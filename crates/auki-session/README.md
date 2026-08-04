@@ -41,7 +41,7 @@ A sensor producer opens its `auki-logs` `Log<T>` at `handle.root()` and appends 
 - `Session::register_pose_log(PoseLogSpec)` → `PoseLogHandle` — `resource_id` is `"<from_frame.id>-><to_frame.id>"`.
 - `Session::register_time_transform_log(TimeTransformLogSpec)` → `TimeTransformLogHandle` — `resource_id` is `"<from_clock.id>-><to_clock.id>"`.
 - `Session::register_detection_log(DetectionLogSpec)` → `DetectionLogHandle` — `resource_id` is the application-chosen `instance_id`; the manifest binds that instance to an exact detector, input log, input sensor contract, clock, and cadence.
-- `Session::register_map_log(MapLogSpec)` → `MapLogHandle` — `resource_id` is the Map id. This handle owns the durable `Log<MapUpdate>` writer and provides append, replay, live subscription, and an atomic replay/live boundary.
+- `Session::register_map_log(MapLogSpec)` → `MapLogHandle` — `resource_id` is the Map id. This handle owns the durable `Log<MapUpdate>` writer and provides append, replay, live subscription, an atomic replay/live boundary, and `persisted_bytes()` diagnostics.
 
 ### Detector execution
 

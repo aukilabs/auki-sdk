@@ -1121,10 +1121,12 @@ mod session_logs_tests {
                             semantics: vec![],
                         }],
                     }],
+                    checkpoint: None,
                 },
             )
             .unwrap();
         assert_eq!(handle.entries().unwrap().len(), 1);
+        assert!(handle.persisted_bytes().unwrap() > 0);
         assert_eq!(handle.resource_id(), "occupancy");
         assert_eq!(session.logs().map_logs().len(), 1);
     }

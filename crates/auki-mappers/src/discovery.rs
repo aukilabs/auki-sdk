@@ -7,8 +7,8 @@ use auki_network::stream_runtime::StreamSubscription;
 use auki_registry::{LogRef, Rangefinder, RegistryRef, VoxelMap};
 
 use crate::{
-    MapUpdateSink, MapperInput, MapperInputBindingError, PoseAlignmentConfig, VoxelMapperRunError,
-    VoxelMapperRunReport, VoxelMapperRunner,
+    MapUpdateSink, MapperInput, MapperInputBindingError, PoseAlignmentConfig, ValidatedFrameAlias,
+    VoxelMapperMapFrameBinding, VoxelMapperRunError, VoxelMapperRunReport, VoxelMapperRunner,
 };
 
 /// Runtime tuning for the SDK-composed voxel Mapper service.
@@ -54,8 +54,13 @@ pub struct VoxelMapperSources {
     pub clock: RegistryRef,
     /// Exact point-cloud sensor frame and pose source frame.
     pub sensor_frame: RegistryRef,
-    /// Exact pose destination frame and selected Map frame.
+    /// Exact destination frame declared by the selected pose log.
+    pub pose_frame: RegistryRef,
+    /// Exact frame owned by the selected Map.
     pub map_frame: RegistryRef,
+    /// Explicit identity-only rebind when `pose_frame` and `map_frame` have
+    /// independent owners.
+    pub frame_alias: Option<ValidatedFrameAlias>,
 }
 
 impl VoxelMapperSources {
@@ -66,6 +71,20 @@ impl VoxelMapperSources {
         map: &VoxelMap,
         query: &VoxelMapperSourceQuery,
     ) -> Result<Self, VoxelMapperSourceSelectionError> {
+        Self::select_with_frame_alias(resources, map, query, None)
+    }
+
+    /// Select inputs while allowing a validated identity-only alias from a
+    /// pose destination frame to the independently owned Map frame.
+    pub fn select_with_frame_alias(
+        resources: &[ResourceEntry],
+        map: &VoxelMap,
+        query: &VoxelMapperSourceQuery,
+        frame_alias: Option<&ValidatedFrameAlias>,
+    ) -> Result<Self, VoxelMapperSourceSelectionError> {
+        if frame_alias.is_some_and(|alias| alias.target() != &map.frame) {
+            return Err(VoxelMapperSourceSelectionError::AliasDoesNotTargetMap);
+        }
         let point_clouds = resources.iter().filter_map(|row| {
             if row.state != "live" || !matches_log(row, query.point_cloud.as_ref()) {
                 return None;
@@ -101,14 +120,25 @@ impl VoxelMapperSources {
             for (pose_row, pose_manifest) in &poses {
                 if point_manifest.clock == pose_manifest.clock
                     && *sensor_frame == pose_manifest.from_frame
-                    && pose_manifest.to_frame == map.frame
+                    && (pose_manifest.to_frame == map.frame
+                        || frame_alias.is_some_and(|alias| {
+                            alias.source() == &pose_manifest.to_frame
+                                && alias.target() == &map.frame
+                        }))
                 {
+                    let uses_alias = pose_manifest.to_frame != map.frame;
                     compatible.push(Self {
                         point_cloud: point_row.clone(),
                         pose: (*pose_row).clone(),
                         clock: point_manifest.clock.clone(),
                         sensor_frame: sensor_frame.clone(),
+                        pose_frame: pose_manifest.to_frame.clone(),
                         map_frame: map.frame.clone(),
+                        frame_alias: uses_alias.then(|| {
+                            frame_alias
+                                .expect("compatible aliased frame requires an alias")
+                                .clone()
+                        }),
                     });
                 }
             }
@@ -207,10 +237,14 @@ pub async fn run_sdk_voxel_mapper<S: MapUpdateSink>(
     sink: &S,
     config: VoxelMapperServiceConfig,
 ) -> Result<VoxelMapperRunReport, VoxelMapperServiceError> {
-    let runner = VoxelMapperRunner::from_sdk_contract(
+    let map_frame_binding = sources.frame_alias.clone().map_or_else(
+        || VoxelMapperMapFrameBinding::Exact(sources.pose_frame.clone()),
+        VoxelMapperMapFrameBinding::Aliased,
+    );
+    let runner = VoxelMapperRunner::from_sdk_contract_with_frame_binding(
         point_layout,
         sources.sensor_frame.clone(),
-        sources.map_frame.clone(),
+        map_frame_binding,
         map,
         config.free_delta,
         config.occupied_delta,
@@ -244,6 +278,9 @@ pub enum VoxelMapperSourceSelectionError {
         /// Number of pairs which satisfy the full contract.
         count: usize,
     },
+    /// The supplied alias is valid but targets a different Map frame.
+    #[error("voxel Mapper frame alias does not target the selected Map frame")]
+    AliasDoesNotTargetMap,
 }
 
 #[cfg(test)]
@@ -261,7 +298,9 @@ mod tests {
     };
     use auki_network::stream_protocol::StreamManifest;
     use auki_network::stream_runtime::StreamEntry;
-    use auki_registry::{FiniteF64, PointField, PointFieldDataType, VoxelValueModel};
+    use auki_registry::{
+        FiniteF64, FrameRegistryEntry, PointField, PointFieldDataType, VoxelValueModel,
+    };
     use futures::{FutureExt, future::BoxFuture};
 
     struct RecordingSink {
@@ -295,6 +334,14 @@ mod tests {
             peer_id: peer.into(),
             id: id.into(),
             hash: hash.into(),
+        }
+    }
+
+    fn frame_reference(entry: &FrameRegistryEntry) -> RegistryRef {
+        RegistryRef {
+            peer_id: entry.peer_id.clone(),
+            id: entry.frame_id.clone(),
+            hash: entry.hash(),
         }
     }
 
@@ -407,6 +454,42 @@ mod tests {
             selected.pose_request(ReadFrom::FromStart).source_peer_id,
             "pose-peer"
         );
+    }
+
+    #[test]
+    fn selects_remote_pose_frame_through_validated_local_alias() {
+        let clock = reference("clock-peer", "session/monotonic", "clock-hash");
+        let sensor_frame = reference("sensor-peer", "lidar", "lidar-frame-hash");
+        let remote_entry = FrameRegistryEntry::ros_body("bracketbot", "local_world");
+        let local_entry = FrameRegistryEntry::ros_body("park", "voxel/world");
+        let remote_frame = frame_reference(&remote_entry);
+        let local_frame = frame_reference(&local_entry);
+        let alias = ValidatedFrameAlias::new(
+            remote_frame.clone(),
+            &remote_entry,
+            local_frame.clone(),
+            &local_entry,
+        )
+        .unwrap();
+        let rows = vec![
+            point_row(clock.clone(), sensor_frame.clone()),
+            pose_row(clock, sensor_frame, remote_frame.clone()),
+        ];
+
+        assert_eq!(
+            VoxelMapperSources::select(&rows, &map(local_frame.clone()), &Default::default()),
+            Err(VoxelMapperSourceSelectionError::NoCompatiblePair)
+        );
+        let selected = VoxelMapperSources::select_with_frame_alias(
+            &rows,
+            &map(local_frame.clone()),
+            &Default::default(),
+            Some(&alias),
+        )
+        .unwrap();
+        assert_eq!(selected.pose_frame, remote_frame);
+        assert_eq!(selected.map_frame, local_frame);
+        assert_eq!(selected.frame_alias, Some(alias));
     }
 
     #[test]

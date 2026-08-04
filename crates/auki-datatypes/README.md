@@ -12,7 +12,11 @@ Each module exposes a canonical payload shape used on both disk and wire. The pr
 - `point_cloud::Data`, `audio::Data`, `joint_encoders::Data`
 - `detection::DetectionFrame`
 - `pose::{SpatialTransform, Vec3, Quat}`
-- `map::{MapUpdate, VoxelChunkUpdate, VoxelDelta, SemanticDelta}`
+- `map::{MapUpdate, VoxelChunkUpdate, VoxelDelta, SemanticDelta}` for
+  commutative evidence deltas, plus `VoxelMapCheckpoint` and its snapshot
+  payloads for ordered full-state replay barriers. A checkpoint is carried in
+  a separate protobuf field with no additive chunks, so older readers safely
+  ignore it instead of adding absolute evidence.
 - `time_transform::TimeTransformEntry`
 - `stream::{StreamMessage, StreamRequest, StreamManifest, StreamEntry, DeclineReason, EndReason}`
   - `StreamRequest` fields (field-number ledger — never reuse or renumber): legacy `sensor_id` (1), `resource_id` (2), `source_peer_id` (3), `read_from` oneof (`latest` = 4, `from_start` = 5, `from_timestamp` = 6 with `int64 timestamp_ns`). New `/auki/stream/0.2.0` opens identify logs by `source_peer_id + resource_id`.

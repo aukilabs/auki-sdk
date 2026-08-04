@@ -41,6 +41,13 @@ impl MapLogHandle {
         &self.log_ref
     }
 
+    /// Total bytes currently persisted beneath this Map Log's storage root.
+    /// The writer is flushed first, so diagnostics include the durable tail.
+    pub fn persisted_bytes(&self) -> crate::Result<u64> {
+        self.writer.lock().flush()?;
+        Ok(directory_bytes(&self.root)?)
+    }
+
     /// Append one mergeable map update. The timestamp belongs to the map log's
     /// declared clock; callers may be a local or remote-input Mapper.
     pub fn append(
@@ -106,6 +113,23 @@ impl MapLogHandle {
             updates,
         }
     }
+}
+
+fn directory_bytes(root: &Path) -> std::io::Result<u64> {
+    let mut total = 0u64;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                pending.push(entry.path());
+            } else if file_type.is_file() {
+                total = total.saturating_add(entry.metadata()?.len());
+            }
+        }
+    }
+    Ok(total)
 }
 
 impl SensorLogHandle {

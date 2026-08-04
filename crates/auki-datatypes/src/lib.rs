@@ -296,6 +296,7 @@ mod tests {
                     }],
                 }],
             }],
+            checkpoint: None,
         };
 
         let hex: String = update
@@ -306,6 +307,46 @@ mod tests {
         assert_eq!(
             hex,
             "0a1a080318062214080110021803250000403f2a07080715000080be"
+        );
+    }
+
+    #[test]
+    fn checkpoint_is_detectable_without_looking_like_legacy_deltas() {
+        #[derive(Clone, PartialEq, prost::Message)]
+        struct LegacyMapUpdate {
+            #[prost(message, repeated, tag = "1")]
+            voxel_chunks: Vec<super::map::VoxelChunkUpdate>,
+        }
+
+        let checkpoint = MapUpdate {
+            voxel_chunks: vec![],
+            checkpoint: Some(super::map::VoxelMapCheckpoint {
+                voxel_chunks: vec![super::map::VoxelChunkSnapshot {
+                    chunk_x: 1,
+                    chunk_y: 2,
+                    chunk_z: 3,
+                    voxels: vec![super::map::VoxelSnapshot {
+                        x: 4,
+                        y: 5,
+                        z: 6,
+                        occupancy_evidence: 2.5,
+                        semantics: vec![],
+                    }],
+                }],
+            }),
+        };
+        let bytes = checkpoint.encode_to_vec();
+        assert!(
+            MapUpdate::decode(bytes.as_slice())
+                .unwrap()
+                .checkpoint
+                .is_some()
+        );
+        assert!(
+            LegacyMapUpdate::decode(bytes.as_slice())
+                .unwrap()
+                .voxel_chunks
+                .is_empty()
         );
     }
 

@@ -7,7 +7,11 @@ adapts changed voxel chunks into renderer-neutral instance buffers.
 
 - `VoxelMapAccumulator::new(map_ref, contract)` validates and pins the exact
   content-addressed Map identity and its `VoxelMap` Registry body.
-- `VoxelMapAccumulator::apply(update)` merges one sparse `MapUpdate`
+- `VoxelMapAccumulator::apply(update)` merges one sparse additive `MapUpdate`
+  or atomically replaces state when the update carries a checkpoint.
+- `VoxelMapAccumulator::checkpoint_update()` produces a complete sparse
+  checkpoint. A bounded retained log must retain at least one checkpoint and
+  every later delta needed for the requested replay position.
   atomically and reports the changed chunks.
 - `viewer_snapshot(threshold)` exposes the current sparse voxel state in Map
   frame coordinates.

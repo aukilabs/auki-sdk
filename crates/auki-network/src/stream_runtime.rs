@@ -940,6 +940,7 @@ mod tests {
                                 semantics: vec![],
                             }],
                         }],
+                        checkpoint: None,
                     },
                 })])),
             }

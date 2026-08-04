@@ -21,8 +21,22 @@ shared SDK clock. Accept-time resource/clock mismatches, timestamp regressions,
 and sequence gaps fail closed. Point-cloud and pose source peers and the Map
 Log destination peer are independent.
 
-`LocalMapLogSink` is the initial Galbot deployment sink. Other peers or
-materializers can implement `MapUpdateSink` without changing the Mapper.
+`LocalMapLogSink::new` preserves aligned input timestamps and therefore fails
+closed unless the input logs and destination Map Log declare the same exact
+clock. `LocalMapLogSink::retimestamped` samples the destination clock when it
+appends each update, allowing a Mapper hosted by Park (or any other peer) to
+consume a remote peer's aligned point-cloud/pose pair while publishing a
+correctly-clocked local Map Log. Other peers, explicit time-transform sinks,
+or materializers can implement `MapUpdateSink` without changing the Mapper.
+
+Point-cloud and pose inputs must still share one exact clock so interpolation
+is meaningful. The output Map Log clock is independent: the sink owns the
+conversion or restamping boundary and the run report exposes both
+`alignment_clock` and `map_clock`.
+
+A restamped update's Map Log timestamp is its production/append time, not the
+original sensor observation time. Applications that need observation-time
+provenance should provide a sink backed by an explicit SDK time transform.
 
 ## Pure voxelization
 

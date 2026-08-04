@@ -1,6 +1,6 @@
 //! Live SDK-stream orchestration for the voxel Mapper.
 
-use std::{collections::VecDeque, pin::Pin};
+use std::{collections::VecDeque, pin::Pin, sync::Arc};
 
 use auki_datatypes::{
     map::MapUpdate,
@@ -174,10 +174,28 @@ pub trait MapUpdateSink: Send + Sync {
     /// Clock declared by the destination Map Log.
     fn clock_ref(&self) -> &RegistryRef;
 
-    /// Append one update using the Map Log's declared clock.
-    fn append<'a>(
+    /// Validate whether this sink can correctly translate timestamps from the
+    /// Mapper's aligned input clock into its destination clock.
+    ///
+    /// The default preserves the original same-clock behavior. Cross-peer
+    /// sinks must override this together with [`Self::append_from`].
+    fn validate_alignment_clock(&self, alignment_clock: &RegistryRef) -> Result<(), MapSinkError> {
+        if alignment_clock == self.clock_ref() {
+            Ok(())
+        } else {
+            Err(MapSinkError::new(
+                "Map sink cannot translate the Mapper alignment clock into its destination clock",
+            ))
+        }
+    }
+
+    /// Append one update produced at `alignment_timestamp_ns` on the Mapper's
+    /// aligned input clock. The sink owns the conversion or restamping into
+    /// its declared destination Map Log clock.
+    fn append_from<'a>(
         &'a self,
-        timestamp_ns: i64,
+        alignment_clock: &'a RegistryRef,
+        alignment_timestamp_ns: i64,
         update: &'a MapUpdate,
     ) -> BoxFuture<'a, Result<(), MapSinkError>>;
 }
@@ -185,12 +203,31 @@ pub trait MapUpdateSink: Send + Sync {
 /// First-stint sink: durably append to a Map Log on the same SDK process.
 pub struct LocalMapLogSink {
     handle: auki_session::MapLogHandle,
+    destination_now_ns: Option<Arc<dyn Fn() -> i64 + Send + Sync>>,
 }
 
 impl LocalMapLogSink {
     /// Take ownership of a locally registered Map Log handle.
     pub fn new(handle: auki_session::MapLogHandle) -> Self {
-        Self { handle }
+        Self {
+            handle,
+            destination_now_ns: None,
+        }
+    }
+
+    /// Append updates using timestamps sampled from the destination Map Log's
+    /// own clock. This is the correct local sink when Mapper inputs belong to
+    /// another peer's clock and no explicit time transform is available. The
+    /// stored timestamp represents MapUpdate production time, not the sensor's
+    /// original observation time.
+    pub fn retimestamped(
+        handle: auki_session::MapLogHandle,
+        destination_now_ns: impl Fn() -> i64 + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            handle,
+            destination_now_ns: Some(Arc::new(destination_now_ns)),
+        }
     }
 
     /// Borrow the underlying local handle for replay or diagnostics.
@@ -208,14 +245,35 @@ impl MapUpdateSink for LocalMapLogSink {
         &self.handle.manifest.clock
     }
 
-    fn append<'a>(
+    fn validate_alignment_clock(&self, alignment_clock: &RegistryRef) -> Result<(), MapSinkError> {
+        if self.destination_now_ns.is_some() || alignment_clock == self.clock_ref() {
+            Ok(())
+        } else {
+            Err(MapSinkError::new(
+                "LocalMapLogSink requires the input clock to match the Map Log clock; use LocalMapLogSink::retimestamped for cross-clock input",
+            ))
+        }
+    }
+
+    fn append_from<'a>(
         &'a self,
-        timestamp_ns: i64,
+        alignment_clock: &'a RegistryRef,
+        alignment_timestamp_ns: i64,
         update: &'a MapUpdate,
     ) -> BoxFuture<'a, Result<(), MapSinkError>> {
+        let destination_timestamp_ns = match &self.destination_now_ns {
+            Some(destination_now_ns) => destination_now_ns(),
+            None if alignment_clock == self.clock_ref() => alignment_timestamp_ns,
+            None => {
+                return futures::future::ready(Err(MapSinkError::new(
+                    "LocalMapLogSink received an untranslatable input clock",
+                )))
+                .boxed();
+            }
+        };
         futures::future::ready(
             self.handle
-                .append(timestamp_ns, update)
+                .append(destination_timestamp_ns, update)
                 .map_err(|error| MapSinkError::new(error.to_string())),
         )
         .boxed()
@@ -332,18 +390,20 @@ impl VoxelMapperRunner {
         mut poses: MapperInput<SpatialTransform>,
         sink: &S,
     ) -> Result<VoxelMapperRunReport, VoxelMapperRunError> {
-        if point_clouds.clock != poses.clock || point_clouds.clock != *sink.clock_ref() {
-            return Err(VoxelMapperRunError::ClockMismatch {
+        if point_clouds.clock != poses.clock {
+            return Err(VoxelMapperRunError::InputClockMismatch {
                 point_cloud_clock: Box::new(point_clouds.clock.clone()),
                 pose_clock: Box::new(poses.clock.clone()),
-                map_clock: Box::new(sink.clock_ref().clone()),
             });
         }
+        sink.validate_alignment_clock(&point_clouds.clock)
+            .map_err(VoxelMapperRunError::Sink)?;
         let mut report = VoxelMapperRunReport {
             point_cloud_source: point_clouds.log_ref.clone(),
             pose_source: poses.log_ref.clone(),
             map_destination: sink.log_ref().clone(),
-            alignment_clock: sink.clock_ref().clone(),
+            alignment_clock: point_clouds.clock.clone(),
+            map_clock: sink.clock_ref().clone(),
             point_clouds_received: 0,
             poses_received: 0,
             poses_dropped_for_backpressure: 0,
@@ -446,7 +506,7 @@ async fn resolve_pending<S: MapUpdateSink>(
             runner.free_delta,
             runner.occupied_delta,
         )?;
-        sink.append(point_cloud.timestamp_ns, &update)
+        sink.append_from(&report.alignment_clock, point_cloud.timestamp_ns, &update)
             .await
             .map_err(VoxelMapperRunError::Sink)?;
         report.map_updates_written += 1;
@@ -660,8 +720,11 @@ pub struct VoxelMapperRunReport {
     pub pose_source: LogRef,
     /// Map Log destination selected independently of both sources.
     pub map_destination: LogRef,
-    /// Exact shared clock used for interpolation and output timestamps.
+    /// Exact shared input clock used for point-cloud/pose interpolation.
     pub alignment_clock: RegistryRef,
+    /// Clock declared by the destination Map Log. It may differ from the
+    /// alignment clock when the sink converts or restamps updates.
+    pub map_clock: RegistryRef,
     /// Point-cloud samples received from the SDK.
     pub point_clouds_received: u64,
     /// Pose samples received from the SDK.
@@ -703,15 +766,13 @@ pub enum VoxelMapperRunError {
         /// Exact frame declared by the Map Registry body.
         map_frame: Box<RegistryRef>,
     },
-    /// Inputs and destination do not use one exact SDK clock reference.
-    #[error("point-cloud, pose, and Map Log clocks must match exactly")]
-    ClockMismatch {
+    /// Point-cloud and pose inputs do not use one exact SDK clock reference.
+    #[error("point-cloud and pose input clocks must match exactly")]
+    InputClockMismatch {
         /// Point-cloud log clock.
         point_cloud_clock: Box<RegistryRef>,
         /// Pose log clock.
         pose_clock: Box<RegistryRef>,
-        /// Destination Map Log clock.
-        map_clock: Box<RegistryRef>,
     },
     /// Point-cloud SDK stream ended with an error.
     #[error("point-cloud input: {0}")]
@@ -774,8 +835,9 @@ mod tests {
             &self.clock
         }
 
-        fn append<'a>(
+        fn append_from<'a>(
             &'a self,
+            _alignment_clock: &'a RegistryRef,
             timestamp_ns: i64,
             update: &'a MapUpdate,
         ) -> BoxFuture<'a, Result<(), MapSinkError>> {
@@ -1142,7 +1204,7 @@ mod tests {
 
         assert!(matches!(
             runner.run(points, poses, &sink).await,
-            Err(VoxelMapperRunError::ClockMismatch { .. })
+            Err(VoxelMapperRunError::InputClockMismatch { .. })
         ));
         assert!(sink.updates.lock().unwrap().is_empty());
     }
@@ -1218,5 +1280,144 @@ mod tests {
         let persisted = sink.handle().entries().unwrap();
         assert_eq!(persisted.len(), 1);
         assert_eq!(persisted[0].timestamp_ns, 5);
+    }
+
+    #[tokio::test]
+    async fn retimestamped_local_sink_writes_on_its_destination_clock() {
+        use std::time::Duration;
+
+        use auki_registry::{FiniteF64, MapBody, VoxelMap, VoxelValueModel};
+        use auki_session::{FrameDef, HeadSpec, MapLogSpec, Peer};
+
+        let temporary = tempfile::tempdir().unwrap();
+        let peer = Peer::new("park-peer", "park").with_storage_root(temporary.path().to_path_buf());
+        let session = peer.start_session().unwrap();
+        let frame = peer.register_frame("world", FrameDef::ros_body()).unwrap();
+        let map = peer
+            .register_map(
+                "voxel/world",
+                MapBody::Voxel(VoxelMap {
+                    frame,
+                    voxel_size_m: FiniteF64(1.0),
+                    chunk_dimension: 64,
+                    value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                    semantic_classes: vec![],
+                }),
+            )
+            .unwrap();
+        let map_clock = session.monotonic_clock();
+        let sink = LocalMapLogSink::retimestamped(
+            session
+                .register_map_log(MapLogSpec {
+                    map,
+                    clock: map_clock.clone(),
+                    head: HeadSpec::Fixed,
+                    segment_duration: Duration::from_secs(1),
+                    retention: Duration::ZERO,
+                })
+                .unwrap(),
+            || 42,
+        );
+        let runner = VoxelMapperRunner::new(
+            Voxelizer::new(1.0, 64).unwrap(),
+            layout(),
+            -0.2,
+            0.8,
+            PoseAlignmentConfig::default(),
+        )
+        .unwrap();
+        let input_clock = clock();
+        let points = MapperInput::new(
+            log("bracketbot", "head_pointcloud"),
+            input_clock.clone(),
+            Box::pin(futures::stream::iter(vec![Ok(TimedSdkSample {
+                timestamp_ns: 5,
+                payload: point(0.0),
+            })])),
+        );
+        let poses = MapperInput::new(
+            log("bracketbot", "base_link->local_world"),
+            input_clock.clone(),
+            Box::pin(futures::stream::iter(vec![
+                Ok(TimedSdkSample {
+                    timestamp_ns: 0,
+                    payload: pose(0.0),
+                }),
+                Ok(TimedSdkSample {
+                    timestamp_ns: 10,
+                    payload: pose(10.0),
+                }),
+            ])),
+        );
+
+        let report = runner.run(points, poses, &sink).await.unwrap();
+        assert_eq!(report.alignment_clock, input_clock);
+        assert_eq!(report.map_clock, map_clock);
+        assert_eq!(report.map_updates_written, 1);
+        let persisted = sink.handle().entries().unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].timestamp_ns, 42);
+    }
+
+    #[tokio::test]
+    async fn same_clock_local_sink_rejects_foreign_input_clock() {
+        use std::time::Duration;
+
+        use auki_registry::{FiniteF64, MapBody, VoxelMap, VoxelValueModel};
+        use auki_session::{FrameDef, HeadSpec, MapLogSpec, Peer};
+
+        let temporary = tempfile::tempdir().unwrap();
+        let peer =
+            Peer::new("map-peer", "mapper").with_storage_root(temporary.path().to_path_buf());
+        let session = peer.start_session().unwrap();
+        let frame = peer.register_frame("world", FrameDef::ros_body()).unwrap();
+        let map = peer
+            .register_map(
+                "occupancy",
+                MapBody::Voxel(VoxelMap {
+                    frame,
+                    voxel_size_m: FiniteF64(1.0),
+                    chunk_dimension: 64,
+                    value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                    semantic_classes: vec![],
+                }),
+            )
+            .unwrap();
+        let sink = LocalMapLogSink::new(
+            session
+                .register_map_log(MapLogSpec {
+                    map,
+                    clock: session.monotonic_clock(),
+                    head: HeadSpec::Fixed,
+                    segment_duration: Duration::from_secs(1),
+                    retention: Duration::ZERO,
+                })
+                .unwrap(),
+        );
+        let runner = VoxelMapperRunner::new(
+            Voxelizer::new(1.0, 64).unwrap(),
+            layout(),
+            -0.2,
+            0.8,
+            PoseAlignmentConfig::default(),
+        )
+        .unwrap();
+        let foreign_clock = clock();
+        let points = MapperInput::new(
+            log("sensor-peer", "points"),
+            foreign_clock.clone(),
+            Box::pin(futures::stream::empty()),
+        );
+        let poses = MapperInput::new(
+            log("pose-peer", "pose"),
+            foreign_clock,
+            Box::pin(futures::stream::empty()),
+        );
+
+        assert!(matches!(
+            runner.run(points, poses, &sink).await,
+            Err(VoxelMapperRunError::Sink(_))
+        ));
+        assert!(sink.handle().entries().unwrap().is_empty());
     }
 }

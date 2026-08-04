@@ -418,6 +418,12 @@ fn validate_detector_id(id: &str) -> PyResult<()> {
         .map_err(|e| PyValueError::new_err(format!("detector_id: {e}")))
 }
 
+#[pyfunction]
+fn validate_map_id(id: &str) -> PyResult<()> {
+    registry::MapRegistryEntry::validate_id(id)
+        .map_err(|e| PyValueError::new_err(format!("map_id: {e}")))
+}
+
 // ─── Clock Registry constructors ───────────────────────────────────
 
 #[pyfunction]
@@ -470,6 +476,34 @@ fn utc_clock_entry(
     struct_to_pyobject(py, &entry)
 }
 
+// ─── Map Registry constructors ─────────────────────────────────────
+
+#[pyfunction]
+#[pyo3(signature = (*, peer_id, map_id, frame, voxel_size_m, chunk_dimension, semantic_classes=Vec::new()))]
+fn voxel_map_entry(
+    py: Python<'_>,
+    peer_id: &str,
+    map_id: &str,
+    frame: &Bound<'_, PyAny>,
+    voxel_size_m: f64,
+    chunk_dimension: u32,
+    semantic_classes: Vec<String>,
+) -> PyResult<PyObject> {
+    let entry = registry::MapRegistryEntry {
+        peer_id: peer_id.to_string(),
+        map_id: map_id.to_string(),
+        body: registry::MapBody::Voxel(registry::VoxelMap {
+            frame: parse_registry_ref(py, frame)?,
+            voxel_size_m: registry::FiniteF64(voxel_size_m),
+            chunk_dimension,
+            value_model: registry::VoxelValueModel::AdditiveOccupancyEvidence,
+            semantic_classes,
+        }),
+    };
+    entry.validate().map_err(map_registry_error)?;
+    struct_to_pyobject(py, &entry)
+}
+
 // ─── Hash / canonical JSON helpers ─────────────────────────────────
 
 #[pyfunction]
@@ -491,6 +525,13 @@ fn hash_clock(py: Python<'_>, entry: &Bound<'_, PyAny>) -> PyResult<String> {
 }
 
 #[pyfunction]
+fn hash_map(py: Python<'_>, entry: &Bound<'_, PyAny>) -> PyResult<String> {
+    let entry: registry::MapRegistryEntry = parse_py(py, entry, "map")?;
+    entry.validate().map_err(map_registry_error)?;
+    Ok(entry.hash())
+}
+
+#[pyfunction]
 fn canonical_json_frame(py: Python<'_>, entry: &Bound<'_, PyAny>) -> PyResult<String> {
     let entry: registry::FrameRegistryEntry = parse_py(py, entry, "frame")?;
     String::from_utf8(entry.canonical_bytes())
@@ -507,6 +548,14 @@ fn canonical_json_sensor(py: Python<'_>, entry: &Bound<'_, PyAny>) -> PyResult<S
 #[pyfunction]
 fn canonical_json_clock(py: Python<'_>, entry: &Bound<'_, PyAny>) -> PyResult<String> {
     let entry: registry::ClockRegistryEntry = parse_py(py, entry, "clock")?;
+    String::from_utf8(entry.canonical_bytes())
+        .map_err(|e| PyRuntimeError::new_err(format!("internal registry utf8: {e}")))
+}
+
+#[pyfunction]
+fn canonical_json_map(py: Python<'_>, entry: &Bound<'_, PyAny>) -> PyResult<String> {
+    let entry: registry::MapRegistryEntry = parse_py(py, entry, "map")?;
+    entry.validate().map_err(map_registry_error)?;
     String::from_utf8(entry.canonical_bytes())
         .map_err(|e| PyRuntimeError::new_err(format!("internal registry utf8: {e}")))
 }
@@ -533,6 +582,14 @@ fn write_sensor(py: Python<'_>, app_root: PathBuf, entry: &Bound<'_, PyAny>) -> 
 fn write_clock(py: Python<'_>, app_root: PathBuf, entry: &Bound<'_, PyAny>) -> PyResult<String> {
     let entry: registry::ClockRegistryEntry = parse_py(py, entry, "clock")?;
     registry::write_clock(&app_root, &entry)
+        .map(write_outcome_hash)
+        .map_err(map_registry_error)
+}
+
+#[pyfunction]
+fn write_map(py: Python<'_>, app_root: PathBuf, entry: &Bound<'_, PyAny>) -> PyResult<String> {
+    let entry: registry::MapRegistryEntry = parse_py(py, entry, "map")?;
+    registry::write_map(&app_root, &entry)
         .map(write_outcome_hash)
         .map_err(map_registry_error)
 }
@@ -579,6 +636,20 @@ fn read_clock(
     }
 }
 
+#[pyfunction]
+fn read_map(
+    py: Python<'_>,
+    app_root: PathBuf,
+    peer_id: &str,
+    map_id: &str,
+    hash: &str,
+) -> PyResult<PyObject> {
+    match registry::read_map(&app_root, peer_id, map_id, hash).map_err(map_registry_error)? {
+        Some(entry) => struct_to_pyobject(py, &entry),
+        None => Ok(py.None()),
+    }
+}
+
 /// Module entry point.
 #[pymodule]
 fn auki_registry(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -599,20 +670,26 @@ fn auki_registry(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(validate_clock_id, m)?)?;
     m.add_function(wrap_pyfunction!(validate_frame_id, m)?)?;
     m.add_function(wrap_pyfunction!(validate_detector_id, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_map_id, m)?)?;
     m.add_function(wrap_pyfunction!(monotonic_clock_entry, m)?)?;
     m.add_function(wrap_pyfunction!(utc_clock_entry, m)?)?;
+    m.add_function(wrap_pyfunction!(voxel_map_entry, m)?)?;
     m.add_function(wrap_pyfunction!(hash_frame, m)?)?;
     m.add_function(wrap_pyfunction!(hash_sensor, m)?)?;
     m.add_function(wrap_pyfunction!(hash_clock, m)?)?;
+    m.add_function(wrap_pyfunction!(hash_map, m)?)?;
     m.add_function(wrap_pyfunction!(canonical_json_frame, m)?)?;
     m.add_function(wrap_pyfunction!(canonical_json_sensor, m)?)?;
     m.add_function(wrap_pyfunction!(canonical_json_clock, m)?)?;
+    m.add_function(wrap_pyfunction!(canonical_json_map, m)?)?;
     m.add_function(wrap_pyfunction!(write_frame, m)?)?;
     m.add_function(wrap_pyfunction!(write_sensor, m)?)?;
     m.add_function(wrap_pyfunction!(write_clock, m)?)?;
+    m.add_function(wrap_pyfunction!(write_map, m)?)?;
     m.add_function(wrap_pyfunction!(read_frame, m)?)?;
     m.add_function(wrap_pyfunction!(read_sensor, m)?)?;
     m.add_function(wrap_pyfunction!(read_clock, m)?)?;
+    m.add_function(wrap_pyfunction!(read_map, m)?)?;
     Ok(())
 }
 
@@ -643,6 +720,32 @@ mod tests {
             assert!(module.getattr("frame_ros_optical").is_ok());
             assert!(module.getattr("rangefinder_sensor_entry").is_ok());
             assert!(module.getattr("write_sensor").is_ok());
+            assert!(module.getattr("voxel_map_entry").is_ok());
+            assert!(module.getattr("write_map").is_ok());
+        });
+    }
+
+    #[test]
+    fn voxel_map_write_read_round_trip_returns_hash() {
+        Python::with_gil(|py| {
+            let dir = tempfile::tempdir().unwrap();
+            let frame = frame_ros_body(py, PEER_ID, "map").unwrap();
+            let frame_hash = write_frame(py, dir.path().to_path_buf(), frame.bind(py)).unwrap();
+            let frame_ref = make_frame_ref_dict(py, &frame_hash);
+            let map = voxel_map_entry(
+                py,
+                PEER_ID,
+                "voxel/world",
+                frame_ref.bind(py),
+                0.05,
+                16,
+                Vec::new(),
+            )
+            .unwrap();
+            let hash = write_map(py, dir.path().to_path_buf(), map.bind(py)).unwrap();
+            let read =
+                read_map(py, dir.path().to_path_buf(), PEER_ID, "voxel/world", &hash).unwrap();
+            assert_eq!(hash_map(py, read.bind(py)).unwrap(), hash);
         });
     }
 

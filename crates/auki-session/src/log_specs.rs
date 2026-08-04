@@ -53,3 +53,13 @@ pub struct DetectionLogSpec {
     pub segment_duration: Duration,
     pub retention: Duration,
 }
+
+/// Registration contract for an append-only MapUpdate log.
+#[derive(Debug, Clone)]
+pub struct MapLogSpec {
+    pub map: RegistryRef,
+    pub clock: RegistryRef,
+    pub head: HeadSpec,
+    pub segment_duration: Duration,
+    pub retention: Duration,
+}

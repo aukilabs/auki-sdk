@@ -70,6 +70,116 @@ pub struct LogRef {
     pub resource_id: String,
 }
 
+// ─── Map Registry ───────────────────────────────────────────────────────────
+
+/// Stable, content-addressed identity and interpretation contract for a map.
+/// A map belongs to its owning peer, but its update log may be consumed and
+/// materialized by any peer. The registry fixes every property necessary to
+/// interpret voxel indices without depending on a Mapper implementation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MapRegistryEntry {
+    pub peer_id: String,
+    pub map_id: String,
+    #[serde(flatten)]
+    pub body: MapBody,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MapBody {
+    Voxel(VoxelMap),
+}
+
+/// A sparse, unbounded voxel map. Voxel coordinates are integer indices in
+/// `frame`; `voxel_size_m` converts each index step into metres.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VoxelMap {
+    pub frame: RegistryRef,
+    pub voxel_size_m: FiniteF64,
+    pub chunk_dimension: u32,
+    pub value_model: VoxelValueModel,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic_classes: Vec<String>,
+}
+
+/// JSON-safe finite floating point value used in content-addressed registries.
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct FiniteF64(pub f64);
+
+/// Defines how MapUpdate values are combined. This initial model stores
+/// additive, unclamped occupancy evidence so independently-produced updates
+/// commute and replay deterministically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VoxelValueModel {
+    AdditiveOccupancyEvidence,
+}
+
+impl MapRegistryEntry {
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        canonicalize(self)
+    }
+
+    pub fn hash(&self) -> String {
+        auki_hash::hash_jcs_bytes(&self.canonical_bytes())
+    }
+
+    /// Exact content-addressed identity of this registry entry.
+    pub fn registry_ref(&self) -> RegistryRef {
+        RegistryRef {
+            peer_id: self.peer_id.clone(),
+            id: self.map_id.clone(),
+            hash: self.hash(),
+        }
+    }
+
+    pub fn validate_id(id: &str) -> std::result::Result<(), RegistryIdError> {
+        validate_registry_id(id)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.peer_id.is_empty() {
+            return Err(Error::InvalidMap("peer_id must not be empty".into()));
+        }
+        validate_registry_id(&self.map_id)
+            .map_err(|error| Error::InvalidMap(format!("invalid map_id: {error}")))?;
+        match &self.body {
+            MapBody::Voxel(map) => {
+                if !map.voxel_size_m.0.is_finite()
+                    || map.voxel_size_m.0 <= 0.0
+                    || map.chunk_dimension == 0
+                {
+                    return Err(Error::InvalidMap(
+                        "voxel_size_m must be finite and greater than zero; chunk_dimension must be greater than zero"
+                            .into(),
+                    ));
+                }
+                if map.frame.peer_id.is_empty()
+                    || map.frame.id.is_empty()
+                    || map.frame.hash.is_empty()
+                {
+                    return Err(Error::InvalidMap(
+                        "frame must contain peer_id, id, and hash".into(),
+                    ));
+                }
+                let unique_classes = map
+                    .semantic_classes
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>();
+                if map.semantic_classes.iter().any(String::is_empty)
+                    || unique_classes.len() != map.semantic_classes.len()
+                {
+                    return Err(Error::InvalidMap(
+                        "semantic class labels must be non-empty and unique".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 // ─── Sensor Registry ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -657,6 +767,8 @@ pub enum Error {
         frame_id: String,
         frame_hash: String,
     },
+    /// A map registry entry declares an invalid voxel-grid contract.
+    InvalidMap(String),
 }
 
 impl std::fmt::Display for Error {
@@ -676,6 +788,7 @@ impl std::fmt::Display for Error {
                 f,
                 "sensor {sensor_id:?} references missing frame ({frame_id:?}, {frame_hash:?})"
             ),
+            Error::InvalidMap(msg) => write!(f, "invalid map: {msg}"),
         }
     }
 }
@@ -819,6 +932,44 @@ pub fn read_detector(
             found: entry.detector_id,
         });
     }
+    Ok(Some(entry))
+}
+
+/// Write a map registry entry under `<app_root>/registries/maps/...`.
+pub fn write_map(app_root: &Path, entry: &MapRegistryEntry) -> Result<WriteOutcome> {
+    entry.validate()?;
+    let bytes = entry.canonical_bytes();
+    let hash = auki_hash::hash_jcs_bytes(&bytes);
+    let path = auki_layout::map_entry_path(app_root, &entry.peer_id, &entry.map_id, &hash);
+    write_entry_at(&path, hash, &bytes)
+}
+
+/// Read a map registry entry by `(peer_id, map_id, hash)`.
+pub fn read_map(
+    app_root: &Path,
+    peer_id: &str,
+    map_id: &str,
+    hash: &str,
+) -> Result<Option<MapRegistryEntry>> {
+    let path = auki_layout::map_entry_path(app_root, peer_id, map_id, hash);
+    let Some(bytes) = read_at(&path)? else {
+        return Ok(None);
+    };
+    let entry: MapRegistryEntry =
+        serde_json::from_slice(&bytes).map_err(|e| Error::Json(e.to_string()))?;
+    if entry.peer_id != peer_id {
+        return Err(Error::IdMismatch {
+            expected: peer_id.to_string(),
+            found: entry.peer_id,
+        });
+    }
+    if entry.map_id != map_id {
+        return Err(Error::IdMismatch {
+            expected: map_id.to_string(),
+            found: entry.map_id,
+        });
+    }
+    entry.validate()?;
     Ok(Some(entry))
 }
 
@@ -1940,6 +2091,52 @@ mod id_charset_tests {
         assert!(ClockRegistryEntry::validate_id("bad@id").is_err());
         assert!(FrameRegistryEntry::validate_id("bad id").is_err());
         assert!(DetectorRegistryEntry::validate_id("").is_err());
+        assert!(MapRegistryEntry::validate_id("voxel/world").is_ok());
+    }
+
+    #[test]
+    fn voxel_map_registry_entry_is_content_addressed_and_rejects_invalid_grid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let entry = MapRegistryEntry {
+            peer_id: "galbot".into(),
+            map_id: "world".into(),
+            body: MapBody::Voxel(VoxelMap {
+                frame: RegistryRef {
+                    peer_id: "galbot".into(),
+                    id: "world".into(),
+                    hash: "frame-hash".into(),
+                },
+                voxel_size_m: FiniteF64(0.05),
+                chunk_dimension: 64,
+                value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                semantic_classes: vec!["floor".into()],
+            }),
+        };
+        write_map(tmp.path(), &entry).unwrap();
+        assert_eq!(
+            read_map(tmp.path(), "galbot", "world", &entry.hash()).unwrap(),
+            Some(entry)
+        );
+
+        let invalid = MapRegistryEntry {
+            peer_id: "galbot".into(),
+            map_id: "bad".into(),
+            body: MapBody::Voxel(VoxelMap {
+                frame: RegistryRef {
+                    peer_id: "galbot".into(),
+                    id: "world".into(),
+                    hash: "frame-hash".into(),
+                },
+                voxel_size_m: FiniteF64(0.0),
+                chunk_dimension: 0,
+                value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                semantic_classes: vec![],
+            }),
+        };
+        assert!(matches!(
+            write_map(tmp.path(), &invalid),
+            Err(Error::InvalidMap(_))
+        ));
     }
 }
 

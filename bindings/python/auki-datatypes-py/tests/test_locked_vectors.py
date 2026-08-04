@@ -19,6 +19,34 @@ from __future__ import annotations
 import auki_datatypes as adt
 
 
+# ─── auki.map ────────────────────────────────────────────────────────────────
+
+
+def test_map_update_locked_wire_bytes():
+    # auki-datatypes/src/lib.rs::map_update_serializes_to_locked_wire_bytes
+    update = adt.map.MapUpdate(
+        voxel_chunks=[
+            adt.map.VoxelChunkUpdate(
+                chunk_x=-2,
+                chunk_z=3,
+                voxels=[
+                    adt.map.VoxelDelta(
+                        x=1,
+                        y=2,
+                        z=3,
+                        occupancy_delta=0.75,
+                        semantics=[
+                            adt.map.SemanticDelta(class_id=7, evidence_delta=-0.25)
+                        ],
+                    )
+                ],
+            )
+        ]
+    )
+    expected = "0a1a080318062214080110021803250000403f2a07080715000080be"
+    assert bytes(update).hex() == expected
+
+
 # ─── Step 1 — auki.camera ────────────────────────────────────────────────────
 
 
@@ -156,6 +184,7 @@ def test_module_re_exports_all_packages():
         "camera",
         "detection",
         "joint_encoders",
+        "map",
         "point_cloud",
         "pose",
         "stream",

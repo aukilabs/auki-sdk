@@ -1,6 +1,6 @@
 # auki-registry-py
 
-PyO3 bindings for [`auki-registry`](../../../crates/auki-registry). Lets Python producers declare and persist Sensor / Clock / Frame / Detector Registry entries with the same content-addressed identity Rust uses.
+PyO3 bindings for [`auki-registry`](../../../crates/auki-registry). Lets Python producers declare and persist Sensor / Clock / Frame / Detector / Map Registry entries with the same content-addressed identity Rust uses. Voxel Maps use `voxel_map_entry`, `write_map`, and `read_map`.
 
 Mirrors the Rust API: dict-style constructors for entries, canonical-JSON + hash helpers, and hash-pinned `write_*` / `read_*` IO. Spatial sensors are validated against a `frame: RegistryRef` reference (a `{ "peer_id": ..., "id": ..., "hash": ... }` dict or `RegistryRef` pyclass instance).
 

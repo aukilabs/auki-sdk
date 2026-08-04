@@ -16,10 +16,12 @@ mod session;
 
 pub use error::{Result, SessionError};
 pub use log_handles::{
-    DetectionLogHandle, MaterializedLogHandle, PoseLogHandle, SensorLogHandle,
+    DetectionLogHandle, MapLogHandle, MaterializedLogHandle, PoseLogHandle, SensorLogHandle,
     TimeTransformLogHandle,
 };
-pub use log_specs::{DetectionLogSpec, HeadSpec, PoseLogSpec, SensorLogSpec, TimeTransformLogSpec};
+pub use log_specs::{
+    DetectionLogSpec, HeadSpec, MapLogSpec, PoseLogSpec, SensorLogSpec, TimeTransformLogSpec,
+};
 pub use materialization::MaterializationError;
 pub use peer::{FrameDef, Peer, PeerRegistries};
 pub use registry_store::RegistryStore;

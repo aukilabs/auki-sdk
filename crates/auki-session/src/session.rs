@@ -19,16 +19,19 @@ use auki_registry::{ClockBody, ClockMeta, ClockRegistryEntry, RegistryRef, Scope
 use parking_lot::RwLock;
 
 use auki_manifests::{
-    DetectionLogManifest, PoseLogManifest, SensorLogManifest, TimeTransformLogManifest,
+    DetectionLogManifest, MapLogManifest, PoseLogManifest, SensorLogManifest,
+    TimeTransformLogManifest,
 };
 use auki_registry::LogRef;
 
 use crate::error::{Result, SessionError};
 use crate::log_handles::{
-    DetectionLogHandle, MaterializedLogHandle, PoseLogHandle, SensorLogHandle,
+    DetectionLogHandle, MapLogHandle, MaterializedLogHandle, PoseLogHandle, SensorLogHandle,
     TimeTransformLogHandle,
 };
-use crate::log_specs::{DetectionLogSpec, PoseLogSpec, SensorLogSpec, TimeTransformLogSpec};
+use crate::log_specs::{
+    DetectionLogSpec, MapLogSpec, PoseLogSpec, SensorLogSpec, TimeTransformLogSpec,
+};
 use crate::materialization::MaterializationError;
 use crate::peer::PeerInner;
 use crate::registry_store::RegistryStore;
@@ -57,6 +60,7 @@ pub(crate) struct SessionInner {
     pub(crate) pose_logs: HashMap<String, Arc<PoseLogHandle>>,
     pub(crate) time_logs: HashMap<String, Arc<TimeTransformLogHandle>>,
     pub(crate) detection_logs: HashMap<String, Arc<DetectionLogHandle>>,
+    pub(crate) map_logs: HashMap<String, Arc<MapLogHandle>>,
 }
 
 /// Write a clock entry to disk and store it in `clocks`, returning its ref.
@@ -140,6 +144,7 @@ impl Session {
                 pose_logs: HashMap::new(),
                 time_logs: HashMap::new(),
                 detection_logs: HashMap::new(),
+                map_logs: HashMap::new(),
             })),
         })
     }
@@ -240,7 +245,8 @@ impl Session {
         };
 
         let mut inner = self.inner.write();
-        if inner.sensor_logs.contains_key(&resource_id) {
+        if inner.sensor_logs.contains_key(&resource_id) || inner.map_logs.contains_key(&resource_id)
+        {
             return Err(SessionError::DuplicateLog {
                 source_peer_id: peer_id,
                 resource_id,
@@ -301,7 +307,7 @@ impl Session {
         let (peer_id, app_id, storage_root) = self.peer_fields();
         let resource_id = format!("{}->{}", spec.from_frame.id, spec.to_frame.id);
         let mut inner = self.inner.write();
-        if inner.pose_logs.contains_key(&resource_id) {
+        if inner.pose_logs.contains_key(&resource_id) || inner.map_logs.contains_key(&resource_id) {
             return Err(SessionError::DuplicateLog {
                 source_peer_id: peer_id,
                 resource_id,
@@ -363,7 +369,7 @@ impl Session {
         let (peer_id, app_id, storage_root) = self.peer_fields();
         let resource_id = format!("{}->{}", spec.from_clock.id, spec.to_clock.id);
         let mut inner = self.inner.write();
-        if inner.time_logs.contains_key(&resource_id) {
+        if inner.time_logs.contains_key(&resource_id) || inner.map_logs.contains_key(&resource_id) {
             return Err(SessionError::DuplicateLog {
                 source_peer_id: peer_id,
                 resource_id,
@@ -422,7 +428,9 @@ impl Session {
         let (peer_id, app_id, storage_root) = self.peer_fields();
         let resource_id = format!("{}@{}", spec.detector.id, spec.input_sensor.id);
         let mut inner = self.inner.write();
-        if inner.detection_logs.contains_key(&resource_id) {
+        if inner.detection_logs.contains_key(&resource_id)
+            || inner.map_logs.contains_key(&resource_id)
+        {
             return Err(SessionError::DuplicateLog {
                 source_peer_id: peer_id,
                 resource_id,
@@ -469,6 +477,96 @@ impl Session {
                 manifest,
                 head_spec,
             }),
+        );
+        Ok(handle)
+    }
+
+    /// Register the append-only update log for a locally-owned Map resource.
+    /// The map ID is the stable resource ID, which keeps map discovery and
+    /// remote materialization peer-agnostic.
+    pub fn register_map_log(&self, spec: MapLogSpec) -> Result<MapLogHandle> {
+        let resource_id = spec.map.id.clone();
+        let clock_known = self.contains_clock_ref(&spec.clock);
+        let (peer_id, app_id, storage_root, map_known) = {
+            let p = self.peer.read();
+            (
+                p.peer_id.clone(),
+                p.app_id.clone(),
+                p.storage_root.clone(),
+                p.maps.get(&spec.map.id).is_some_and(|entry| {
+                    spec.map.peer_id == p.peer_id
+                        && spec.map.id == entry.map_id
+                        && spec.map.hash == entry.hash()
+                }),
+            )
+        };
+        if !map_known {
+            return Err(SessionError::MapNotRegistered {
+                peer_id: spec.map.peer_id,
+                map_id: spec.map.id,
+                map_hash: spec.map.hash,
+            });
+        }
+        if !clock_known {
+            return Err(SessionError::ClockNotRegistered {
+                peer_id: spec.clock.peer_id,
+                clock_id: spec.clock.id,
+                clock_hash: spec.clock.hash,
+            });
+        }
+        let mut inner = self.inner.write();
+        if inner.map_logs.contains_key(&resource_id)
+            || inner.sensor_logs.contains_key(&resource_id)
+            || inner.pose_logs.contains_key(&resource_id)
+            || inner.time_logs.contains_key(&resource_id)
+            || inner.detection_logs.contains_key(&resource_id)
+        {
+            return Err(SessionError::DuplicateLog {
+                source_peer_id: peer_id,
+                resource_id,
+            });
+        }
+        let head_spec = spec.head.clone();
+        let manifest = MapLogManifest {
+            source_peer_id: peer_id.clone(),
+            writer_peer_id: peer_id.clone(),
+            app_id,
+            session_id: inner.session_id.clone(),
+            map: spec.map,
+            clock: spec.clock,
+            segment_duration_ns: spec.segment_duration.as_nanos().min(i64::MAX as u128) as i64,
+            retention_ns: spec.retention.as_nanos().min(i64::MAX as u128) as i64,
+        };
+        let root = storage_root.join("logs").join(&peer_id).join(&resource_id);
+        let writer = Arc::new(parking_lot::Mutex::new(auki_logs::Log::open(
+            &root,
+            serde_json::to_value(&manifest).unwrap_or_else(|_| panic!("MapLogManifest serializes")),
+        )?));
+        let (updates, _) = tokio::sync::broadcast::channel(1024);
+        let log_ref = LogRef {
+            source_peer_id: peer_id,
+            resource_id: resource_id.clone(),
+        };
+        let handle = MapLogHandle::with_writer(
+            resource_id.clone(),
+            log_ref.clone(),
+            manifest.clone(),
+            head_spec.clone(),
+            root.clone(),
+            writer.clone(),
+            updates.clone(),
+        );
+        inner.map_logs.insert(
+            resource_id.clone(),
+            Arc::new(MapLogHandle::with_writer(
+                resource_id,
+                log_ref,
+                manifest,
+                head_spec,
+                root,
+                writer,
+                updates,
+            )),
         );
         Ok(handle)
     }
@@ -533,6 +631,9 @@ impl SessionLogs {
     }
     pub fn detection_logs(&self) -> Vec<Arc<DetectionLogHandle>> {
         self.inner.read().detection_logs.values().cloned().collect()
+    }
+    pub fn map_logs(&self) -> Vec<Arc<MapLogHandle>> {
+        self.inner.read().map_logs.values().cloned().collect()
     }
 }
 
@@ -951,6 +1052,185 @@ mod session_logs_tests {
         assert_eq!(sensor_logs.len(), 1);
         assert_eq!(sensor_logs[0].resource_id(), "head_left_rgb");
         assert_eq!(sensor_logs[0].manifest.source_peer_id, "galbot");
+    }
+
+    #[test]
+    fn logs_view_reflects_registered_map_log() {
+        use crate::MapLogSpec;
+        use auki_registry::{FiniteF64, MapBody, VoxelMap, VoxelValueModel};
+        let tmp = tempdir().unwrap();
+        let peer = Peer::new("galbot", "ctrl").with_storage_root(tmp.path().to_path_buf());
+        let session = peer.start_session().unwrap();
+        let frame = peer.register_frame("world", FrameDef::ros_body()).unwrap();
+        let map = peer
+            .register_map(
+                "occupancy",
+                MapBody::Voxel(VoxelMap {
+                    frame,
+                    voxel_size_m: FiniteF64(0.05),
+                    chunk_dimension: 64,
+                    value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                    semantic_classes: vec![],
+                }),
+            )
+            .unwrap();
+        let handle = session
+            .register_map_log(MapLogSpec {
+                map: map.clone(),
+                clock: session.monotonic_clock(),
+                head: HeadSpec::Fixed,
+                segment_duration: Duration::from_secs(1),
+                retention: Duration::ZERO,
+            })
+            .unwrap();
+        handle
+            .append(
+                42,
+                &auki_datatypes::map::MapUpdate {
+                    voxel_chunks: vec![auki_datatypes::map::VoxelChunkUpdate {
+                        chunk_x: -1,
+                        chunk_y: 0,
+                        chunk_z: 2,
+                        voxels: vec![auki_datatypes::map::VoxelDelta {
+                            x: 3,
+                            y: 4,
+                            z: 5,
+                            occupancy_delta: 0.8,
+                            semantics: vec![],
+                        }],
+                    }],
+                },
+            )
+            .unwrap();
+        assert_eq!(handle.entries().unwrap().len(), 1);
+        assert_eq!(handle.resource_id(), "occupancy");
+        assert_eq!(session.logs().map_logs().len(), 1);
+    }
+
+    #[test]
+    fn register_map_log_rejects_a_stale_map_registry_reference() {
+        use crate::MapLogSpec;
+        use auki_registry::{FiniteF64, MapBody, VoxelMap, VoxelValueModel};
+        let tmp = tempdir().unwrap();
+        let peer = Peer::new("galbot", "ctrl").with_storage_root(tmp.path().to_path_buf());
+        let session = peer.start_session().unwrap();
+        let frame = peer.register_frame("world", FrameDef::ros_body()).unwrap();
+        let mut map = peer
+            .register_map(
+                "occupancy",
+                MapBody::Voxel(VoxelMap {
+                    frame,
+                    voxel_size_m: FiniteF64(0.05),
+                    chunk_dimension: 64,
+                    value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                    semantic_classes: vec![],
+                }),
+            )
+            .unwrap();
+        map.hash = "stale".into();
+        assert!(matches!(
+            session.register_map_log(MapLogSpec {
+                map,
+                clock: session.monotonic_clock(),
+                head: HeadSpec::Fixed,
+                segment_duration: Duration::from_secs(1),
+                retention: Duration::ZERO,
+            }),
+            Err(SessionError::MapNotRegistered { .. })
+        ));
+    }
+
+    #[test]
+    fn voxelizer_update_persists_and_replays_through_a_map_log() {
+        use crate::MapLogSpec;
+        use auki_datatypes::pose::{Quat, SpatialTransform, Vec3};
+        use auki_mappers::Voxelizer;
+        use auki_registry::{FiniteF64, MapBody, VoxelMap, VoxelValueModel};
+        let tmp = tempdir().unwrap();
+        let peer = Peer::new("galbot", "ctrl").with_storage_root(tmp.path().to_path_buf());
+        let session = peer.start_session().unwrap();
+        let frame = peer.register_frame("world", FrameDef::ros_body()).unwrap();
+        let map_contract = VoxelMap {
+            frame,
+            voxel_size_m: FiniteF64(1.0),
+            chunk_dimension: 64,
+            value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+            semantic_classes: vec![],
+        };
+        let map = peer
+            .register_map("occupancy", MapBody::Voxel(map_contract.clone()))
+            .unwrap();
+        let log = session
+            .register_map_log(MapLogSpec {
+                map: map.clone(),
+                clock: session.monotonic_clock(),
+                head: HeadSpec::Fixed,
+                segment_duration: Duration::from_secs(1),
+                retention: Duration::ZERO,
+            })
+            .unwrap();
+        let pose = SpatialTransform {
+            translation: Some(Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            }),
+            orientation: Some(Quat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            }),
+        };
+        let update = Voxelizer::new(1.0, 64)
+            .unwrap()
+            .map_sensor_rays(
+                [Vec3 {
+                    x: 2.0,
+                    y: 0.0,
+                    z: 0.0,
+                }],
+                &pose,
+                -0.2,
+                0.8,
+            )
+            .unwrap();
+        log.append(100, &update).unwrap();
+        let entries = log.entries().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(
+            entries[0].payload.voxel_chunks[0]
+                .voxels
+                .iter()
+                .any(|v| v.occupancy_delta > 0.0)
+        );
+        assert!(
+            entries[0].payload.voxel_chunks[0]
+                .voxels
+                .iter()
+                .any(|v| v.occupancy_delta < 0.0)
+        );
+
+        let mut accumulated =
+            auki_maps::VoxelMapAccumulator::new(map.clone(), map_contract).unwrap();
+        let mut applied = None;
+        for entry in entries {
+            applied = Some(accumulated.apply(&entry.payload).unwrap());
+        }
+        let viewer = accumulated.viewer_snapshot(0.0).unwrap();
+        assert_eq!(viewer.map, map);
+        assert_eq!(viewer.frame.id, "world");
+        assert_eq!(viewer.chunks.len(), 1);
+        assert_eq!(viewer.chunks[0].voxels[0].center_m, [2.5, 0.5, 0.5]);
+        let adapter = auki_maps::VoxelViewerAdapter::new(Default::default()).unwrap();
+        let render_updates = adapter
+            .changed_chunks(&accumulated, &applied.unwrap())
+            .unwrap();
+        let auki_maps::ChunkRenderUpdate::Replace { instances, .. } = &render_updates[0] else {
+            panic!("occupied Galbot voxel must produce a chunk instance buffer")
+        };
+        assert_eq!(instances[0].center_m, [2.5, 0.5, 0.5]);
+        assert_eq!(instances[0].edge_length_m, 0.92);
     }
 
     #[tokio::test]

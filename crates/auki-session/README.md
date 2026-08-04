@@ -17,8 +17,9 @@ Shipped in SDK #216 (2026-05-27) as a `Session`-centric API; split into `Peer` /
 - `Peer::register_sensor(sensor_id, SensorBody)` — writes the entry under `registries/sensors/<peer_id>/<sensor_id>/<hash>.json`; returns a `RegistryRef { peer_id, id, hash }`.
 - `Peer::register_frame(frame_id, FrameDef)` — `FrameDef` presets: `ros_body()`, `ros_optical()`, `opengl()`, `unity()`.
 - `Peer::register_detector(detector_id, DetectorBody, output_types)`.
+- `Peer::register_map(map_id, MapBody)` — writes the immutable Map contract and returns its content-addressed `RegistryRef`.
 - `Peer::start_session()` → `Session` — mints a fresh ULID `session_id` and auto-registers the session's clock pair (below).
-- `Peer::registries()` → `PeerRegistries` — read handle (`sensor(id)`, `frame(id)`, `detector(id)`); consumed by `auki-domain` to resolve entries at catalog-build time.
+- `Peer::registries()` → `PeerRegistries` — read handle (`sensor(id)`, `frame(id)`, `detector(id)`, `map(id)`); consumed by `auki-domain` to resolve entries at catalog-build time.
 
 All IDs are validated — `>`, `@`, and whitespace are rejected.
 
@@ -29,18 +30,19 @@ There is no public `Session` constructor: sessions come from `Peer::start_sessio
 - Read accessors: `peer_id()`, `app_id()`, `session_id()`, `storage_root()` — read live through the shared peer state.
 - `Session::monotonic_clock()` / `utc_clock()` → `RegistryRef` — the auto-minted pair; pass these into log specs.
 - `Session::register_clock(clock_id, ClockBody)` — additional session-scoped clocks.
-- `Session::logs()` → `SessionLogs` — read handle (`sensor_logs()`, `pose_logs()`, `time_logs()`, `detection_logs()`); consumed by `auki-domain` for live catalog snapshots.
+- `Session::logs()` → `SessionLogs` — read handle (`sensor_logs()`, `pose_logs()`, `time_logs()`, `detection_logs()`, `map_logs()`); consumed by `auki-domain` for live catalog snapshots.
 
 ### Log registration
 
-Each returns a typed handle carrying `resource_id`, `log_ref: LogRef`, and the full manifest. Duplicate `(source_peer_id, resource_id)` pairs are rejected with `SessionError::DuplicateLog`. Handles are *declarations* — the app still opens the `auki-logs` `Log<T>` at the layout path and runs the append loop.
+Each returns a typed handle carrying `resource_id`, `log_ref: LogRef`, and the full manifest. Duplicate `(source_peer_id, resource_id)` pairs are rejected with `SessionError::DuplicateLog`.
 
 - `Session::register_sensor_log(SensorLogSpec)` → `SensorLogHandle` — `resource_id` is `sensor.id`.
 - `Session::register_pose_log(PoseLogSpec)` → `PoseLogHandle` — `resource_id` is `"<from_frame.id>-><to_frame.id>"`.
 - `Session::register_time_transform_log(TimeTransformLogSpec)` → `TimeTransformLogHandle` — `resource_id` is `"<from_clock.id>-><to_clock.id>"`.
 - `Session::register_detection_log(DetectionLogSpec)` → `DetectionLogHandle` — `resource_id` is `"<detector.id>@<input_sensor.id>"`.
+- `Session::register_map_log(MapLogSpec)` → `MapLogHandle` — `resource_id` is the Map id. This handle owns the durable `Log<MapUpdate>` writer and provides append, replay, live subscription, and an atomic replay/live boundary.
 
-Log spec types (`SensorLogSpec`, `PoseLogSpec`, `TimeTransformLogSpec`, `DetectionLogSpec`) and `HeadSpec` (`Rolling { retention_ns }` / `Fixed`) live in `auki_session::log_specs`.
+Log spec types (`SensorLogSpec`, `PoseLogSpec`, `TimeTransformLogSpec`, `DetectionLogSpec`, `MapLogSpec`) and `HeadSpec` (`Rolling { retention_ns }` / `Fixed`) live in `auki_session::log_specs`.
 
 ### Materialization stubs (Phase 5, not yet implemented)
 

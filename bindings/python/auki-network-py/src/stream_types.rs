@@ -25,6 +25,7 @@
 use auki_datatypes::{
     audio::Data as RustAudioFrame,
     joint_encoders::Data as RustJointEncodersFrame,
+    map::MapUpdate as RustMapUpdate,
     point_cloud::Data as RustPointCloudFrame,
     pose::{
         Quat as RustPoseQuat, SpatialTransform as RustPoseSpatialTransform, Vec3 as RustPoseVec3,
@@ -171,6 +172,32 @@ impl PyStreamManifest {
         }
     }
 
+    #[staticmethod]
+    #[pyo3(signature = (*, resource_id, map_peer_id, map_id, map_hash, clock_peer_id, clock_id, clock_hash))]
+    fn map_stream(
+        resource_id: String,
+        map_peer_id: String,
+        map_id: String,
+        map_hash: String,
+        clock_peer_id: String,
+        clock_id: String,
+        clock_hash: String,
+    ) -> Self {
+        Self {
+            inner: RustStreamManifest {
+                resource_id,
+                payload: "map_update".into(),
+                map_peer_id,
+                map_id,
+                map_hash,
+                clock_peer_id,
+                clock_id,
+                clock_hash,
+                ..Default::default()
+            },
+        }
+    }
+
     #[getter]
     fn sensor_id(&self) -> &str {
         &self.inner.sensor_id
@@ -239,6 +266,26 @@ impl PyStreamManifest {
     #[getter]
     fn expected_rate_hz(&self) -> u32 {
         self.inner.expected_rate_hz
+    }
+
+    #[getter]
+    fn map_peer_id(&self) -> &str {
+        &self.inner.map_peer_id
+    }
+
+    #[getter]
+    fn map_id(&self) -> &str {
+        &self.inner.map_id
+    }
+
+    #[getter]
+    fn map_hash(&self) -> &str {
+        &self.inner.map_hash
+    }
+
+    #[getter]
+    fn clock_peer_id(&self) -> &str {
+        &self.inner.clock_peer_id
     }
 
     fn __repr__(&self) -> String {
@@ -608,6 +655,45 @@ impl PySpatialTransformFrame {
     }
 }
 
+// ─── MapUpdateFrame ─────────────────────────────────────────────────────────
+
+/// Encoded SDK `MapUpdate` stream payload. Construction validates the
+/// protobuf once; `.data` returns the canonical encoded bytes for replay into
+/// an SDK map accumulator.
+#[pyclass(name = "MapUpdateFrame", frozen)]
+#[derive(Clone, Debug)]
+pub struct PyMapUpdateFrame {
+    pub(crate) inner: RustMapUpdate,
+}
+
+#[pymethods]
+impl PyMapUpdateFrame {
+    #[new]
+    #[pyo3(signature = (data, /))]
+    fn new(data: Bound<'_, PyBytes>) -> PyResult<Self> {
+        let inner = RustMapUpdate::decode(data.as_bytes())
+            .map_err(|e| PyValueError::new_err(format!("invalid MapUpdate bytes: {e}")))?;
+        Ok(Self { inner })
+    }
+
+    #[getter]
+    fn data<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new_bound(py, &self.inner.encode_to_vec())
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.encoded_len()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("MapUpdateFrame(<{} bytes>)", self.inner.encoded_len())
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
 // ─── DeclineReason ───────────────────────────────────────────────────────────
 
 /// Tagged union mirroring [`RustDeclineReason`]. Construct via the
@@ -789,6 +875,7 @@ pub(crate) enum StreamPayload {
     JointEncoders(PyJointEncodersFrame),
     Audio(PyAudioFrame),
     Pose(PySpatialTransformFrame),
+    Map(PyMapUpdateFrame),
 }
 
 impl StreamPayload {
@@ -808,8 +895,11 @@ impl StreamPayload {
         if let Ok(pose) = payload.extract::<PySpatialTransformFrame>() {
             return Ok(Self::Pose(pose));
         }
+        if let Ok(map) = payload.extract::<PyMapUpdateFrame>() {
+            return Ok(Self::Map(map));
+        }
         Err(PyValueError::new_err(format!(
-            "stream payload must be a CameraFrame, PointCloudFrame, JointEncodersFrame, AudioFrame, or SpatialTransformFrame; got {}",
+            "stream payload must be a CameraFrame, PointCloudFrame, JointEncodersFrame, AudioFrame, SpatialTransformFrame, or MapUpdateFrame; got {}",
             payload
                 .repr()
                 .map(|r| r.to_string())
@@ -828,6 +918,7 @@ impl StreamPayload {
             Self::Pose(f) => Py::new(py, f)
                 .expect("alloc SpatialTransformFrame")
                 .into_py(py),
+            Self::Map(f) => Py::new(py, f).expect("alloc MapUpdateFrame").into_py(py),
         }
     }
 
@@ -838,6 +929,7 @@ impl StreamPayload {
             Self::JointEncoders(f) => f.__repr__(),
             Self::Audio(f) => f.__repr__(),
             Self::Pose(f) => f.__repr__(),
+            Self::Map(f) => f.__repr__(),
         }
     }
 }
@@ -979,6 +1071,19 @@ impl PyStreamItem {
             )),
         }
     }
+
+    pub(crate) fn to_rust_map(&self) -> Result<RustStreamItem<RustMapUpdate>, String> {
+        match &self.payload {
+            StreamPayload::Map(f) => Ok(RustStreamItem {
+                timestamp_ns: self.timestamp_ns,
+                payload: f.inner.clone(),
+            }),
+            other => Err(format!(
+                "AcceptMap source yielded a StreamItem with {} payload; the substream is mono-T",
+                other.kind_name(),
+            )),
+        }
+    }
 }
 
 impl StreamPayload {
@@ -989,6 +1094,7 @@ impl StreamPayload {
             Self::JointEncoders(_) => "JointEncodersFrame",
             Self::Audio(_) => "AudioFrame",
             Self::Pose(_) => "SpatialTransformFrame",
+            Self::Map(_) => "MapUpdateFrame",
         }
     }
 }
@@ -1089,6 +1195,16 @@ impl PyStreamEntry {
             }),
         }
     }
+
+    fn from_rust_map(frame: RustStreamEntry<RustMapUpdate>) -> Self {
+        Self {
+            timestamp_ns: frame.timestamp_ns,
+            seq: frame.seq,
+            payload: StreamPayload::Map(PyMapUpdateFrame {
+                inner: frame.payload,
+            }),
+        }
+    }
 }
 
 // ─── StreamDecision ──────────────────────────────────────────────────────────
@@ -1150,6 +1266,14 @@ pub(crate) enum DecisionInner {
     AcceptPose {
         manifest: PyStreamManifest,
         source: Py<PyAny>,
+    },
+    AcceptMap {
+        manifest: PyStreamManifest,
+        source: Py<PyAny>,
+    },
+    AcceptMapRetained {
+        manifest: PyStreamManifest,
+        source: RustRetainedStreamSource,
     },
     Decline {
         reason: PyDeclineReason,
@@ -1225,6 +1349,15 @@ impl PyStreamDecision {
         }
     }
 
+    /// Accept an SDK Map Log source yielding `MapUpdateFrame` values.
+    #[staticmethod]
+    #[pyo3(signature = (*, manifest, source))]
+    fn accept_map(manifest: PyStreamManifest, source: Py<PyAny>) -> Self {
+        Self {
+            inner: Mutex::new(Some(DecisionInner::AcceptMap { manifest, source })),
+        }
+    }
+
     /// Accept the request with an SDK-owned retained log source created
     /// by `auki_logs.Log.stream_source(...)`. This is the recommended
     /// producer API for apps: the SDK builds the stream manifest,
@@ -1254,9 +1387,13 @@ impl PyStreamDecision {
                 manifest,
                 source: retained,
             },
+            "map" => DecisionInner::AcceptMapRetained {
+                manifest,
+                source: retained,
+            },
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "payload_kind must be one of camera, pointcloud, joint_encoders, or audio; got {other:?}"
+                    "payload_kind must be one of camera, pointcloud, joint_encoders, audio, or map; got {other:?}"
                 )));
             }
         };
@@ -1291,6 +1428,8 @@ impl PyStreamDecision {
             Some(DecisionInner::AcceptAudio { .. })
             | Some(DecisionInner::AcceptAudioRetained { .. }) => "accept_audio",
             Some(DecisionInner::AcceptPose { .. }) => "accept_pose",
+            Some(DecisionInner::AcceptMap { .. })
+            | Some(DecisionInner::AcceptMapRetained { .. }) => "accept_map",
             Some(DecisionInner::Decline { .. }) => "decline",
             None => "consumed",
         }
@@ -1496,6 +1635,27 @@ pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
                         source: source_stream,
                     }
                 }
+                Ok(DecisionInner::AcceptMap { manifest, source }) => {
+                    let source_stream =
+                        python_iter_into_source_stream::<RustMapUpdate>(source, |pf| {
+                            pf.to_rust_map()
+                        });
+                    RustStreamDispatch::AcceptMap {
+                        manifest: manifest.inner,
+                        source: source_stream,
+                    }
+                }
+                Ok(DecisionInner::AcceptMapRetained { manifest, source }) => {
+                    match retained_log_into_source_stream(source, decode_retained_map, &read_from) {
+                        Ok(source) => RustStreamDispatch::AcceptMap {
+                            manifest: manifest.inner,
+                            source,
+                        },
+                        Err(e) => RustStreamDispatch::Decline {
+                            reason: RustDeclineReason::other(e.to_string()),
+                        },
+                    }
+                }
             }
         },
     )
@@ -1536,6 +1696,19 @@ fn retained_stream_source_from_python(
 }
 
 fn manifest_from_retained_source(source: &RustRetainedStreamSource) -> RustStreamManifest {
+    if source.payload_kind == "map" {
+        return RustStreamManifest {
+            resource_id: source.resource_id.clone(),
+            payload: "map_update".into(),
+            map_peer_id: source.map_peer_id.clone(),
+            map_id: source.map_id.clone(),
+            map_hash: source.map_hash.clone(),
+            clock_peer_id: source.clock_peer_id.clone(),
+            clock_id: source.clock_id.clone(),
+            clock_hash: source.clock_hash.clone(),
+            ..Default::default()
+        };
+    }
     RustStreamManifest {
         sensor_id: source.sensor_id.clone(),
         sensor_hash: source.sensor_hash.clone(),
@@ -1631,6 +1804,10 @@ struct RetainedSourceState {
 
 fn decode_retained_camera(bytes: Vec<u8>) -> Result<RustCameraFrame, String> {
     RustCameraFrame::decode(&*bytes).map_err(|e| e.to_string())
+}
+
+fn decode_retained_map(bytes: Vec<u8>) -> Result<RustMapUpdate, String> {
+    RustMapUpdate::decode(&*bytes).map_err(|e| e.to_string())
 }
 
 fn decode_retained_pointcloud(bytes: Vec<u8>) -> Result<RustPointCloudFrame, String> {
@@ -1778,6 +1955,8 @@ type RustPoseFrameStream = Pin<
             + Send,
     >,
 >;
+type RustMapFrameStream =
+    Pin<Box<dyn Stream<Item = Result<RustStreamEntry<RustMapUpdate>, RustStreamError>> + Send>>;
 
 /// Tagged union over the underlying typed entry stream the SDK returns
 /// for an open subscription. Each substream is mono-`T`, so the
@@ -1789,6 +1968,7 @@ enum EntryStreamKind {
     JointEncoders(RustJointEncodersFrameStream),
     Audio(RustAudioFrameStream),
     Pose(RustPoseFrameStream),
+    Map(RustMapFrameStream),
 }
 
 /// What `runtime.open_stream` / `runtime.open_pointcloud_stream`
@@ -1889,6 +2069,15 @@ impl PyStreamSubscription {
             entries: Mutex::new(Some(EntryStreamKind::Pose(rust_sub.entries))),
         }
     }
+
+    pub fn from_rust_map(rust_sub: RustStreamSubscription<RustMapUpdate>) -> Self {
+        Self {
+            manifest: PyStreamManifest {
+                inner: rust_sub.manifest,
+            },
+            entries: Mutex::new(Some(EntryStreamKind::Map(rust_sub.entries))),
+        }
+    }
 }
 
 /// Sync iterator over a [`PyStreamSubscription`]'s entries. Each
@@ -1911,6 +2100,7 @@ enum EntryNext {
     JointEncoders(Result<RustStreamEntry<RustJointEncodersFrame>, RustStreamError>),
     Audio(Result<RustStreamEntry<RustAudioFrame>, RustStreamError>),
     Pose(Result<RustStreamEntry<RustPoseSpatialTransform>, RustStreamError>),
+    Map(Result<RustStreamEntry<RustMapUpdate>, RustStreamError>),
     Done,
 }
 
@@ -1968,6 +2158,10 @@ impl PyStreamEntryIterator {
                         Some(item) => EntryNext::Pose(item),
                         None => EntryNext::Done,
                     },
+                    EntryStreamKind::Map(s) => match s.next().await {
+                        Some(item) => EntryNext::Map(item),
+                        None => EntryNext::Done,
+                    },
                 }
             })
         });
@@ -2013,11 +2207,20 @@ impl PyStreamEntryIterator {
                 *guard = Some(stream);
                 Ok(PyStreamEntry::from_rust_pose(frame))
             }
+            EntryNext::Map(Ok(frame)) => {
+                let mut guard = self
+                    .entries
+                    .lock()
+                    .expect("StreamEntryIterator mutex poisoned");
+                *guard = Some(stream);
+                Ok(PyStreamEntry::from_rust_map(frame))
+            }
             EntryNext::Camera(Err(stream_err))
             | EntryNext::PointCloud(Err(stream_err))
             | EntryNext::JointEncoders(Err(stream_err))
             | EntryNext::Audio(Err(stream_err))
-            | EntryNext::Pose(Err(stream_err)) => {
+            | EntryNext::Pose(Err(stream_err))
+            | EntryNext::Map(Err(stream_err)) => {
                 // Terminator. Don't put the stream back — exhausted.
                 Err(stream_error_to_pyerr(py, stream_err))
             }
@@ -2140,6 +2343,7 @@ pub(crate) fn register(py: Python<'_>, cluster: &Bound<'_, PyModule>) -> PyResul
     cluster.add_class::<PyJointEncodersFrame>()?;
     cluster.add_class::<PyAudioFrame>()?;
     cluster.add_class::<PySpatialTransformFrame>()?;
+    cluster.add_class::<PyMapUpdateFrame>()?;
     cluster.add_class::<PyDeclineReason>()?;
     cluster.add_class::<PyEndReason>()?;
     cluster.add_class::<PyStreamItem>()?;
@@ -2210,8 +2414,13 @@ mod tests {
     fn retained_source_for(root: &std::path::Path, payload_kind: &str) -> RustRetainedStreamSource {
         RustRetainedStreamSource {
             root: root.to_path_buf(),
+            resource_id: String::new(),
             sensor_id: format!("robot/{payload_kind}"),
             sensor_hash: "sensor-hash".into(),
+            map_peer_id: String::new(),
+            map_id: String::new(),
+            map_hash: String::new(),
+            clock_peer_id: String::new(),
             clock_id: "robot/clock".into(),
             clock_hash: "clock-hash".into(),
             payload_kind: payload_kind.into(),
@@ -2503,6 +2712,37 @@ mod tests {
 
         assert_eq!(got.timestamp_ns, 400);
         assert_eq!(got.payload.data, b"pcm");
+    }
+
+    #[test]
+    fn retained_map_source_replays_map_update_with_pinned_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let update = RustMapUpdate::default();
+        append_raw_payload(dir.path(), 500, update.encode_to_vec());
+        let mut source = retained_source_for(dir.path(), "map");
+        source.resource_id = "voxel/world".into();
+        source.map_peer_id = "peer-a".into();
+        source.map_id = "voxel/world".into();
+        source.map_hash = "map-hash".into();
+        source.clock_peer_id = "peer-a".into();
+
+        let manifest = manifest_from_retained_source(&source);
+        assert_eq!(manifest.payload, "map_update");
+        assert_eq!(manifest.resource_id, "voxel/world");
+        assert_eq!(manifest.map_hash, "map-hash");
+
+        let mut stream = retained_log_into_source_stream(
+            source,
+            decode_retained_map,
+            &RustReadFrom::FromStart,
+        )
+        .unwrap();
+        let got = crate::cluster_tokio_runtime()
+            .block_on(async { stream.next().await })
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.timestamp_ns, 500);
+        assert_eq!(got.payload, update);
     }
 
     #[test]

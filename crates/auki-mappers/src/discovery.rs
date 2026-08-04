@@ -279,8 +279,9 @@ mod tests {
             &self.clock
         }
 
-        fn append<'a>(
+        fn append_from<'a>(
             &'a self,
+            _alignment_clock: &'a RegistryRef,
             _timestamp_ns: i64,
             update: &'a MapUpdate,
         ) -> BoxFuture<'a, Result<(), crate::MapSinkError>> {

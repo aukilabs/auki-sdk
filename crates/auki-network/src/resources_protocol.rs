@@ -213,6 +213,8 @@ pub struct TimeTransformManifestPointer {
 /// Manifest pointer for `detection_log` variant rows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DetectionManifestPointer {
+    /// Application-chosen identity for this running detector instance.
+    pub instance_id: String,
     /// Detector registry reference.
     pub detector: RegistryRef,
     /// Input log reference (source_peer_id + resource_id).
@@ -221,6 +223,8 @@ pub struct DetectionManifestPointer {
     pub input_sensor: RegistryRef,
     /// Clock registry reference.
     pub clock: RegistryRef,
+    /// Requested detector execution cadence.
+    pub cadence: auki_manifests::DetectionCadence,
 }
 
 // ── VariantContent enum ──────────────────────────────────────────────────────
@@ -574,6 +578,7 @@ mod tests {
             pose: None,
             variant_content: VariantContent::DetectionLog {
                 manifest: DetectionManifestPointer {
+                    instance_id: "yolo-head-left".to_string(),
                     detector: RegistryRef {
                         peer_id: "galbot".to_string(),
                         id: "yolo_v8".to_string(),
@@ -593,6 +598,7 @@ mod tests {
                         id: "session/sdk_clock".to_string(),
                         hash: "ch".to_string(),
                     },
+                    cadence: auki_manifests::DetectionCadence::EveryFrame,
                 },
             },
         };

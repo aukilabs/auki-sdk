@@ -5,6 +5,7 @@ use auki_manifests::{
     TimeTransformLogManifest,
 };
 use auki_registry::LogRef;
+use std::path::{Path, PathBuf};
 
 use crate::log_specs::HeadSpec;
 
@@ -17,6 +18,7 @@ pub struct SensorLogHandle {
     pub manifest: SensorLogManifest,
     /// Head window spec, used for catalog row production.
     pub head_spec: HeadSpec,
+    pub(crate) root: PathBuf,
 }
 
 impl SensorLogHandle {
@@ -25,6 +27,9 @@ impl SensorLogHandle {
     }
     pub fn log_ref(&self) -> &LogRef {
         &self.log_ref
+    }
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 }
 
@@ -37,6 +42,7 @@ pub struct PoseLogHandle {
     pub head_spec: HeadSpec,
     /// Writer mode (derived from spec).
     pub writer_mode: PoseWriterMode,
+    pub(crate) root: PathBuf,
 }
 
 impl PoseLogHandle {
@@ -45,6 +51,9 @@ impl PoseLogHandle {
     }
     pub fn log_ref(&self) -> &LogRef {
         &self.log_ref
+    }
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 }
 
@@ -55,6 +64,7 @@ pub struct TimeTransformLogHandle {
     pub manifest: TimeTransformLogManifest,
     /// Head window spec, used for catalog row production.
     pub head_spec: HeadSpec,
+    pub(crate) root: PathBuf,
 }
 
 impl TimeTransformLogHandle {
@@ -63,6 +73,9 @@ impl TimeTransformLogHandle {
     }
     pub fn log_ref(&self) -> &LogRef {
         &self.log_ref
+    }
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 }
 
@@ -73,6 +86,7 @@ pub struct DetectionLogHandle {
     pub manifest: DetectionLogManifest,
     /// Head window spec, used for catalog row production.
     pub head_spec: HeadSpec,
+    pub(crate) root: PathBuf,
 }
 
 impl DetectionLogHandle {
@@ -81,6 +95,9 @@ impl DetectionLogHandle {
     }
     pub fn log_ref(&self) -> &LogRef {
         &self.log_ref
+    }
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 }
 

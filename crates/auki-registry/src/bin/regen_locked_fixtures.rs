@@ -124,7 +124,9 @@ fn make_sensor_camera_rgb() -> SensorRegistryEntry {
             width: 1920,
             height: 1200,
             frame_rate_hz: 30,
+            image_encoding: "raw".into(),
             pixel_format: "rgb8".into(),
+            row_stride_bytes: 1920 * 3,
             color_space: "srgb".into(),
             intrinsics_model: "pinhole".into(),
             distortion_model: "brown_conrady".into(),
@@ -143,7 +145,9 @@ fn make_sensor_camera_depth() -> SensorRegistryEntry {
             width: 640,
             height: 480,
             frame_rate_hz: 30,
+            image_encoding: "raw".into(),
             pixel_format: "16uc1".into(),
+            row_stride_bytes: 640 * 2,
             color_space: "depth".into(),
             intrinsics_model: "pinhole".into(),
             distortion_model: "brown_conrady".into(),
@@ -335,6 +339,7 @@ fn make_detector_object_detection() -> DetectorRegistryEntry {
         body: DetectorBody::ObjectDetection(ObjectDetection {
             model: "yolo_v8n".into(),
         }),
+        input_types: vec![],
         output_types: vec!["object_detection".into()],
     }
 }

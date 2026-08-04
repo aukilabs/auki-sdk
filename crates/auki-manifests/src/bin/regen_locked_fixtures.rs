@@ -13,8 +13,8 @@
 //! two sets of fixtures in sync.
 
 use auki_manifests::{
-    DetectionLogManifest, PoseLogManifest, PoseSource, PoseWriterMode, SensorLogManifest,
-    TimeTransformLogManifest, TimeTransformSource,
+    DetectionCadence, DetectionLogManifest, PoseLogManifest, PoseSource, PoseWriterMode,
+    SensorLogManifest, TimeTransformLogManifest, TimeTransformSource,
 };
 use auki_registry::{LogRef, RegistryRef};
 use std::fs;
@@ -68,7 +68,7 @@ fn sensor_head_left_rgb() -> RegistryRef {
         peer_id: "galbot".into(),
         id: "head_left_rgb".into(),
         // auki-registry sensor_camera_rgb.json hash
-        hash: "8295922307fa2b426453486ba87a59ef".into(),
+        hash: "7777653792d253b35e994f878206cc34".into(),
     }
 }
 
@@ -128,7 +128,7 @@ fn detector_yolo_v8() -> RegistryRef {
         peer_id: "galbot".into(),
         id: "yolo_v8".into(),
         // auki-registry detector_object_detection.json hash
-        hash: "031308c146a2f6f086713388dc01f60e".into(),
+        hash: "ce9df764679231887e47fd0a58518d1e".into(),
     }
 }
 
@@ -235,6 +235,7 @@ fn make_detection_log() -> DetectionLogManifest {
         writer_peer_id: "galbot".into(),
         app_id: "galbot-control-plane".into(),
         session_id: "01HV-galbot-session".into(),
+        instance_id: "yolo-head-left-30hz".into(),
         detector: detector_yolo_v8(),
         input_log: LogRef {
             source_peer_id: "galbot".into(),
@@ -242,6 +243,7 @@ fn make_detection_log() -> DetectionLogManifest {
         },
         input_sensor: sensor_head_left_rgb(),
         clock: clock_sdk("galbot"),
+        cadence: DetectionCadence::EveryFrame,
         segment_duration_ns: 1_000_000_000,
         retention_ns: 60_000_000_000,
     }

@@ -104,7 +104,7 @@ fn sensor_head_left_rgb() -> RegistryRef {
     RegistryRef {
         peer_id: "galbot".into(),
         id: "head_left_rgb".into(),
-        hash: "8295922307fa2b426453486ba87a59ef".into(),
+        hash: "7777653792d253b35e994f878206cc34".into(),
     }
 }
 
@@ -167,7 +167,7 @@ fn detector_yolo_v8() -> RegistryRef {
     RegistryRef {
         peer_id: "galbot".into(),
         id: "yolo_v8".into(),
-        hash: "031308c146a2f6f086713388dc01f60e".into(),
+        hash: "ce9df764679231887e47fd0a58518d1e".into(),
     }
 }
 
@@ -199,7 +199,7 @@ fn make_sensor_camera_live_rolling() -> ResourceEntry {
             kind: SensorKind::Camera,
             r#type: "rgb".into(),
             sensor_id: "head_left_rgb".into(),
-            sensor_hash: "8295922307fa2b426453486ba87a59ef".into(),
+            sensor_hash: "7777653792d253b35e994f878206cc34".into(),
         }),
         pose: None,
         variant_content: VariantContent::SensorLog {
@@ -266,7 +266,7 @@ fn make_sensor_sealed() -> ResourceEntry {
             kind: SensorKind::Camera,
             r#type: "rgb".into(),
             sensor_id: "head_left_rgb".into(),
-            sensor_hash: "8295922307fa2b426453486ba87a59ef".into(),
+            sensor_hash: "7777653792d253b35e994f878206cc34".into(),
         }),
         pose: None,
         variant_content: VariantContent::SensorLog {
@@ -299,7 +299,7 @@ fn make_sensor_materialization() -> ResourceEntry {
             kind: SensorKind::Camera,
             r#type: "rgb".into(),
             sensor_id: "head_left_rgb".into(),
-            sensor_hash: "8295922307fa2b426453486ba87a59ef".into(),
+            sensor_hash: "7777653792d253b35e994f878206cc34".into(),
         }),
         pose: None,
         variant_content: VariantContent::SensorLog {
@@ -408,12 +408,12 @@ fn make_time_transform() -> ResourceEntry {
     }
 }
 
-/// Detection log — yolo_v8@head_left_rgb, live rolling 5s.
+/// Detection log — one named YOLO instance, live rolling 5s.
 fn make_detection() -> ResourceEntry {
     ResourceEntry {
         source_peer_id: "galbot".into(),
         writer_peer_id: "galbot".into(),
-        resource_id: "yolo_v8@head_left_rgb".into(),
+        resource_id: "yolo-head-left-30hz".into(),
         state: "live".into(),
         head: Some(Head::Rolling {
             retention_ns: 5_000_000_000,
@@ -428,6 +428,7 @@ fn make_detection() -> ResourceEntry {
         pose: None,
         variant_content: VariantContent::DetectionLog {
             manifest: DetectionManifestPointer {
+                instance_id: "yolo-head-left-30hz".into(),
                 detector: detector_yolo_v8(),
                 input_log: LogRef {
                     source_peer_id: "galbot".into(),
@@ -435,6 +436,7 @@ fn make_detection() -> ResourceEntry {
                 },
                 input_sensor: sensor_head_left_rgb(),
                 clock: clock_sdk(),
+                cadence: auki_manifests::DetectionCadence::EveryFrame,
             },
         },
     }

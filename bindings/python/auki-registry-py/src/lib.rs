@@ -253,7 +253,7 @@ fn point_field(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (*, peer_id, sensor_id, sensor_type, width, height, frame_rate_hz, pixel_format, color_space, intrinsics_model, distortion_model, frame))]
+#[pyo3(signature = (*, peer_id, sensor_id, sensor_type, width, height, frame_rate_hz, image_encoding, pixel_format, row_stride_bytes, color_space, intrinsics_model, distortion_model, frame))]
 fn camera_sensor_entry(
     py: Python<'_>,
     peer_id: &str,
@@ -262,7 +262,9 @@ fn camera_sensor_entry(
     width: u32,
     height: u32,
     frame_rate_hz: u32,
+    image_encoding: &str,
     pixel_format: &str,
+    row_stride_bytes: u32,
     color_space: &str,
     intrinsics_model: &str,
     distortion_model: &str,
@@ -277,7 +279,9 @@ fn camera_sensor_entry(
             width,
             height,
             frame_rate_hz,
+            image_encoding: image_encoding.to_string(),
             pixel_format: pixel_format.to_string(),
+            row_stride_bytes,
             color_space: color_space.to_string(),
             intrinsics_model: intrinsics_model.to_string(),
             distortion_model: distortion_model.to_string(),
@@ -761,7 +765,9 @@ mod tests {
                 544,
                 488,
                 20,
+                "raw",
                 "YUV_NV12",
+                544,
                 "BT.709",
                 "pinhole",
                 "plumb_bob",

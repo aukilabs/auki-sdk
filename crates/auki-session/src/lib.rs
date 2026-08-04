@@ -6,6 +6,8 @@
 
 #![deny(unused_must_use)]
 
+mod camera_detector_package;
+mod detector_runner;
 mod error;
 mod log_handles;
 mod log_specs;
@@ -14,12 +16,24 @@ mod peer;
 mod registry_store;
 mod session;
 
+pub use auki_manifests::DetectionCadence;
+pub use camera_detector_package::{
+    CameraDetectorPackageError, CameraDetectorTask, CameraStreamDescriptor,
+    RegisteredCameraDetector, StreamingCameraDetectorTask,
+};
+pub use detector_runner::{
+    CameraDetector, CameraFrameHub, CameraFrameSample, CameraInputBinding, DetectorOutput,
+    DetectorRunnerError, DetectorTask, StreamingDetectorTask,
+};
 pub use error::{Result, SessionError};
 pub use log_handles::{
     DetectionLogHandle, MaterializedLogHandle, PoseLogHandle, SensorLogHandle,
     TimeTransformLogHandle,
 };
-pub use log_specs::{DetectionLogSpec, HeadSpec, PoseLogSpec, SensorLogSpec, TimeTransformLogSpec};
+pub use log_specs::{
+    DetectionLogSpec, DetectorInstanceSpec, HeadSpec, PoseLogSpec, SensorLogSpec,
+    TimeTransformLogSpec,
+};
 pub use materialization::MaterializationError;
 pub use peer::{FrameDef, Peer, PeerRegistries};
 pub use registry_store::RegistryStore;

@@ -15,7 +15,8 @@ fn galbot_session_writes_manifest_then_park_session_independently_constructs_one
 
     // ── Galbot side ──────────────────────────────────────────────────────────
     // Peer owns identity + registries; a session is born from it.
-    let galbot_peer = Peer::new("galbot", "galbot-ctrl").with_storage_root(tmp.path().join("galbot"));
+    let galbot_peer =
+        Peer::new("galbot", "galbot-ctrl").with_storage_root(tmp.path().join("galbot"));
 
     let frame = galbot_peer
         .register_frame("head_left_camera_optical", FrameDef::ros_optical())
@@ -29,7 +30,9 @@ fn galbot_session_writes_manifest_then_park_session_independently_constructs_one
                 width: 1920,
                 height: 1200,
                 frame_rate_hz: 30,
+                image_encoding: "raw".into(),
                 pixel_format: "rgb8".into(),
+                row_stride_bytes: 1920 * 3,
                 color_space: "srgb".into(),
                 intrinsics_model: "pinhole".into(),
                 distortion_model: "brown_conrady".into(),
@@ -66,9 +69,7 @@ fn galbot_session_writes_manifest_then_park_session_independently_constructs_one
         .unwrap();
 
     // 1. Manifest persisted to disk with source==writer==galbot
-    let manifest_path = tmp
-        .path()
-        .join("galbot/logs/galbot/head_left_rgb/manifest.json");
+    let manifest_path = log.root().join("manifest.json");
     assert!(
         manifest_path.exists(),
         "manifest at {manifest_path:?} should exist"

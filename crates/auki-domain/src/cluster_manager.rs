@@ -4757,6 +4757,7 @@ mod tests {
             body: DetectorBody::Aruco(Aruco {
                 dictionary: "5x5_50".into(),
             }),
+            input_types: vec![],
             output_types: vec!["aruco".into()],
         };
         let hash = auki_registry::write_detector(dir.path(), &entry)

@@ -97,13 +97,46 @@ pub struct Camera {
     pub width: u32,
     pub height: u32,
     pub frame_rate_hz: u32,
+    /// Byte encoding of every `CameraFrame.frame` payload in the matching
+    /// Sensor Log, for example `"raw"` or `"jpeg"`.
+    pub image_encoding: String,
     pub pixel_format: String,
+    /// Number of bytes between successive image rows for a raw single-plane
+    /// image. Zero is only valid for compressed encodings.
+    pub row_stride_bytes: u32,
     pub color_space: String,
     pub intrinsics_model: String,
     pub distortion_model: String,
     /// Frame Registry reference for the camera optical frame. Replaces
     /// the former `(frame_id, frame_hash)` pair.
     pub frame: RegistryRef,
+}
+
+impl Camera {
+    /// Validate the immutable byte-layout contract shared by every frame in
+    /// the Sensor Log that pins this registry entry.
+    pub fn validate_image_layout(&self) -> Result<()> {
+        if self.width == 0 || self.height == 0 {
+            return Err(Error::InvalidImageLayout(
+                "width and height must be positive".into(),
+            ));
+        }
+        if self.image_encoding.is_empty() || self.pixel_format.is_empty() {
+            return Err(Error::InvalidImageLayout(
+                "image_encoding and pixel_format must be non-empty".into(),
+            ));
+        }
+        match self.image_encoding.as_str() {
+            "raw" if self.row_stride_bytes == 0 => Err(Error::InvalidImageLayout(
+                "raw images require a positive row_stride_bytes".into(),
+            )),
+            "raw" => Ok(()),
+            _ if self.row_stride_bytes != 0 => Err(Error::InvalidImageLayout(
+                "compressed images must set row_stride_bytes to zero".into(),
+            )),
+            _ => Ok(()),
+        }
+    }
 }
 
 /// Static layout of a rangefinder sensor's per-point bytes. The actual point
@@ -564,9 +597,59 @@ pub struct DetectorRegistryEntry {
     pub detector_id: String,
     #[serde(flatten)]
     pub body: DetectorBody,
+    /// Sensor contracts accepted as inputs by this detector. A detector can
+    /// advertise several alternatives; matching any one makes a stream
+    /// compatible.
+    pub input_types: Vec<DetectorInput>,
     /// Detection `type` strings this detector emits. Cuba T16. Order is
     /// preserved on disk; consumers should treat the list as a set.
     pub output_types: Vec<String>,
+}
+
+/// Discoverable compatibility requirement for one Detector input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetectorInput {
+    /// Sensor body kind, for example `"camera"` or `"rangefinder"`.
+    pub sensor_kind: String,
+    /// Optional open-string sensor modality, for example `"rgb"` or `"mono"`.
+    pub sensor_type: Option<String>,
+    /// Required Camera image encoding when applicable.
+    pub image_encoding: Option<String>,
+    /// Required Camera pixel format when applicable.
+    pub pixel_format: Option<String>,
+}
+
+impl DetectorInput {
+    /// Whether this requirement accepts the supplied immutable sensor body.
+    pub fn matches(&self, sensor: &SensorBody) -> bool {
+        let (kind, sensor_type) = match sensor {
+            SensorBody::Camera(camera) => ("camera", camera.r#type.as_str()),
+            SensorBody::Rangefinder(rangefinder) => ("rangefinder", rangefinder.r#type.as_str()),
+            SensorBody::Rf(rf) => ("rf", rf.r#type.as_str()),
+            SensorBody::Audio(audio) => ("audio", audio.r#type.as_str()),
+            SensorBody::JointEncoders(encoders) => ("joint_encoders", encoders.r#type.as_str()),
+        };
+        if self.sensor_kind != kind
+            || self
+                .sensor_type
+                .as_deref()
+                .is_some_and(|required| required != sensor_type)
+        {
+            return false;
+        }
+        match sensor {
+            SensorBody::Camera(camera) => {
+                self.image_encoding
+                    .as_deref()
+                    .is_none_or(|required| required == camera.image_encoding)
+                    && self
+                        .pixel_format
+                        .as_deref()
+                        .is_none_or(|required| required == camera.pixel_format)
+            }
+            _ => self.image_encoding.is_none() && self.pixel_format.is_none(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -576,6 +659,19 @@ pub enum DetectorBody {
     Qr(Qr),
     Esl(Esl),
     ObjectDetection(ObjectDetection),
+    /// Developer-defined detector kind and content-addressed configuration.
+    Custom(CustomDetector),
+}
+
+/// Open extension point for bring-your-own detector implementations.
+///
+/// The SDK treats `kind` as an open, reverse-DNS-style identifier and does not
+/// interpret `configuration`; both participate in the registry hash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CustomDetector {
+    pub kind: String,
+    #[serde(default)]
+    pub configuration: serde_json::Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -608,6 +704,12 @@ impl DetectorRegistryEntry {
     }
     pub fn hash(&self) -> String {
         auki_hash::hash_jcs_bytes(&self.canonical_bytes())
+    }
+
+    /// Whether at least one advertised input contract accepts this immutable
+    /// Sensor Registry body.
+    pub fn accepts_input(&self, sensor: &SensorBody) -> bool {
+        self.input_types.iter().any(|input| input.matches(sensor))
     }
 
     pub fn validate_id(id: &str) -> std::result::Result<(), RegistryIdError> {
@@ -649,6 +751,9 @@ pub enum Error {
     /// triplet was not orthogonal — i.e. two of `x`/`y`/`z` came from
     /// the same axis-pair (forward/backward, left/right, or up/down).
     InvalidAxes(String),
+    /// A Camera registry entry does not define a coherent immutable frame
+    /// byte layout.
+    InvalidImageLayout(String),
     /// On write of a frame-bearing [`SensorRegistryEntry`], the
     /// referenced `(frame_id, frame_hash)` did not resolve to an
     /// existing [`FrameRegistryEntry`] on disk.
@@ -668,6 +773,7 @@ impl std::fmt::Display for Error {
                 write!(f, "id mismatch: expected {expected:?}, found {found:?}")
             }
             Error::InvalidAxes(msg) => write!(f, "invalid axes: {msg}"),
+            Error::InvalidImageLayout(msg) => write!(f, "invalid image layout: {msg}"),
             Error::FrameReferenceMissing {
                 sensor_id,
                 frame_id,
@@ -693,6 +799,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Write a sensor registry entry under `<app_root>/registries/sensors/...`.
 /// Idempotent on hash: writing identical content is a no-op.
 pub fn write_sensor(app_root: &Path, entry: &SensorRegistryEntry) -> Result<WriteOutcome> {
+    if let SensorBody::Camera(camera) = &entry.body {
+        camera.validate_image_layout()?;
+    }
     validate_sensor_frame_reference(app_root, entry)?;
     let bytes = entry.canonical_bytes();
     let hash = auki_hash::hash_jcs_bytes(&bytes);
@@ -919,7 +1028,9 @@ mod tests {
                 width: 544,
                 height: 488,
                 frame_rate_hz: 20,
+                image_encoding: "raw".into(),
                 pixel_format: "YUV_NV12".into(),
+                row_stride_bytes: 544,
                 color_space: "BT.709".into(),
                 intrinsics_model: "pinhole".into(),
                 distortion_model: "plumb_bob".into(),
@@ -981,7 +1092,7 @@ mod tests {
         // sensor.type lives as "type" key inside the body.
         assert_eq!(
             s,
-            r#"{"color_space":"BT.709","distortion_model":"plumb_bob","frame":{"hash":"03b86f32827ec6a25a5e619b2f36478b","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"frame_rate_hz":20,"height":488,"intrinsics_model":"pinhole","kind":"camera","peer_id":"test-peer","pixel_format":"YUV_NV12","sensor_id":"K1-AABBCCDDEEFF/head_left_cam","type":"rgb","width":544}"#
+            r#"{"color_space":"BT.709","distortion_model":"plumb_bob","frame":{"hash":"03b86f32827ec6a25a5e619b2f36478b","id":"K1-AABBCCDDEEFF/head_left_cam_optical","peer_id":"test-peer"},"frame_rate_hz":20,"height":488,"image_encoding":"raw","intrinsics_model":"pinhole","kind":"camera","peer_id":"test-peer","pixel_format":"YUV_NV12","row_stride_bytes":544,"sensor_id":"K1-AABBCCDDEEFF/head_left_cam","type":"rgb","width":544}"#
         );
     }
 
@@ -1009,7 +1120,7 @@ mod tests {
     /// sensor.type field added.
     #[test]
     fn sensor_entry_hash_is_locked() {
-        assert_eq!(m1_sensor_entry().hash(), "bfc5a987e68b274dd5e06c334602f64d");
+        assert_eq!(m1_sensor_entry().hash(), "9306d67f99d38ced7c186c0f63734421");
     }
 
     #[test]
@@ -1338,6 +1449,34 @@ mod tests {
             matches!(err, Error::FrameReferenceMissing { .. }),
             "got {err:?}"
         );
+    }
+
+    #[test]
+    fn camera_registry_rejects_raw_frames_without_a_stride() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut entry = m1_sensor_entry();
+        let SensorBody::Camera(camera) = &mut entry.body else {
+            unreachable!()
+        };
+        camera.row_stride_bytes = 0;
+        assert!(matches!(
+            write_sensor(dir.path(), &entry),
+            Err(Error::InvalidImageLayout(_))
+        ));
+    }
+
+    #[test]
+    fn camera_registry_rejects_stride_on_compressed_frames() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut entry = m1_sensor_entry();
+        let SensorBody::Camera(camera) = &mut entry.body else {
+            unreachable!()
+        };
+        camera.image_encoding = "jpeg".into();
+        assert!(matches!(
+            write_sensor(dir.path(), &entry),
+            Err(Error::InvalidImageLayout(_))
+        ));
     }
 
     #[test]
@@ -1705,6 +1844,7 @@ mod tests {
             body: DetectorBody::Aruco(Aruco {
                 dictionary: "5x5_50".into(),
             }),
+            input_types: vec![],
             output_types: vec!["aruco".into()],
         }
     }
@@ -1716,7 +1856,7 @@ mod tests {
         // Keys sorted lexicographically per RFC 8785 §3.2.3.
         assert_eq!(
             s,
-            r#"{"detector_id":"aukilabs/aruco/v1","dictionary":"5x5_50","output_types":["aruco"],"peer_id":"galbot","type":"aruco"}"#
+            r#"{"detector_id":"aukilabs/aruco/v1","dictionary":"5x5_50","input_types":[],"output_types":["aruco"],"peer_id":"galbot","type":"aruco"}"#
         );
     }
 
@@ -1763,6 +1903,31 @@ mod tests {
     }
 
     #[test]
+    fn custom_detector_configuration_is_serialized_and_content_addressed() {
+        let entry = DetectorRegistryEntry {
+            peer_id: "robot".into(),
+            detector_id: "developer-detector".into(),
+            body: DetectorBody::Custom(CustomDetector {
+                kind: "com.example.detector".into(),
+                configuration: serde_json::json!({"threshold": 0.7}),
+            }),
+            input_types: vec![],
+            output_types: vec!["example".into()],
+        };
+        let json = serde_json::to_value(&entry).unwrap();
+        assert_eq!(json["type"], "custom");
+        assert_eq!(json["kind"], "com.example.detector");
+        assert_eq!(json["configuration"]["threshold"], 0.7);
+
+        let mut changed = entry.clone();
+        let DetectorBody::Custom(custom) = &mut changed.body else {
+            unreachable!();
+        };
+        custom.configuration = serde_json::json!({"threshold": 0.8});
+        assert_ne!(entry.hash(), changed.hash());
+    }
+
+    #[test]
     fn detector_entry_slash_in_id_becomes_double_underscore() {
         let dir = tempfile::tempdir().unwrap();
         let entry = cuba_aruco_detector_entry();
@@ -1782,6 +1947,12 @@ mod tests {
             peer_id: "galbot".into(),
             detector_id: "aukilabs/qr/v1".into(),
             body: DetectorBody::Qr(Qr {}),
+            input_types: vec![DetectorInput {
+                sensor_kind: "camera".into(),
+                sensor_type: None,
+                image_encoding: Some("raw".into()),
+                pixel_format: Some("luma8".into()),
+            }],
             output_types: vec!["portal".into(), "portal_corner".into()],
         };
         let s = std::str::from_utf8(&entry.canonical_bytes())
@@ -1789,6 +1960,45 @@ mod tests {
             .to_string();
         assert!(s.contains(r#""output_types":["portal","portal_corner"]"#));
         assert!(s.contains(r#""type":"qr""#));
+    }
+
+    #[test]
+    fn detector_input_matches_exact_camera_byte_contract() {
+        let input = DetectorInput {
+            sensor_kind: "camera".into(),
+            sensor_type: None,
+            image_encoding: Some("raw".into()),
+            pixel_format: Some("luma8".into()),
+        };
+        let mut sensor = m1_sensor_entry().body;
+        assert!(!input.matches(&sensor));
+        let SensorBody::Camera(camera) = &mut sensor else {
+            unreachable!()
+        };
+        camera.pixel_format = "luma8".into();
+        assert!(input.matches(&sensor));
+    }
+
+    #[test]
+    fn detector_entry_accepts_any_matching_input_alternative() {
+        let entry = DetectorRegistryEntry {
+            peer_id: "robot".into(),
+            detector_id: "qr".into(),
+            body: DetectorBody::Qr(Qr {}),
+            input_types: vec![DetectorInput {
+                sensor_kind: "camera".into(),
+                sensor_type: None,
+                image_encoding: Some("raw".into()),
+                pixel_format: Some("luma8".into()),
+            }],
+            output_types: vec!["qr".into()],
+        };
+        let mut sensor = m1_sensor_entry().body;
+        let SensorBody::Camera(camera) = &mut sensor else {
+            unreachable!()
+        };
+        camera.pixel_format = "luma8".into();
+        assert!(entry.accepts_input(&sensor));
     }
 
     // ─── New-shape canonical JSON test (#216 rev 2 TDD anchor) ─────────────
@@ -1816,7 +2026,9 @@ mod tests {
                 width: 1920,
                 height: 1200,
                 frame_rate_hz: 30,
+                image_encoding: "raw".into(),
                 pixel_format: "rgb8".into(),
+                row_stride_bytes: 1920 * 3,
                 color_space: "srgb".into(),
                 intrinsics_model: "pinhole".into(),
                 distortion_model: "brown_conrady".into(),

@@ -33,12 +33,42 @@ There is no public `Session` constructor: sessions come from `Peer::start_sessio
 
 ### Log registration
 
-Each returns a typed handle carrying `resource_id`, `log_ref: LogRef`, and the full manifest. Duplicate `(source_peer_id, resource_id)` pairs are rejected with `SessionError::DuplicateLog`. Handles are *declarations* — the app still opens the `auki-logs` `Log<T>` at the layout path and runs the append loop.
+Each returns a typed handle carrying `resource_id`, `log_ref: LogRef`, the full manifest, and `root()`, the session-scoped local log path. Duplicate `(source_peer_id, resource_id)` pairs are rejected with `SessionError::DuplicateLog`. A sensor producer opens its `auki-logs` `Log<T>` at `handle.root()` and appends source samples there.
 
 - `Session::register_sensor_log(SensorLogSpec)` → `SensorLogHandle` — `resource_id` is `sensor.id`.
 - `Session::register_pose_log(PoseLogSpec)` → `PoseLogHandle` — `resource_id` is `"<from_frame.id>-><to_frame.id>"`.
 - `Session::register_time_transform_log(TimeTransformLogSpec)` → `TimeTransformLogHandle` — `resource_id` is `"<from_clock.id>-><to_clock.id>"`.
-- `Session::register_detection_log(DetectionLogSpec)` → `DetectionLogHandle` — `resource_id` is `"<detector.id>@<input_sensor.id>"`.
+- `Session::register_detection_log(DetectionLogSpec)` → `DetectionLogHandle` — `resource_id` is the application-chosen `instance_id`; the manifest binds that instance to an exact detector, input log, input sensor contract, clock, and cadence.
+
+### Detector execution
+
+`RegisteredCameraDetector::register` is the bring-your-own detector entry point. A developer supplies a `CameraDetector` factory plus the registry body, accepted camera contracts, and declared output types. The SDK creates a fresh detector value for every started instance, validates the selected sensor against the registered contracts, owns cadence and provenance, and rejects any emitted output type that was not declared. Third-party implementations use `DetectorBody::Custom(CustomDetector { .. })`; `kind` is an open namespaced identifier and the configuration participates in the content-addressed registry hash. Built-in bodies such as `Qr` are conveniences, not a closed implementation list.
+
+```rust,ignore
+let registered = RegisteredCameraDetector::register(
+    &peer,
+    "my-detector",
+    DetectorBody::Custom(CustomDetector {
+        kind: "com.example.my-detector".into(),
+        configuration: serde_json::json!({"model": "v2"}),
+    }),
+    vec![camera_input_contract],
+    vec!["example.result".into()],
+    || MyDetector::new(),
+)?;
+
+let task = registered.start(&session, instance, &sensor_log)?;
+```
+
+`DetectorTask::start(detector, camera, input, output)` is the detector-agnostic local runner. It tails an open Camera Sensor Log. `StreamingDetectorTask::start(detector, camera, binding, frames, output)` consumes any asynchronous stream of `CameraFrameSample` values, including a remote `auki-network` subscription mapped by the application. Both paths use the same cadence/provenance/output pipeline: they apply the Detection Log's `EveryFrame` or timestamp-based `Periodic` cadence, invoke the detector, stamp results with the exact input sensor hash, and append them to the Detection Log.
+
+The streaming runner remains transport-neutral, preserving this crate's network-free dependency boundary. A network consumer maps each successful `StreamEntry<CameraFrame>` to `CameraFrameSample { timestamp_ns, frame: Arc::new(payload) }` and maps `StreamError` to a string. Dropping `StreamingDetectorTask` cancels its worker; `shutdown().await` performs an observed graceful shutdown.
+
+`CameraFrameHub::new(capacity)` provides bounded fanout when a viewer, cache, and multiple detectors share one network subscription. Samples hold `Arc<CameraFrame>`, so fanout does not copy image bytes. Slow subscribers skip overwritten frames rather than blocking the publisher; `lagged_frames()` exposes the aggregate drop count. Keep the hub alive across transport reconnects so detector instances can remain subscribed while the network supervisor replaces the underlying subscription.
+
+Detector crates may expose a typed application-facing adapter around `RegisteredCameraDetector`, as the QR reference crate does. `DetectorInstanceSpec::rolling(instance_id, cadence, retention, segment_duration)` contains only choices the application actually owns. The package derives the detector reference from its registered implementation and derives the input log, sensor, and clock references from the selected `SensorLogHandle`.
+
+Remote detector inputs do not require materialization. Their Detection Log manifest binds the remote `LogRef`, Sensor Registry reference, and clock exactly as a local input does; only the frame transport differs.
 
 Log spec types (`SensorLogSpec`, `PoseLogSpec`, `TimeTransformLogSpec`, `DetectionLogSpec`) and `HeadSpec` (`Rolling { retention_ns }` / `Fixed`) live in `auki_session::log_specs`.
 

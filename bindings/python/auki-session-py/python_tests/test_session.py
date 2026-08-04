@@ -224,6 +224,9 @@ def test_register_sensor_log_end_to_end(tmp_path: pathlib.Path) -> None:
 
     assert isinstance(handle, auki_session.SensorLogHandle)
     assert handle.resource_id == "head_left_rgb"
+    assert pathlib.Path(handle.root) == (
+        tmp_path / s.session_id / "logs" / PEER_ID / "head_left_rgb"
+    )
 
     lr = handle.log_ref
     assert isinstance(lr, auki_session.LogRef)
@@ -231,7 +234,7 @@ def test_register_sensor_log_end_to_end(tmp_path: pathlib.Path) -> None:
     assert lr.resource_id == "head_left_rgb"
 
     # manifest.json should be on disk
-    manifest_path = tmp_path / "logs" / PEER_ID / "head_left_rgb" / "manifest.json"
+    manifest_path = pathlib.Path(handle.root) / "manifest.json"
     assert manifest_path.exists(), f"manifest.json missing at {manifest_path}"
 
 
@@ -489,10 +492,12 @@ def test_register_detection_log_resource_id(tmp_path: pathlib.Path) -> None:
     )
 
     spec = auki_session.DetectionLogSpec(
+        instance_id="yolo-head-left",
         detector=detector_ref,
         input_log=input_log_ref,
         input_sensor=sensor_ref,
         clock=clock_ref,
+        cadence={"kind": "every_frame"},
         head=auki_session.HeadSpec.rolling(5_000_000_000),
         segment_duration_ns=1_000_000_000,
         retention_ns=5_000_000_000,
@@ -502,4 +507,4 @@ def test_register_detection_log_resource_id(tmp_path: pathlib.Path) -> None:
     handle = s.register_detection_log(spec)
 
     assert isinstance(handle, auki_session.DetectionLogHandle)
-    assert handle.resource_id == "yolo_v8@head_left_rgb"
+    assert handle.resource_id == "yolo-head-left"

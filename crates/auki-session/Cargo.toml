@@ -16,6 +16,7 @@ auki-logs = { path = "../auki-logs" }
 auki-jcs = { path = "../auki-jcs" }
 auki-hash = { path = "../auki-hash" }
 auki-time = { path = "../auki-time" }
+futures = { version = "0.3", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["sync", "fs", "macros", "rt", "rt-multi-thread"] }

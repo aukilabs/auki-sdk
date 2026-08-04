@@ -22,7 +22,7 @@ session = peer.start_session()
 - Read accessors: `peer_id`, `app_id`, `storage_root`.
 - `register_sensor(sensor_id, body_dict)` — `body_dict` has `"kind"` and `"type"` fields (e.g. `{"kind": "camera", "type": "rgb", ...}`).
 - `register_frame(frame_id, FrameDef)` — takes a `FrameDef` preset object. Classmethods: `FrameDef.ros_body()`, `FrameDef.ros_optical()`, `FrameDef.opengl()`, `FrameDef.unity()`.
-- `register_detector(detector_id, body_dict, output_types: list[str])`.
+- `register_detector(detector_id, body_dict, output_types: list[str], input_types: list[dict] | None = None)`.
 - `start_session()` → `Session` — mints a ULID `session_id` and auto-registers the session's monotonic + UTC clocks (`{peer_id}/{session_id}/monotonic` / `…/utc`).
 
 Each `register_*` returns a `RegistryRef` instance (`peer_id`, `id`, `hash`). IDs must not contain `>`, `@`, or whitespace.
@@ -38,12 +38,12 @@ Not yet exposed: the Rust `Session::monotonic_clock()` / `utc_clock()` getters f
 
 ### Log registration
 
-Each returns a typed handle with `resource_id` and `log_ref` attributes. Specs take `RegistryRef` instances or dicts.
+Each returns a typed handle with `resource_id`, `log_ref`, and canonical session-scoped `root` attributes. Specs take `RegistryRef` instances or dicts.
 
 - `register_sensor_log(SensorLogSpec)` → `SensorLogHandle` — `resource_id` is `sensor.id`.
 - `register_pose_log(PoseLogSpec)` → `PoseLogHandle` — `resource_id` is `"<from_frame.id>-><to_frame.id>"`.
 - `register_time_transform_log(TimeTransformLogSpec)` → `TimeTransformLogHandle` — `resource_id` is `"<from_clock.id>-><to_clock.id>"`.
-- `register_detection_log(DetectionLogSpec)` → `DetectionLogHandle` — `resource_id` is `"<detector.id>@<input_sensor.id>"`.
+- `register_detection_log(DetectionLogSpec)` → `DetectionLogHandle` — `resource_id` is the spec's application-selected `instance_id`; the spec also carries its `cadence`.
 
 `HeadSpec` factory methods: `HeadSpec.rolling(retention_ns)`, `HeadSpec.fixed()`.
 

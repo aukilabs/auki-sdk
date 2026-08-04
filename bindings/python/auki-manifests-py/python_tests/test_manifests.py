@@ -233,16 +233,20 @@ def test_build_detection_log_manifest_contains_all_required_fields():
         writer_peer_id=WRITER_PEER_ID,
         app_id="boosterapp",
         session_id="550e8400-e29b-41d4-a716-446655440000",
+        instance_id="qr-head-left-1hz",
         detector=detector,
         input_log=input_log,
         input_sensor=input_sensor,
         clock=CLOCK_REF,
+        cadence={"kind": "periodic", "period_ns": 1_000_000_000},
         segment_duration_ns=1_000_000_000,
         retention_ns=30_000_000_000,
     )
     assert m["source_peer_id"] == SOURCE_PEER_ID
     assert m["writer_peer_id"] == WRITER_PEER_ID
     assert m["app_id"] == "boosterapp"
+    assert m["instance_id"] == "qr-head-left-1hz"
+    assert m["cadence"] == {"kind": "periodic", "period_ns": 1_000_000_000}
     assert m["detector"]["peer_id"] == "galbot"
     assert m["detector"]["id"] == "aukilabs/qr/v1"
     assert m["detector"]["hash"] == "abc123def4567890abc123def4567890"
@@ -375,10 +379,12 @@ def test_parity_detection_log() -> None:
         writer_peer_id=fixture["writer_peer_id"],
         app_id=fixture["app_id"],
         session_id=fixture["session_id"],
+        instance_id=fixture["instance_id"],
         detector=fixture["detector"],
         input_log=fixture["input_log"],
         input_sensor=fixture["input_sensor"],
         clock=fixture["clock"],
+        cadence=fixture["cadence"],
         segment_duration_ns=fixture["segment_duration_ns"],
         retention_ns=fixture["retention_ns"],
     )

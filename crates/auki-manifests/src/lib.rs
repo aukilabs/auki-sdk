@@ -144,12 +144,24 @@ pub struct DetectionLogManifest {
     pub writer_peer_id: String,
     pub app_id: String,
     pub session_id: String,
+    pub instance_id: String,
     pub detector: RegistryRef,
     pub input_log: LogRef,
     pub input_sensor: RegistryRef,
     pub clock: RegistryRef,
+    pub cadence: DetectionCadence,
     pub segment_duration_ns: i64,
     pub retention_ns: i64,
+}
+
+/// Immutable frame-selection policy for one running Detector instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DetectionCadence {
+    /// Process every frame arriving on the selected sensor stream.
+    EveryFrame,
+    /// Process the first frame at or after the configured interval.
+    Periodic { period_ns: u64 },
 }
 
 impl DetectionLogManifest {
@@ -158,6 +170,7 @@ impl DetectionLogManifest {
         validate_non_empty("writer_peer_id", &self.writer_peer_id)?;
         validate_non_empty("app_id", &self.app_id)?;
         validate_non_empty("session_id", &self.session_id)?;
+        validate_non_empty("instance_id", &self.instance_id)?;
         validate_non_empty("detector.peer_id", &self.detector.peer_id)?;
         validate_non_empty("detector.id", &self.detector.id)?;
         validate_non_empty("detector.hash", &self.detector.hash)?;
@@ -169,6 +182,12 @@ impl DetectionLogManifest {
         validate_non_empty("clock.peer_id", &self.clock.peer_id)?;
         validate_non_empty("clock.id", &self.clock.id)?;
         validate_non_empty("clock.hash", &self.clock.hash)?;
+        if matches!(self.cadence, DetectionCadence::Periodic { period_ns: 0 }) {
+            return Err(ManifestValidationError {
+                field: "cadence.period_ns",
+                reason: "must be positive",
+            });
+        }
         validate_durations(self.segment_duration_ns, self.retention_ns)
     }
 }
@@ -348,10 +367,12 @@ pub fn build_detection_log_manifest(
     writer_peer_id: &str,
     app_id: &str,
     session_id: &str,
+    instance_id: &str,
     detector: RegistryRef,
     input_log: LogRef,
     input_sensor: RegistryRef,
     clock: RegistryRef,
+    cadence: DetectionCadence,
     segment_duration: Duration,
     retention: Duration,
 ) -> serde_json::Value {
@@ -360,10 +381,12 @@ pub fn build_detection_log_manifest(
         writer_peer_id: writer_peer_id.into(),
         app_id: app_id.into(),
         session_id: session_id.into(),
+        instance_id: instance_id.into(),
         detector,
         input_log,
         input_sensor,
         clock,
+        cadence,
         segment_duration_ns: duration_as_i64_ns(segment_duration),
         retention_ns: duration_as_i64_ns(retention),
     })
@@ -873,6 +896,7 @@ mod tests {
             "galbot",
             "boosterapp",
             "550e8400-e29b-41d4-a716-446655440000",
+            "qr-head-left-1hz",
             RegistryRef {
                 peer_id: "galbot".into(),
                 id: "aukilabs/qr/v1".into(),
@@ -892,6 +916,9 @@ mod tests {
                 id: "K1-AABBCCDDEEFF/utc".into(),
                 hash: "89f84f4c2e09bef81d385b2af1d17e6c".into(),
             },
+            DetectionCadence::Periodic {
+                period_ns: 1_000_000_000,
+            },
             Duration::from_secs(1),
             Duration::from_secs(30),
         )
@@ -904,6 +931,9 @@ mod tests {
         assert_eq!(m["writer_peer_id"], "galbot");
         assert_eq!(m["app_id"], "boosterapp");
         assert_eq!(m["session_id"], "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(m["instance_id"], "qr-head-left-1hz");
+        assert_eq!(m["cadence"]["kind"], "periodic");
+        assert_eq!(m["cadence"]["period_ns"], 1_000_000_000u64);
         assert_eq!(m["detector"]["peer_id"], "galbot");
         assert_eq!(m["detector"]["id"], "aukilabs/qr/v1");
         assert_eq!(m["detector"]["hash"], "abc123def4567890abc123def4567890");
@@ -920,6 +950,22 @@ mod tests {
         assert_eq!(m["clock"]["hash"], "89f84f4c2e09bef81d385b2af1d17e6c");
         assert_eq!(m["segment_duration_ns"], 1_000_000_000i64);
         assert_eq!(m["retention_ns"], 30_000_000_000i64);
+    }
+
+    #[test]
+    fn detection_log_manifest_rejects_empty_instance_id() {
+        let mut manifest: DetectionLogManifest =
+            serde_json::from_value(m1_detection_log_manifest()).unwrap();
+        manifest.instance_id.clear();
+        assert_eq!(manifest.validate().unwrap_err().field, "instance_id");
+    }
+
+    #[test]
+    fn detection_log_manifest_rejects_zero_period() {
+        let mut manifest: DetectionLogManifest =
+            serde_json::from_value(m1_detection_log_manifest()).unwrap();
+        manifest.cadence = DetectionCadence::Periodic { period_ns: 0 };
+        assert_eq!(manifest.validate().unwrap_err().field, "cadence.period_ns");
     }
 
     #[test]
@@ -1147,6 +1193,7 @@ mod tests {
             writer_peer_id: "galbot".to_string(),
             app_id: "ctrl".to_string(),
             session_id: "01HV".to_string(),
+            instance_id: "yolo-head-left".to_string(),
             detector: RegistryRef {
                 peer_id: "galbot".to_string(),
                 id: "yolo_v8".to_string(),
@@ -1166,6 +1213,7 @@ mod tests {
                 id: "session/sdk_clock".to_string(),
                 hash: "clockhash".to_string(),
             },
+            cadence: DetectionCadence::EveryFrame,
             segment_duration_ns: 1_000_000_000,
             retention_ns: 60_000_000_000,
         };

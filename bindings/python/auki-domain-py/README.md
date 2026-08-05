@@ -22,7 +22,9 @@ subscription types to Python daemons.
 | `ResourceEntry` | Post-#216 resource catalog row. `variant` discriminates `sensor_log` \| `pose_log` \| `time_transform_log` \| `detection_log`. Nested blocks (`head`, `extent`, `available`, `sensor`, `pose`, `manifest`) returned as Python dicts. Construct via `ResourceEntry.from_dict(d)` or `ResourceEntry.from_json(s)` (see below). |
 | `MapLogResource` | Resource Catalog v0.4 Map Log row. Construct via `MapLogResource.from_dict(d)` or `MapLogResource.from_json(s)`. |
 | `MessageEvent` | One live opaque message with `resource_id`, authenticated `sender_peer_id`, `type`, `timestamp_ns`, and byte payload |
+| `MessageChannelResource` | Exact remote receiver identity discovered through Resource Catalog v0.3 |
 | `MessageChannelReceiver` | Blocking receiver returned by `ClusterManager.register_message_channel` |
+| `MessageChannelSender` | Persistent outbound handle opened from a discovered `MessageChannelResource` |
 | `ReadFrom` | Stream start position: `.latest()` / `.from_start()` / `.from_timestamp(ns)` |
 | `StreamRequest` | Consumer → Producer handshake: `resource_id`, `source_peer_id`, `from_` |
 | `ClusterTarget` | Policy enum for `ClusterManager.bootstrap` |
@@ -56,6 +58,14 @@ internal multi-thread tokio runtime).
 - `register_message_channel(resource_id, capacity=64)` advertises a Resource
   Catalog v0.3 message channel owned by this peer, tied to the SDK-declared
   local session clock, and returns a `MessageChannelReceiver`.
+- `fetch_message_channels(peer_id)` returns the peer's exact v0.3
+  `MessageChannelResource` rows without falling back to the v0.2 catalog.
+- `open_message_channel(resource)` validates the discovered owner and clock,
+  then returns a persistent `MessageChannelSender`.
+- `sender.send(type, timestamp_ns, payload)` blocks until transport accepts the
+  event into the remote bounded receiver queue. That ACK is not application
+  acceptance; a delivery error is indeterminate and the same operation must
+  not be retried automatically. `sender.close()` closes the Python handle.
 - `receiver.recv()` blocks until a live `MessageEvent` arrives or returns
   `None` after the channel closes.
 

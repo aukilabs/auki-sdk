@@ -27,7 +27,9 @@ def test_module_imports_post_216_surface() -> None:
     # Post-#216 resource catalog type (replaces SensorStreamResource etc.)
     assert hasattr(auki_domain, "ResourceEntry")
     assert hasattr(auki_domain, "MessageEvent")
+    assert hasattr(auki_domain, "MessageChannelResource")
     assert hasattr(auki_domain, "MessageChannelReceiver")
+    assert hasattr(auki_domain, "MessageChannelSender")
     for attr in ("resource_id", "sender_peer_id", "type", "timestamp_ns", "payload"):
         assert hasattr(auki_domain.MessageEvent, attr)
 
@@ -46,9 +48,20 @@ def test_module_imports_post_216_surface() -> None:
     assert hasattr(auki_domain.ClusterManager, "open_camera_stream")
     assert hasattr(auki_domain.ClusterManager, "open_stream_with_request")
     assert hasattr(auki_domain.ClusterManager, "register_message_channel")
+    assert hasattr(auki_domain.ClusterManager, "fetch_message_channels")
+    assert hasattr(auki_domain.ClusterManager, "open_message_channel")
     signature = inspect.signature(auki_domain.ClusterManager.register_message_channel)
     assert list(signature.parameters) == ["self", "resource_id", "capacity"]
     assert signature.parameters["capacity"].default == 64
+    open_signature = inspect.signature(auki_domain.ClusterManager.open_message_channel)
+    assert list(open_signature.parameters) == ["self", "resource"]
+    send_signature = inspect.signature(auki_domain.MessageChannelSender.send)
+    assert list(send_signature.parameters) == [
+        "self",
+        "message_type",
+        "timestamp_ns",
+        "payload",
+    ]
 
     # Old deleted types must NOT be present
     assert not hasattr(auki_domain, "SensorEntry")

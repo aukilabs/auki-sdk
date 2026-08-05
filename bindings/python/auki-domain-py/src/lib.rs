@@ -15,8 +15,8 @@
 //!   `time_transform_log` | `detection_log`).
 //! - `ReadFrom` / `StreamRequest` — post-#216 §5 stream subscription
 //!   request types.
-//! - `MessageEvent` / `MessageChannelReceiver` — live, receiver-owned typed
-//!   messaging from Resource Catalog v0.3.
+//! - `MessageEvent` / `MessageChannelReceiver` / `MessageChannelSender` —
+//!   live, receiver-owned typed messaging from Resource Catalog v0.3.
 //! - `StreamManifestBuilder` — producer-side helper.
 //! - `ClusterTarget` / `ClusterManager` — daemon-side cluster handle.
 
@@ -29,9 +29,13 @@ use auki_domain_rs::{
     DaemonInfo as RustDaemonInfo, FetchMapCatalogError as RustFetchMapCatalogError,
     FetchRegistryEntryError as RustFetchRegistryEntryError,
     FetchResourcesCatalogError as RustFetchResourcesCatalogError,
+    FetchResourcesCatalogV3Error as RustFetchResourcesCatalogV3Error,
     JoinClusterError as RustJoinClusterError, MapLogResource as RustMapLogResource,
     MessageChannelResource as RustMessageChannelResource,
+    MessageChannelSender as RustMessageChannelSender,
     ResourceCatalogProvider as RustResourceCatalogProvider, ResourceEntry as RustResourceEntry,
+    ResourceEntryV3 as RustResourceEntryV3, ResourceVariantV3 as RustResourceVariantV3,
+    ResourcesRequestV3 as RustResourcesRequestV3,
     StreamManifestBuilder as RustStreamManifestBuilder,
 };
 use auki_identity::Wallet;
@@ -290,6 +294,101 @@ impl PyMessageChannelReceiver {
                 }))
             })
         })
+    }
+}
+
+/// Exact receiver-owned Message Channel identity discovered from Resource
+/// Catalog v0.3. Applications pass this object back to
+/// `ClusterManager.open_message_channel`; the Rust SDK validates both the
+/// authenticated owner and the content-addressed clock during the handshake.
+#[pyclass(name = "MessageChannelResource")]
+#[derive(Clone)]
+pub struct PyMessageChannelResource {
+    inner: RustMessageChannelResource,
+}
+
+#[pymethods]
+impl PyMessageChannelResource {
+    #[getter]
+    fn owner_peer_id(&self) -> String {
+        self.inner.owner_peer_id.to_string()
+    }
+
+    #[getter]
+    fn resource_id(&self) -> &str {
+        &self.inner.resource_id
+    }
+
+    #[getter]
+    fn clock_peer_id(&self) -> &str {
+        &self.inner.clock.peer_id
+    }
+
+    #[getter]
+    fn clock_id(&self) -> &str {
+        &self.inner.clock.id
+    }
+
+    #[getter]
+    fn clock_hash(&self) -> &str {
+        &self.inner.clock.hash
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "MessageChannelResource(owner_peer_id={:?}, resource_id={:?}, clock_id={:?})",
+            self.inner.owner_peer_id.to_string(),
+            self.inner.resource_id,
+            self.inner.clock.id,
+        )
+    }
+}
+
+/// Persistent sender for one exact remote Message Channel.
+///
+/// `send` resolves only after the receiver runtime accepts the event into its
+/// bounded queue. It never means the remote application semantically accepted
+/// the message. Delivery errors are indeterminate and callers must not retry
+/// the same application operation automatically.
+#[pyclass(name = "MessageChannelSender")]
+pub struct PyMessageChannelSender {
+    inner: Arc<Mutex<Option<RustMessageChannelSender>>>,
+}
+
+#[pymethods]
+impl PyMessageChannelSender {
+    fn send(
+        &self,
+        py: Python<'_>,
+        message_type: String,
+        timestamp_ns: i64,
+        payload: Vec<u8>,
+    ) -> PyResult<()> {
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let sender = inner
+                    .lock()
+                    .expect("MessageChannelSender lock")
+                    .as_ref()
+                    .cloned()
+                    .ok_or_else(|| {
+                        PyRuntimeError::new_err("MessageChannelSender has been closed")
+                    })?;
+                sender
+                    .send(message_type, timestamp_ns, payload)
+                    .await
+                    .map_err(|error| {
+                        PyOSError::new_err(format!("message delivery is indeterminate: {error}"))
+                    })
+            })
+        })
+    }
+
+    /// Close this Python handle. Any in-flight or cloned SDK handle may keep
+    /// the underlying substream alive until it too is dropped.
+    fn close(&self) {
+        self.inner.lock().expect("MessageChannelSender lock").take();
     }
 }
 
@@ -2006,6 +2105,77 @@ impl PyClusterManager {
         })
     }
 
+    /// Discover a peer's receiver-owned Message Channels from Resource
+    /// Catalog v0.3. No fallback to the v0.2 catalog is attempted because v0.2
+    /// cannot represent Message Channel rows.
+    fn fetch_message_channels(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+    ) -> PyResult<Vec<PyMessageChannelResource>> {
+        let peer_id = parse_peer_id(peer_id)?;
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let guard = inner.lock().expect("ClusterManager lock");
+                let manager = guard
+                    .as_ref()
+                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let response = manager
+                    .fetch_resources_catalog_v3_with(
+                        peer_id,
+                        RustResourcesRequestV3 {
+                            variants: vec![RustResourceVariantV3::MessageChannel],
+                        },
+                    )
+                    .await
+                    .map_err(map_fetch_resources_catalog_v3_error)?;
+                Ok(response
+                    .resources
+                    .into_iter()
+                    .filter_map(|entry| match entry {
+                        RustResourceEntryV3::MessageChannel(inner) => {
+                            Some(PyMessageChannelResource { inner })
+                        }
+                        RustResourceEntryV3::V2(_) => None,
+                    })
+                    .collect())
+            })
+        })
+    }
+
+    /// Open one exact discovered Message Channel as a persistent sender.
+    /// Resource ownership and clock identity are validated by the Rust SDK.
+    fn open_message_channel(
+        &self,
+        py: Python<'_>,
+        resource: &PyMessageChannelResource,
+    ) -> PyResult<PyMessageChannelSender> {
+        let resource = resource.inner.clone();
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let guard = inner.lock().expect("ClusterManager lock");
+                let manager = guard
+                    .as_ref()
+                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let sender = manager
+                    .open_message_channel(
+                        resource.owner_peer_id,
+                        resource.resource_id,
+                        resource.clock,
+                    )
+                    .await
+                    .map_err(|error| {
+                        PyOSError::new_err(format!("open message channel: {error}"))
+                    })?;
+                Ok(PyMessageChannelSender {
+                    inner: Arc::new(Mutex::new(Some(sender))),
+                })
+            })
+        })
+    }
+
     /// Fetch a cluster peer's current resource catalog over `/auki/resources/0.2.0`.
     ///
     /// Returns a `list[ResourceEntry]`. Use `variants` to filter by
@@ -2445,6 +2615,17 @@ fn map_fetch_resources_catalog_error(e: RustFetchResourcesCatalogError) -> PyErr
     }
 }
 
+fn map_fetch_resources_catalog_v3_error(e: RustFetchResourcesCatalogV3Error) -> PyErr {
+    match e {
+        RustFetchResourcesCatalogV3Error::UnsupportedProtocol => PyRuntimeError::new_err(
+            "remote peer does not support Resource Catalog v0.3 Message Channels",
+        ),
+        RustFetchResourcesCatalogV3Error::Request(error) => {
+            PyOSError::new_err(format!("fetch_message_channels: {error}"))
+        }
+    }
+}
+
 fn map_fetch_map_catalog_error(e: RustFetchMapCatalogError) -> PyErr {
     match e {
         RustFetchMapCatalogError::UnsupportedProtocol => {
@@ -2508,7 +2689,9 @@ fn auki_domain(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyResourceEntry>()?;
     m.add_class::<PyMapLogResource>()?;
     m.add_class::<PyMessageEvent>()?;
+    m.add_class::<PyMessageChannelResource>()?;
     m.add_class::<PyMessageChannelReceiver>()?;
+    m.add_class::<PyMessageChannelSender>()?;
     m.add_class::<PyReadFrom>()?;
     m.add_class::<PyStreamRequest>()?;
     m.add_class::<PyStreamManifestBuilder>()?;
@@ -2582,6 +2765,9 @@ mod tests {
             assert!(module.getattr("ParticipantInfo").is_ok());
             assert!(module.getattr("ResourceEntry").is_ok());
             assert!(module.getattr("MapLogResource").is_ok());
+            assert!(module.getattr("MessageChannelResource").is_ok());
+            assert!(module.getattr("MessageChannelReceiver").is_ok());
+            assert!(module.getattr("MessageChannelSender").is_ok());
             assert!(module.getattr("ReadFrom").is_ok());
             assert!(module.getattr("StreamRequest").is_ok());
             assert!(module.getattr("StreamManifestBuilder").is_ok());
@@ -2614,7 +2800,45 @@ mod tests {
                     .getattr("open_map_stream")
                     .is_ok()
             );
+            assert!(
+                module
+                    .getattr("ClusterManager")
+                    .unwrap()
+                    .getattr("fetch_message_channels")
+                    .is_ok()
+            );
+            assert!(
+                module
+                    .getattr("ClusterManager")
+                    .unwrap()
+                    .getattr("open_message_channel")
+                    .is_ok()
+            );
         });
+    }
+
+    #[test]
+    fn message_channel_resource_exposes_exact_owner_and_clock() {
+        let owner: PeerId = "12D3KooWHbpNSAvGn5p8qDCkNVTgqsyfaV4wUKgBR1eHFY6DPFUm"
+            .parse()
+            .unwrap();
+        let resource = PyMessageChannelResource {
+            inner: RustMessageChannelResource {
+                owner_peer_id: owner,
+                resource_id: "park.teleop.lease-events.v1".into(),
+                clock: RegistryRef {
+                    peer_id: owner.to_string(),
+                    id: "park/session/monotonic".into(),
+                    hash: "clock-hash".into(),
+                },
+            },
+        };
+
+        assert_eq!(resource.owner_peer_id(), owner.to_string());
+        assert_eq!(resource.resource_id(), "park.teleop.lease-events.v1");
+        assert_eq!(resource.clock_peer_id(), owner.to_string());
+        assert_eq!(resource.clock_id(), "park/session/monotonic");
+        assert_eq!(resource.clock_hash(), "clock-hash");
     }
 
     #[test]

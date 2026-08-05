@@ -5361,7 +5361,7 @@ dependencies = [
 [[package]]
 name = "pnp-core"
 version = "0.1.0"
-source = "git+https://github.com/aukilabs/pnp-lab.git?rev=41bec92c34dc5a0b7db9e8383d3edff548a209cc#41bec92c34dc5a0b7db9e8383d3edff548a209cc"
+source = "git+https://github.com/aukilabs/pnp-lab.git?rev=c56b1d4d5518eac997f020168a4e508bb27d599a#c56b1d4d5518eac997f020168a4e508bb27d599a"
 dependencies = [
  "libm",
  "nalgebra",

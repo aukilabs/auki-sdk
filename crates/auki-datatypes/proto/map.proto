@@ -2,9 +2,11 @@ syntax = "proto3";
 
 package auki.map;
 
+import "pose.proto";
+
 // One append-only, mergeable change to a map. `timestamp_ns` is supplied by
-// the log framing; this payload deliberately contains no peer identity, so it
-// can be materialized and relayed by any peer.
+// the log framing. Portal observations additionally retain source-log
+// provenance so replay is idempotent across materializing and relaying peers.
 message MapUpdate {
   // Ordinary commutative evidence deltas. Producers MUST leave this empty
   // when `checkpoint` is present. Keeping checkpoints in a new field makes
@@ -15,6 +17,45 @@ message MapUpdate {
   // An ordered full-state barrier. Applying it atomically replaces all prior
   // voxel state before subsequent `voxel_chunks` entries are accumulated.
   VoxelMapCheckpoint checkpoint = 2;
+
+  // Idempotent Portal observations keyed by their source log position and
+  // detection index. Portal Map consumers reject voxel fields, and voxel Map
+  // consumers reject these fields, so one payload can never mutate two map
+  // kinds at once.
+  repeated PortalObservation portal_observations = 3;
+
+  // Ordered full-state barrier for a Portal Map.
+  PortalMapCheckpoint portal_checkpoint = 4;
+}
+
+// One Portal pose observation already expressed in the destination Map frame.
+// Repeated observations are evidence for a later fusion/materialization step;
+// no observation claims to be the authoritative Portal placement.
+message PortalObservation {
+  string portal_id = 1;
+  double physical_size_m = 2;
+  auki.pose.SpatialTransform portal_to_map = 3;
+  double confidence = 4;
+  double normalized_corner_error = 5;
+
+  // Stable provenance key. A given tuple MUST always carry identical content.
+  string source_peer_id = 6;
+  string source_resource_id = 7;
+  int64 source_timestamp_ns = 8;
+  uint32 source_detection_index = 9;
+
+  // Exact camera frame used for calibration and PnP.
+  string camera_frame_peer_id = 10;
+  string camera_frame_id = 11;
+  string camera_frame_hash = 12;
+
+  // Sequence in the source Detection Log. Unlike timestamps, this is unique
+  // within the log and therefore participates in observation identity.
+  uint64 source_sequence = 13;
+}
+
+message PortalMapCheckpoint {
+  repeated PortalObservation observations = 1;
 }
 
 // Complete sparse materialization of a voxel map at one log position. A

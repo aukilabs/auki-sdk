@@ -1,18 +1,21 @@
-//! Deterministic, sparse Map state built by replaying SDK [`MapUpdate`]s.
+//! Deterministic Map state built by replaying SDK [`MapUpdate`]s.
 //!
 //! Mappers produce updates; this crate consumes them. It deliberately has no
 //! network, robot, ROS, renderer, or storage dependency. A viewer can replay a
 //! local or remote Map Log into [`VoxelMapAccumulator`] and request either a
 //! complete [`ViewerSnapshot`] or only the chunks named by [`ApplySummary`].
+//! Portal Maps use [`PortalMapAccumulator`] to retain idempotent,
+//! provenance-keyed pose observations for later fusion.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use auki_datatypes::map::{
-    ColorEvidence, ColorEvidenceDelta, MapUpdate, SemanticEvidence, VoxelChunkSnapshot,
-    VoxelMapCheckpoint, VoxelSnapshot,
+    ColorEvidence, ColorEvidenceDelta, MapUpdate, PortalMapCheckpoint, PortalObservation,
+    SemanticEvidence, VoxelChunkSnapshot, VoxelMapCheckpoint, VoxelSnapshot,
 };
 use auki_registry::{
-    MapBody, MapRegistryEntry, RegistryRef, VoxelColorModel, VoxelMap, VoxelValueModel,
+    MapBody, MapRegistryEntry, PortalMap, PortalObservationModel, RegistryRef, VoxelColorModel,
+    VoxelMap, VoxelValueModel,
 };
 
 mod viewer;
@@ -109,6 +112,269 @@ pub struct ApplySummary {
     pub changed_chunks: Vec<ChunkCoord>,
     /// Number of sparse voxel deltas in the accepted payload.
     pub voxel_deltas_applied: usize,
+}
+
+/// Stable identity of one Portal observation within its source Detection Log.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PortalObservationKey {
+    pub source_peer_id: String,
+    pub source_resource_id: String,
+    pub source_timestamp_ns: i64,
+    pub source_sequence: u64,
+    pub source_detection_index: u32,
+}
+
+impl From<&PortalObservation> for PortalObservationKey {
+    fn from(observation: &PortalObservation) -> Self {
+        Self {
+            source_peer_id: observation.source_peer_id.clone(),
+            source_resource_id: observation.source_resource_id.clone(),
+            source_timestamp_ns: observation.source_timestamp_ns,
+            source_sequence: observation.source_sequence,
+            source_detection_index: observation.source_detection_index,
+        }
+    }
+}
+
+/// Result of atomically applying one Portal Map update.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortalApplySummary {
+    pub revision: u64,
+    pub observations_added: usize,
+    pub checkpoint_applied: bool,
+}
+
+/// Deterministic materialization of provenance-keyed Portal observations.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PortalMapAccumulator {
+    map: RegistryRef,
+    contract: PortalMap,
+    revision: u64,
+    observations: BTreeMap<PortalObservationKey, PortalObservation>,
+}
+
+impl PortalMapAccumulator {
+    pub fn new(map: RegistryRef, contract: PortalMap) -> Result<Self, PortalAccumulatorError> {
+        if contract.observation_model != PortalObservationModel::AppendOnlyPoseObservations {
+            return Err(PortalAccumulatorError::UnsupportedObservationModel);
+        }
+        let registry_entry = MapRegistryEntry {
+            peer_id: map.peer_id.clone(),
+            map_id: map.id.clone(),
+            body: MapBody::Portal(contract.clone()),
+        };
+        if registry_entry.registry_ref() != map {
+            return Err(PortalAccumulatorError::MapIdentityMismatch);
+        }
+        Ok(Self {
+            map,
+            contract,
+            revision: 0,
+            observations: BTreeMap::new(),
+        })
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub fn map_ref(&self) -> &RegistryRef {
+        &self.map
+    }
+
+    pub fn contract(&self) -> &PortalMap {
+        &self.contract
+    }
+
+    pub fn observations(&self) -> impl Iterator<Item = &PortalObservation> {
+        self.observations.values()
+    }
+
+    pub fn apply(
+        &mut self,
+        update: &MapUpdate,
+    ) -> Result<PortalApplySummary, PortalAccumulatorError> {
+        if !update.voxel_chunks.is_empty() || update.checkpoint.is_some() {
+            return Err(PortalAccumulatorError::UnexpectedVoxelData);
+        }
+        if update.portal_checkpoint.is_some() && !update.portal_observations.is_empty() {
+            return Err(PortalAccumulatorError::MixedCheckpointAndObservations);
+        }
+
+        if let Some(checkpoint) = &update.portal_checkpoint {
+            let replacement = validated_observation_set(&checkpoint.observations, true)?;
+            let changed = replacement != self.observations;
+            if changed {
+                self.observations = replacement;
+                self.revision = self.revision.wrapping_add(1);
+            }
+            return Ok(PortalApplySummary {
+                revision: self.revision,
+                observations_added: 0,
+                checkpoint_applied: changed,
+            });
+        }
+
+        let incoming = validated_observation_set(&update.portal_observations, false)?;
+        validate_portal_sizes(self.observations.values().chain(incoming.values()))?;
+        for (key, observation) in &incoming {
+            if self
+                .observations
+                .get(key)
+                .is_some_and(|existing| existing != observation)
+            {
+                return Err(PortalAccumulatorError::ConflictingObservation(key.clone()));
+            }
+        }
+        let mut observations_added = 0;
+        for (key, observation) in incoming {
+            if let std::collections::btree_map::Entry::Vacant(entry) = self.observations.entry(key)
+            {
+                entry.insert(observation);
+                observations_added += 1;
+            }
+        }
+        if observations_added > 0 {
+            self.revision = self.revision.wrapping_add(1);
+        }
+        Ok(PortalApplySummary {
+            revision: self.revision,
+            observations_added,
+            checkpoint_applied: false,
+        })
+    }
+
+    pub fn checkpoint_update(&self) -> MapUpdate {
+        MapUpdate {
+            voxel_chunks: vec![],
+            checkpoint: None,
+            portal_observations: vec![],
+            portal_checkpoint: Some(PortalMapCheckpoint {
+                observations: self.observations.values().cloned().collect(),
+            }),
+        }
+    }
+}
+
+fn validated_observation_set(
+    observations: &[PortalObservation],
+    reject_duplicate_keys: bool,
+) -> Result<BTreeMap<PortalObservationKey, PortalObservation>, PortalAccumulatorError> {
+    let mut validated = BTreeMap::new();
+    for observation in observations {
+        validate_portal_observation(observation)?;
+        let key = PortalObservationKey::from(observation);
+        if let Some(existing) = validated.insert(key.clone(), observation.clone())
+            && (reject_duplicate_keys || existing != *observation)
+        {
+            return Err(PortalAccumulatorError::ConflictingObservation(key));
+        }
+    }
+    validate_portal_sizes(validated.values())?;
+    Ok(validated)
+}
+
+fn validate_portal_sizes<'a>(
+    observations: impl IntoIterator<Item = &'a PortalObservation>,
+) -> Result<(), PortalAccumulatorError> {
+    let mut sizes = BTreeMap::<&str, f64>::new();
+    for observation in observations {
+        match sizes.insert(&observation.portal_id, observation.physical_size_m) {
+            Some(size) if size != observation.physical_size_m => {
+                return Err(PortalAccumulatorError::ConflictingPortalSize(
+                    observation.portal_id.clone(),
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_portal_observation(
+    observation: &PortalObservation,
+) -> Result<(), PortalAccumulatorError> {
+    if observation.portal_id.is_empty()
+        || observation.source_peer_id.is_empty()
+        || observation.source_resource_id.is_empty()
+        || observation.camera_frame_peer_id.is_empty()
+        || observation.camera_frame_id.is_empty()
+        || observation.camera_frame_hash.is_empty()
+    {
+        return Err(PortalAccumulatorError::MissingIdentity);
+    }
+    if !observation.physical_size_m.is_finite() || observation.physical_size_m <= 0.0 {
+        return Err(PortalAccumulatorError::InvalidPhysicalSize);
+    }
+    if !observation.confidence.is_finite()
+        || !(0.0..=1.0).contains(&observation.confidence)
+        || !observation.normalized_corner_error.is_finite()
+        || observation.normalized_corner_error < 0.0
+    {
+        return Err(PortalAccumulatorError::InvalidQuality);
+    }
+    let transform = observation
+        .portal_to_map
+        .as_ref()
+        .ok_or(PortalAccumulatorError::IncompletePose)?;
+    let translation = transform
+        .translation
+        .as_ref()
+        .ok_or(PortalAccumulatorError::IncompletePose)?;
+    let orientation = transform
+        .orientation
+        .as_ref()
+        .ok_or(PortalAccumulatorError::IncompletePose)?;
+    if ![
+        translation.x,
+        translation.y,
+        translation.z,
+        orientation.x,
+        orientation.y,
+        orientation.z,
+        orientation.w,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+    {
+        return Err(PortalAccumulatorError::NonFinitePose);
+    }
+    let norm_squared = orientation.x * orientation.x
+        + orientation.y * orientation.y
+        + orientation.z * orientation.z
+        + orientation.w * orientation.w;
+    if norm_squared <= f64::EPSILON {
+        return Err(PortalAccumulatorError::ZeroQuaternion);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum PortalAccumulatorError {
+    #[error("Map Registry reference does not match the Portal contract")]
+    MapIdentityMismatch,
+    #[error("unsupported Portal observation model")]
+    UnsupportedObservationModel,
+    #[error("Portal MapUpdate contains voxel data")]
+    UnexpectedVoxelData,
+    #[error("Portal MapUpdate cannot contain both a checkpoint and observations")]
+    MixedCheckpointAndObservations,
+    #[error("Portal observation is missing required identity provenance")]
+    MissingIdentity,
+    #[error("Portal observation physical size must be finite and positive")]
+    InvalidPhysicalSize,
+    #[error("Portal observation confidence or error is invalid")]
+    InvalidQuality,
+    #[error("Portal observation pose is incomplete")]
+    IncompletePose,
+    #[error("Portal observation pose contains NaN or infinity")]
+    NonFinitePose,
+    #[error("Portal observation pose quaternion has zero magnitude")]
+    ZeroQuaternion,
+    #[error("conflicting Portal observation for provenance key {0:?}")]
+    ConflictingObservation(PortalObservationKey),
+    #[error("Portal {0:?} has conflicting canonical physical sizes")]
+    ConflictingPortalSize(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -371,6 +637,8 @@ impl VoxelMapAccumulator {
                     })
                     .collect(),
             }),
+            portal_observations: Vec::new(),
+            portal_checkpoint: None,
         }
     }
 
@@ -423,6 +691,9 @@ impl VoxelMapAccumulator {
     }
 
     fn validate_update(&self, update: &MapUpdate) -> Result<(), AccumulatorError> {
+        if !update.portal_observations.is_empty() || update.portal_checkpoint.is_some() {
+            return Err(AccumulatorError::UnexpectedPortalData);
+        }
         if update.checkpoint.is_some() && !update.voxel_chunks.is_empty() {
             return Err(AccumulatorError::MixedCheckpointAndDeltas);
         }
@@ -732,6 +1003,9 @@ pub enum AccumulatorError {
     /// A checkpoint barrier cannot also carry commutative deltas.
     #[error("MapUpdate cannot contain both a checkpoint and additive voxel chunks")]
     MixedCheckpointAndDeltas,
+    /// A voxel Map cannot consume Portal observation fields.
+    #[error("voxel MapUpdate contains Portal observation data")]
+    UnexpectedPortalData,
     /// A full-state checkpoint named one chunk more than once.
     #[error("checkpoint contains duplicate chunk ({x}, {y}, {z})")]
     DuplicateCheckpointChunk {
@@ -763,8 +1037,11 @@ pub enum AccumulatorError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use auki_datatypes::map::{ColorEvidenceDelta, SemanticDelta, VoxelChunkUpdate, VoxelDelta};
-    use auki_registry::{FiniteF64, VoxelColorModel};
+    use auki_datatypes::{
+        map::{ColorEvidenceDelta, SemanticDelta, VoxelChunkUpdate, VoxelDelta},
+        pose::{Quat, SpatialTransform, Vec3},
+    };
+    use auki_registry::{FiniteF64, PortalObservationModel, VoxelColorModel};
 
     fn contract() -> VoxelMap {
         VoxelMap {
@@ -825,6 +1102,8 @@ mod tests {
                 }],
             }],
             checkpoint: None,
+            portal_observations: vec![],
+            portal_checkpoint: None,
         }
     }
 
@@ -847,6 +1126,8 @@ mod tests {
                 }],
             }],
             checkpoint: None,
+            portal_observations: vec![],
+            portal_checkpoint: None,
         }
     }
 
@@ -1074,5 +1355,164 @@ mod tests {
             Err(AccumulatorError::VoxelOutsideChunk { .. })
         ));
         assert_eq!(map.viewer_snapshot(-1_000.0).unwrap(), before);
+    }
+
+    fn portal_accumulator() -> PortalMapAccumulator {
+        let contract = PortalMap {
+            frame: RegistryRef {
+                peer_id: "bracketbot".into(),
+                id: "map".into(),
+                hash: "map-frame-hash".into(),
+            },
+            observation_model: PortalObservationModel::AppendOnlyPoseObservations,
+        };
+        let map = MapRegistryEntry {
+            peer_id: "park".into(),
+            map_id: "portals".into(),
+            body: MapBody::Portal(contract.clone()),
+        }
+        .registry_ref();
+        PortalMapAccumulator::new(map, contract).unwrap()
+    }
+
+    fn portal_observation(index: u32, x: f64) -> PortalObservation {
+        PortalObservation {
+            portal_id: "portal:office".into(),
+            physical_size_m: 0.2,
+            portal_to_map: Some(SpatialTransform {
+                translation: Some(Vec3 { x, y: 2.0, z: 3.0 }),
+                orientation: Some(Quat {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    w: 1.0,
+                }),
+            }),
+            confidence: 0.98,
+            normalized_corner_error: 0.01,
+            source_peer_id: "bracketbot".into(),
+            source_resource_id: "qr/head_left".into(),
+            source_timestamp_ns: 42,
+            source_sequence: 7,
+            source_detection_index: index,
+            camera_frame_peer_id: "bracketbot".into(),
+            camera_frame_id: "head_left_camera_optical".into(),
+            camera_frame_hash: "camera-frame-hash".into(),
+        }
+    }
+
+    fn portal_update(observations: Vec<PortalObservation>) -> MapUpdate {
+        MapUpdate {
+            voxel_chunks: vec![],
+            checkpoint: None,
+            portal_observations: observations,
+            portal_checkpoint: None,
+        }
+    }
+
+    #[test]
+    fn portal_observations_are_idempotent_and_sorted_by_provenance() {
+        let mut map = portal_accumulator();
+        let update = portal_update(vec![portal_observation(1, 2.0), portal_observation(0, 1.0)]);
+
+        let first = map.apply(&update).unwrap();
+        let replay = map.apply(&update).unwrap();
+        assert_eq!(first.observations_added, 2);
+        assert_eq!(first.revision, 1);
+        assert_eq!(replay.observations_added, 0);
+        assert_eq!(replay.revision, 1);
+        assert_eq!(
+            map.observations()
+                .map(|observation| observation.source_detection_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn equal_timestamps_from_distinct_log_sequences_are_distinct_observations() {
+        let mut map = portal_accumulator();
+        let first = portal_observation(0, 1.0);
+        let mut second = portal_observation(0, 2.0);
+        second.source_sequence += 1;
+
+        let summary = map.apply(&portal_update(vec![first, second])).unwrap();
+
+        assert_eq!(summary.observations_added, 2);
+        assert_eq!(map.observations().count(), 2);
+    }
+
+    #[test]
+    fn conflicting_portal_provenance_fails_without_mutation() {
+        let mut map = portal_accumulator();
+        map.apply(&portal_update(vec![portal_observation(0, 1.0)]))
+            .unwrap();
+        let conflict = portal_update(vec![portal_observation(0, 9.0)]);
+
+        assert!(matches!(
+            map.apply(&conflict),
+            Err(PortalAccumulatorError::ConflictingObservation(_))
+        ));
+        assert_eq!(
+            map.observations()
+                .next()
+                .unwrap()
+                .portal_to_map
+                .as_ref()
+                .unwrap()
+                .translation
+                .as_ref()
+                .unwrap()
+                .x,
+            1.0
+        );
+    }
+
+    #[test]
+    fn conflicting_canonical_portal_sizes_fail_without_mutation() {
+        let mut map = portal_accumulator();
+        map.apply(&portal_update(vec![portal_observation(0, 1.0)]))
+            .unwrap();
+        let mut conflicting_size = portal_observation(1, 2.0);
+        conflicting_size.physical_size_m = 0.25;
+
+        assert_eq!(
+            map.apply(&portal_update(vec![conflicting_size])),
+            Err(PortalAccumulatorError::ConflictingPortalSize(
+                "portal:office".into()
+            ))
+        );
+        assert_eq!(map.observations().count(), 1);
+    }
+
+    #[test]
+    fn portal_checkpoint_round_trips_materialized_state() {
+        let mut source = portal_accumulator();
+        source
+            .apply(&portal_update(vec![
+                portal_observation(2, 3.0),
+                portal_observation(0, 1.0),
+            ]))
+            .unwrap();
+
+        let mut replay = portal_accumulator();
+        let summary = replay.apply(&source.checkpoint_update()).unwrap();
+        assert!(summary.checkpoint_applied);
+        assert_eq!(
+            replay.observations().cloned().collect::<Vec<_>>(),
+            source.observations().cloned().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn voxel_and_portal_accumulators_reject_the_other_map_kind() {
+        assert_eq!(
+            accumulator().apply(&portal_update(vec![portal_observation(0, 1.0)])),
+            Err(AccumulatorError::UnexpectedPortalData)
+        );
+        assert_eq!(
+            portal_accumulator().apply(&update(0, 1.0, 0.0)),
+            Err(PortalAccumulatorError::UnexpectedVoxelData)
+        );
     }
 }

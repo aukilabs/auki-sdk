@@ -317,6 +317,8 @@ mod tests {
                 }],
             }],
             checkpoint: None,
+            portal_observations: vec![],
+            portal_checkpoint: None,
         }
     }
 

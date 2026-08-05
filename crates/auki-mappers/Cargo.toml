@@ -6,9 +6,11 @@ license.workspace = true
 
 [dependencies]
 auki-datatypes = { path = "../auki-datatypes" }
+auki-geometry = { path = "../auki-geometry" }
 auki-registry = { path = "../auki-registry" }
 auki-session = { path = "../auki-session" }
 auki-network = { path = "../auki-network", features = ["swarm"] }
+pnp-core = { git = "https://github.com/aukilabs/pnp-lab.git", rev = "c56b1d4d5518eac997f020168a4e508bb27d599a" }
 thiserror = "2"
 futures = "0.3"
 tokio = { version = "1", features = ["macros", "rt"] }
@@ -16,3 +18,4 @@ tokio = { version = "1", features = ["macros", "rt"] }
 [dev-dependencies]
 tempfile = "3"
 auki-manifests = { path = "../auki-manifests" }
+auki-maps = { path = "../auki-maps" }

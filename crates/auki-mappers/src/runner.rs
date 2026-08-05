@@ -15,6 +15,8 @@ use crate::{VoxelMapperMapFrameBinding, Voxelizer, VoxelizerError};
 /// One typed sample received from an SDK log stream.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimedSdkSample<T> {
+    /// Monotonic sequence number from the source SDK log.
+    pub sequence: u64,
     /// Timestamp expressed in the input log's declared clock.
     pub timestamp_ns: i64,
     /// SDK payload decoded from the stream entry.
@@ -109,6 +111,7 @@ impl<T: Send + 'static> MapperInput<T> {
                             )))
                         } else {
                             Ok(TimedSdkSample {
+                                sequence,
                                 timestamp_ns: entry.timestamp_ns,
                                 payload: entry.payload,
                             })
@@ -537,18 +540,18 @@ async fn resolve_pending<S: MapUpdateSink>(
 }
 
 #[derive(Default)]
-struct PoseBuffer {
+pub(crate) struct PoseBuffer {
     samples: VecDeque<TimedSdkSample<SpatialTransform>>,
 }
 
-enum PoseResolution {
+pub(crate) enum PoseResolution {
     Ready(SpatialTransform),
     BeforeAvailableRange,
     Waiting,
 }
 
 impl PoseBuffer {
-    fn push(
+    pub(crate) fn push(
         &mut self,
         sample: TimedSdkSample<SpatialTransform>,
         maximum_buffered_poses: usize,
@@ -573,7 +576,10 @@ impl PoseBuffer {
         Ok(dropped)
     }
 
-    fn resolve(&mut self, timestamp_ns: i64) -> Result<PoseResolution, VoxelMapperRunError> {
+    pub(crate) fn resolve(
+        &mut self,
+        timestamp_ns: i64,
+    ) -> Result<PoseResolution, VoxelMapperRunError> {
         while self.samples.len() >= 2 && self.samples[1].timestamp_ns <= timestamp_ns {
             self.samples.pop_front();
         }
@@ -941,6 +947,7 @@ mod tests {
             !buffer
                 .push(
                     TimedSdkSample {
+                        sequence: 0,
                         timestamp_ns: i64::MIN,
                         payload: pose(0.0),
                     },
@@ -952,6 +959,7 @@ mod tests {
             !buffer
                 .push(
                     TimedSdkSample {
+                        sequence: 1,
                         timestamp_ns: 0,
                         payload: pose(5.0),
                     },
@@ -963,6 +971,7 @@ mod tests {
             buffer
                 .push(
                     TimedSdkSample {
+                        sequence: 2,
                         timestamp_ns: i64::MAX,
                         payload: pose(10.0),
                     },
@@ -978,10 +987,12 @@ mod tests {
 
         let midpoint = interpolate_pose(
             &TimedSdkSample {
+                sequence: 0,
                 timestamp_ns: i64::MIN,
                 payload: pose(0.0),
             },
             &TimedSdkSample {
+                sequence: 1,
                 timestamp_ns: i64::MAX,
                 payload: pose(10.0),
             },
@@ -1121,6 +1132,7 @@ mod tests {
             log("sensor-peer", "lidar-points"),
             clock(),
             Box::pin(futures::stream::iter(vec![Ok(TimedSdkSample {
+                sequence: 0,
                 timestamp_ns: 5,
                 payload: point(0.0),
             })])),
@@ -1130,10 +1142,12 @@ mod tests {
             clock(),
             Box::pin(futures::stream::iter(vec![
                 Ok(TimedSdkSample {
+                    sequence: 0,
                     timestamp_ns: 0,
                     payload: pose(0.0),
                 }),
                 Ok(TimedSdkSample {
+                    sequence: 1,
                     timestamp_ns: 10,
                     payload: pose(10.0),
                 }),
@@ -1176,6 +1190,7 @@ mod tests {
             log("p1", "points"),
             clock(),
             Box::pin(futures::stream::iter(vec![Ok(TimedSdkSample {
+                sequence: 0,
                 timestamp_ns: 1,
                 payload: point(0.0),
             })])),
@@ -1184,6 +1199,7 @@ mod tests {
             log("p2", "pose"),
             clock(),
             Box::pin(futures::stream::iter(vec![Ok(TimedSdkSample {
+                sequence: 0,
                 timestamp_ns: 2,
                 payload: pose(0.0),
             })])),
@@ -1281,6 +1297,7 @@ mod tests {
             log("sensor-peer", "points"),
             session.monotonic_clock(),
             Box::pin(futures::stream::iter(vec![Ok(TimedSdkSample {
+                sequence: 0,
                 timestamp_ns: 5,
                 payload: point(0.0),
             })])),
@@ -1290,10 +1307,12 @@ mod tests {
             session.monotonic_clock(),
             Box::pin(futures::stream::iter(vec![
                 Ok(TimedSdkSample {
+                    sequence: 0,
                     timestamp_ns: 0,
                     payload: pose(0.0),
                 }),
                 Ok(TimedSdkSample {
+                    sequence: 1,
                     timestamp_ns: 10,
                     payload: pose(10.0),
                 }),
@@ -1357,6 +1376,7 @@ mod tests {
             log("bracketbot", "head_pointcloud"),
             input_clock.clone(),
             Box::pin(futures::stream::iter(vec![Ok(TimedSdkSample {
+                sequence: 0,
                 timestamp_ns: 5,
                 payload: point(0.0),
             })])),
@@ -1366,10 +1386,12 @@ mod tests {
             input_clock.clone(),
             Box::pin(futures::stream::iter(vec![
                 Ok(TimedSdkSample {
+                    sequence: 0,
                     timestamp_ns: 0,
                     payload: pose(0.0),
                 }),
                 Ok(TimedSdkSample {
+                    sequence: 1,
                     timestamp_ns: 10,
                     payload: pose(10.0),
                 }),

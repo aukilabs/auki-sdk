@@ -2,6 +2,7 @@
 //! produce MapUpdates; they deliberately have no robot or ROS dependency.
 
 mod camera;
+mod portal;
 
 use auki_datatypes::map::{ColorEvidenceDelta, MapUpdate, VoxelChunkUpdate, VoxelDelta};
 use auki_datatypes::point_cloud::Data as PointCloudData;
@@ -23,6 +24,9 @@ pub use discovery::{
     VoxelMapperInputBindingError, VoxelMapperServiceConfig, VoxelMapperServiceError,
     VoxelMapperSourceQuery, VoxelMapperSourceSelectionError, VoxelMapperSources,
     run_sdk_voxel_mapper,
+};
+pub use portal::{
+    ImagePoint, PortalDefinition, PortalObservation, PortalPnpError, estimate_portal_observation,
 };
 
 pub use frame_alias::{FrameAliasError, ValidatedFrameAlias, VoxelMapperMapFrameBinding};

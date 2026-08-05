@@ -6,9 +6,11 @@ license.workspace = true
 
 [dependencies]
 auki-datatypes = { path = "../auki-datatypes" }
+auki-geometry = { path = "../auki-geometry" }
 auki-registry = { path = "../auki-registry" }
 auki-session = { path = "../auki-session" }
 auki-network = { path = "../auki-network", features = ["swarm"] }
+pnp-core = { git = "https://github.com/aukilabs/pnp-lab.git", rev = "41bec92c34dc5a0b7db9e8383d3edff548a209cc" }
 thiserror = "2"
 futures = "0.3"
 tokio = { version = "1", features = ["macros", "rt"] }

@@ -56,3 +56,22 @@ and future Portal Mappers. A `CameraFrame.dynamic_intrinsics` value replaces
 the complete Camera Registry calibration for that frame. Otherwise the static,
 content-addressed registry calibration is used. Resolution fails closed when
 neither source exists or when the selected calibration is invalid.
+
+## Portal PnP
+
+`estimate_portal_observation` turns four detector-provided image corners in
+`TL, TR, BR, BL` order and a canonical square Portal size into a metric
+`PortalObservation`. It resolves static or per-frame calibration through the
+shared camera contract and supports pinhole Brown–Conrady / ROS `plumb_bob` as
+well as OpenCV fisheye / ROS `equidistant` distortion.
+
+The exact Camera Frame Registry entry is also required. The Mapper verifies
+its content hash against the Camera reference and uses its declared axes and
+units to express the result, failing closed on an incompatible convention.
+
+The API is detector-agnostic: QR Lab is the first reference detector, but any
+detector can provide the ordered corners. Portal payload recognition and
+Portal Service lookup remain application concerns. The result is a
+camera-frame observation with confidence and normalized corner error, not an
+authoritative Map placement; a later materializer can fuse repeated and
+multi-peer observations.

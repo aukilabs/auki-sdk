@@ -36,6 +36,7 @@ fn galbot_session_writes_manifest_then_park_session_independently_constructs_one
                 color_space: "srgb".into(),
                 intrinsics_model: "pinhole".into(),
                 distortion_model: "brown_conrady".into(),
+                calibration: None,
                 frame: frame.clone(),
             }),
         )

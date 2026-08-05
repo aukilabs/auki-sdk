@@ -6,12 +6,12 @@ package auki.camera;
 // whose registry entry has body kind `camera`. The frame timestamp
 // rides in the auki-logs framing's `timestamp_ns`, not here.
 //
-// `dynamic_intrinsics` is inline-optional per the Step 1 decision in
-// ../parking_lot.md. Cameras whose intrinsics don't change frame-to-frame
-// pay ~1 byte/frame for the absent-tag; autofocusing cameras populate it
-// per-frame. Promoting to a sibling intrinsics-update sub-stream remains
-// possible without breaking on-disk readers — drop the field, mark its
-// number reserved, add a sibling log.
+// The Camera Sensor Registry entry may pin a static calibration for its
+// immutable published image geometry. `dynamic_intrinsics` is an optional
+// per-frame override: when present it replaces the complete static calibration
+// for this frame; fields are not merged. Cameras whose intrinsics don't change
+// frame-to-frame omit it. Metric consumers must fail closed when neither source
+// is available rather than guessing intrinsics.
 //
 // Field number ledger (never reuse, never renumber):
 //   CameraFrame.dynamic_intrinsics = 1

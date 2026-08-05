@@ -1,5 +1,6 @@
 //! ROS2 → Auki translation: `sensor_msgs/CameraInfo` + `sensor_msgs/Image`
-//! into `SensorRegistryEntry` + `DynamicIntrinsics` + `CameraFrame`.
+//! into a `SensorRegistryEntry` with static calibration plus `CameraFrame`
+//! values with per-frame dynamic calibration overrides.
 //!
 //! Sensor Log payload schema: see [`auki-datatypes`](../../auki-datatypes/README.md).
 //! Translation contract: [`../README.md`](../README.md).
@@ -118,6 +119,23 @@ pub fn dynamic_intrinsics_from(info: &CameraInfoMsg) -> DynamicIntrinsics {
     }
 }
 
+/// Capture the bootstrap `CameraInfo` as the content-addressed static
+/// calibration for the published image geometry.
+pub fn camera_calibration_from(info: &CameraInfoMsg) -> auki_registry::CameraCalibration {
+    auki_registry::CameraCalibration {
+        fx: auki_registry::FiniteF64(info.k[0]),
+        fy: auki_registry::FiniteF64(info.k[4]),
+        cx: auki_registry::FiniteF64(info.k[2]),
+        cy: auki_registry::FiniteF64(info.k[5]),
+        distortion_coefficients: info
+            .d
+            .iter()
+            .copied()
+            .map(auki_registry::FiniteF64)
+            .collect(),
+    }
+}
+
 /// Static metadata supplied by the integrator — the bits not present in
 /// `sensor_msgs/CameraInfo` but required by `SensorRegistryEntry`. For the K1
 /// these come from out-of-band knowledge of the platform.
@@ -162,13 +180,16 @@ pub fn build_camera_registry_entry(
             color_space: meta.color_space.clone(),
             intrinsics_model: meta.intrinsics_model.clone(),
             distortion_model: info.distortion_model.clone(),
+            calibration: Some(camera_calibration_from(info)),
             frame: meta.frame.clone(),
         }),
     }
 }
 
-/// Build a `CameraFrame` from the latest `CameraInfo` snapshot + an
-/// Image. Returns `(timestamp_ns, entry)` ready for `auki_logs::Log::append`.
+/// Build a `CameraFrame` from the latest `CameraInfo` snapshot + an Image.
+/// The inline intrinsics override the registry baseline for this frame, which
+/// preserves correctness when a ROS camera changes calibration at runtime.
+/// Returns `(timestamp_ns, entry)` ready for `auki_logs::Log::append`.
 pub fn build_sensor_log_entry(info: &CameraInfoMsg, image: &ImageMsg) -> (i64, CameraFrame) {
     let timestamp_ns = stamp_to_ns(image.stamp);
     let entry = CameraFrame {
@@ -894,19 +915,8 @@ mod tests {
     }
 
     #[test]
-    fn build_camera_registry_entry_matches_m1_example_hash() {
-        // The auki-registry test suite locks the M1 example sensor entry's
-        // hash. Driving build_camera_registry_entry with a CameraInfo
-        // whose width/height/distortion_model match should produce the same
-        // entry — same canonical bytes, same hash.
-        let info = CameraInfoMsg {
-            stamp: StampMsg { sec: 0, nanosec: 0 },
-            width: 544,
-            height: 488,
-            distortion_model: "plumb_bob".into(),
-            k: [0.0; 9], // unused by the registry side
-            d: vec![],   // unused by the registry side
-        };
+    fn build_camera_registry_entry_pins_bootstrap_calibration() {
+        let info = k1_bootstrap_camera_info();
         let entry = build_camera_registry_entry(
             "test-peer",
             "K1-AABBCCDDEEFF/head_left_cam",
@@ -922,8 +932,22 @@ mod tests {
                 frame: k1_optical_frame_ref(),
             },
         );
-        // Same hash as auki-registry's `sensor_entry_hash_is_locked` (#216 rev 2 shape).
-        assert_eq!(entry.hash(), "9306d67f99d38ced7c186c0f63734421");
+        let auki_registry::SensorBody::Camera(camera) = entry.body else {
+            panic!("expected camera body");
+        };
+        let calibration = camera.calibration.expect("static calibration");
+        assert_eq!(calibration.fx.0, 400.0);
+        assert_eq!(calibration.fy.0, 401.0);
+        assert_eq!(calibration.cx.0, 272.5);
+        assert_eq!(calibration.cy.0, 244.5);
+        assert_eq!(
+            calibration
+                .distortion_coefficients
+                .iter()
+                .map(|value| value.0)
+                .collect::<Vec<_>>(),
+            vec![-0.1, 0.05, 0.0, 0.0, 0.0]
+        );
     }
 
     #[test]
@@ -1009,8 +1033,8 @@ mod tests {
                 frame: k1_optical_frame_ref(),
             },
         );
-        // Matches auki-registry's locked hash for the M1 camera entry (#216 rev 2 shape).
-        assert_eq!(registry_entry.hash(), "9306d67f99d38ced7c186c0f63734421");
+        // The bootstrap calibration is part of the camera's content identity.
+        assert_eq!(registry_entry.hash(), "0c53498ca507da145784db9c65563e36");
 
         // Now a frame arrives.
         sub.enqueue(SubscriptionEvent::Frame(ImageMsg {

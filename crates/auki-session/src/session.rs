@@ -1126,6 +1126,8 @@ mod session_logs_tests {
                         }],
                     }],
                     checkpoint: None,
+                    portal_observations: vec![],
+                    portal_checkpoint: None,
                 },
             )
             .unwrap();

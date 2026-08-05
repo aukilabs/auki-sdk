@@ -1045,6 +1045,8 @@ mod tests {
         let first = auki_network::stream_protocol::map::MapUpdate {
             voxel_chunks: vec![],
             checkpoint: None,
+            portal_observations: vec![],
+            portal_checkpoint: None,
         };
         handle.append(100, &first).unwrap();
         let streams = map_stream_provider(
@@ -1076,6 +1078,8 @@ mod tests {
                 &auki_network::stream_protocol::map::MapUpdate {
                     voxel_chunks: vec![],
                     checkpoint: None,
+                    portal_observations: vec![],
+                    portal_checkpoint: None,
                 },
             )
             .unwrap();

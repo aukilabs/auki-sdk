@@ -3,6 +3,10 @@
 `auki-maps` materializes SDK Map Logs into deterministic in-memory state and
 adapts changed voxel chunks into renderer-neutral instance buffers.
 
+It also materializes Portal Maps as provenance-keyed pose observations. These
+remain unfused evidence: choosing one authoritative Portal placement is a
+separate policy layer.
+
 ## Current surface
 
 - `VoxelMapAccumulator::new(map_ref, contract)` validates and pins the exact
@@ -18,6 +22,12 @@ adapts changed voxel chunks into renderer-neutral instance buffers.
 - `VoxelViewerAdapter::changed_chunks(...)` emits `ChunkRenderUpdate::Replace`
   or `ChunkRenderUpdate::Remove` operations containing pickable cube
   `VoxelInstance`s.
+- `PortalMapAccumulator::apply(update)` idempotently unions observations by
+  source Detection Log sequence and detection index. Conflicting content for
+  one provenance key or conflicting canonical sizes for one Portal fails
+  atomically.
+- `PortalMapAccumulator::checkpoint_update()` produces an ordered full-state
+  barrier for retained-log replay.
 
 Updates use additive occupancy evidence. Applying independent updates in any
 order produces the same state. Invalid coordinates, non-finite evidence, and

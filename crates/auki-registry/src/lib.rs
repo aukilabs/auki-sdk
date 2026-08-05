@@ -75,7 +75,7 @@ pub struct LogRef {
 /// Stable, content-addressed identity and interpretation contract for a map.
 /// A map belongs to its owning peer, but its update log may be consumed and
 /// materialized by any peer. The registry fixes every property necessary to
-/// interpret voxel indices without depending on a Mapper implementation.
+/// interpret updates without depending on a Mapper implementation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MapRegistryEntry {
     pub peer_id: String,
@@ -88,6 +88,22 @@ pub struct MapRegistryEntry {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MapBody {
     Voxel(VoxelMap),
+    Portal(PortalMap),
+}
+
+/// An append-only set of metric Portal pose observations in `frame`.
+/// Repeated observations are fused by a materializer rather than overwritten
+/// by individual Mapper updates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PortalMap {
+    pub frame: RegistryRef,
+    pub observation_model: PortalObservationModel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PortalObservationModel {
+    AppendOnlyPoseObservations,
 }
 
 /// A sparse, unbounded voxel map. Voxel coordinates are integer indices in
@@ -183,6 +199,21 @@ impl MapRegistryEntry {
                 {
                     return Err(Error::InvalidMap(
                         "semantic class labels must be non-empty and unique".into(),
+                    ));
+                }
+            }
+            MapBody::Portal(map) => {
+                if map.frame.peer_id.is_empty()
+                    || map.frame.id.is_empty()
+                    || map.frame.hash.is_empty()
+                {
+                    return Err(Error::InvalidMap(
+                        "frame must contain peer_id, id, and hash".into(),
+                    ));
+                }
+                if map.observation_model != PortalObservationModel::AppendOnlyPoseObservations {
+                    return Err(Error::InvalidMap(
+                        "unsupported Portal observation model".into(),
                     ));
                 }
             }
@@ -2480,6 +2511,29 @@ mod id_charset_tests {
             write_map(tmp.path(), &invalid),
             Err(Error::InvalidMap(_))
         ));
+    }
+
+    #[test]
+    fn portal_map_registry_entry_is_content_addressed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let entry = MapRegistryEntry {
+            peer_id: "park".into(),
+            map_id: "portals".into(),
+            body: MapBody::Portal(PortalMap {
+                frame: RegistryRef {
+                    peer_id: "bracketbot".into(),
+                    id: "map".into(),
+                    hash: "map-frame-hash".into(),
+                },
+                observation_model: PortalObservationModel::AppendOnlyPoseObservations,
+            }),
+        };
+
+        write_map(tmp.path(), &entry).unwrap();
+        assert_eq!(
+            read_map(tmp.path(), "park", "portals", &entry.hash()).unwrap(),
+            Some(entry)
+        );
     }
 }
 

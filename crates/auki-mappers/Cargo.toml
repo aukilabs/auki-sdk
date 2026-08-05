@@ -18,3 +18,4 @@ tokio = { version = "1", features = ["macros", "rt"] }
 [dev-dependencies]
 tempfile = "3"
 auki-manifests = { path = "../auki-manifests" }
+auki-maps = { path = "../auki-maps" }

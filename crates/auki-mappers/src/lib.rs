@@ -3,6 +3,7 @@
 
 mod camera;
 mod portal;
+mod portal_runner;
 
 use auki_datatypes::map::{ColorEvidenceDelta, MapUpdate, VoxelChunkUpdate, VoxelDelta};
 use auki_datatypes::point_cloud::Data as PointCloudData;
@@ -27,6 +28,10 @@ pub use discovery::{
 };
 pub use portal::{
     ImagePoint, PortalDefinition, PortalObservation, PortalPnpError, estimate_portal_observation,
+};
+pub use portal_runner::{
+    PortalCandidate, PortalDetectionBatch, PortalMapperAlignmentConfig, PortalMapperRunError,
+    PortalMapperRunReport, PortalMapperRunner, PortalResolver, PortalResolverError,
 };
 
 pub use frame_alias::{FrameAliasError, ValidatedFrameAlias, VoxelMapperMapFrameBinding};
@@ -246,6 +251,8 @@ impl Voxelizer {
                 })
                 .collect(),
             checkpoint: None,
+            portal_observations: Vec::new(),
+            portal_checkpoint: None,
         })
     }
 

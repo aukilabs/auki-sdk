@@ -880,6 +880,7 @@ dependencies = [
  "auki-datatypes",
  "auki-geometry",
  "auki-manifests",
+ "auki-maps",
  "auki-network",
  "auki-registry",
  "auki-session",

@@ -271,7 +271,7 @@ mod tests {
     use super::camera::{CameraFrame, DynamicIntrinsics};
     use super::detection::DetectionFrame;
     use super::joint_encoders;
-    use super::map::{MapUpdate, SemanticDelta, VoxelChunkUpdate, VoxelDelta};
+    use super::map::{MapUpdate, PortalObservation, SemanticDelta, VoxelChunkUpdate, VoxelDelta};
     use super::message::Message as TypedMessage;
     use super::point_cloud;
     use super::pose::{Quat, SpatialTransform, Vec3};
@@ -298,6 +298,8 @@ mod tests {
                 }],
             }],
             checkpoint: None,
+            portal_observations: vec![],
+            portal_checkpoint: None,
         };
 
         let hex: String = update
@@ -336,6 +338,8 @@ mod tests {
                     }],
                 }],
             }),
+            portal_observations: vec![],
+            portal_checkpoint: None,
         };
         let bytes = checkpoint.encode_to_vec();
         assert!(
@@ -344,6 +348,57 @@ mod tests {
                 .checkpoint
                 .is_some()
         );
+        assert!(
+            LegacyMapUpdate::decode(bytes.as_slice())
+                .unwrap()
+                .voxel_chunks
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn portal_observation_is_ignored_by_legacy_voxel_consumers() {
+        #[derive(Clone, PartialEq, prost::Message)]
+        struct LegacyMapUpdate {
+            #[prost(message, repeated, tag = "1")]
+            voxel_chunks: Vec<super::map::VoxelChunkUpdate>,
+        }
+
+        let update = MapUpdate {
+            voxel_chunks: vec![],
+            checkpoint: None,
+            portal_observations: vec![PortalObservation {
+                portal_id: "portal:office".into(),
+                physical_size_m: 0.2,
+                portal_to_map: Some(SpatialTransform {
+                    translation: Some(Vec3 {
+                        x: 1.0,
+                        y: 2.0,
+                        z: 3.0,
+                    }),
+                    orientation: Some(Quat {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                        w: 1.0,
+                    }),
+                }),
+                confidence: 0.9,
+                normalized_corner_error: 0.01,
+                source_peer_id: "bracketbot".into(),
+                source_resource_id: "qr/head_left".into(),
+                source_timestamp_ns: 42,
+                source_sequence: 7,
+                source_detection_index: 0,
+                camera_frame_peer_id: "bracketbot".into(),
+                camera_frame_id: "head_left_camera_optical".into(),
+                camera_frame_hash: "frame-hash".into(),
+            }],
+            portal_checkpoint: None,
+        };
+        let bytes = update.encode_to_vec();
+
+        assert_eq!(MapUpdate::decode(bytes.as_slice()).unwrap(), update);
         assert!(
             LegacyMapUpdate::decode(bytes.as_slice())
                 .unwrap()

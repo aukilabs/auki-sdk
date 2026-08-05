@@ -75,3 +75,26 @@ Portal Service lookup remain application concerns. The result is a
 camera-frame observation with confidence and normalized corner error, not an
 authoritative Map placement; a later materializer can fuse repeated and
 multi-peer observations.
+
+## Live Portal Mapper flow
+
+`PortalMapperRunner` consumes three streams on one exact SDK clock:
+
+1. normalized detector batches carrying a source Camera Sensor hash,
+2. the original Camera Frames at the same timestamps, and
+3. Camera→Map poses bracketing those timestamps.
+
+For every candidate, an application-supplied `PortalResolver` decides whether
+the detector payload is a Portal and returns its canonical physical size. The
+runner resolves frame-specific calibration, performs PnP, interpolates the
+Camera→Map pose, and writes a Portal→Map observation. A batch is rejected if
+its Camera Sensor hash differs from the configured camera, and it is skipped
+if no Camera Frame exists at the exact detector timestamp.
+
+Observation identity is `(source Detection Log, source sequence, detection
+index)`, not timestamp alone. This makes replay idempotent even when a log has
+multiple samples with the same timestamp. `PortalMapAccumulator` rejects
+conflicting content under one provenance key and conflicting canonical sizes
+for one Portal, and supports ordered checkpoint barriers. It deliberately
+retains observations rather than selecting an authoritative Portal pose;
+fusion remains a separate materializer policy.

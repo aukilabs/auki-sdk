@@ -1,6 +1,8 @@
 //! SDK-native map producers. Mappers consume SDK resources and streams and
 //! produce MapUpdates; they deliberately have no robot or ROS dependency.
 
+mod camera;
+
 use auki_datatypes::map::{ColorEvidenceDelta, MapUpdate, VoxelChunkUpdate, VoxelDelta};
 use auki_datatypes::point_cloud::Data as PointCloudData;
 use auki_datatypes::pose::{SpatialTransform, Vec3};
@@ -16,6 +18,7 @@ mod discovery;
 mod frame_alias;
 mod runner;
 
+pub use camera::{CameraCalibrationError, effective_camera_calibration};
 pub use discovery::{
     VoxelMapperInputBindingError, VoxelMapperServiceConfig, VoxelMapperServiceError,
     VoxelMapperSourceQuery, VoxelMapperSourceSelectionError, VoxelMapperSources,

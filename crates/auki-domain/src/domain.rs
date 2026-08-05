@@ -940,6 +940,7 @@ mod tests {
                     color_space: "srgb".to_string(),
                     intrinsics_model: "pinhole".to_string(),
                     distortion_model: "brown_conrady".to_string(),
+                    calibration: None,
                     frame: frame.clone(),
                 }),
             )

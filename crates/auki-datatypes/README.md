@@ -8,7 +8,9 @@ Each module exposes a canonical payload shape used on both disk and wire. The pr
 
 ## Public surface
 
-- `camera::{CameraFrame, DynamicIntrinsics}`
+- `camera::{CameraFrame, DynamicIntrinsics}`. A frame's optional dynamic
+  intrinsics replace (rather than merge with) the Camera Registry's static
+  calibration; metric consumers require one source or fail closed.
 - `point_cloud::Data`, `audio::Data`, `joint_encoders::Data`
 - `detection::DetectionFrame`
 - `pose::{SpatialTransform, Vec3, Quat}`

@@ -48,3 +48,11 @@ provenance should provide a sink backed by an explicit SDK time transform.
 `Voxelizer` decodes the canonical XYZ fields from an SDK `Rangefinder`
 payload, interpolates the SDK-supplied sensor-to-Map pose, traces free-space
 rays, and emits additive occupied/free evidence grouped into sparse chunks.
+
+## Camera calibration for metric Mappers
+
+`effective_camera_calibration` applies the shared camera contract used by PnP
+and future Portal Mappers. A `CameraFrame.dynamic_intrinsics` value replaces
+the complete Camera Registry calibration for that frame. Otherwise the static,
+content-addressed registry calibration is used. Resolution fails closed when
+neither source exists or when the selected calibration is invalid.

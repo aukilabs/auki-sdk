@@ -509,6 +509,7 @@ mod tests {
             color_space: "linear".into(),
             intrinsics_model: "pinhole".into(),
             distortion_model: "none".into(),
+            calibration: None,
             frame: RegistryRef {
                 peer_id: "robot".into(),
                 id: "camera_optical".into(),

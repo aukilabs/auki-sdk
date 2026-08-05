@@ -193,7 +193,7 @@ impl MapRegistryEntry {
 
 // ─── Sensor Registry ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SensorRegistryEntry {
     pub peer_id: String,
     pub sensor_id: String,
@@ -201,7 +201,7 @@ pub struct SensorRegistryEntry {
     pub body: SensorBody,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SensorBody {
     Camera(Camera),
@@ -211,7 +211,7 @@ pub enum SensorBody {
     JointEncoders(JointEncoders),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Camera {
     /// Open-string sensor type, e.g. `"rgb"` | `"depth"` | `"ir"` | `"mono"` | `"multispectral"`.
     pub r#type: String,
@@ -228,9 +228,28 @@ pub struct Camera {
     pub color_space: String,
     pub intrinsics_model: String,
     pub distortion_model: String,
+    /// Numeric calibration for the immutable output image geometry. Cameras
+    /// remain useful for non-geometric consumers when this is absent, while
+    /// PnP and other metric consumers must require either this calibration or
+    /// a per-frame dynamic override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calibration: Option<CameraCalibration>,
     /// Frame Registry reference for the camera optical frame. Replaces
     /// the former `(frame_id, frame_hash)` pair.
     pub frame: RegistryRef,
+}
+
+/// Static pinhole intrinsics and lens-distortion coefficients for every frame
+/// in the Sensor Log. Values describe the published `width` × `height` image
+/// after any producer-side crop, resize, rotation, or rectification.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CameraCalibration {
+    pub fx: FiniteF64,
+    pub fy: FiniteF64,
+    pub cx: FiniteF64,
+    pub cy: FiniteF64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub distortion_coefficients: Vec<FiniteF64>,
 }
 
 impl Camera {
@@ -257,6 +276,31 @@ impl Camera {
             )),
             _ => Ok(()),
         }
+    }
+
+    /// Validate optional metric calibration without requiring it for image-
+    /// space-only consumers such as previews and QR decoders.
+    pub fn validate_calibration(&self) -> Result<()> {
+        let Some(calibration) = &self.calibration else {
+            return Ok(());
+        };
+        if !calibration.fx.0.is_finite()
+            || calibration.fx.0 <= 0.0
+            || !calibration.fy.0.is_finite()
+            || calibration.fy.0 <= 0.0
+            || !calibration.cx.0.is_finite()
+            || !calibration.cy.0.is_finite()
+            || calibration
+                .distortion_coefficients
+                .iter()
+                .any(|coefficient| !coefficient.0.is_finite())
+        {
+            return Err(Error::InvalidCameraCalibration(
+                "fx and fy must be finite and positive; cx, cy, and all distortion coefficients must be finite"
+                    .into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -875,6 +919,8 @@ pub enum Error {
     /// A Camera registry entry does not define a coherent immutable frame
     /// byte layout.
     InvalidImageLayout(String),
+    /// A Camera registry entry contains invalid numeric calibration.
+    InvalidCameraCalibration(String),
     /// On write of a frame-bearing [`SensorRegistryEntry`], the
     /// referenced `(frame_id, frame_hash)` did not resolve to an
     /// existing [`FrameRegistryEntry`] on disk.
@@ -897,6 +943,9 @@ impl std::fmt::Display for Error {
             }
             Error::InvalidAxes(msg) => write!(f, "invalid axes: {msg}"),
             Error::InvalidImageLayout(msg) => write!(f, "invalid image layout: {msg}"),
+            Error::InvalidCameraCalibration(msg) => {
+                write!(f, "invalid camera calibration: {msg}")
+            }
             Error::FrameReferenceMissing {
                 sensor_id,
                 frame_id,
@@ -925,6 +974,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub fn write_sensor(app_root: &Path, entry: &SensorRegistryEntry) -> Result<WriteOutcome> {
     if let SensorBody::Camera(camera) = &entry.body {
         camera.validate_image_layout()?;
+        camera.validate_calibration()?;
     }
     validate_sensor_frame_reference(app_root, entry)?;
     let bytes = entry.canonical_bytes();
@@ -1196,6 +1246,7 @@ mod tests {
                 color_space: "BT.709".into(),
                 intrinsics_model: "pinhole".into(),
                 distortion_model: "plumb_bob".into(),
+                calibration: None,
                 frame: RegistryRef {
                     peer_id: "test-peer".into(),
                     id: "K1-AABBCCDDEEFF/head_left_cam_optical".into(),
@@ -1638,6 +1689,72 @@ mod tests {
         assert!(matches!(
             write_sensor(dir.path(), &entry),
             Err(Error::InvalidImageLayout(_))
+        ));
+    }
+
+    fn test_camera_calibration() -> CameraCalibration {
+        CameraCalibration {
+            fx: FiniteF64(400.0),
+            fy: FiniteF64(401.0),
+            cx: FiniteF64(272.5),
+            cy: FiniteF64(244.5),
+            distortion_coefficients: vec![
+                FiniteF64(-0.1),
+                FiniteF64(0.05),
+                FiniteF64(0.0),
+                FiniteF64(0.0),
+                FiniteF64(0.0),
+            ],
+        }
+    }
+
+    #[test]
+    fn camera_calibration_is_optional_but_content_addressed_when_present() {
+        let uncalibrated = m1_sensor_entry();
+        let mut calibrated = uncalibrated.clone();
+        let SensorBody::Camera(camera) = &mut calibrated.body else {
+            unreachable!()
+        };
+        camera.calibration = Some(test_camera_calibration());
+
+        assert_ne!(uncalibrated.hash(), calibrated.hash());
+        let json = String::from_utf8(calibrated.canonical_bytes()).unwrap();
+        assert!(json.contains(
+            r#""calibration":{"cx":272.5,"cy":244.5,"distortion_coefficients":[-0.1,0.05,0,0,0],"fx":400,"fy":401}"#
+        ));
+    }
+
+    #[test]
+    fn camera_registry_rejects_non_positive_focal_lengths() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut entry = m1_sensor_entry();
+        let SensorBody::Camera(camera) = &mut entry.body else {
+            unreachable!()
+        };
+        let mut calibration = test_camera_calibration();
+        calibration.fx = FiniteF64(0.0);
+        camera.calibration = Some(calibration);
+
+        assert!(matches!(
+            write_sensor(dir.path(), &entry),
+            Err(Error::InvalidCameraCalibration(_))
+        ));
+    }
+
+    #[test]
+    fn camera_registry_rejects_non_finite_calibration_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut entry = m1_sensor_entry();
+        let SensorBody::Camera(camera) = &mut entry.body else {
+            unreachable!()
+        };
+        let mut calibration = test_camera_calibration();
+        calibration.distortion_coefficients[0] = FiniteF64(f64::NAN);
+        camera.calibration = Some(calibration);
+
+        assert!(matches!(
+            write_sensor(dir.path(), &entry),
+            Err(Error::InvalidCameraCalibration(_))
         ));
     }
 
@@ -2194,6 +2311,7 @@ mod tests {
                 color_space: "srgb".into(),
                 intrinsics_model: "pinhole".into(),
                 distortion_model: "brown_conrady".into(),
+                calibration: None,
                 frame: frame_ref.clone(),
             }),
         };

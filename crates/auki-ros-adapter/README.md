@@ -1,6 +1,6 @@
 # auki-ros-adapter
 
-Generic ROS2 → SDK glue. Converts `sensor_msgs/CameraInfo` + `sensor_msgs/Image` into Sensor Registry entries and Sensor Log payloads; same for `sensor_msgs/PointCloud2`, with RGB / RGBA normalization. Both builders thread `frame_id` + `frame_hash` through so the resulting registry entries commit to an exact Frame Registry version.
+Generic ROS2 → SDK glue. Converts `sensor_msgs/CameraInfo` + `sensor_msgs/Image` into Sensor Registry entries and Sensor Log payloads; same for `sensor_msgs/PointCloud2`, with RGB / RGBA normalization. Camera registry entries pin the bootstrap `CameraInfo` as static calibration. Per-frame `CameraInfo` remains an all-fields override in `CameraFrame`, so runtime calibration changes remain correct. Both builders thread `frame_id` + `frame_hash` through so the resulting registry entries commit to an exact Frame Registry version.
 
 **Status:** ⚠ Broken at the transport layer. `r2r 0.9.5`'s compile-time-generated `sensor_msgs` typesupport doesn't match the CDR layout some camera drivers publish. Fix in flight.
 

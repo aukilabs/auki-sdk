@@ -130,6 +130,7 @@ fn make_sensor_camera_rgb() -> SensorRegistryEntry {
             color_space: "srgb".into(),
             intrinsics_model: "pinhole".into(),
             distortion_model: "brown_conrady".into(),
+            calibration: None,
             frame: galbot_frame_ref("head_left_camera_optical", &optical_frame),
         }),
     }
@@ -151,6 +152,7 @@ fn make_sensor_camera_depth() -> SensorRegistryEntry {
             color_space: "depth".into(),
             intrinsics_model: "pinhole".into(),
             distortion_model: "brown_conrady".into(),
+            calibration: None,
             frame: galbot_frame_ref("head_depth_optical", &optical_frame),
         }),
     }

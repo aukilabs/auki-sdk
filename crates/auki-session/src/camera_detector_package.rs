@@ -403,6 +403,7 @@ mod tests {
                     color_space: "srgb".into(),
                     intrinsics_model: "pinhole".into(),
                     distortion_model: "none".into(),
+                    calibration: None,
                     frame: frame.clone(),
                 }),
             )

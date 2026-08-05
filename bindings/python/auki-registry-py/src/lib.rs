@@ -253,7 +253,7 @@ fn point_field(
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
-#[pyo3(signature = (*, peer_id, sensor_id, sensor_type, width, height, frame_rate_hz, image_encoding, pixel_format, row_stride_bytes, color_space, intrinsics_model, distortion_model, frame))]
+#[pyo3(signature = (*, peer_id, sensor_id, sensor_type, width, height, frame_rate_hz, image_encoding, pixel_format, row_stride_bytes, color_space, intrinsics_model, distortion_model, frame, calibration=None))]
 fn camera_sensor_entry(
     py: Python<'_>,
     peer_id: &str,
@@ -269,8 +269,12 @@ fn camera_sensor_entry(
     intrinsics_model: &str,
     distortion_model: &str,
     frame: &Bound<'_, PyAny>,
+    calibration: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PyObject> {
     let frame_ref = parse_registry_ref(py, frame)?;
+    let calibration = calibration
+        .map(|value| parse_py(py, value, "calibration"))
+        .transpose()?;
     let entry = registry::SensorRegistryEntry {
         peer_id: peer_id.to_string(),
         sensor_id: sensor_id.to_string(),
@@ -285,6 +289,7 @@ fn camera_sensor_entry(
             color_space: color_space.to_string(),
             intrinsics_model: intrinsics_model.to_string(),
             distortion_model: distortion_model.to_string(),
+            calibration,
             frame: frame_ref,
         }),
     };
@@ -880,11 +885,55 @@ mod tests {
                 "pinhole",
                 "plumb_bob",
                 frame_ref_py.bind(py),
+                None,
             )
             .unwrap();
 
             let sensor_hash = write_sensor(py, dir.path().to_path_buf(), sensor.bind(py)).unwrap();
             assert!(!sensor_hash.is_empty());
+        });
+    }
+
+    #[test]
+    fn camera_sensor_entry_accepts_static_calibration() {
+        Python::with_gil(|py| {
+            let frame_ref = make_frame_ref_dict(py, "frame-hash");
+            let calibration = PyDict::new_bound(py);
+            calibration.set_item("fx", 400.0).unwrap();
+            calibration.set_item("fy", 401.0).unwrap();
+            calibration.set_item("cx", 272.5).unwrap();
+            calibration.set_item("cy", 244.5).unwrap();
+            calibration
+                .set_item("distortion_coefficients", vec![-0.1, 0.05, 0.0, 0.0, 0.0])
+                .unwrap();
+
+            let sensor = camera_sensor_entry(
+                py,
+                PEER_ID,
+                "K1-AABBCCDDEEFF/head_left_cam",
+                "rgb",
+                544,
+                488,
+                20,
+                "raw",
+                "YUV_NV12",
+                544,
+                "BT.709",
+                "pinhole",
+                "plumb_bob",
+                frame_ref.bind(py),
+                Some(calibration.as_any()),
+            )
+            .unwrap();
+
+            let parsed: registry::SensorRegistryEntry =
+                parse_py(py, sensor.bind(py), "sensor").unwrap();
+            let registry::SensorBody::Camera(camera) = parsed.body else {
+                panic!("expected camera body");
+            };
+            let calibration = camera.calibration.expect("static calibration");
+            assert_eq!(calibration.fx.0, 400.0);
+            assert_eq!(calibration.distortion_coefficients.len(), 5);
         });
     }
 }

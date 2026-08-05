@@ -53,6 +53,42 @@ Logs reference registries by **content-addressed hash**: the hash IS the version
 
 ---
 
+## Application-controlled processing components
+
+Detectors and Mappers are executable components, not network Resources. A
+registry entry describes an implementation and its compatible contracts; a
+runner executes one instance; the application chooses the concrete inputs,
+output, cadence, lifetime, and resource budget. The resulting Detection Log or
+Map Log is the Resource other peers discover and consume.
+
+This separation keeps policy out of implementations. A QR detector does not
+choose a camera, and a voxel Mapper does not subscribe merely because a point
+cloud exists. An application may run the same registered implementation many
+times against different streams or not run it at all. SDK discovery helpers may
+validate and propose unambiguous bindings, but source selection remains an
+application decision.
+
+Execution follows two explicit modes:
+
+- **Live:** preserve freshness and control-plane responsiveness. Ingestion is
+  asynchronous, CPU-heavy component work runs outside the async runtime, and
+  bounded queues apply an observable overload policy. Image and spatial mapping
+  runners normally use latest-frame-wins because stale work has declining value.
+- **Replay:** preserve the recording. Samples are processed in timestamp order,
+  exhaustively unless the caller cancels or a deterministic error terminates the
+  run. Replay never silently adopts live dropping semantics.
+
+SDK runners own validation, timestamps, provenance, scheduling, backpressure,
+cancellation, and operational counters. Bring-your-own implementations own the
+domain computation. Output sinks must also avoid blocking the async control
+plane; an async method is not sufficient if it performs expensive synchronous
+work before returning its future.
+
+The detailed contract and integration checklist live in the
+[Component Execution wiki page](docs/wiki/Component-Execution.md).
+
+---
+
 ## What's implemented today
 
 This repo is in early development. The crates here implement a foundational subset of the architecture:

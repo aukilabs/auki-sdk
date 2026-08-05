@@ -23,6 +23,7 @@ pub struct SensorLogHandle {
     pub(crate) root: PathBuf,
 }
 
+#[derive(Clone)]
 pub struct MapLogHandle {
     pub resource_id: String,
     pub log_ref: LogRef,

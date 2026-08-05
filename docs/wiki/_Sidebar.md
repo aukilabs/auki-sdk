@@ -9,6 +9,7 @@
 ### Design + Architecture
 
 - [Overview](Design-and-Architecture)
+- [Component execution](Component-Execution)
 - [The Five Questions](The-Five-Questions)
 - [Glossary](Glossary)
 - [Crate map](Crate-Map)

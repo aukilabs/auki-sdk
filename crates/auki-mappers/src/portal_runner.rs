@@ -79,6 +79,7 @@ pub struct PortalMapperRunner {
     camera_sensor: RegistryRef,
     camera: Camera,
     camera_frame: FrameRegistryEntry,
+    pose_prefix: Option<SpatialTransform>,
     alignment: PortalMapperAlignmentConfig,
 }
 
@@ -124,8 +125,51 @@ impl PortalMapperRunner {
             camera_sensor,
             camera,
             camera_frame,
+            pose_prefix: None,
             alignment,
         })
+    }
+
+    /// Bind a Camera→intermediate rigid edge followed by a live
+    /// intermediate→Map Pose Log.
+    ///
+    /// This is the normal robot contract when the camera extrinsic is static
+    /// and SLAM publishes the moving robot base in map space. Each live pose
+    /// sample is composed into Camera→Map before timestamp interpolation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_sdk_pose_chain_contract(
+        camera_sensor: RegistryRef,
+        camera: Camera,
+        camera_frame: FrameRegistryEntry,
+        rigid_from_frame: RegistryRef,
+        rigid_to_frame: RegistryRef,
+        rigid_transform: SpatialTransform,
+        live_from_frame: RegistryRef,
+        live_to_frame: RegistryRef,
+        map: &PortalMap,
+        alignment: PortalMapperAlignmentConfig,
+    ) -> Result<Self, PortalMapperRunError> {
+        if rigid_to_frame != live_from_frame {
+            return Err(PortalMapperRunError::PoseChainFrameMismatch {
+                rigid_to_frame: Box::new(rigid_to_frame),
+                live_from_frame: Box::new(live_from_frame),
+            });
+        }
+        // The identity composition validates that the rigid sample is a
+        // complete, finite SDK transform before any stream is opened.
+        compose_spatial_transforms(&rigid_transform, &identity_transform())
+            .map_err(|error| PortalMapperRunError::Geometry(error.to_string()))?;
+        let mut runner = Self::from_sdk_contract(
+            camera_sensor,
+            camera,
+            camera_frame,
+            rigid_from_frame,
+            live_to_frame,
+            map,
+            alignment,
+        )?;
+        runner.pose_prefix = Some(rigid_transform);
+        Ok(runner)
     }
 
     /// Run until the Detection input ends and every resolvable pending batch
@@ -250,8 +294,12 @@ impl PortalMapperRunner {
                 }
                 pose = poses.samples.next(), if !poses_done => {
                     match pose {
-                        Some(Ok(sample)) => {
+                        Some(Ok(mut sample)) => {
                             report.poses_received += 1;
+                            if let Some(prefix) = &self.pose_prefix {
+                                sample.payload = compose_spatial_transforms(prefix, &sample.payload)
+                                    .map_err(|error| PortalMapperRunError::Geometry(error.to_string()))?;
+                            }
                             if pose_buffer
                                 .push(sample, self.alignment.maximum_buffered_poses)
                                 .map_err(|error| PortalMapperRunError::PoseAlignment(error.to_string()))?
@@ -423,6 +471,11 @@ pub enum PortalMapperRunError {
         pose_to_frame: Box<RegistryRef>,
         map_frame: Box<RegistryRef>,
     },
+    #[error("rigid pose destination frame does not match live pose source frame")]
+    PoseChainFrameMismatch {
+        rigid_to_frame: Box<RegistryRef>,
+        live_from_frame: Box<RegistryRef>,
+    },
     #[error("Camera Frame Registry entry does not match the Camera reference")]
     CameraFrameReferenceMismatch,
     #[error("unsupported Portal observation model")]
@@ -458,6 +511,22 @@ pub enum PortalMapperRunError {
     TooManyDetections,
     #[error("map sink: {0}")]
     Sink(MapSinkError),
+}
+
+fn identity_transform() -> SpatialTransform {
+    SpatialTransform {
+        translation: Some(auki_datatypes::pose::Vec3 {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        }),
+        orientation: Some(auki_datatypes::pose::Quat {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            w: 1.0,
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -750,6 +819,95 @@ mod tests {
             accumulator.apply(&updates[0].1).unwrap().observations_added,
             1
         );
+    }
+
+    #[tokio::test]
+    async fn composes_rigid_camera_to_base_with_live_base_to_map() {
+        let Contract { runner, clock, map } = contract();
+        let camera_sensor = runner.camera_sensor.clone();
+        let camera = runner.camera.clone();
+        let camera_frame = runner.camera_frame.clone();
+        let camera_frame_ref = camera.frame.clone();
+        let base_frame = registry_ref("bracketbot", "base_link", "base-frame-hash");
+        let map_frame = map.frame.clone();
+        let runner = PortalMapperRunner::from_sdk_pose_chain_contract(
+            camera_sensor,
+            camera,
+            camera_frame,
+            camera_frame_ref,
+            base_frame.clone(),
+            pose(2.0),
+            base_frame,
+            map_frame,
+            &map,
+            PortalMapperAlignmentConfig::default(),
+        )
+        .unwrap();
+        let detections = input(
+            log_ref("bracketbot", "qr/head_left"),
+            clock.clone(),
+            vec![TimedSdkSample {
+                sequence: 7,
+                timestamp_ns: 10,
+                payload: PortalDetectionBatch {
+                    sensor_hash: "camera-sensor-hash".into(),
+                    detections: vec![PortalCandidate {
+                        payload: "auki://portal/office".into(),
+                        corners_px: corners(),
+                    }],
+                },
+            }],
+        );
+        let cameras = input(
+            log_ref("bracketbot", "camera/head_left"),
+            clock.clone(),
+            vec![TimedSdkSample {
+                sequence: 3,
+                timestamp_ns: 10,
+                payload: CameraFrame {
+                    frame: vec![],
+                    dynamic_intrinsics: None,
+                },
+            }],
+        );
+        let poses = input(
+            log_ref("bracketbot", "base_link->map"),
+            clock.clone(),
+            vec![
+                TimedSdkSample {
+                    sequence: 0,
+                    timestamp_ns: 0,
+                    payload: pose(10.0),
+                },
+                TimedSdkSample {
+                    sequence: 1,
+                    timestamp_ns: 20,
+                    payload: pose(12.0),
+                },
+            ],
+        );
+        let sink = RecordingSink {
+            destination: log_ref("park", "portal-map"),
+            clock,
+            updates: Mutex::new(vec![]),
+        };
+
+        runner
+            .run(detections, cameras, poses, &StaticResolver, &sink)
+            .await
+            .unwrap();
+
+        let updates = sink.updates.lock().unwrap();
+        let translation = updates[0].1.portal_observations[0]
+            .portal_to_map
+            .as_ref()
+            .unwrap()
+            .translation
+            .as_ref()
+            .unwrap();
+        assert!((translation.x - 13.0).abs() < 1e-5);
+        assert!(translation.y.abs() < 1e-5);
+        assert!((translation.z - 2.0).abs() < 1e-5);
     }
 
     #[tokio::test]

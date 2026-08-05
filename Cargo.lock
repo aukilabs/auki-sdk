@@ -1009,6 +1009,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-portal-mapper"
+version = "0.0.0"
+dependencies = [
+ "auki-datatypes",
+ "auki-mappers",
+ "auki-qr-detector",
+ "futures",
+ "reqwest",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "auki-qr-detector"
 version = "0.0.0"
 dependencies = [

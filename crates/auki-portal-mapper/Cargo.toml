@@ -1,0 +1,21 @@
+[package]
+name = "auki-portal-mapper"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Reference QR and Portal Service integration for the detector-agnostic Auki Portal Mapper."
+
+[dependencies]
+auki-datatypes = { path = "../auki-datatypes" }
+auki-mappers = { path = "../auki-mappers" }
+auki-qr-detector = { path = "../auki-qr-detector" }
+futures = { version = "0.3", default-features = false, features = ["std"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+url = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "net", "rt"] }

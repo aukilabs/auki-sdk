@@ -105,6 +105,12 @@ impl StreamingQrDetectorTask {
         self.task.request_shutdown();
     }
 
+    /// Live frames replaced by fresher pending work while QR detection was
+    /// busy. Frames skipped by cadence are not included.
+    pub fn dropped_frames(&self) -> u64 {
+        self.task.dropped_frames()
+    }
+
     pub async fn shutdown(self) -> Result<(), QrDetectorError> {
         self.task.shutdown().await.map_err(Into::into)
     }

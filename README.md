@@ -19,6 +19,7 @@ The Auki protocol is built around five questions any node should be able to answ
 - **Pose Logs** — segmented `from → to` transforms keyed per ordered frame pair. The future `convert_pose` composition along a transform path is pending.
 - **Sensor + Detection Logs** — per-frame sensor payloads (camera, point cloud, joint encoders, audio) and detector outputs.
 - **Maps + Mappers** — content-addressed Map resources, durable Map Logs, and SDK-native producers that transform sensor/pose streams into mergeable Map Updates.
+- **Application-controlled components** — bring-your-own Detectors and Mappers run only when an application starts an instance. Live runners isolate blocking work behind bounded latest-wins queues; local Sensor Log detector replay remains ordered and exhaustive. Detection Logs and Map Logs, rather than component instances, are the Resources peers consume.
 - **`auki-geometry`** — convention conversion for points, vectors, directions, and `SpatialTransform` poses (the convention-only layer underneath the future full `convert_pose`).
 
 ### Temporal

@@ -11,7 +11,8 @@ auki-session = { path = "../auki-session" }
 auki-network = { path = "../auki-network", features = ["swarm"] }
 thiserror = "2"
 futures = "0.3"
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "sync"] }
+parking_lot = "0.12"
 
 [dev-dependencies]
 tempfile = "3"

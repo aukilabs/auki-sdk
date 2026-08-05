@@ -296,6 +296,12 @@ impl StreamingCameraDetectorTask {
         self.task.request_shutdown();
     }
 
+    /// Live frames replaced by fresher pending work while the detector was
+    /// busy. Frames skipped by cadence are not included.
+    pub fn dropped_frames(&self) -> u64 {
+        self.task.dropped_frames()
+    }
+
     pub async fn shutdown(self) -> Result<(), CameraDetectorPackageError> {
         self.task.shutdown().await.map_err(Into::into)
     }

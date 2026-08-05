@@ -10,6 +10,7 @@ use auki_datatypes::detection::DetectionFrame;
 use auki_logs::{Log, TailIter};
 use auki_registry::{Camera, LogRef, RegistryRef};
 use futures::{Stream, StreamExt};
+use parking_lot::{Condvar, Mutex};
 use thiserror::Error;
 use tokio::sync::watch;
 
@@ -287,7 +288,10 @@ impl Drop for DetectorTask {
 /// Callers map their transport entries into [`CameraFrameSample`] values.
 pub struct StreamingDetectorTask {
     stop: watch::Sender<bool>,
-    worker: Option<tokio::task::JoinHandle<std::result::Result<(), DetectorRunnerError>>>,
+    queue: Arc<LatestFrameSlot>,
+    dropped_frames: Arc<AtomicU64>,
+    ingestion: Option<tokio::task::JoinHandle<std::result::Result<(), DetectorRunnerError>>>,
+    worker: Option<JoinHandle<std::result::Result<(), DetectorRunnerError>>>,
 }
 
 impl StreamingDetectorTask {
@@ -308,34 +312,118 @@ impl StreamingDetectorTask {
         tokio::runtime::Handle::try_current().map_err(|_| DetectorRunnerError::NoAsyncRuntime)?;
         let pipeline = DetectorPipeline::open(detector, camera, output)?;
         let (stop, stop_rx) = watch::channel(false);
-        let worker = tokio::spawn(run_stream_loop(pipeline, Box::pin(frames), stop_rx));
+        let queue = Arc::new(LatestFrameSlot::default());
+        let dropped_frames = Arc::new(AtomicU64::new(0));
+        let worker_queue = Arc::clone(&queue);
+        let worker = thread::spawn(move || run_stream_worker(pipeline, worker_queue));
+        let ingestion_queue = Arc::clone(&queue);
+        let ingestion_drops = Arc::clone(&dropped_frames);
+        let ingestion = tokio::spawn(run_stream_ingestion(
+            Box::pin(frames),
+            stop_rx,
+            ingestion_queue,
+            ingestion_drops,
+        ));
         Ok(Self {
             stop,
+            queue,
+            dropped_frames,
+            ingestion: Some(ingestion),
             worker: Some(worker),
         })
     }
 
     pub fn request_shutdown(&self) {
         let _ = self.stop.send(true);
+        self.queue.cancel();
+    }
+
+    /// Frames replaced in the pending latest-wins slot while the detector was
+    /// busy. This does not include frames skipped by the declared cadence.
+    pub fn dropped_frames(&self) -> u64 {
+        self.dropped_frames.load(Ordering::Relaxed)
     }
 
     pub async fn shutdown(mut self) -> std::result::Result<(), DetectorRunnerError> {
         self.request_shutdown();
-        match self.worker.take() {
-            Some(worker) => worker
+        let ingestion_result = match self.ingestion.take() {
+            Some(ingestion) => ingestion
                 .await
                 .map_err(|_| DetectorRunnerError::TaskPanicked)?,
             None => Ok(()),
-        }
+        };
+        let worker_result = match self.worker.take() {
+            Some(worker) => tokio::task::spawn_blocking(move || worker.join())
+                .await
+                .map_err(|_| DetectorRunnerError::TaskPanicked)?
+                .map_err(|_| DetectorRunnerError::TaskPanicked)?,
+            None => Ok(()),
+        };
+        ingestion_result.and(worker_result)
     }
 }
 
 impl Drop for StreamingDetectorTask {
     fn drop(&mut self) {
         self.request_shutdown();
-        if let Some(worker) = &self.worker {
-            worker.abort();
+        if let Some(ingestion) = &self.ingestion {
+            ingestion.abort();
         }
+    }
+}
+
+#[derive(Default)]
+struct LatestFrameSlot {
+    state: Mutex<LatestFrameState>,
+    ready: Condvar,
+}
+
+#[derive(Default)]
+struct LatestFrameState {
+    pending: Option<CameraFrameSample>,
+    closed: bool,
+}
+
+impl LatestFrameSlot {
+    /// Replace the pending frame. Returns `Some(replaced)` while open and
+    /// `None` once the worker has closed the slot.
+    fn submit(&self, sample: CameraFrameSample) -> Option<bool> {
+        let mut state = self.state.lock();
+        if state.closed {
+            return None;
+        }
+        let replaced = state.pending.replace(sample).is_some();
+        self.ready.notify_one();
+        Some(replaced)
+    }
+
+    fn receive(&self) -> Option<CameraFrameSample> {
+        let mut state = self.state.lock();
+        loop {
+            if let Some(sample) = state.pending.take() {
+                return Some(sample);
+            }
+            if state.closed {
+                return None;
+            }
+            self.ready.wait(&mut state);
+        }
+    }
+
+    /// Close after normal input EOF, allowing the worker to drain the latest
+    /// pending frame.
+    fn finish(&self) {
+        let mut state = self.state.lock();
+        state.closed = true;
+        self.ready.notify_all();
+    }
+
+    /// Close for cancellation or failure and discard stale pending work.
+    fn cancel(&self) {
+        let mut state = self.state.lock();
+        state.pending = None;
+        state.closed = true;
+        self.ready.notify_all();
     }
 }
 
@@ -357,27 +445,52 @@ fn run_local_loop<D: CameraDetector>(
     Ok(())
 }
 
-async fn run_stream_loop<D: CameraDetector>(
-    mut pipeline: DetectorPipeline<D>,
+async fn run_stream_ingestion(
     mut frames: std::pin::Pin<
         Box<dyn Stream<Item = std::result::Result<CameraFrameSample, String>> + Send>,
     >,
     mut stop: watch::Receiver<bool>,
+    queue: Arc<LatestFrameSlot>,
+    dropped_frames: Arc<AtomicU64>,
 ) -> std::result::Result<(), DetectorRunnerError> {
     loop {
         tokio::select! {
             changed = stop.changed() => {
                 if changed.is_err() || *stop.borrow() {
+                    queue.cancel();
                     return Ok(());
                 }
             }
             sample = frames.next() => match sample {
-                Some(Ok(sample)) => pipeline.process(sample)?,
-                Some(Err(error)) => return Err(DetectorRunnerError::InputStream(error)),
-                None => return Ok(()),
+                Some(Ok(sample)) => match queue.submit(sample) {
+                    Some(true) => { dropped_frames.fetch_add(1, Ordering::Relaxed); }
+                    Some(false) => {}
+                    None => return Ok(()),
+                },
+                Some(Err(error)) => {
+                    queue.cancel();
+                    return Err(DetectorRunnerError::InputStream(error));
+                }
+                None => {
+                    queue.finish();
+                    return Ok(());
+                }
             }
         }
     }
+}
+
+fn run_stream_worker<D: CameraDetector>(
+    mut pipeline: DetectorPipeline<D>,
+    queue: Arc<LatestFrameSlot>,
+) -> std::result::Result<(), DetectorRunnerError> {
+    while let Some(sample) = queue.receive() {
+        if let Err(error) = pipeline.process(sample) {
+            queue.cancel();
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 fn cadence_accepts(
@@ -441,5 +554,78 @@ mod tests {
         }
         assert_eq!(first.next().await.unwrap().unwrap().timestamp_ns, 3);
         assert_eq!(hub.lagged_frames(), 1);
+    }
+
+    #[test]
+    fn live_pending_slot_keeps_only_the_latest_frame() {
+        let slot = LatestFrameSlot::default();
+        let frame = Arc::new(CameraFrame {
+            dynamic_intrinsics: None,
+            frame: vec![7; 16],
+        });
+
+        assert_eq!(
+            slot.submit(CameraFrameSample {
+                timestamp_ns: 1,
+                frame: Arc::clone(&frame),
+            }),
+            Some(false)
+        );
+        assert_eq!(
+            slot.submit(CameraFrameSample {
+                timestamp_ns: 2,
+                frame,
+            }),
+            Some(true)
+        );
+        slot.finish();
+
+        assert_eq!(slot.receive().unwrap().timestamp_ns, 2);
+        assert!(slot.receive().is_none());
+    }
+
+    #[test]
+    fn cancelling_live_slot_discards_pending_frame() {
+        let slot = LatestFrameSlot::default();
+        slot.submit(CameraFrameSample {
+            timestamp_ns: 1,
+            frame: Arc::new(CameraFrame {
+                dynamic_intrinsics: None,
+                frame: vec![7; 16],
+            }),
+        });
+        slot.cancel();
+
+        assert!(slot.receive().is_none());
+    }
+
+    #[tokio::test]
+    async fn live_ingestion_counts_replaced_frames() {
+        let frame = Arc::new(CameraFrame {
+            dynamic_intrinsics: None,
+            frame: vec![7; 16],
+        });
+        let frames = futures::stream::iter([1, 2, 3].map(|timestamp_ns| {
+            Ok(CameraFrameSample {
+                timestamp_ns,
+                frame: Arc::clone(&frame),
+            })
+        }));
+        let (_stop, stop_rx) = watch::channel(false);
+        let slot = Arc::new(LatestFrameSlot::default());
+        let drops = Arc::new(AtomicU64::new(0));
+
+        run_stream_ingestion(
+            Box::pin(frames),
+            stop_rx,
+            Arc::clone(&slot),
+            Arc::clone(&drops),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(drops.load(Ordering::Relaxed), 2);
+        assert_eq!(slot.receive().unwrap().timestamp_ns, 3);
+        assert!(slot.receive().is_none());
     }
 }

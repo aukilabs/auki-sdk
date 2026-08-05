@@ -43,6 +43,19 @@ A restamped update's Map Log timestamp is its production/append time, not the
 original sensor observation time. Applications that need observation-time
 provenance should provide a sink backed by an explicit SDK time transform.
 
+The live runner separates stream alignment from voxel computation. Point-cloud
+and pose subscriptions remain responsive on the async runtime; once a point
+cloud has a bracketing pose, the aligned job enters a bounded blocking-worker
+queue. The queue is latest-wins, so a newer aligned cloud replaces stale pending
+work while one cloud is being voxelized. The run report distinguishes these
+worker-overload drops from point clouds dropped while waiting for poses.
+
+`MapUpdateSink::append_from` is part of the async boundary: implementations must
+not perform expensive synchronous compaction, encoding, or I/O before returning
+their future. Applications also control runner lifetime. A UI such as Park
+should start the voxel Mapper only while an output consumer is active and stop
+it when demand disappears.
+
 ## Pure voxelization
 
 `Voxelizer` decodes the canonical XYZ fields from an SDK `Rangefinder`

@@ -1,6 +1,11 @@
 //! Live SDK-stream orchestration for the voxel Mapper.
 
-use std::{collections::VecDeque, pin::Pin, sync::Arc};
+use std::{
+    collections::VecDeque,
+    pin::Pin,
+    sync::Arc,
+    thread::{self, JoinHandle},
+};
 
 use auki_datatypes::{
     map::MapUpdate,
@@ -9,6 +14,7 @@ use auki_datatypes::{
 };
 use auki_registry::{LogRef, Rangefinder, RegistryRef, VoxelMap};
 use futures::{FutureExt, Stream, StreamExt, future::BoxFuture};
+use parking_lot::{Condvar, Mutex};
 
 use crate::{VoxelMapperMapFrameBinding, Voxelizer, VoxelizerError};
 
@@ -271,11 +277,14 @@ impl MapUpdateSink for LocalMapLogSink {
                 .boxed();
             }
         };
-        futures::future::ready(
-            self.handle
-                .append(destination_timestamp_ns, update)
-                .map_err(|error| MapSinkError::new(error.to_string())),
-        )
+        let handle = self.handle.clone();
+        let update = update.clone();
+        async move {
+            tokio::task::spawn_blocking(move || handle.append(destination_timestamp_ns, &update))
+                .await
+                .map_err(|error| MapSinkError::new(format!("Map Log append task failed: {error}")))?
+                .map_err(|error| MapSinkError::new(error.to_string()))
+        }
         .boxed()
     }
 }
@@ -433,31 +442,54 @@ impl VoxelMapperRunner {
             map_updates_written: 0,
             point_clouds_without_pose: 0,
             point_clouds_dropped_for_backpressure: 0,
+            point_clouds_dropped_for_worker_backpressure: 0,
         };
         let mut pose_buffer = PoseBuffer::default();
         let mut pending = VecDeque::<TimedSdkSample<PointCloudData>>::new();
         let mut points_done = false;
         let mut poses_done = false;
         let mut last_point_timestamp = None;
+        let jobs = Arc::new(LatestVoxelJobSlot::default());
+        let worker_jobs = Arc::clone(&jobs);
+        let (updates_tx, mut updates_rx) = tokio::sync::mpsc::channel(1);
+        let voxelizer = self.voxelizer;
+        let point_layout = self.point_layout.clone();
+        let free_delta = self.free_delta;
+        let occupied_delta = self.occupied_delta;
+        let worker = thread::Builder::new()
+            .name("auki-voxel-mapper".into())
+            .spawn(move || {
+                run_voxel_worker(
+                    voxelizer,
+                    point_layout,
+                    free_delta,
+                    occupied_delta,
+                    worker_jobs,
+                    updates_tx,
+                )
+            })
+            .map_err(|_| VoxelMapperRunError::WorkerSpawn)?;
+        let mut worker = MapperWorkerGuard::new(Arc::clone(&jobs), worker);
+        let mut alignment_done = false;
 
         loop {
             resolve_pending(
-                self,
                 &mut pending,
                 &mut pose_buffer,
                 poses_done,
-                sink,
+                &jobs,
                 &mut report,
-            )
-            .await?;
+            )?;
 
-            if points_done && (pending.is_empty() || poses_done) {
+            if !alignment_done && points_done && (pending.is_empty() || poses_done) {
                 report.point_clouds_without_pose += pending.len() as u64;
-                return Ok(report);
+                pending.clear();
+                jobs.finish();
+                alignment_done = true;
             }
 
             tokio::select! {
-                point = point_clouds.samples.next(), if !points_done => {
+                point = point_clouds.samples.next(), if !points_done && !alignment_done => {
                     match point {
                         Some(Ok(sample)) => {
                             if last_point_timestamp.is_some_and(|last| sample.timestamp_ns < last) {
@@ -474,11 +506,15 @@ impl VoxelMapperRunner {
                                 report.point_clouds_dropped_for_backpressure += 1;
                             }
                         }
-                        Some(Err(error)) => return Err(VoxelMapperRunError::PointCloudInput(error)),
+                        Some(Err(error)) => {
+                            worker.cancel();
+                            worker.join().await?;
+                            return Err(VoxelMapperRunError::PointCloudInput(error));
+                        }
                         None => points_done = true,
                     }
                 }
-                pose = poses.samples.next(), if !poses_done => {
+                pose = poses.samples.next(), if !poses_done && !alignment_done => {
                     match pose {
                         Some(Ok(sample)) => {
                             report.poses_received += 1;
@@ -486,8 +522,38 @@ impl VoxelMapperRunner {
                                 report.poses_dropped_for_backpressure += 1;
                             }
                         }
-                        Some(Err(error)) => return Err(VoxelMapperRunError::PoseInput(error)),
+                        Some(Err(error)) => {
+                            worker.cancel();
+                            worker.join().await?;
+                            return Err(VoxelMapperRunError::PoseInput(error));
+                        }
                         None => poses_done = true,
+                    }
+                }
+                update = updates_rx.recv() => match update {
+                    Some(Ok(update)) => {
+                        if let Err(error) = sink
+                            .append_from(&report.alignment_clock, update.timestamp_ns, &update.update)
+                            .await
+                        {
+                            worker.cancel();
+                            worker.join().await?;
+                            return Err(VoxelMapperRunError::Sink(error));
+                        }
+                        report.map_updates_written += 1;
+                    }
+                    Some(Err(error)) => {
+                        worker.cancel();
+                        worker.join().await?;
+                        return Err(VoxelMapperRunError::Voxelizer(error));
+                    }
+                    None if alignment_done => {
+                        worker.join().await?;
+                        return Ok(report);
+                    }
+                    None => {
+                        worker.join().await?;
+                        return Err(VoxelMapperRunError::WorkerStopped);
                     }
                 }
             }
@@ -495,12 +561,11 @@ impl VoxelMapperRunner {
     }
 }
 
-async fn resolve_pending<S: MapUpdateSink>(
-    runner: &VoxelMapperRunner,
+fn resolve_pending(
     pending: &mut VecDeque<TimedSdkSample<PointCloudData>>,
     poses: &mut PoseBuffer,
     poses_done: bool,
-    sink: &S,
+    jobs: &LatestVoxelJobSlot,
     report: &mut VoxelMapperRunReport,
 ) -> Result<(), VoxelMapperRunError> {
     loop {
@@ -522,17 +587,139 @@ async fn resolve_pending<S: MapUpdateSink>(
             }
         };
         let point_cloud = pending.pop_front().expect("front checked above");
-        let update = runner.voxelizer.map_point_cloud(
-            &point_cloud.payload,
-            &runner.point_layout,
-            &pose,
-            runner.free_delta,
-            runner.occupied_delta,
-        )?;
-        sink.append_from(&report.alignment_clock, point_cloud.timestamp_ns, &update)
+        match jobs.submit(VoxelJob {
+            timestamp_ns: point_cloud.timestamp_ns,
+            point_cloud: point_cloud.payload,
+            pose,
+        }) {
+            Some(true) => report.point_clouds_dropped_for_worker_backpressure += 1,
+            Some(false) => {}
+            None => return Err(VoxelMapperRunError::WorkerStopped),
+        }
+    }
+}
+
+struct VoxelJob {
+    timestamp_ns: i64,
+    point_cloud: PointCloudData,
+    pose: SpatialTransform,
+}
+
+struct VoxelWorkerOutput {
+    timestamp_ns: i64,
+    update: MapUpdate,
+}
+
+#[derive(Default)]
+struct LatestVoxelJobSlot {
+    state: Mutex<LatestVoxelJobState>,
+    ready: Condvar,
+}
+
+#[derive(Default)]
+struct LatestVoxelJobState {
+    pending: Option<VoxelJob>,
+    closed: bool,
+}
+
+impl LatestVoxelJobSlot {
+    fn submit(&self, job: VoxelJob) -> Option<bool> {
+        let mut state = self.state.lock();
+        if state.closed {
+            return None;
+        }
+        let replaced = state.pending.replace(job).is_some();
+        self.ready.notify_one();
+        Some(replaced)
+    }
+
+    fn receive(&self) -> Option<VoxelJob> {
+        let mut state = self.state.lock();
+        loop {
+            if let Some(job) = state.pending.take() {
+                return Some(job);
+            }
+            if state.closed {
+                return None;
+            }
+            self.ready.wait(&mut state);
+        }
+    }
+
+    fn finish(&self) {
+        let mut state = self.state.lock();
+        state.closed = true;
+        self.ready.notify_all();
+    }
+
+    fn cancel(&self) {
+        let mut state = self.state.lock();
+        state.pending = None;
+        state.closed = true;
+        self.ready.notify_all();
+    }
+}
+
+fn run_voxel_worker(
+    voxelizer: Voxelizer,
+    point_layout: Rangefinder,
+    free_delta: f32,
+    occupied_delta: f32,
+    jobs: Arc<LatestVoxelJobSlot>,
+    updates: tokio::sync::mpsc::Sender<Result<VoxelWorkerOutput, VoxelizerError>>,
+) {
+    while let Some(job) = jobs.receive() {
+        let result = voxelizer
+            .map_point_cloud(
+                &job.point_cloud,
+                &point_layout,
+                &job.pose,
+                free_delta,
+                occupied_delta,
+            )
+            .map(|update| VoxelWorkerOutput {
+                timestamp_ns: job.timestamp_ns,
+                update,
+            });
+        let failed = result.is_err();
+        if updates.blocking_send(result).is_err() || failed {
+            jobs.cancel();
+            return;
+        }
+    }
+}
+
+struct MapperWorkerGuard {
+    jobs: Arc<LatestVoxelJobSlot>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl MapperWorkerGuard {
+    fn new(jobs: Arc<LatestVoxelJobSlot>, worker: JoinHandle<()>) -> Self {
+        Self {
+            jobs,
+            worker: Some(worker),
+        }
+    }
+
+    fn cancel(&self) {
+        self.jobs.cancel();
+    }
+
+    async fn join(&mut self) -> Result<(), VoxelMapperRunError> {
+        let Some(worker) = self.worker.take() else {
+            return Ok(());
+        };
+        tokio::task::spawn_blocking(move || worker.join())
             .await
-            .map_err(VoxelMapperRunError::Sink)?;
-        report.map_updates_written += 1;
+            .map_err(|_| VoxelMapperRunError::WorkerPanicked)?
+            .map_err(|_| VoxelMapperRunError::WorkerPanicked)
+    }
+}
+
+impl Drop for MapperWorkerGuard {
+    fn drop(&mut self) {
+        self.cancel();
     }
 }
 
@@ -762,6 +949,9 @@ pub struct VoxelMapperRunReport {
     /// Oldest pending point clouds discarded when the configured bound was
     /// exceeded.
     pub point_clouds_dropped_for_backpressure: u64,
+    /// Ready, pose-aligned point clouds replaced by a fresher job while the
+    /// blocking voxel worker was busy.
+    pub point_clouds_dropped_for_worker_backpressure: u64,
 }
 
 /// Failure from live Mapper orchestration.
@@ -770,6 +960,15 @@ pub enum VoxelMapperRunError {
     /// Evidence or pending-buffer configuration is invalid.
     #[error("invalid voxel Mapper runner configuration")]
     InvalidConfiguration,
+    /// The dedicated blocking worker could not be started.
+    #[error("failed to start voxel Mapper worker")]
+    WorkerSpawn,
+    /// The dedicated blocking worker panicked.
+    #[error("voxel Mapper worker panicked")]
+    WorkerPanicked,
+    /// The dedicated blocking worker stopped before input alignment ended.
+    #[error("voxel Mapper worker stopped unexpectedly")]
+    WorkerStopped,
     /// The selected Rangefinder does not produce SDK point-cloud payloads.
     #[error("voxel Mapper requires a point_cloud Rangefinder, received {0:?}")]
     UnsupportedSensorType(String),
@@ -932,6 +1131,44 @@ mod tests {
             ]
             .concat(),
         }
+    }
+
+    #[test]
+    fn aligned_worker_queue_keeps_only_the_latest_job() {
+        let jobs = LatestVoxelJobSlot::default();
+        assert_eq!(
+            jobs.submit(VoxelJob {
+                timestamp_ns: 1,
+                point_cloud: point(1.0),
+                pose: pose(1.0),
+            }),
+            Some(false)
+        );
+        assert_eq!(
+            jobs.submit(VoxelJob {
+                timestamp_ns: 2,
+                point_cloud: point(2.0),
+                pose: pose(2.0),
+            }),
+            Some(true)
+        );
+        jobs.finish();
+
+        assert_eq!(jobs.receive().unwrap().timestamp_ns, 2);
+        assert!(jobs.receive().is_none());
+    }
+
+    #[test]
+    fn aligned_worker_queue_cancellation_discards_pending_job() {
+        let jobs = LatestVoxelJobSlot::default();
+        jobs.submit(VoxelJob {
+            timestamp_ns: 1,
+            point_cloud: point(1.0),
+            pose: pose(1.0),
+        });
+        jobs.cancel();
+
+        assert!(jobs.receive().is_none());
     }
 
     #[test]

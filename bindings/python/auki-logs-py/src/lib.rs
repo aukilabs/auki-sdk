@@ -123,9 +123,9 @@ pub struct RetainedStreamSource {
 
 fn validate_payload_kind(payload_kind: &str) -> PyResult<()> {
     match payload_kind {
-        "camera" | "pointcloud" | "joint_encoders" | "audio" | "map" => Ok(()),
+        "camera" | "pointcloud" | "joint_encoders" | "audio" | "scalar" | "map" => Ok(()),
         other => Err(PyValueError::new_err(format!(
-            "payload_kind must be one of camera, pointcloud, joint_encoders, audio, or map; got {other:?}"
+            "payload_kind must be one of camera, pointcloud, joint_encoders, audio, scalar, or map; got {other:?}"
         ))),
     }
 }
@@ -635,6 +635,11 @@ mod tests {
         let entries = reader.entries().unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].payload.0, Vec::<u8>::new());
+    }
+
+    #[test]
+    fn scalar_is_an_allowed_retained_stream_payload_kind() {
+        assert!(validate_payload_kind("scalar").is_ok());
     }
 
     #[test]

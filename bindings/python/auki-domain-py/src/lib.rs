@@ -21,6 +21,7 @@
 //! - `ClusterTarget` / `ClusterManager` — daemon-side cluster handle.
 
 use auki_datatypes::detection::DetectionFrame as RustDetectionFrame;
+use auki_datatypes::scalar::Data as RustScalarFrame;
 use auki_domain_rs::cluster_manager::ManagerRelayReservation as RustManagerRelayReservation;
 use auki_domain_rs::{
     AdmitError as RustAdmitError, BootstrapError as RustBootstrapError,
@@ -82,6 +83,7 @@ enum GenericStreamPayloadKind {
     PointCloud,
     JointEncoders,
     Audio,
+    Scalar,
     Detection,
     Pose,
 }
@@ -111,6 +113,7 @@ fn resolve_generic_stream_payload_kind_from_entries(
                     let kind = match sensor.kind {
                         SensorKind::Camera => GenericStreamPayloadKind::Camera,
                         SensorKind::Audio => GenericStreamPayloadKind::Audio,
+                        SensorKind::Scalar => GenericStreamPayloadKind::Scalar,
                         SensorKind::JointEncoders => GenericStreamPayloadKind::JointEncoders,
                         // rangefinder/rf map to PointCloud as the closest stream type
                         SensorKind::Rangefinder | SensorKind::Rf => {
@@ -1977,6 +1980,13 @@ impl PyClusterManager {
                     rust_request,
                     |sub| PyStreamSubscription::from_rust_audio(sub),
                 ),
+            GenericStreamPayloadKind::Scalar => self
+                .open_typed_stream_with_request::<RustScalarFrame>(
+                    py,
+                    peer_id,
+                    rust_request,
+                    |sub| PyStreamSubscription::from_rust_scalar(sub),
+                ),
             GenericStreamPayloadKind::Detection => self
                 .open_typed_stream_with_request::<RustDetectionFrame>(
                     py,
@@ -2037,6 +2047,13 @@ impl PyClusterManager {
                 resource_id,
                 String::new(),
                 |sub| PyStreamSubscription::from_rust_audio(sub),
+            ),
+            GenericStreamPayloadKind::Scalar => self.open_typed_stream::<RustScalarFrame>(
+                py,
+                peer_id,
+                resource_id,
+                String::new(),
+                |sub| PyStreamSubscription::from_rust_scalar(sub),
             ),
             GenericStreamPayloadKind::Detection => self.open_typed_stream::<RustDetectionFrame>(
                 py,
@@ -3196,6 +3213,38 @@ mod tests {
                     },
                 },
             },
+            ResourceEntry {
+                source_peer_id: "galbot".into(),
+                writer_peer_id: "galbot".into(),
+                resource_id: "battery_charge".into(),
+                state: "live".into(),
+                head: Some(Head::Rolling {
+                    retention_ns: 60_000_000_000,
+                }),
+                extent: None,
+                available: Available {
+                    bytes: 0,
+                    entries: 0,
+                    duration_ns: 0,
+                },
+                sensor: Some(SensorBlock {
+                    kind: SensorKind::Scalar,
+                    r#type: "battery_charge".into(),
+                    sensor_id: "battery_charge".into(),
+                    sensor_hash: "scalar-hash".into(),
+                }),
+                pose: None,
+                variant_content: VariantContent::SensorLog {
+                    manifest: SensorManifestPointer {
+                        clock: RegistryRef {
+                            peer_id: "g".into(),
+                            id: "clk".into(),
+                            hash: "ch".into(),
+                        },
+                        frame: None,
+                    },
+                },
+            },
         ];
 
         assert_eq!(
@@ -3211,6 +3260,15 @@ mod tests {
             )
             .unwrap(),
             GenericStreamPayloadKind::Audio
+        );
+        assert_eq!(
+            resolve_generic_stream_payload_kind_from_entries(
+                &resources,
+                "galbot",
+                "battery_charge",
+            )
+            .unwrap(),
+            GenericStreamPayloadKind::Scalar
         );
     }
 

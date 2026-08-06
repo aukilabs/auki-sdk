@@ -44,7 +44,7 @@ internal multi-thread tokio runtime).
 - `list_clusters(discovery_url)` → `list[ClusterEntry]`
 
 **Stream methods:**
-- `open_stream(peer_id, resource_id)` — auto-dispatches by catalog variant
+- `open_stream(peer_id, resource_id)` — auto-dispatches by catalog variant and sensor kind, including non-spatial scalar Sensor Logs
 - `open_stream_with_request(peer_id, request: StreamRequest)` — full post-#216 control; resolves the payload kind by the request's `source_peer_id` + `resource_id`
 - `open_camera_stream / open_pointcloud_stream / open_joint_encoders_stream / open_audio_stream / open_pose_stream`
 - `open_map_stream(peer_id, resource, from_=ReadFrom.from_start())` — opens an exact discovered `MapLogResource` and validates the producer manifest

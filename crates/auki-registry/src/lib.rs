@@ -209,6 +209,35 @@ pub enum SensorBody {
     Rf(Rf),
     Audio(Audio),
     JointEncoders(JointEncoders),
+    Scalar(Scalar),
+}
+
+/// Static identity of a non-spatial scalar measurement such as battery
+/// charge, voltage, temperature, or CPU utilization. The open strings name
+/// the measured quantity and unit; each matching Sensor Log or live stream
+/// carries [`auki_datatypes::scalar::Data`] samples.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Scalar {
+    /// Open-string measured quantity, e.g. `"battery_charge"`, `"voltage"`,
+    /// or `"temperature"`.
+    pub r#type: String,
+    /// Open-string unit shared by every sample, e.g. `"percent"`, `"volt"`,
+    /// or `"celsius"`.
+    pub unit: String,
+    /// Expected publication cadence. This is a sizing/discovery hint rather
+    /// than a guarantee; timestamps remain authoritative.
+    pub expected_rate_hz: u32,
+}
+
+impl Scalar {
+    pub fn validate(&self) -> Result<()> {
+        if self.r#type.is_empty() || self.unit.is_empty() || self.expected_rate_hz == 0 {
+            return Err(Error::InvalidScalar(
+                "type and unit must be non-empty and expected_rate_hz must be positive".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -793,6 +822,7 @@ impl DetectorInput {
             SensorBody::Rf(rf) => ("rf", rf.r#type.as_str()),
             SensorBody::Audio(audio) => ("audio", audio.r#type.as_str()),
             SensorBody::JointEncoders(encoders) => ("joint_encoders", encoders.r#type.as_str()),
+            SensorBody::Scalar(scalar) => ("scalar", scalar.r#type.as_str()),
         };
         if self.sensor_kind != kind
             || self
@@ -921,6 +951,9 @@ pub enum Error {
     InvalidImageLayout(String),
     /// A Camera registry entry contains invalid numeric calibration.
     InvalidCameraCalibration(String),
+    /// A Scalar registry entry does not identify a quantity, unit, and
+    /// positive expected cadence.
+    InvalidScalar(String),
     /// On write of a frame-bearing [`SensorRegistryEntry`], the
     /// referenced `(frame_id, frame_hash)` did not resolve to an
     /// existing [`FrameRegistryEntry`] on disk.
@@ -946,6 +979,7 @@ impl std::fmt::Display for Error {
             Error::InvalidCameraCalibration(msg) => {
                 write!(f, "invalid camera calibration: {msg}")
             }
+            Error::InvalidScalar(msg) => write!(f, "invalid scalar sensor: {msg}"),
             Error::FrameReferenceMissing {
                 sensor_id,
                 frame_id,
@@ -975,6 +1009,9 @@ pub fn write_sensor(app_root: &Path, entry: &SensorRegistryEntry) -> Result<Writ
     if let SensorBody::Camera(camera) = &entry.body {
         camera.validate_image_layout()?;
         camera.validate_calibration()?;
+    }
+    if let SensorBody::Scalar(scalar) = &entry.body {
+        scalar.validate()?;
     }
     validate_sensor_frame_reference(app_root, entry)?;
     let bytes = entry.canonical_bytes();
@@ -1191,6 +1228,7 @@ fn sensor_frame_reference(body: &SensorBody) -> Option<&RegistryRef> {
         SensorBody::Rf(b) => Some(&b.frame),
         SensorBody::Audio(b) => Some(&b.frame),
         SensorBody::JointEncoders(b) => Some(&b.frame),
+        SensorBody::Scalar(_) => None,
     }
 }
 
@@ -1439,7 +1477,8 @@ mod tests {
             SensorBody::Rangefinder(_)
             | SensorBody::Rf(_)
             | SensorBody::Audio(_)
-            | SensorBody::JointEncoders(_) => {
+            | SensorBody::JointEncoders(_)
+            | SensorBody::Scalar(_) => {
                 panic!("test was set up for Camera")
             }
         }
@@ -1653,7 +1692,8 @@ mod tests {
             SensorBody::Rangefinder(_)
             | SensorBody::Rf(_)
             | SensorBody::Audio(_)
-            | SensorBody::JointEncoders(_) => {
+            | SensorBody::JointEncoders(_)
+            | SensorBody::Scalar(_) => {
                 panic!("test was set up for Camera")
             }
         }
@@ -2480,6 +2520,61 @@ mod id_charset_tests {
             write_map(tmp.path(), &invalid),
             Err(Error::InvalidMap(_))
         ));
+    }
+
+    #[test]
+    fn scalar_sensor_is_non_spatial_and_content_addressed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let entry = SensorRegistryEntry {
+            peer_id: "bracketbot".into(),
+            sensor_id: "battery_charge".into(),
+            body: SensorBody::Scalar(Scalar {
+                r#type: "battery_charge".into(),
+                unit: "percent".into(),
+                expected_rate_hz: 1,
+            }),
+        };
+
+        assert_eq!(
+            std::str::from_utf8(&entry.canonical_bytes()).unwrap(),
+            r#"{"expected_rate_hz":1,"kind":"scalar","peer_id":"bracketbot","sensor_id":"battery_charge","type":"battery_charge","unit":"percent"}"#
+        );
+        let outcome = write_sensor(tmp.path(), &entry).unwrap();
+        assert_eq!(
+            read_sensor(tmp.path(), &entry.peer_id, &entry.sensor_id, outcome.hash()).unwrap(),
+            Some(entry)
+        );
+    }
+
+    #[test]
+    fn scalar_sensor_rejects_incomplete_contracts() {
+        for body in [
+            Scalar {
+                r#type: String::new(),
+                unit: "percent".into(),
+                expected_rate_hz: 1,
+            },
+            Scalar {
+                r#type: "battery_charge".into(),
+                unit: String::new(),
+                expected_rate_hz: 1,
+            },
+            Scalar {
+                r#type: "battery_charge".into(),
+                unit: "percent".into(),
+                expected_rate_hz: 0,
+            },
+        ] {
+            let entry = SensorRegistryEntry {
+                peer_id: "bracketbot".into(),
+                sensor_id: "battery_charge".into(),
+                body: SensorBody::Scalar(body),
+            };
+            assert!(matches!(
+                write_sensor(tempfile::tempdir().unwrap().path(), &entry),
+                Err(Error::InvalidScalar(_))
+            ));
+        }
     }
 }
 

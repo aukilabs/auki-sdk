@@ -95,6 +95,8 @@ pub enum SensorKind {
     Audio,
     /// Articulated joint encoders.
     JointEncoders,
+    /// Non-spatial numeric measurement (battery charge, voltage, temperature, …).
+    Scalar,
 }
 
 // ── Head / Extent / Available ────────────────────────────────────────────────
@@ -882,6 +884,7 @@ mod tests {
         assert_eq!(canon(&SensorKind::Rf), r#""rf""#);
         assert_eq!(canon(&SensorKind::Audio), r#""audio""#);
         assert_eq!(canon(&SensorKind::JointEncoders), r#""joint_encoders""#);
+        assert_eq!(canon(&SensorKind::Scalar), r#""scalar""#);
         let bad: Result<SensorKind, _> = serde_json::from_str(r#""point_cloud""#);
         assert!(bad.is_err());
     }

@@ -2,7 +2,7 @@
 
 PyO3 bindings for [`auki-registry`](../../../crates/auki-registry). Lets Python producers declare and persist Sensor / Clock / Frame / Detector / Map Registry entries with the same content-addressed identity Rust uses. Voxel Maps use `voxel_map_entry`, `write_map`, and `read_map`.
 
-Mirrors the Rust API: dict-style constructors for entries, canonical-JSON + hash helpers, and hash-pinned `write_*` / `read_*` IO. Spatial sensors are validated against a `frame: RegistryRef` reference (a `{ "peer_id": ..., "id": ..., "hash": ... }` dict or `RegistryRef` pyclass instance). Camera constructors require the immutable frame-byte contract (`image_encoding`, `pixel_format`, dimensions, and `row_stride_bytes`) and accept optional static `calibration={fx, fy, cx, cy, distortion_coefficients}` for metric consumers.
+Mirrors the Rust API: dict-style constructors for entries, canonical-JSON + hash helpers, and hash-pinned `write_*` / `read_*` IO. Spatial sensors are validated against a `frame: RegistryRef` reference (a `{ "peer_id": ..., "id": ..., "hash": ... }` dict or `RegistryRef` pyclass instance). Non-spatial measurements use `scalar_sensor_entry(peer_id=..., sensor_id=..., sensor_type=..., unit=..., expected_rate_hz=...)` and need no frame. Camera constructors require the immutable frame-byte contract (`image_encoding`, `pixel_format`, dimensions, and `row_stride_bytes`) and accept optional static `calibration={fx, fy, cx, cy, distortion_coefficients}` for metric consumers.
 
 **Status:** Shipped.
 

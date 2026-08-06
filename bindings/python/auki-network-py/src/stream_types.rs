@@ -31,6 +31,7 @@ use auki_datatypes::{
     pose::{
         Quat as RustPoseQuat, SpatialTransform as RustPoseSpatialTransform, Vec3 as RustPoseVec3,
     },
+    scalar::Data as RustScalarFrame,
 };
 use auki_logs_py_rs::{
     RawBytes as RustRawLogBytes, RetainedStreamSource as RustRetainedStreamSource,
@@ -646,6 +647,41 @@ impl PyAudioFrame {
     }
 }
 
+// ─── ScalarFrame ────────────────────────────────────────────────────────────
+
+/// One non-spatial scalar sample. The measured quantity and unit are pinned
+/// by the Scalar Sensor Registry entry; the live/log payload only carries the
+/// numeric value.
+#[pyclass(name = "ScalarFrame", frozen)]
+#[derive(Clone, Debug)]
+pub struct PyScalarFrame {
+    pub(crate) inner: RustScalarFrame,
+}
+
+#[pymethods]
+impl PyScalarFrame {
+    #[new]
+    #[pyo3(signature = (value, /))]
+    fn new(value: f64) -> Self {
+        Self {
+            inner: RustScalarFrame { value },
+        }
+    }
+
+    #[getter]
+    fn value(&self) -> f64 {
+        self.inner.value
+    }
+
+    fn __repr__(&self) -> String {
+        format!("ScalarFrame(value={})", self.inner.value)
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
 // ─── SpatialTransformFrame ──────────────────────────────────────────────────
 
 /// Live pose stream payload `T` — one flat
@@ -933,6 +969,7 @@ pub(crate) enum StreamPayload {
     PointCloud(PyPointCloudFrame),
     JointEncoders(PyJointEncodersFrame),
     Audio(PyAudioFrame),
+    Scalar(PyScalarFrame),
     Detection(PyDetectionFrame),
     Pose(PySpatialTransformFrame),
     Map(PyMapUpdateFrame),
@@ -952,6 +989,9 @@ impl StreamPayload {
         if let Ok(a) = payload.extract::<PyAudioFrame>() {
             return Ok(Self::Audio(a));
         }
+        if let Ok(scalar) = payload.extract::<PyScalarFrame>() {
+            return Ok(Self::Scalar(scalar));
+        }
         if let Ok(detection) = payload.extract::<PyDetectionFrame>() {
             return Ok(Self::Detection(detection));
         }
@@ -962,7 +1002,7 @@ impl StreamPayload {
             return Ok(Self::Map(map));
         }
         Err(PyValueError::new_err(format!(
-            "stream payload must be a CameraFrame, PointCloudFrame, JointEncodersFrame, AudioFrame, DetectionFrame, SpatialTransformFrame, or MapUpdateFrame; got {}",
+            "stream payload must be a CameraFrame, PointCloudFrame, JointEncodersFrame, AudioFrame, ScalarFrame, DetectionFrame, SpatialTransformFrame, or MapUpdateFrame; got {}",
             payload
                 .repr()
                 .map(|r| r.to_string())
@@ -978,6 +1018,7 @@ impl StreamPayload {
                 .expect("alloc JointEncodersFrame")
                 .into_py(py),
             Self::Audio(f) => Py::new(py, f).expect("alloc AudioFrame").into_py(py),
+            Self::Scalar(f) => Py::new(py, f).expect("alloc ScalarFrame").into_py(py),
             Self::Detection(f) => Py::new(py, f).expect("alloc DetectionFrame").into_py(py),
             Self::Pose(f) => Py::new(py, f)
                 .expect("alloc SpatialTransformFrame")
@@ -992,6 +1033,7 @@ impl StreamPayload {
             Self::PointCloud(f) => f.__repr__(),
             Self::JointEncoders(f) => f.__repr__(),
             Self::Audio(f) => f.__repr__(),
+            Self::Scalar(f) => f.__repr__(),
             Self::Detection(f) => f.__repr__(),
             Self::Pose(f) => f.__repr__(),
             Self::Map(f) => f.__repr__(),
@@ -1119,6 +1161,20 @@ impl PyStreamItem {
         }
     }
 
+    pub(crate) fn to_rust_scalar(&self) -> Result<RustStreamItem<RustScalarFrame>, String> {
+        match &self.payload {
+            StreamPayload::Scalar(f) => Ok(RustStreamItem {
+                timestamp_ns: self.timestamp_ns,
+                payload: f.inner.clone(),
+            }),
+            other => Err(format!(
+                "AcceptScalar source yielded a StreamItem with {} payload; \
+                 the substream is mono-T — yield ScalarFrame or use the matching factory",
+                other.kind_name(),
+            )),
+        }
+    }
+
     /// Convert to a `RustStreamItem<RustPoseSpatialTransform>`. Errors
     /// with a human-readable detail if the payload is the wrong variant.
     /// Used by the producer-side source-stream pump for an `AcceptPose`
@@ -1158,6 +1214,7 @@ impl StreamPayload {
             Self::PointCloud(_) => "PointCloudFrame",
             Self::JointEncoders(_) => "JointEncodersFrame",
             Self::Audio(_) => "AudioFrame",
+            Self::Scalar(_) => "ScalarFrame",
             Self::Detection(_) => "DetectionFrame",
             Self::Pose(_) => "SpatialTransformFrame",
             Self::Map(_) => "MapUpdateFrame",
@@ -1252,6 +1309,16 @@ impl PyStreamEntry {
         }
     }
 
+    fn from_rust_scalar(frame: RustStreamEntry<RustScalarFrame>) -> Self {
+        Self {
+            timestamp_ns: frame.timestamp_ns,
+            seq: frame.seq,
+            payload: StreamPayload::Scalar(PyScalarFrame {
+                inner: frame.payload,
+            }),
+        }
+    }
+
     fn from_rust_detection(frame: RustStreamEntry<RustDetectionFrame>) -> Self {
         Self {
             timestamp_ns: frame.timestamp_ns,
@@ -1339,6 +1406,14 @@ pub(crate) enum DecisionInner {
         manifest: PyStreamManifest,
         source: RustRetainedStreamSource,
     },
+    AcceptScalar {
+        manifest: PyStreamManifest,
+        source: Py<PyAny>,
+    },
+    AcceptScalarRetained {
+        manifest: PyStreamManifest,
+        source: RustRetainedStreamSource,
+    },
     AcceptPose {
         manifest: PyStreamManifest,
         source: Py<PyAny>,
@@ -1413,6 +1488,16 @@ impl PyStreamDecision {
         }
     }
 
+    /// Accept the request with a non-spatial scalar source. The registry
+    /// entry supplies the quantity and unit; each item carries a ScalarFrame.
+    #[staticmethod]
+    #[pyo3(signature = (*, manifest, source))]
+    fn accept_scalar(manifest: PyStreamManifest, source: Py<PyAny>) -> Self {
+        Self {
+            inner: Mutex::new(Some(DecisionInner::AcceptScalar { manifest, source })),
+        }
+    }
+
     /// Accept the request with a pose source. The async iterator must
     /// yield `StreamItem(payload=SpatialTransformFrame(values))`
     /// values; frame-pair identity lives in the `StreamManifest`
@@ -1463,13 +1548,17 @@ impl PyStreamDecision {
                 manifest,
                 source: retained,
             },
+            "scalar" => DecisionInner::AcceptScalarRetained {
+                manifest,
+                source: retained,
+            },
             "map" => DecisionInner::AcceptMapRetained {
                 manifest,
                 source: retained,
             },
             other => {
                 return Err(PyValueError::new_err(format!(
-                    "payload_kind must be one of camera, pointcloud, joint_encoders, audio, or map; got {other:?}"
+                    "payload_kind must be one of camera, pointcloud, joint_encoders, audio, scalar, or map; got {other:?}"
                 )));
             }
         };
@@ -1503,6 +1592,8 @@ impl PyStreamDecision {
             | Some(DecisionInner::AcceptJointEncodersRetained { .. }) => "accept_joint_encoders",
             Some(DecisionInner::AcceptAudio { .. })
             | Some(DecisionInner::AcceptAudioRetained { .. }) => "accept_audio",
+            Some(DecisionInner::AcceptScalar { .. })
+            | Some(DecisionInner::AcceptScalarRetained { .. }) => "accept_scalar",
             Some(DecisionInner::AcceptPose { .. }) => "accept_pose",
             Some(DecisionInner::AcceptMap { .. })
             | Some(DecisionInner::AcceptMapRetained { .. }) => "accept_map",
@@ -1693,6 +1784,31 @@ pub fn build_stream_provider(callable: Py<PyAny>) -> StreamProvider {
                     match retained_log_into_source_stream(source, decode_retained_audio, &read_from)
                     {
                         Ok(source) => RustStreamDispatch::AcceptAudio {
+                            manifest: manifest.inner,
+                            source,
+                        },
+                        Err(e) => RustStreamDispatch::Decline {
+                            reason: RustDeclineReason::other(e.to_string()),
+                        },
+                    }
+                }
+                Ok(DecisionInner::AcceptScalar { manifest, source }) => {
+                    let source_stream =
+                        python_iter_into_source_stream::<RustScalarFrame>(source, |pf| {
+                            pf.to_rust_scalar()
+                        });
+                    RustStreamDispatch::AcceptScalar {
+                        manifest: manifest.inner,
+                        source: source_stream,
+                    }
+                }
+                Ok(DecisionInner::AcceptScalarRetained { manifest, source }) => {
+                    match retained_log_into_source_stream(
+                        source,
+                        decode_retained_scalar,
+                        &read_from,
+                    ) {
+                        Ok(source) => RustStreamDispatch::AcceptScalar {
                             manifest: manifest.inner,
                             source,
                         },
@@ -1898,6 +2014,10 @@ fn decode_retained_audio(bytes: Vec<u8>) -> Result<RustAudioFrame, String> {
     RustAudioFrame::decode(&*bytes).map_err(|e| e.to_string())
 }
 
+fn decode_retained_scalar(bytes: Vec<u8>) -> Result<RustScalarFrame, String> {
+    RustScalarFrame::decode(&*bytes).map_err(|e| e.to_string())
+}
+
 /// Convert a Python async iterator (yielding `PyStreamItem`) into a
 /// Rust [`SourceStream<T>`] the SDK can drain. The `convert` callback
 /// extracts the per-substream typed payload from each yielded
@@ -2025,6 +2145,8 @@ type RustJointEncodersFrameStream = Pin<
 >;
 type RustAudioFrameStream =
     Pin<Box<dyn Stream<Item = Result<RustStreamEntry<RustAudioFrame>, RustStreamError>> + Send>>;
+type RustScalarFrameStream =
+    Pin<Box<dyn Stream<Item = Result<RustStreamEntry<RustScalarFrame>, RustStreamError>> + Send>>;
 type RustDetectionFrameStream = Pin<
     Box<dyn Stream<Item = Result<RustStreamEntry<RustDetectionFrame>, RustStreamError>> + Send>,
 >;
@@ -2046,6 +2168,7 @@ enum EntryStreamKind {
     PointCloud(RustPointCloudFrameStream),
     JointEncoders(RustJointEncodersFrameStream),
     Audio(RustAudioFrameStream),
+    Scalar(RustScalarFrameStream),
     Detection(RustDetectionFrameStream),
     Pose(RustPoseFrameStream),
     Map(RustMapFrameStream),
@@ -2141,6 +2264,15 @@ impl PyStreamSubscription {
         }
     }
 
+    pub fn from_rust_scalar(rust_sub: RustStreamSubscription<RustScalarFrame>) -> Self {
+        Self {
+            manifest: PyStreamManifest {
+                inner: rust_sub.manifest,
+            },
+            entries: Mutex::new(Some(EntryStreamKind::Scalar(rust_sub.entries))),
+        }
+    }
+
     pub fn from_rust_detection(rust_sub: RustStreamSubscription<RustDetectionFrame>) -> Self {
         Self {
             manifest: PyStreamManifest {
@@ -2188,6 +2320,7 @@ enum EntryNext {
     PointCloud(Result<RustStreamEntry<RustPointCloudFrame>, RustStreamError>),
     JointEncoders(Result<RustStreamEntry<RustJointEncodersFrame>, RustStreamError>),
     Audio(Result<RustStreamEntry<RustAudioFrame>, RustStreamError>),
+    Scalar(Result<RustStreamEntry<RustScalarFrame>, RustStreamError>),
     Detection(Result<RustStreamEntry<RustDetectionFrame>, RustStreamError>),
     Pose(Result<RustStreamEntry<RustPoseSpatialTransform>, RustStreamError>),
     Map(Result<RustStreamEntry<RustMapUpdate>, RustStreamError>),
@@ -2244,6 +2377,10 @@ impl PyStreamEntryIterator {
                         Some(item) => EntryNext::Audio(item),
                         None => EntryNext::Done,
                     },
+                    EntryStreamKind::Scalar(s) => match s.next().await {
+                        Some(item) => EntryNext::Scalar(item),
+                        None => EntryNext::Done,
+                    },
                     EntryStreamKind::Detection(s) => match s.next().await {
                         Some(item) => EntryNext::Detection(item),
                         None => EntryNext::Done,
@@ -2293,6 +2430,14 @@ impl PyStreamEntryIterator {
                 *guard = Some(stream);
                 Ok(PyStreamEntry::from_rust_audio(frame))
             }
+            EntryNext::Scalar(Ok(frame)) => {
+                let mut guard = self
+                    .entries
+                    .lock()
+                    .expect("StreamEntryIterator mutex poisoned");
+                *guard = Some(stream);
+                Ok(PyStreamEntry::from_rust_scalar(frame))
+            }
             EntryNext::Detection(Ok(frame)) => {
                 let mut guard = self
                     .entries
@@ -2321,6 +2466,7 @@ impl PyStreamEntryIterator {
             | EntryNext::PointCloud(Err(stream_err))
             | EntryNext::JointEncoders(Err(stream_err))
             | EntryNext::Audio(Err(stream_err))
+            | EntryNext::Scalar(Err(stream_err))
             | EntryNext::Detection(Err(stream_err))
             | EntryNext::Pose(Err(stream_err))
             | EntryNext::Map(Err(stream_err)) => {
@@ -2445,6 +2591,7 @@ pub(crate) fn register(py: Python<'_>, cluster: &Bound<'_, PyModule>) -> PyResul
     cluster.add_class::<PyPointCloudFrame>()?;
     cluster.add_class::<PyJointEncodersFrame>()?;
     cluster.add_class::<PyAudioFrame>()?;
+    cluster.add_class::<PyScalarFrame>()?;
     cluster.add_class::<PyDetectionFrame>()?;
     cluster.add_class::<PySpatialTransformFrame>()?;
     cluster.add_class::<PyMapUpdateFrame>()?;
@@ -3406,6 +3553,42 @@ def _make(cluster):
                 _ => panic!("expected AcceptPointCloud"),
             }
         });
+    }
+
+    #[test]
+    fn scalar_frame_and_stream_item_preserve_value() {
+        let frame = PyScalarFrame::new(73.5);
+        assert_eq!(frame.value(), 73.5);
+        assert_eq!(frame.__repr__(), "ScalarFrame(value=73.5)");
+
+        let item = PyStreamItem {
+            timestamp_ns: 42,
+            payload: StreamPayload::Scalar(frame),
+        };
+        let rust = item.to_rust_scalar().unwrap();
+        assert_eq!(rust.timestamp_ns, 42);
+        assert_eq!(rust.payload.value, 73.5);
+    }
+
+    #[test]
+    fn stream_entry_constructs_from_rust_scalar() {
+        let entry = PyStreamEntry::from_rust_scalar(RustStreamEntry {
+            timestamp_ns: 99,
+            seq: 7,
+            payload: RustScalarFrame { value: 12.25 },
+        });
+        assert_eq!(entry.timestamp_ns, 99);
+        assert_eq!(entry.seq, 7);
+        let StreamPayload::Scalar(frame) = entry.payload else {
+            panic!("expected ScalarFrame");
+        };
+        assert_eq!(frame.value(), 12.25);
+    }
+
+    #[test]
+    fn retained_scalar_decoder_uses_canonical_payload() {
+        let bytes = RustScalarFrame { value: 88.0 }.encode_to_vec();
+        assert_eq!(decode_retained_scalar(bytes).unwrap().value, 88.0);
     }
 
     /// `OPEN_STREAM_TIMEOUT` is re-exported from `auki_network_rs` and

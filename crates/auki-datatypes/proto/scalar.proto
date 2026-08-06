@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package auki.scalar;
+
+// One non-spatial scalar measurement. This exact payload is used both in
+// Sensor Log segments and on `/auki/stream/0.2.0`; the surrounding framing
+// carries the sample timestamp. Quantity identity and unit live in the
+// matching Sensor Registry entry rather than being repeated per sample.
+//
+// Field number ledger (never reuse, never renumber):
+//   Data.value = 1
+
+message Data {
+  double value = 1;
+}

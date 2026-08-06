@@ -20,7 +20,7 @@ Peer identity is derived from a wallet: `Wallet::derive_child("peer/v1")`. The `
 - A message-channel registration exists only while its receiver or owning runtime exists. Dropping the receiver removes the v0.3 row and closes active endpoints; runtime shutdown drains all registrations and closes retained receivers.
 - Security is intentionally coarse for this milestone: any current Noise-authenticated cluster member may send. There is no generic channel-level ACL. The `NetworkRuntime` allow-list prevents unknown or removed peers from delivering payloads to an app receiver.
 - Stream request type `StreamRequest { source_peer_id, resource_id, read_from }` where `read_from` is a `oneof` (`latest`, `from_start`, `from_timestamp(i64)`).
-- Typed stream payloads: camera, point cloud, joint encoders, audio, pose `SpatialTransform`, detection frames, and sparse `MapUpdate`s.
+- Typed stream payloads: camera, point cloud, joint encoders, audio, non-spatial scalar `Data`, pose `SpatialTransform`, detection frames, and sparse `MapUpdate`s. `StreamDispatch::AcceptScalar` and `open_stream::<scalar::Data>` use the same protobuf payload as Scalar Sensor Logs.
 - Relay reachability: `swarm::reserve_relay_circuit_addr` reserves `/p2p-circuit` on a relay and returns the Manager circuit address to publish; `discovery_client` derives `relay_multiaddrs` from circuit Manager addresses when creating or rotating Discovery entries.
 - Runtime relay reachability: `NetworkRuntimeHandle::reserve_relay_circuit_addr` lets a runtime-owned swarm reserve a Manager circuit address after spawn, for promotion/rotation flows.
 - Discovery: `ClusterEntry.relay_multiaddrs`, `create_cluster_with_relay_multiaddrs`, `rotate_manager_with_relay_multiaddrs`

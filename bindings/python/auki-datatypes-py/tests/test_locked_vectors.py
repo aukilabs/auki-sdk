@@ -92,6 +92,15 @@ def test_audio_log_entry_locked_wire_bytes():
     assert bytes(entry).hex() == expected
 
 
+# ─── auki.scalar ───────────────────────────────────────────────────────────────────────
+
+
+def test_scalar_data_locked_wire_bytes():
+    # auki-datatypes/src/lib.rs::scalar_data_is_identical_on_log_and_protobuf_paths
+    entry = adt.scalar.Data(value=73.5)
+    assert bytes(entry).hex() == "090000000000605240"
+
+
 # ─── Step 5 — auki.pose ──────────────────────────────────────────────────────
 
 
@@ -187,6 +196,7 @@ def test_module_re_exports_all_packages():
         "map",
         "point_cloud",
         "pose",
+        "scalar",
         "stream",
         "time_transform",
     ]:

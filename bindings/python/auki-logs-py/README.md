@@ -18,7 +18,7 @@ log.set_retention(retention_ns)
 log.manifest()                       # dict
 
 # Producer sources preserve replay + live log semantics in SDK streams.
-sensor_source = log.stream_source(...)
+sensor_source = log.stream_source(...)  # payload_kind also accepts "scalar"
 map_source = log.map_stream_source(
     resource_id="voxel/world",
     map_peer_id=peer_id,

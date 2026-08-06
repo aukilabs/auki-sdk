@@ -873,6 +873,7 @@ fn sensor_kind_and_type(body: &SensorBody) -> (SensorKind, String) {
         SensorBody::Rf(b) => (SensorKind::Rf, b.r#type.clone()),
         SensorBody::Audio(b) => (SensorKind::Audio, b.r#type.clone()),
         SensorBody::JointEncoders(b) => (SensorKind::JointEncoders, b.r#type.clone()),
+        SensorBody::Scalar(b) => (SensorKind::Scalar, b.r#type.clone()),
     }
 }
 
@@ -998,7 +999,7 @@ fn detection_log_row(handle: &DetectionLogHandle) -> ResourceEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use auki_registry::{Camera, ClockBody, ClockMeta, Scope, SensorBody};
+    use auki_registry::{Camera, ClockBody, ClockMeta, Scalar, Scope, SensorBody};
     use auki_session::{FrameDef, HeadSpec, Peer, SensorLogSpec};
     use std::time::Duration;
     use tempfile::tempdir;
@@ -1077,6 +1078,54 @@ mod tests {
             row.variant_content,
             VariantContent::SensorLog { .. }
         ));
+    }
+
+    #[test]
+    fn catalog_of_discovers_non_spatial_scalar_sensor_log() {
+        let tmp = tempdir().unwrap();
+        let peer = Peer::new("bracketbot", "ctrl").with_storage_root(tmp.path().to_path_buf());
+        let sensor = peer
+            .register_sensor(
+                "battery_charge",
+                SensorBody::Scalar(Scalar {
+                    r#type: "battery_charge".into(),
+                    unit: "percent".into(),
+                    expected_rate_hz: 1,
+                }),
+            )
+            .unwrap();
+        let session = peer.start_session().unwrap();
+        let clock = session
+            .register_clock(
+                "session/sdk_clock",
+                ClockBody::MonotonicClock(ClockMeta {
+                    unit: "ns".into(),
+                    monotonic: true,
+                    epoch: None,
+                    scope: Scope::DeviceLocal,
+                }),
+            )
+            .unwrap();
+        session
+            .register_sensor_log(SensorLogSpec {
+                sensor,
+                clock,
+                frame: None,
+                head: HeadSpec::Rolling {
+                    retention_ns: 60_000_000_000,
+                },
+                segment_duration: Duration::from_secs(1),
+                retention: Duration::from_secs(60),
+            })
+            .unwrap();
+
+        let rows = catalog_of(&peer, &session);
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        let sensor = row.sensor.as_ref().expect("sensor block");
+        assert_eq!(sensor.kind, SensorKind::Scalar);
+        assert_eq!(sensor.r#type, "battery_charge");
+        assert!(row.pose.is_none());
     }
 
     #[tokio::test]

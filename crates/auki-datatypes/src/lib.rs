@@ -71,6 +71,16 @@ pub mod joint_encoders {
 
 impl_log_payload!(joint_encoders::Data);
 
+/// `auki.scalar` — one non-spatial numeric measurement shared by disk
+/// (Sensor Log segment) and wire (`/auki/stream/0.2.0` substream). Quantity
+/// identity, unit, and expected cadence live on the Sensor Registry entry;
+/// the framing timestamp identifies the sample instant.
+pub mod scalar {
+    include!(concat!(env!("OUT_DIR"), "/auki.scalar.rs"));
+}
+
+impl_log_payload!(scalar::Data);
+
 /// `auki.map` — append-only, peer-agnostic map updates. The concrete update
 /// shape is selected by the Map Registry entry; voxel maps use
 /// [`map::MapUpdate`].
@@ -275,8 +285,26 @@ mod tests {
     use super::message::Message as TypedMessage;
     use super::point_cloud;
     use super::pose::{Quat, SpatialTransform, Vec3};
+    use super::scalar;
     use super::time_transform::TimeTransformEntry;
     use prost::Message;
+
+    #[test]
+    fn scalar_data_is_identical_on_log_and_protobuf_paths() {
+        use auki_logs::LogPayload;
+
+        let sample = scalar::Data { value: 73.5 };
+        let prost_bytes = sample.encode_to_vec();
+        assert_eq!(
+            prost_bytes,
+            vec![0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x60, 0x52, 0x40]
+        );
+        assert_eq!(LogPayload::encode(&sample), prost_bytes);
+        assert_eq!(
+            <scalar::Data as LogPayload>::decode(&prost_bytes).unwrap(),
+            sample
+        );
+    }
 
     #[test]
     fn map_update_serializes_to_locked_wire_bytes() {

@@ -1257,6 +1257,42 @@ mod tests {
     }
 
     #[test]
+    fn register_non_spatial_scalar_sensor_log_end_to_end() {
+        Python::with_gil(|py| {
+            let tmp = tempfile::tempdir().unwrap();
+            let peer = peer_at(tmp.path());
+            let body = PyDict::new_bound(py);
+            body.set_item("kind", "scalar").unwrap();
+            body.set_item("type", "battery_charge").unwrap();
+            body.set_item("unit", "percent").unwrap();
+            body.set_item("expected_rate_hz", 1).unwrap();
+            let sensor = peer
+                .register_sensor(py, "battery_charge", body.as_any())
+                .unwrap();
+
+            let session = peer.start_session().unwrap();
+            let clock = session
+                .register_clock(py, "sdk_clock", make_monotonic_clock_dict(py).as_any())
+                .unwrap();
+            let sensor_py = Py::new(py, sensor).unwrap();
+            let clock_py = Py::new(py, clock).unwrap();
+            let spec = SensorLogSpec::new(
+                py,
+                sensor_py.bind(py),
+                clock_py.bind(py),
+                &HeadSpec::rolling(60_000_000_000),
+                1_000_000_000,
+                60_000_000_000,
+                None,
+            )
+            .unwrap();
+
+            let handle = session.register_sensor_log(&spec).unwrap();
+            assert_eq!(handle.resource_id, "battery_charge");
+        });
+    }
+
+    #[test]
     fn materialize_remote_log_raises_not_implemented() {
         Python::with_gil(|py| {
             let tmp = tempfile::tempdir().unwrap();

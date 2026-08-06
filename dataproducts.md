@@ -213,6 +213,33 @@ Note: `sensor.kind = "rangefinder"` and `sensor.type = "point_cloud"`. The forme
 }
 ```
 
+### Live rolling sensor_log (non-spatial scalar battery charge)
+
+Scalar Sensor Registry entries pin the measured quantity, unit, and expected
+rate. Their Sensor Log manifest intentionally has no `frame`; each
+`auki.scalar.Data` payload contains only `double value`.
+
+```json
+{
+  "available": { "bytes": 900, "duration_ns": 60000000000, "entries": 60 },
+  "head": { "kind": "rolling", "retention_ns": 60000000000 },
+  "manifest": {
+    "clock": { "hash": "…", "id": "session/sdk_clock", "peer_id": "bracketbot" }
+  },
+  "resource_id": "battery_charge",
+  "sensor": {
+    "kind": "scalar",
+    "sensor_hash": "…",
+    "sensor_id": "battery_charge",
+    "type": "battery_charge"
+  },
+  "source_peer_id": "bracketbot",
+  "state": "live",
+  "variant": "sensor_log",
+  "writer_peer_id": "bracketbot"
+}
+```
+
 ### Materialized sensor_log (Park serving Galbot's RGB, 5-min local retention)
 
 `source_peer_id` is preserved as `"galbot"`; `writer_peer_id` is `"park"`. The `sensor.sensor_hash` and registry refs still point at Galbot's canonical entries.

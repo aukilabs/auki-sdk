@@ -106,7 +106,7 @@ pub type SourceStream<T> = Pin<Box<dyn Stream<Item = Result<StreamItem<T>, Strin
 /// `Decline { reason }` and closes the substream.
 ///
 /// SDK-supported `T`s: `CameraFrame`, `point_cloud::Data`,
-/// `joint_encoders::Data`, `audio::Data`, `pose::SpatialTransform`,
+/// `joint_encoders::Data`, `audio::Data`, `scalar::Data`, `pose::SpatialTransform`,
 /// (Cuba T8) `DetectionFrame`, and `MapUpdate`.
 pub enum StreamDispatch {
     /// Accept the request with a Camera source-Stream — grimsby v1's
@@ -146,6 +146,13 @@ pub enum StreamDispatch {
     AcceptAudio {
         manifest: StreamManifest,
         source: SourceStream<audio::Data>,
+    },
+    /// Accept a non-spatial scalar measurement stream. Quantity and unit are
+    /// resolved from the pinned Sensor Registry entry; each payload carries
+    /// only one `f64` value.
+    AcceptScalar {
+        manifest: StreamManifest,
+        source: SourceStream<auki_datatypes::scalar::Data>,
     },
     /// Accept the request with a Pose source-Stream. Each
     /// [`pose::SpatialTransform`] carries one transform sample for the
@@ -461,6 +468,10 @@ pub(crate) async fn handle_inbound_substream(
         StreamDispatch::AcceptAudio { manifest, source } => {
             pump_typed::<audio::Data>(substream, manifest, source, shutdown_rx).await;
         }
+        StreamDispatch::AcceptScalar { manifest, source } => {
+            pump_typed::<auki_datatypes::scalar::Data>(substream, manifest, source, shutdown_rx)
+                .await;
+        }
         StreamDispatch::AcceptPose { manifest, source } => {
             pump_typed::<pose::SpatialTransform>(substream, manifest, source, shutdown_rx).await;
         }
@@ -640,6 +651,7 @@ const _: fn() = || {
     fn assert_message_send_static<T: Message + Default + Send + 'static>() {}
     assert_message_send_static::<CameraFrame>();
     assert_message_send_static::<point_cloud::Data>();
+    assert_message_send_static::<auki_datatypes::scalar::Data>();
     assert_message_send_static::<pose::SpatialTransform>();
 };
 
@@ -1049,6 +1061,31 @@ mod tests {
                     "",
                 ),
                 source: Box::pin(stream::iter(frames)),
+            }
+        })
+    }
+
+    fn scalar_provider_yielding_three_samples() -> StreamProvider {
+        Arc::new(|_peer, _req| {
+            let samples = [87.5, 86.75, 86.0]
+                .into_iter()
+                .enumerate()
+                .map(|(i, value)| {
+                    Ok(StreamItem {
+                        timestamp_ns: 10_000 + i as i64 * 1_000_000_000,
+                        payload: auki_datatypes::scalar::Data { value },
+                    })
+                });
+            StreamDispatch::AcceptScalar {
+                manifest: manifest(
+                    "test/battery_charge",
+                    "scalar-sensor-hash",
+                    "test/session-monotonic",
+                    "scalar-clock-hash",
+                    "",
+                    "",
+                ),
+                source: Box::pin(stream::iter(samples)),
             }
         })
     }
@@ -2210,6 +2247,71 @@ mod tests {
                 if matches!(reason.kind, Some(end_reason::Kind::SourceEnded(_))) => {}
             other => panic!("expected SourceEnded, got {other:?}"),
         }
+
+        producer.shutdown();
+        consumer.shutdown();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn producer_accepts_and_streams_scalar_samples() {
+        let id_p = PeerIdentity::from_seed(&[145u8; 32]);
+        let id_c = PeerIdentity::from_seed(&[146u8; 32]);
+        let (swarm_p, addr_p) = build_listening_swarm(&id_p, "test-scalar-producer/0").await;
+        let (swarm_c, addr_c) = build_listening_swarm(&id_c, "test-scalar-consumer/0").await;
+
+        let (producer, ..) = crate::network_runtime::NetworkRuntime::spawn(
+            swarm_p,
+            vec![AllowedPeer {
+                peer_id: id_c.peer_id(),
+                multiaddrs: vec![addr_c],
+            }],
+            scalar_provider_yielding_three_samples(),
+            crate::network_runtime::test_heartbeat_timestamps(),
+        )
+        .expect("producer spawn");
+        let (consumer, ..) = crate::network_runtime::NetworkRuntime::spawn(
+            swarm_c,
+            vec![AllowedPeer {
+                peer_id: id_p.peer_id(),
+                multiaddrs: vec![addr_p],
+            }],
+            decline_all_streams(),
+            crate::network_runtime::test_heartbeat_timestamps(),
+        )
+        .expect("consumer spawn");
+
+        assert!(
+            poll_until(
+                || consumer.connected_peers().contains(&id_p.peer_id()),
+                Duration::from_secs(15),
+            )
+            .await
+        );
+
+        let sub: StreamSubscription<auki_datatypes::scalar::Data> = consumer
+            .open_stream(
+                id_p.peer_id(),
+                StreamRequest {
+                    resource_id: "test/battery_charge".into(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("open_stream<scalar::Data>");
+        assert_eq!(sub.manifest.sensor_id, "test/battery_charge");
+        assert!(sub.manifest.frame_id.is_empty());
+        assert!(sub.manifest.frame_hash.is_empty());
+
+        let mut entries = sub.entries;
+        for (seq, value) in [87.5, 86.75, 86.0].into_iter().enumerate() {
+            let entry = entries.next().await.unwrap().expect("scalar sample");
+            assert_eq!(entry.seq, seq as u64);
+            assert_eq!(entry.payload.value, value);
+        }
+        assert!(matches!(
+            entries.next().await.unwrap(),
+            Err(StreamError::EndOfStream { .. })
+        ));
 
         producer.shutdown();
         consumer.shutdown();

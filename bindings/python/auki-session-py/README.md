@@ -20,7 +20,7 @@ session = peer.start_session()
 - `Peer(peer_id, app_id)` — long-lived identity; `peer_id` is the libp2p peer-id string. The peer outlives any one session.
 - `with_storage_root(path)` — in-place builder; mutates the peer's storage root and returns `self` for chaining. Under the hood, calls Rust's `Peer::set_storage_root` (the binding-friendly sibling of `Peer::with_storage_root(self, root) -> Self`).
 - Read accessors: `peer_id`, `app_id`, `storage_root`.
-- `register_sensor(sensor_id, body_dict)` — `body_dict` has `"kind"` and `"type"` fields (e.g. `{"kind": "camera", "type": "rgb", ...}`).
+- `register_sensor(sensor_id, body_dict)` — `body_dict` has `"kind"` and `"type"` fields (e.g. `{"kind": "camera", "type": "rgb", ...}`). Non-spatial measurements use `{"kind": "scalar", "type": "battery_charge", "unit": "percent", "expected_rate_hz": 1}`.
 - `register_frame(frame_id, FrameDef)` — takes a `FrameDef` preset object. Classmethods: `FrameDef.ros_body()`, `FrameDef.ros_optical()`, `FrameDef.opengl()`, `FrameDef.unity()`.
 - `register_detector(detector_id, body_dict, output_types: list[str], input_types: list[dict] | None = None)`.
 - `start_session()` → `Session` — mints a ULID `session_id` and auto-registers the session's monotonic + UTC clocks (`{peer_id}/{session_id}/monotonic` / `…/utc`).
@@ -40,7 +40,7 @@ Not yet exposed: the Rust `Session::monotonic_clock()` / `utc_clock()` getters f
 
 Each returns a typed handle with `resource_id`, `log_ref`, and canonical session-scoped `root` attributes. Specs take `RegistryRef` instances or dicts.
 
-- `register_sensor_log(SensorLogSpec)` → `SensorLogHandle` — `resource_id` is `sensor.id`.
+- `register_sensor_log(SensorLogSpec)` → `SensorLogHandle` — `resource_id` is `sensor.id`. Set `frame=None` for Scalar sensors.
 - `register_pose_log(PoseLogSpec)` → `PoseLogHandle` — `resource_id` is `"<from_frame.id>-><to_frame.id>"`.
 - `register_time_transform_log(TimeTransformLogSpec)` → `TimeTransformLogHandle` — `resource_id` is `"<from_clock.id>-><to_clock.id>"`.
 - `register_detection_log(DetectionLogSpec)` → `DetectionLogHandle` — `resource_id` is the spec's application-selected `instance_id`; the spec also carries its `cadence`.

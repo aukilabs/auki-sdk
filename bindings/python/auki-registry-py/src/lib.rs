@@ -401,6 +401,35 @@ fn rf_sensor_entry(
     struct_to_pyobject(py, &entry)
 }
 
+/// Build a non-spatial scalar Sensor Registry entry.
+///
+/// `sensor_type` and `unit` are open strings so applications can introduce
+/// measurements such as `battery_charge` / `percent` without another SDK
+/// schema change.
+#[pyfunction]
+#[pyo3(signature = (*, peer_id, sensor_id, sensor_type, unit, expected_rate_hz))]
+fn scalar_sensor_entry(
+    py: Python<'_>,
+    peer_id: &str,
+    sensor_id: &str,
+    sensor_type: &str,
+    unit: &str,
+    expected_rate_hz: u32,
+) -> PyResult<PyObject> {
+    let scalar = registry::Scalar {
+        r#type: sensor_type.to_string(),
+        unit: unit.to_string(),
+        expected_rate_hz,
+    };
+    scalar.validate().map_err(map_registry_error)?;
+    let entry = registry::SensorRegistryEntry {
+        peer_id: peer_id.to_string(),
+        sensor_id: sensor_id.to_string(),
+        body: registry::SensorBody::Scalar(scalar),
+    };
+    struct_to_pyobject(py, &entry)
+}
+
 // ─── Validate ID ───────────────────────────────────────────────────
 
 #[pyfunction]
@@ -679,6 +708,7 @@ fn auki_registry(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(audio_sensor_entry, m)?)?;
     m.add_function(wrap_pyfunction!(joint_encoders_sensor_entry, m)?)?;
     m.add_function(wrap_pyfunction!(rf_sensor_entry, m)?)?;
+    m.add_function(wrap_pyfunction!(scalar_sensor_entry, m)?)?;
     m.add_function(wrap_pyfunction!(validate_sensor_id, m)?)?;
     m.add_function(wrap_pyfunction!(validate_clock_id, m)?)?;
     m.add_function(wrap_pyfunction!(validate_frame_id, m)?)?;
@@ -934,6 +964,56 @@ mod tests {
             let calibration = camera.calibration.expect("static calibration");
             assert_eq!(calibration.fx.0, 400.0);
             assert_eq!(calibration.distortion_coefficients.len(), 5);
+        });
+    }
+
+    #[test]
+    fn scalar_sensor_entry_is_non_spatial_and_round_trips() {
+        Python::with_gil(|py| {
+            let dir = tempfile::tempdir().unwrap();
+            let sensor = scalar_sensor_entry(
+                py,
+                PEER_ID,
+                "K1-AABBCCDDEEFF/battery_charge",
+                "battery_charge",
+                "percent",
+                1,
+            )
+            .unwrap();
+
+            let sensor_hash = write_sensor(py, dir.path().to_path_buf(), sensor.bind(py)).unwrap();
+            let read = read_sensor(
+                py,
+                dir.path().to_path_buf(),
+                PEER_ID,
+                "K1-AABBCCDDEEFF/battery_charge",
+                &sensor_hash,
+            )
+            .unwrap();
+            let parsed: registry::SensorRegistryEntry =
+                parse_py(py, read.bind(py), "sensor").unwrap();
+            let registry::SensorBody::Scalar(scalar) = parsed.body else {
+                panic!("expected scalar body");
+            };
+            assert_eq!(scalar.r#type, "battery_charge");
+            assert_eq!(scalar.unit, "percent");
+            assert_eq!(scalar.expected_rate_hz, 1);
+        });
+    }
+
+    #[test]
+    fn scalar_sensor_entry_rejects_invalid_metadata() {
+        Python::with_gil(|py| {
+            let error = scalar_sensor_entry(
+                py,
+                PEER_ID,
+                "K1-AABBCCDDEEFF/battery_charge",
+                "battery_charge",
+                "percent",
+                0,
+            )
+            .unwrap_err();
+            assert!(error.is_instance_of::<PyValueError>(py));
         });
     }
 }

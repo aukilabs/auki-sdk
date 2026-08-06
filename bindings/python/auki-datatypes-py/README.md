@@ -9,7 +9,7 @@ Python bindings for [`auki-datatypes`](../../../crates/auki-datatypes) — `bett
 `betterproto` dataclasses mirroring the Rust prost types, including:
 
 - `auki.camera.CameraFrame`, `auki.camera.DynamicIntrinsics`
-- `auki.point_cloud.Data`, `auki.audio.Data`, `auki.joint_encoders.Data`
+- `auki.point_cloud.Data`, `auki.audio.Data`, `auki.joint_encoders.Data`, `auki.scalar.Data`
 - `auki.detection.DetectionFrame`
 - `auki.pose.SpatialTransform`, `auki.pose.Vec3`, `auki.pose.Quat`
 - `auki.map.MapUpdate`, `auki.map.VoxelChunkUpdate`, `auki.map.VoxelDelta`, `auki.map.SemanticDelta`

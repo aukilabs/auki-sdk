@@ -2,14 +2,12 @@
 //!
 //! `auki-network` treats [`StreamManifest`] as an already-formed wire
 //! payload. This module is the domain-layer bridge that looks up the
-//! producer's Sensor Registry entry, copies the committed frame reference,
-//! and verifies the exact Frame Registry entry exists before an Accept
-//! response is built.
+//! producer's Sensor Registry entry, copies and verifies its committed frame
+//! reference when the sensor is spatial, and leaves frame fields empty for
+//! explicitly non-spatial sensor kinds such as Scalar.
 //!
-//! All sensor bodies in the post-#216 schema carry a `frame: RegistryRef`
-//! with `peer_id`. The `peer_id` from the registry ref is used for the
-//! frame registry read; the caller supplies the local `peer_id` for the
-//! sensor read itself.
+//! Spatial sensor bodies carry a `frame: RegistryRef` with `peer_id`. Scalar
+//! bodies deliberately do not invent a coordinate frame.
 
 use std::io;
 use std::path::Path;
@@ -21,14 +19,15 @@ use auki_registry::{SensorBody, read_frame, read_sensor};
 ///
 /// The builder performs no discovery and no directory scanning: callers
 /// provide the exact sensor and clock ids/hashes they intend to publish, and
-/// every sensor body must already contain a resolvable `frame: RegistryRef`.
+/// every spatial sensor body must already contain a resolvable
+/// `frame: RegistryRef`.
 pub struct StreamManifestBuilder;
 
 impl StreamManifestBuilder {
     /// Build a [`StreamManifest`] from the producer's local registry.
     ///
-    /// All sensor bodies are spatial — `frame_id` / `frame_hash` are
-    /// extracted from the body's `frame: RegistryRef`. The `peer_id`
+    /// Spatial sensor bodies contribute `frame_id` / `frame_hash` from their
+    /// `frame: RegistryRef`; non-spatial Scalar sensors leave both empty. The `peer_id`
     /// used for the sensor read is `sensor_peer_id`; the `peer_id` used
     /// for the frame read is the `peer_id` embedded in `body.frame`.
     pub fn from_registry(
@@ -52,33 +51,38 @@ impl StreamManifestBuilder {
             })?;
 
         let frame_ref = match &entry.body {
-            SensorBody::Camera(b) => &b.frame,
-            SensorBody::Rangefinder(b) => &b.frame,
-            SensorBody::Rf(b) => &b.frame,
-            SensorBody::Audio(b) => &b.frame,
-            SensorBody::JointEncoders(b) => &b.frame,
+            SensorBody::Camera(b) => Some(&b.frame),
+            SensorBody::Rangefinder(b) => Some(&b.frame),
+            SensorBody::Rf(b) => Some(&b.frame),
+            SensorBody::Audio(b) => Some(&b.frame),
+            SensorBody::JointEncoders(b) => Some(&b.frame),
+            SensorBody::Scalar(_) => None,
         };
 
-        let frame_id = frame_ref.id.clone();
-        let frame_hash = frame_ref.hash.clone();
-        let frame_peer_id = frame_ref.peer_id.clone();
+        let (frame_id, frame_hash) = if let Some(frame_ref) = frame_ref {
+            let frame_id = frame_ref.id.clone();
+            let frame_hash = frame_ref.hash.clone();
+            let frame_peer_id = frame_ref.peer_id.clone();
 
-        if frame_id.is_empty() {
-            return Err(BuildStreamManifestError::FrameIdMissing { sensor_id });
-        }
-        if frame_hash.is_empty() {
-            return Err(BuildStreamManifestError::FrameHashMissing {
-                sensor_id,
-                frame_id,
-            });
-        }
-
-        if read_frame(app_root, &frame_peer_id, &frame_id, &frame_hash)?.is_none() {
-            return Err(BuildStreamManifestError::FrameEntryMissing {
-                frame_id,
-                frame_hash,
-            });
-        }
+            if frame_id.is_empty() {
+                return Err(BuildStreamManifestError::FrameIdMissing { sensor_id });
+            }
+            if frame_hash.is_empty() {
+                return Err(BuildStreamManifestError::FrameHashMissing {
+                    sensor_id,
+                    frame_id,
+                });
+            }
+            if read_frame(app_root, &frame_peer_id, &frame_id, &frame_hash)?.is_none() {
+                return Err(BuildStreamManifestError::FrameEntryMissing {
+                    frame_id,
+                    frame_hash,
+                });
+            }
+            (frame_id, frame_hash)
+        } else {
+            (String::new(), String::new())
+        };
 
         Ok(StreamManifest {
             resource_id: sensor_id.clone(),
@@ -150,7 +154,7 @@ mod tests {
     use std::fs;
 
     use auki_registry::{
-        FrameRegistryEntry, PointField, PointFieldDataType, Rangefinder, RegistryRef,
+        FrameRegistryEntry, PointField, PointFieldDataType, Rangefinder, RegistryRef, Scalar,
         SensorRegistryEntry, WriteOutcome, write_frame, write_sensor,
     };
 
@@ -222,6 +226,36 @@ mod tests {
         assert_eq!(manifest.clock_hash, "clock-hash");
         assert_eq!(manifest.frame_id, FRAME_ID);
         assert_eq!(manifest.frame_hash, frame_hash);
+    }
+
+    #[test]
+    fn from_registry_builds_non_spatial_scalar_manifest_without_frame_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = SensorRegistryEntry {
+            peer_id: PEER_ID.into(),
+            sensor_id: "K1-AABBCCDDEEFF/battery_charge".into(),
+            body: SensorBody::Scalar(Scalar {
+                r#type: "battery_charge".into(),
+                unit: "percent".into(),
+                expected_rate_hz: 1,
+            }),
+        };
+        let sensor_hash = write_sensor(dir.path(), &entry).unwrap().hash().to_string();
+
+        let manifest = StreamManifestBuilder::from_registry(
+            dir.path(),
+            PEER_ID,
+            &entry.sensor_id,
+            &sensor_hash,
+            "K1-AABBCCDDEEFF/monotonic",
+            "clock-hash",
+        )
+        .unwrap();
+
+        assert_eq!(manifest.sensor_id, entry.sensor_id);
+        assert_eq!(manifest.sensor_hash, sensor_hash);
+        assert!(manifest.frame_id.is_empty());
+        assert!(manifest.frame_hash.is_empty());
     }
 
     #[test]

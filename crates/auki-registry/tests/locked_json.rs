@@ -77,6 +77,11 @@ fn sensor_joint_encoders_absolute_locked() {
     assert_round_trip::<SensorRegistryEntry>("sensor_joint_encoders_absolute.json");
 }
 
+#[test]
+fn sensor_scalar_battery_charge_locked() {
+    assert_round_trip::<SensorRegistryEntry>("sensor_scalar_battery_charge.json");
+}
+
 // ─── Clock fixtures ───────────────────────────────────────────────────────────
 
 #[test]

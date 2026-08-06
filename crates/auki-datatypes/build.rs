@@ -24,6 +24,7 @@ fn main() -> std::io::Result<()> {
                 "proto/map.proto",
                 "proto/point_cloud.proto",
                 "proto/pose.proto",
+                "proto/scalar.proto",
                 "proto/stream.proto",
                 "proto/time_transform.proto",
             ],

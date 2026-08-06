@@ -52,7 +52,7 @@ Generic segmented append-only log primitive. `Log<T>` over a `LogPayload` trait:
 
 ### [`auki-registry`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-registry)
 
-The four registries: Sensor, Clock, Frame, Detector. Each entry post-#216 carries an explicit `peer_id` top-level field; the key is `(peer_id, id, hash)` where the hash is XXH3-128 over the entry's JCS-canonical JSON. Frame Registry ships four preset constructors (`ros_body`, `ros_optical`, `opengl`, `unity`); `SensorBody` is a closed enum (`Camera`, `Rangefinder`, `Rf`, `Audio`, `JointEncoders`), each with an open `type: String` for the modality.
+The five registries: Sensor, Clock, Frame, Detector, and Map. Each entry post-#216 carries an explicit `peer_id` top-level field; the key is `(peer_id, id, hash)` where the hash is XXH3-128 over the entry's JCS-canonical JSON. Frame Registry ships four preset constructors (`ros_body`, `ros_optical`, `opengl`, `unity`); `SensorBody` is a closed enum (`Camera`, `Rangefinder`, `Rf`, `Audio`, `JointEncoders`, `Scalar`). Every sensor has an open `type: String`; spatial variants pin a Frame Registry reference, while `Scalar` pins its unit and expected rate without a frame.
 
 ### [`auki-time`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-time)
 

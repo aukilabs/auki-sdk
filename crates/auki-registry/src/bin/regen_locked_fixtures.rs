@@ -10,7 +10,7 @@
 use auki_registry::{
     Audio, Camera, ClockBody, ClockMeta, ClockRegistryEntry, DetectorBody, DetectorRegistryEntry,
     FrameRegistryEntry, JointEncoders, ObjectDetection, PointField, PointFieldDataType,
-    Rangefinder, RegistryRef, Rf, Scope, SensorBody, SensorRegistryEntry,
+    Rangefinder, RegistryRef, Rf, Scalar, Scope, SensorBody, SensorRegistryEntry,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -47,6 +47,10 @@ fn main() {
         (
             "sensor_joint_encoders_absolute.json",
             canonical_sensor(&make_sensor_joint_encoders_absolute()),
+        ),
+        (
+            "sensor_scalar_battery_charge.json",
+            canonical_sensor(&make_sensor_scalar_battery_charge()),
         ),
         (
             "clock_monotonic.json",
@@ -280,6 +284,18 @@ fn make_sensor_joint_encoders_absolute() -> SensorRegistryEntry {
             joint_count: 7,
             frame_rate_hz: 100,
             frame: galbot_frame_ref("base_link", &base_frame),
+        }),
+    }
+}
+
+fn make_sensor_scalar_battery_charge() -> SensorRegistryEntry {
+    SensorRegistryEntry {
+        peer_id: "bracketbot".into(),
+        sensor_id: "battery_charge".into(),
+        body: SensorBody::Scalar(Scalar {
+            r#type: "battery_charge".into(),
+            unit: "percent".into(),
+            expected_rate_hz: 1,
         }),
     }
 }

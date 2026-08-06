@@ -200,6 +200,8 @@ pub struct DetectionLogHandle {
     /// Head window spec, used for catalog row production.
     pub head_spec: HeadSpec,
     pub(crate) root: PathBuf,
+    writer: Arc<Mutex<auki_logs::Log<auki_datatypes::detection::DetectionFrame>>>,
+    entries: tokio::sync::broadcast::Sender<(i64, auki_datatypes::detection::DetectionFrame)>,
 }
 
 impl DetectionLogHandle {
@@ -211,6 +213,66 @@ impl DetectionLogHandle {
     }
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Append one detector output and publish it to live subscribers only
+    /// after the durable write succeeds.
+    pub fn append(
+        &self,
+        timestamp_ns: i64,
+        frame: &auki_datatypes::detection::DetectionFrame,
+    ) -> Result<(), auki_logs::Error> {
+        let mut writer = self.writer.lock();
+        writer.append(timestamp_ns, frame)?;
+        writer.flush()?;
+        let _ = self.entries.send((timestamp_ns, frame.clone()));
+        Ok(())
+    }
+
+    /// Subscribe at the current live end.
+    pub fn subscribe(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<(i64, auki_datatypes::detection::DetectionFrame)> {
+        self.entries.subscribe()
+    }
+
+    /// Atomically capture persisted history and subscribe to future entries.
+    pub fn snapshot_and_subscribe(
+        &self,
+    ) -> Result<
+        (
+            Vec<auki_logs::Entry<auki_datatypes::detection::DetectionFrame>>,
+            tokio::sync::broadcast::Receiver<(i64, auki_datatypes::detection::DetectionFrame)>,
+        ),
+        auki_logs::Error,
+    > {
+        let mut writer = self.writer.lock();
+        writer.flush()?;
+        let history =
+            auki_logs::Log::<auki_datatypes::detection::DetectionFrame>::read(&self.root)?
+                .entries()?;
+        let receiver = self.entries.subscribe();
+        Ok((history, receiver))
+    }
+
+    pub(crate) fn with_writer(
+        resource_id: String,
+        log_ref: LogRef,
+        manifest: DetectionLogManifest,
+        head_spec: HeadSpec,
+        root: PathBuf,
+        writer: Arc<Mutex<auki_logs::Log<auki_datatypes::detection::DetectionFrame>>>,
+        entries: tokio::sync::broadcast::Sender<(i64, auki_datatypes::detection::DetectionFrame)>,
+    ) -> Self {
+        Self {
+            resource_id,
+            log_ref,
+            manifest,
+            head_spec,
+            root,
+            writer,
+            entries,
+        }
     }
 }
 

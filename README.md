@@ -29,11 +29,12 @@ The Auki protocol is built around five questions any node should be able to answ
 
 ### Networking
 
-- **libp2p substrate** (TCP/QUIC, Noise, Yamux, Circuit Relay v2) with typed `/auki/stream/0.2.0` streams for camera, point-cloud, joint-encoder, audio, and live pose `SpatialTransform` payloads. Native Managers can reserve a relay-mediated circuit address through a Domain Relay and publish the relay base metadata through Discovery for browser peers.
+- **libp2p substrate** (TCP/QUIC, Noise, Yamux, Circuit Relay v2) with typed `/auki/stream/0.2.0` streams for camera, point-cloud, joint-encoder, audio, detection, and live pose `SpatialTransform` payloads. Native Managers can reserve a relay-mediated circuit address through a Domain Relay and publish the relay base metadata through Discovery for browser peers.
 - **Peer protocols**: `/auki/join`, `/auki/heartbeat`, `/auki/membership`, `/auki/info`, `/auki/resources/0.2.0`, `/auki/registries/0.2.0`.
 - **`Peer` / `Session` / `Domain`** — the app-facing API split (#282): a long-lived `Peer` (in `auki-session`) owns identity and the sensor / frame / detector registries and mints `Session`s — one timeline each, with a ULID session id and auto-registered monotonic + UTC clocks (#284) — which register the logs they write. `auki-domain`'s `Domain::join(&peer, &session, config)` puts the pair on the network and serves the resource catalog; `ClusterManager` is the engine `Domain` constructs and owns.
 - The resource catalog (`/auki/resources/0.2.0`) exposes rows discriminated by a `variant` field (`sensor_log` | `pose_log` | `time_transform_log` | `detection_log`), replacing the old `sensor_stream` / `transform_edge` / `pose_stream` row types.
 - `/auki/resources/0.2.0` is a live, pollable snapshot of resources that can currently accept stream opens. Peers may join before resources are ready; consumers such as Park poll and reconcile additions/removals; producers omit unavailable resources and re-add them later with the same stable `resource_id`.
+- A registered Detection Log is served automatically by `Domain` with retained replay and live tailing. Python consumers can use `ClusterManager.open_detection_stream(...)` or the generic `open_stream_with_request(...)`; entries carry a typed `DetectionFrame(data, sensor_hash, type)` envelope. Detector Registry entries are available through `fetch_detector_entry(...)`, allowing consumers to verify open output types such as `qr` without hard-coding an implementation id.
 - **HTTP control API** for daemons that produce SDK sessions — see [`docs/control-api.md`](docs/control-api.md).
 
 ### Tokenomics

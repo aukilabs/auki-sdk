@@ -25,6 +25,7 @@ default = []
 extension-module = ["pyo3/extension-module"]
 
 [dependencies]
+auki-datatypes = { path = "../../../crates/auki-datatypes" }
 # Renamed via `package =` so the upstream Rust crate's name doesn't
 # collide with our own lib name `auki_domain`.
 auki-domain-rs = { package = "auki-domain", path = "../../../crates/auki-domain", features = ["native_runtime"] }

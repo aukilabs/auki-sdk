@@ -681,10 +681,12 @@ dependencies = [
 name = "auki-domain"
 version = "0.0.0"
 dependencies = [
+ "auki-datatypes",
  "auki-hash",
  "auki-identity",
  "auki-jcs",
  "auki-layout",
+ "auki-manifests",
  "auki-network",
  "auki-registry",
  "auki-session",
@@ -706,6 +708,7 @@ dependencies = [
 name = "auki-domain-py"
 version = "0.0.0"
 dependencies = [
+ "auki-datatypes",
  "auki-domain",
  "auki-identity",
  "auki-manifests",

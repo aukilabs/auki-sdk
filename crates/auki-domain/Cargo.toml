@@ -10,6 +10,7 @@ description = "Cluster lifecycle for the Auki SDK — cluster membership documen
 [features]
 default = ["native_runtime"]
 native_runtime = [
+    "dep:auki-datatypes",
     "dep:auki-hash",
     "dep:auki-jcs",
     "auki-network/discovery_client",
@@ -24,6 +25,7 @@ native_runtime = [
 browser_runtime = ["dep:getrandom"]
 
 [dependencies]
+auki-datatypes = { path = "../auki-datatypes", optional = true }
 auki-identity = { path = "../auki-identity" }
 auki-hash = { path = "../auki-hash", optional = true }
 auki-jcs = { path = "../auki-jcs", optional = true }
@@ -57,6 +59,7 @@ getrandom = { version = "0.2", features = ["js"], optional = true }
 
 [dev-dependencies]
 auki-layout = { path = "../auki-layout" }
+auki-manifests = { path = "../auki-manifests" }
 serde_json = "1"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "time"] }
 tempfile = "3"

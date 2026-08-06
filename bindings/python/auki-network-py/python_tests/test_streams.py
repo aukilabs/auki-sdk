@@ -98,6 +98,20 @@ def test_audio_frame_carries_bytes() -> None:
     assert "AudioFrame" in repr(f)
 
 
+def test_detection_frame_exposes_detector_agnostic_envelope() -> None:
+    payload = b'{"schema_version":1,"codes":[]}'
+    frame = cluster.DetectionFrame(
+        data=payload,
+        sensor_hash="camera-hash",
+        type_="qr",
+    )
+    assert frame.data == payload
+    assert frame.sensor_hash == "camera-hash"
+    assert frame.type == "qr"
+    assert len(frame) == len(payload)
+    assert "DetectionFrame" in repr(frame)
+
+
 def test_pose_stream_surface_is_exposed() -> None:
     frame = cluster.SpatialTransformFrame([1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0])
     assert frame.values == [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0]

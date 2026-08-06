@@ -171,7 +171,7 @@ fn validate_binding(
 struct DetectorPipeline<D> {
     detector: D,
     camera: Camera,
-    output: Log<DetectionFrame>,
+    output: DetectionLogHandle,
     cadence: DetectionCadence,
     sensor_hash: String,
     last_processed_ns: Option<i64>,
@@ -183,12 +183,10 @@ impl<D: CameraDetector> DetectorPipeline<D> {
         camera: Camera,
         output: &DetectionLogHandle,
     ) -> std::result::Result<Self, DetectorRunnerError> {
-        let output_manifest = serde_json::to_value(&output.manifest)
-            .expect("DetectionLogManifest serializes to JSON");
         Ok(Self {
             detector,
             camera,
-            output: Log::<DetectionFrame>::open(output.root(), output_manifest)?,
+            output: output.clone(),
             cadence: output.manifest.cadence,
             sensor_hash: output.manifest.input_sensor.hash.clone(),
             last_processed_ns: None,
@@ -218,7 +216,6 @@ impl<D: CameraDetector> DetectorPipeline<D> {
                 },
             )?;
         }
-        self.output.flush()?;
         Ok(())
     }
 }

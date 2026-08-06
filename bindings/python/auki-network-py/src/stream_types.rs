@@ -24,6 +24,7 @@
 
 use auki_datatypes::{
     audio::Data as RustAudioFrame,
+    detection::DetectionFrame as RustDetectionFrame,
     joint_encoders::Data as RustJointEncodersFrame,
     map::MapUpdate as RustMapUpdate,
     point_cloud::Data as RustPointCloudFrame,
@@ -553,6 +554,64 @@ pub struct PyAudioFrame {
     pub(crate) inner: RustAudioFrame,
 }
 
+// ─── DetectionFrame ─────────────────────────────────────────────────────────
+
+/// Detector-agnostic output from a Detection Log. `data` is decoded according
+/// to the open `type` vocabulary; `sensor_hash` pins the input Sensor Registry
+/// entry against which the detector ran.
+#[pyclass(name = "DetectionFrame", frozen)]
+#[derive(Clone, Debug)]
+pub struct PyDetectionFrame {
+    pub(crate) inner: RustDetectionFrame,
+}
+
+#[pymethods]
+impl PyDetectionFrame {
+    #[new]
+    #[pyo3(signature = (*, data, sensor_hash, type_))]
+    fn new(data: Bound<'_, PyBytes>, sensor_hash: String, type_: String) -> Self {
+        Self {
+            inner: RustDetectionFrame {
+                data: data.as_bytes().to_vec(),
+                sensor_hash,
+                r#type: type_,
+            },
+        }
+    }
+
+    #[getter]
+    fn data<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new_bound(py, &self.inner.data)
+    }
+
+    #[getter]
+    fn sensor_hash(&self) -> &str {
+        &self.inner.sensor_hash
+    }
+
+    #[getter]
+    fn r#type(&self) -> &str {
+        &self.inner.r#type
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.data.len()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "DetectionFrame(type={:?}, sensor_hash={:?}, <{} data bytes>)",
+            self.inner.r#type,
+            self.inner.sensor_hash,
+            self.inner.data.len(),
+        )
+    }
+
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
 #[pymethods]
 impl PyAudioFrame {
     #[new]
@@ -874,6 +933,7 @@ pub(crate) enum StreamPayload {
     PointCloud(PyPointCloudFrame),
     JointEncoders(PyJointEncodersFrame),
     Audio(PyAudioFrame),
+    Detection(PyDetectionFrame),
     Pose(PySpatialTransformFrame),
     Map(PyMapUpdateFrame),
 }
@@ -892,6 +952,9 @@ impl StreamPayload {
         if let Ok(a) = payload.extract::<PyAudioFrame>() {
             return Ok(Self::Audio(a));
         }
+        if let Ok(detection) = payload.extract::<PyDetectionFrame>() {
+            return Ok(Self::Detection(detection));
+        }
         if let Ok(pose) = payload.extract::<PySpatialTransformFrame>() {
             return Ok(Self::Pose(pose));
         }
@@ -899,7 +962,7 @@ impl StreamPayload {
             return Ok(Self::Map(map));
         }
         Err(PyValueError::new_err(format!(
-            "stream payload must be a CameraFrame, PointCloudFrame, JointEncodersFrame, AudioFrame, SpatialTransformFrame, or MapUpdateFrame; got {}",
+            "stream payload must be a CameraFrame, PointCloudFrame, JointEncodersFrame, AudioFrame, DetectionFrame, SpatialTransformFrame, or MapUpdateFrame; got {}",
             payload
                 .repr()
                 .map(|r| r.to_string())
@@ -915,6 +978,7 @@ impl StreamPayload {
                 .expect("alloc JointEncodersFrame")
                 .into_py(py),
             Self::Audio(f) => Py::new(py, f).expect("alloc AudioFrame").into_py(py),
+            Self::Detection(f) => Py::new(py, f).expect("alloc DetectionFrame").into_py(py),
             Self::Pose(f) => Py::new(py, f)
                 .expect("alloc SpatialTransformFrame")
                 .into_py(py),
@@ -928,6 +992,7 @@ impl StreamPayload {
             Self::PointCloud(f) => f.__repr__(),
             Self::JointEncoders(f) => f.__repr__(),
             Self::Audio(f) => f.__repr__(),
+            Self::Detection(f) => f.__repr__(),
             Self::Pose(f) => f.__repr__(),
             Self::Map(f) => f.__repr__(),
         }
@@ -1093,6 +1158,7 @@ impl StreamPayload {
             Self::PointCloud(_) => "PointCloudFrame",
             Self::JointEncoders(_) => "JointEncodersFrame",
             Self::Audio(_) => "AudioFrame",
+            Self::Detection(_) => "DetectionFrame",
             Self::Pose(_) => "SpatialTransformFrame",
             Self::Map(_) => "MapUpdateFrame",
         }
@@ -1181,6 +1247,16 @@ impl PyStreamEntry {
             timestamp_ns: frame.timestamp_ns,
             seq: frame.seq,
             payload: StreamPayload::Audio(PyAudioFrame {
+                inner: frame.payload,
+            }),
+        }
+    }
+
+    fn from_rust_detection(frame: RustStreamEntry<RustDetectionFrame>) -> Self {
+        Self {
+            timestamp_ns: frame.timestamp_ns,
+            seq: frame.seq,
+            payload: StreamPayload::Detection(PyDetectionFrame {
                 inner: frame.payload,
             }),
         }
@@ -1949,6 +2025,9 @@ type RustJointEncodersFrameStream = Pin<
 >;
 type RustAudioFrameStream =
     Pin<Box<dyn Stream<Item = Result<RustStreamEntry<RustAudioFrame>, RustStreamError>> + Send>>;
+type RustDetectionFrameStream = Pin<
+    Box<dyn Stream<Item = Result<RustStreamEntry<RustDetectionFrame>, RustStreamError>> + Send>,
+>;
 type RustPoseFrameStream = Pin<
     Box<
         dyn Stream<Item = Result<RustStreamEntry<RustPoseSpatialTransform>, RustStreamError>>
@@ -1967,6 +2046,7 @@ enum EntryStreamKind {
     PointCloud(RustPointCloudFrameStream),
     JointEncoders(RustJointEncodersFrameStream),
     Audio(RustAudioFrameStream),
+    Detection(RustDetectionFrameStream),
     Pose(RustPoseFrameStream),
     Map(RustMapFrameStream),
 }
@@ -2061,6 +2141,15 @@ impl PyStreamSubscription {
         }
     }
 
+    pub fn from_rust_detection(rust_sub: RustStreamSubscription<RustDetectionFrame>) -> Self {
+        Self {
+            manifest: PyStreamManifest {
+                inner: rust_sub.manifest,
+            },
+            entries: Mutex::new(Some(EntryStreamKind::Detection(rust_sub.entries))),
+        }
+    }
+
     pub fn from_rust_pose(rust_sub: RustStreamSubscription<RustPoseSpatialTransform>) -> Self {
         Self {
             manifest: PyStreamManifest {
@@ -2099,6 +2188,7 @@ enum EntryNext {
     PointCloud(Result<RustStreamEntry<RustPointCloudFrame>, RustStreamError>),
     JointEncoders(Result<RustStreamEntry<RustJointEncodersFrame>, RustStreamError>),
     Audio(Result<RustStreamEntry<RustAudioFrame>, RustStreamError>),
+    Detection(Result<RustStreamEntry<RustDetectionFrame>, RustStreamError>),
     Pose(Result<RustStreamEntry<RustPoseSpatialTransform>, RustStreamError>),
     Map(Result<RustStreamEntry<RustMapUpdate>, RustStreamError>),
     Done,
@@ -2154,6 +2244,10 @@ impl PyStreamEntryIterator {
                         Some(item) => EntryNext::Audio(item),
                         None => EntryNext::Done,
                     },
+                    EntryStreamKind::Detection(s) => match s.next().await {
+                        Some(item) => EntryNext::Detection(item),
+                        None => EntryNext::Done,
+                    },
                     EntryStreamKind::Pose(s) => match s.next().await {
                         Some(item) => EntryNext::Pose(item),
                         None => EntryNext::Done,
@@ -2199,6 +2293,14 @@ impl PyStreamEntryIterator {
                 *guard = Some(stream);
                 Ok(PyStreamEntry::from_rust_audio(frame))
             }
+            EntryNext::Detection(Ok(frame)) => {
+                let mut guard = self
+                    .entries
+                    .lock()
+                    .expect("StreamEntryIterator mutex poisoned");
+                *guard = Some(stream);
+                Ok(PyStreamEntry::from_rust_detection(frame))
+            }
             EntryNext::Pose(Ok(frame)) => {
                 let mut guard = self
                     .entries
@@ -2219,6 +2321,7 @@ impl PyStreamEntryIterator {
             | EntryNext::PointCloud(Err(stream_err))
             | EntryNext::JointEncoders(Err(stream_err))
             | EntryNext::Audio(Err(stream_err))
+            | EntryNext::Detection(Err(stream_err))
             | EntryNext::Pose(Err(stream_err))
             | EntryNext::Map(Err(stream_err)) => {
                 // Terminator. Don't put the stream back — exhausted.
@@ -2342,6 +2445,7 @@ pub(crate) fn register(py: Python<'_>, cluster: &Bound<'_, PyModule>) -> PyResul
     cluster.add_class::<PyPointCloudFrame>()?;
     cluster.add_class::<PyJointEncodersFrame>()?;
     cluster.add_class::<PyAudioFrame>()?;
+    cluster.add_class::<PyDetectionFrame>()?;
     cluster.add_class::<PySpatialTransformFrame>()?;
     cluster.add_class::<PyMapUpdateFrame>()?;
     cluster.add_class::<PyDeclineReason>()?;
@@ -2870,6 +2974,31 @@ mod tests {
             assert_eq!(f.__len__(), 4);
             assert_eq!(f.data(py).as_bytes(), &[0x00, 0x80, 0xff, 0x7f]);
             assert_eq!(f.__repr__(), "AudioFrame(<4 bytes>)");
+        });
+    }
+
+    #[test]
+    fn detection_frame_exposes_typed_envelope_fields() {
+        Python::with_gil(|py| {
+            let payload = PyBytes::new_bound(py, br#"{"schema_version":1,"codes":[]}"#);
+            let frame = PyDetectionFrame::new(payload, "sensor-hash".into(), "qr".into());
+            assert_eq!(
+                frame.data(py).as_bytes(),
+                br#"{"schema_version":1,"codes":[]}"#
+            );
+            assert_eq!(frame.sensor_hash(), "sensor-hash");
+            assert_eq!(frame.r#type(), "qr");
+
+            let object = Py::new(py, frame).unwrap();
+            assert_eq!(
+                object
+                    .bind(py)
+                    .getattr("type")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "qr"
+            );
         });
     }
 

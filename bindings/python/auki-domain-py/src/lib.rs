@@ -20,6 +20,7 @@
 //! - `StreamManifestBuilder` — producer-side helper.
 //! - `ClusterTarget` / `ClusterManager` — daemon-side cluster handle.
 
+use auki_datatypes::detection::DetectionFrame as RustDetectionFrame;
 use auki_domain_rs::cluster_manager::ManagerRelayReservation as RustManagerRelayReservation;
 use auki_domain_rs::{
     AdmitError as RustAdmitError, BootstrapError as RustBootstrapError,
@@ -81,6 +82,7 @@ enum GenericStreamPayloadKind {
     PointCloud,
     JointEncoders,
     Audio,
+    Detection,
     Pose,
 }
 
@@ -123,6 +125,9 @@ fn resolve_generic_stream_payload_kind_from_entries(
             }
             VariantContent::PoseLog { .. } => {
                 return Ok(GenericStreamPayloadKind::Pose);
+            }
+            VariantContent::DetectionLog { .. } => {
+                return Ok(GenericStreamPayloadKind::Detection);
             }
             _ => {
                 return Err(PyValueError::new_err(format!(
@@ -1837,6 +1842,22 @@ impl PyClusterManager {
         })
     }
 
+    /// Open a typed Detection Log stream.
+    fn open_detection_stream(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        resource_id: &str,
+    ) -> PyResult<PyStreamSubscription> {
+        self.open_typed_stream::<RustDetectionFrame>(
+            py,
+            peer_id,
+            resource_id,
+            String::new(),
+            |sub| PyStreamSubscription::from_rust_detection(sub),
+        )
+    }
+
     /// Open a live pose stream subscription on `peer_id` for `resource_id`.
     fn open_pose_stream(
         &self,
@@ -1956,6 +1977,13 @@ impl PyClusterManager {
                     rust_request,
                     |sub| PyStreamSubscription::from_rust_audio(sub),
                 ),
+            GenericStreamPayloadKind::Detection => self
+                .open_typed_stream_with_request::<RustDetectionFrame>(
+                    py,
+                    peer_id,
+                    rust_request,
+                    |sub| PyStreamSubscription::from_rust_detection(sub),
+                ),
             GenericStreamPayloadKind::Pose => self
                 .open_typed_stream_with_request::<RustPoseSpatialTransform>(
                     py,
@@ -2009,6 +2037,13 @@ impl PyClusterManager {
                 resource_id,
                 String::new(),
                 |sub| PyStreamSubscription::from_rust_audio(sub),
+            ),
+            GenericStreamPayloadKind::Detection => self.open_typed_stream::<RustDetectionFrame>(
+                py,
+                peer_id,
+                resource_id,
+                String::new(),
+                |sub| PyStreamSubscription::from_rust_detection(sub),
             ),
             GenericStreamPayloadKind::Pose => self.open_pose_stream(py, peer_id, resource_id),
         }
@@ -2263,6 +2298,31 @@ impl PyClusterManager {
         })
     }
 
+    /// Fetch and verify a peer's Detector Registry entry.
+    fn fetch_detector_entry(
+        &self,
+        py: Python<'_>,
+        peer_id: &str,
+        detector_id: String,
+        detector_hash: String,
+    ) -> PyResult<String> {
+        let peer_id_parsed = parse_peer_id(peer_id)?;
+        let inner = self.inner.clone();
+        py.allow_threads(|| {
+            shared_runtime().block_on(async move {
+                let guard = inner.lock().expect("ClusterManager lock");
+                let manager = guard
+                    .as_ref()
+                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let entry = manager
+                    .fetch_detector_entry(peer_id_parsed, detector_id, detector_hash)
+                    .await
+                    .map_err(map_fetch_registry_entry_error)?;
+                Ok(canonical_json_to_py(entry.canonical_bytes()))
+            })
+        })
+    }
+
     /// Fetch and verify a peer's Clock Registry entry.
     fn fetch_clock_entry(
         &self,
@@ -2425,7 +2485,11 @@ impl PyClusterManager {
                     .fetch_resources_catalog_with(
                         peer_id_parsed,
                         RustResourcesRequest {
-                            variants: vec![RustVariant::SensorLog, RustVariant::PoseLog],
+                            variants: vec![
+                                RustVariant::SensorLog,
+                                RustVariant::PoseLog,
+                                RustVariant::DetectionLog,
+                            ],
                         },
                     )
                     .await
@@ -3284,6 +3348,58 @@ mod tests {
             )
             .unwrap(),
             GenericStreamPayloadKind::Pose
+        );
+    }
+
+    #[test]
+    fn generic_stream_resolver_uses_detection_log_variant() {
+        use auki_manifests::DetectionCadence;
+        use auki_network::resources_protocol::DetectionManifestPointer;
+
+        let registry_ref = |id: &str| RegistryRef {
+            peer_id: "park".into(),
+            id: id.into(),
+            hash: format!("{id}-hash"),
+        };
+        let resources = vec![ResourceEntry {
+            source_peer_id: "booster".into(),
+            writer_peer_id: "park".into(),
+            resource_id: "qr-head".into(),
+            state: "live".into(),
+            head: Some(Head::Rolling {
+                retention_ns: 5_000_000_000,
+            }),
+            extent: None,
+            available: Available {
+                bytes: 0,
+                entries: 0,
+                duration_ns: 0,
+            },
+            sensor: None,
+            pose: None,
+            variant_content: VariantContent::DetectionLog {
+                manifest: DetectionManifestPointer {
+                    instance_id: "qr-head".into(),
+                    detector: registry_ref("qr"),
+                    input_log: auki_registry::LogRef {
+                        source_peer_id: "booster".into(),
+                        resource_id: "head_rgb".into(),
+                    },
+                    input_sensor: RegistryRef {
+                        peer_id: "booster".into(),
+                        id: "head_rgb".into(),
+                        hash: "head-rgb-hash".into(),
+                    },
+                    clock: registry_ref("clock"),
+                    cadence: DetectionCadence::EveryFrame,
+                },
+            },
+        }];
+
+        assert_eq!(
+            resolve_generic_stream_payload_kind_from_entries(&resources, "booster", "qr-head",)
+                .unwrap(),
+            GenericStreamPayloadKind::Detection
         );
     }
 

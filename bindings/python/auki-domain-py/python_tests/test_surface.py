@@ -45,8 +45,10 @@ def test_module_imports_post_216_surface() -> None:
     # ClusterManager has the expected stream-open methods
     assert hasattr(auki_domain.ClusterManager, "open_stream")
     assert hasattr(auki_domain.ClusterManager, "open_pose_stream")
+    assert hasattr(auki_domain.ClusterManager, "open_detection_stream")
     assert hasattr(auki_domain.ClusterManager, "open_camera_stream")
     assert hasattr(auki_domain.ClusterManager, "open_stream_with_request")
+    assert hasattr(auki_domain.ClusterManager, "fetch_detector_entry")
     assert hasattr(auki_domain.ClusterManager, "register_message_channel")
     assert hasattr(auki_domain.ClusterManager, "fetch_message_channels")
     assert hasattr(auki_domain.ClusterManager, "open_message_channel")

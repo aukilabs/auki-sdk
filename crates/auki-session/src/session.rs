@@ -472,27 +472,37 @@ impl Session {
         manifest.validate()?;
 
         write_manifest(&root, &manifest, "DetectionLogManifest")?;
+        let writer = Arc::new(parking_lot::Mutex::new(auki_logs::Log::open(
+            &root,
+            serde_json::to_value(&manifest)
+                .unwrap_or_else(|_| panic!("DetectionLogManifest serializes")),
+        )?));
+        let (entries, _) = tokio::sync::broadcast::channel(1024);
 
         let log_ref = LogRef {
             source_peer_id: peer_id,
             resource_id: resource_id.clone(),
         };
-        let handle = DetectionLogHandle {
-            resource_id: resource_id.clone(),
-            log_ref: log_ref.clone(),
-            manifest: manifest.clone(),
-            head_spec: head_spec.clone(),
-            root: root.clone(),
-        };
+        let handle = DetectionLogHandle::with_writer(
+            resource_id.clone(),
+            log_ref.clone(),
+            manifest.clone(),
+            head_spec.clone(),
+            root.clone(),
+            writer.clone(),
+            entries.clone(),
+        );
         inner.detection_logs.insert(
             resource_id.clone(),
-            Arc::new(DetectionLogHandle {
+            Arc::new(DetectionLogHandle::with_writer(
                 resource_id,
                 log_ref,
                 manifest,
                 head_spec,
                 root,
-            }),
+                writer,
+                entries,
+            )),
         );
         Ok(handle)
     }

@@ -38,6 +38,7 @@ def test_module_exposes_only_documented_apis() -> None:
         "PointCloudFrame",
         "JointEncodersFrame",
         "AudioFrame",
+        "DetectionFrame",
         "DeclineReason",
         "EndReason",
         "StreamItem",

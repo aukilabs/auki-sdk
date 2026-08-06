@@ -391,10 +391,12 @@ impl Domain {
         config.daemon_info.session_clock_id = mono.id;
         config.daemon_info.session_clock_hash = mono.hash;
 
-        // Map Logs are SDK resources, so serving them must not depend on an
-        // application callback. Compose them ahead of the existing provider;
-        // all non-map requests continue to the application unchanged.
-        config.stream_provider = map_stream_provider(config.stream_provider, session.logs());
+        // Session Logs are SDK resources, so serving them must not depend on
+        // application callbacks. Compose the SDK-owned providers ahead of the
+        // existing provider; unknown resources continue to the application.
+        let logs = session.logs();
+        config.stream_provider = detection_stream_provider(config.stream_provider, logs.clone());
+        config.stream_provider = map_stream_provider(config.stream_provider, logs);
 
         let manager = ClusterManager::bootstrap(
             config.target,
@@ -653,6 +655,88 @@ fn map_stream_provider(fallback: StreamProvider, logs: SessionLogs) -> StreamPro
             source,
         }
     })
+}
+
+fn detection_stream_provider(fallback: StreamProvider, logs: SessionLogs) -> StreamProvider {
+    Arc::new(move |peer, request| {
+        let handle = logs.detection_logs().into_iter().find(|handle| {
+            handle.resource_id == request.resource_id
+                && (request.source_peer_id.is_empty()
+                    || handle.manifest.source_peer_id == request.source_peer_id)
+        });
+        let Some(handle) = handle else {
+            return fallback(peer, request);
+        };
+
+        let source = match detection_log_source(&handle, request.from) {
+            Ok(source) => source,
+            Err(detail) => {
+                return StreamDispatch::Decline {
+                    reason: auki_network::stream_protocol::DeclineReason::other(detail),
+                };
+            }
+        };
+        StreamDispatch::AcceptDetection {
+            manifest: detection_stream_manifest(&handle),
+            source,
+        }
+    })
+}
+
+fn detection_stream_manifest(handle: &DetectionLogHandle) -> StreamManifest {
+    StreamManifest {
+        resource_id: handle.resource_id.clone(),
+        payload: "detection".into(),
+        sensor_id: handle.manifest.input_sensor.id.clone(),
+        sensor_hash: handle.manifest.input_sensor.hash.clone(),
+        clock_peer_id: handle.manifest.clock.peer_id.clone(),
+        clock_id: handle.manifest.clock.id.clone(),
+        clock_hash: handle.manifest.clock.hash.clone(),
+        ..Default::default()
+    }
+}
+
+fn detection_log_source(
+    handle: &DetectionLogHandle,
+    from: ReadFrom,
+) -> Result<SourceStream<auki_datatypes::detection::DetectionFrame>, String> {
+    let (history, receiver) = match from {
+        ReadFrom::Latest => (Vec::new(), handle.subscribe()),
+        ReadFrom::FromStart | ReadFrom::FromTimestamp(_) => handle
+            .snapshot_and_subscribe()
+            .map_err(|error| error.to_string())?,
+    };
+    let history = history
+        .into_iter()
+        .filter(move |entry| match from {
+            ReadFrom::FromTimestamp(start) => entry.timestamp_ns >= start,
+            _ => true,
+        })
+        .map(|entry| {
+            Ok(StreamItem {
+                timestamp_ns: entry.timestamp_ns,
+                payload: entry.payload,
+            })
+        });
+    let live = stream::unfold(receiver, |mut receiver| async move {
+        match receiver.recv().await {
+            Ok((timestamp_ns, payload)) => Some((
+                Ok(StreamItem {
+                    timestamp_ns,
+                    payload,
+                }),
+                receiver,
+            )),
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => Some((
+                Err(format!(
+                    "detection log subscriber lagged by {count} updates"
+                )),
+                receiver,
+            )),
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => None,
+        }
+    });
+    Ok(Box::pin(stream::iter(history).chain(live)))
 }
 
 fn map_stream_manifest(handle: &auki_session::MapLogHandle) -> StreamManifest {
@@ -1076,6 +1160,123 @@ mod tests {
                 &auki_network::stream_protocol::map::MapUpdate {
                     voxel_chunks: vec![],
                     checkpoint: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(source.next().await.unwrap().unwrap().timestamp_ns, 200);
+    }
+
+    #[tokio::test]
+    async fn detection_catalog_and_stream_provider_follow_registered_log_live() {
+        use auki_datatypes::detection::DetectionFrame;
+        use auki_network::stream_runtime::StreamDispatch;
+        use auki_registry::{DetectorBody, LogRef, ObjectDetection};
+        use auki_session::DetectionLogSpec;
+
+        let tmp = tempdir().unwrap();
+        let peer = Peer::new("booster", "ctrl").with_storage_root(tmp.path().to_path_buf());
+        let frame = peer
+            .register_frame("head_camera", FrameDef::ros_optical())
+            .unwrap();
+        let sensor = peer
+            .register_sensor(
+                "head_rgb",
+                SensorBody::Camera(Camera {
+                    r#type: "rgb".into(),
+                    width: 640,
+                    height: 480,
+                    frame_rate_hz: 30,
+                    image_encoding: "jpeg".into(),
+                    pixel_format: "rgb8".into(),
+                    row_stride_bytes: 0,
+                    color_space: "srgb".into(),
+                    intrinsics_model: "pinhole".into(),
+                    distortion_model: "none".into(),
+                    calibration: None,
+                    frame,
+                }),
+            )
+            .unwrap();
+        let detector = peer
+            .register_detector(
+                "qr",
+                DetectorBody::ObjectDetection(ObjectDetection {
+                    model: "qr-lab".into(),
+                }),
+                vec!["qr".into()],
+            )
+            .unwrap();
+        let session = peer.start_session().unwrap();
+        let handle = session
+            .register_detection_log(DetectionLogSpec {
+                instance_id: "qr-head".into(),
+                detector,
+                input_log: LogRef {
+                    source_peer_id: peer.peer_id().into(),
+                    resource_id: "head_rgb".into(),
+                },
+                input_sensor: sensor.clone(),
+                clock: session.monotonic_clock(),
+                cadence: auki_manifests::DetectionCadence::EveryFrame,
+                head: HeadSpec::Rolling {
+                    retention_ns: 5_000_000_000,
+                },
+                segment_duration: Duration::from_secs(1),
+                retention: Duration::from_secs(5),
+            })
+            .unwrap();
+
+        let rows = catalog_of(&peer, &session);
+        let row = rows
+            .iter()
+            .find(|row| row.resource_id == "qr-head")
+            .expect("registered Detection Log must be discoverable");
+        assert!(matches!(
+            row.variant_content,
+            VariantContent::DetectionLog { .. }
+        ));
+
+        handle
+            .append(
+                100,
+                &DetectionFrame {
+                    data: br#"{"schema_version":1,"codes":[]}"#.to_vec(),
+                    sensor_hash: sensor.hash.clone(),
+                    r#type: "qr".into(),
+                },
+            )
+            .unwrap();
+        let provider = detection_stream_provider(
+            auki_network::stream_runtime::decline_all_streams(),
+            session.logs(),
+        );
+        let dispatch = provider(
+            PeerId::random(),
+            StreamRequest {
+                source_peer_id: peer.peer_id().into(),
+                resource_id: "qr-head".into(),
+                from: ReadFrom::FromStart,
+            },
+        );
+        let StreamDispatch::AcceptDetection {
+            manifest,
+            mut source,
+        } = dispatch
+        else {
+            panic!("registered Detection Log must be served by the SDK provider")
+        };
+        assert_eq!(manifest.payload, "detection");
+        assert_eq!(manifest.sensor_id, "head_rgb");
+        assert_eq!(manifest.sensor_hash, sensor.hash);
+        assert_eq!(source.next().await.unwrap().unwrap().timestamp_ns, 100);
+
+        handle
+            .append(
+                200,
+                &DetectionFrame {
+                    data: br#"{"schema_version":1,"codes":[]}"#.to_vec(),
+                    sensor_hash: manifest.sensor_hash,
+                    r#type: "qr".into(),
                 },
             )
             .unwrap();

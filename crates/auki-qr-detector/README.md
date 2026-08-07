@@ -7,22 +7,23 @@ register their own implementation, input contracts, configuration, and output
 types with `RegisteredCameraDetector` without depending on this crate.
 
 The crate is the typed producer side of the SDK's intentionally generic
-`DetectionFrame` envelope. It scans raw 8-bit luminance or packed RGB camera
-frames and emits one versioned JSON payload per source frame with `type =
-"qr"`. Consumers can decode the payload with [`QrDetections::decode`].
+`DetectionFrame` envelope. It scans raw 8-bit luminance, packed RGB, or NV12
+camera frames and emits one versioned JSON payload per source frame with
+`type = "qr"`. NV12 is scanned directly through its full-resolution Y plane; the
+interleaved chroma plane is validated but does not need conversion. Consumers
+can decode the payload with [`QrDetections::decode`].
 
 `RegisteredQrDetector` pins the implementation to its content-addressed
 Detector Registry entry. Its `start` method tails an open local Camera Sensor
 Log; `start_stream` consumes an asynchronous local or remote camera stream.
 Both declare and write the named Detection Log resource that other peers
 discover and consume.
-It accepts `image_encoding = "raw"` with either `pixel_format = "luma8"` or
-`pixel_format = "rgb8"`, plus `image_encoding = "jpeg"`. Raw layout comes
-from the Camera Registry; JPEG dimensions are checked against that immutable
-contract after decoding. The SDK detector boundary owns JPEG decompression,
-while QR Lab converts decoded RGB8 with BT.601 luma weights and reuses its
-scratch storage. Every-frame and timestamp-based periodic cadence are both
-supported.
+It accepts `image_encoding = "raw"` with `pixel_format = "luma8"`, `rgb8`, or
+`YUV_NV12`, plus `image_encoding = "jpeg"`. Raw layout comes from the Camera
+Registry; JPEG dimensions are checked against that immutable contract after
+decoding. The SDK detector boundary owns JPEG decompression, while QR Lab
+converts decoded RGB8 with BT.601 luma weights and reuses its scratch storage.
+Every-frame and timestamp-based periodic cadence are both supported.
 
 Each decoded code retains the source-frame pixel corners in `TL → TR → BR →
 BL` order. When QR Lab has subpixel refinement available, those are exposed in

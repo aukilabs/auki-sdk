@@ -25,7 +25,7 @@ pub struct VoxelViewerStyle {
 impl Default for VoxelViewerStyle {
     fn default() -> Self {
         Self {
-            minimum_occupancy_evidence: 0.0,
+            minimum_occupancy_evidence: 0.1,
             maximum_occupancy_evidence: 3.0,
             low_evidence_rgba: [0.12, 0.42, 1.0, 0.28],
             high_evidence_rgba: [1.0, 0.18, 0.04, 1.0],
@@ -181,7 +181,12 @@ impl VoxelViewerAdapter {
         chunk
             .voxels
             .iter()
-            .filter(|voxel| voxel.occupancy_evidence >= self.style.minimum_occupancy_evidence)
+            // Be defensive when adapting detached snapshots: historical
+            // color must not make zero or free-space evidence visible.
+            .filter(|voxel| {
+                voxel.occupancy_evidence > 0.0
+                    && voxel.occupancy_evidence >= self.style.minimum_occupancy_evidence
+            })
             .map(|voxel| {
                 let t = ((voxel.occupancy_evidence - self.style.minimum_occupancy_evidence)
                     / evidence_span)
@@ -389,6 +394,47 @@ mod tests {
             panic!("expected occupancy chunk replacement")
         };
         assert_ne!(instances[0].rgba[..3], [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn cleared_colored_voxel_emits_remove_operation() {
+        let mut colored_contract = accumulator().contract().clone();
+        colored_contract.color_model = Some(VoxelColorModel::AdditiveLinearRgbEvidence);
+        let map_ref = MapRegistryEntry {
+            peer_id: "galbot".into(),
+            map_id: "colored-clearing".into(),
+            body: MapBody::Voxel(colored_contract.clone()),
+        }
+        .registry_ref();
+        let mut colored = VoxelMapAccumulator::new(map_ref, colored_contract).unwrap();
+        let mut hit = update(0.8, 0.0, 0.0);
+        hit.voxel_chunks[0].voxels[0].color = Some(ColorEvidenceDelta {
+            red_sum_delta: 0.25,
+            green_sum_delta: 0.5,
+            blue_sum_delta: 0.75,
+            weight_delta: 1.0,
+        });
+        colored.apply(&hit).unwrap();
+
+        // Four default free-space observations exactly cancel one hit. The
+        // retained historical color must not leave a visible ghost voxel.
+        let mut applied = None;
+        for _ in 0..4 {
+            applied = Some(colored.apply(&update(-0.2, 0.0, 0.0)).unwrap());
+        }
+
+        let adapter = VoxelViewerAdapter::new(VoxelViewerStyle {
+            minimum_occupancy_evidence: 0.0,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(matches!(
+            adapter
+                .changed_chunks(&colored, &applied.unwrap())
+                .unwrap()
+                .as_slice(),
+            [ChunkRenderUpdate::Remove { .. }]
+        ));
     }
 
     #[test]

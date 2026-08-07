@@ -62,6 +62,20 @@ it when demand disappears.
 payload, interpolates the SDK-supplied sensor-to-Map pose, traces free-space
 rays, and emits additive occupied/free evidence grouped into sparse chunks.
 
+## Stable occupancy
+
+`run_sdk_voxel_mapper` enables `VoxelPersistenceConfig::default()` unless its
+service configuration explicitly sets `persistence: None`. The filter first
+normalizes a point-cloud frame to at most one occupied or free observation per
+voxel, so point density does not count as repeated evidence. A candidate voxel
+is published only after six observations spanning three seconds with no gap
+over 500 ms. Once confirmed, it remains in the Map until continuous free-space
+observations span one second. Missing or occluded observations do not clear it.
+
+All four thresholds are configurable. The low-level `VoxelMapperRunner`
+retains its immediate raw-evidence behavior unless the application calls
+`with_persistence`, which keeps existing algorithm and test uses explicit.
+
 ## Camera calibration for metric Mappers
 
 `effective_camera_calibration` applies the shared camera contract used by PnP

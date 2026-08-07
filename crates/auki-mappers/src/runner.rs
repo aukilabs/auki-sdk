@@ -16,7 +16,10 @@ use auki_registry::{LogRef, Rangefinder, RegistryRef, VoxelMap};
 use futures::{FutureExt, Stream, StreamExt, future::BoxFuture};
 use parking_lot::{Condvar, Mutex};
 
-use crate::{VoxelMapperMapFrameBinding, Voxelizer, VoxelizerError};
+use crate::{
+    VoxelMapperMapFrameBinding, VoxelPersistenceConfig, Voxelizer, VoxelizerError,
+    persistence::VoxelPersistenceFilter,
+};
 
 /// One typed sample received from an SDK log stream.
 #[derive(Debug, Clone, PartialEq)]
@@ -316,6 +319,7 @@ pub struct VoxelMapperRunner {
     point_layout: Rangefinder,
     free_delta: f32,
     occupied_delta: f32,
+    persistence: Option<VoxelPersistenceConfig>,
     alignment: PoseAlignmentConfig,
 }
 
@@ -406,8 +410,23 @@ impl VoxelMapperRunner {
             point_layout,
             free_delta,
             occupied_delta,
+            persistence: None,
             alignment,
         })
+    }
+
+    /// Enable time-based hysteresis. Raw point density is normalized to one
+    /// observation per voxel per frame; only confirmed state transitions are
+    /// written to the Map Log.
+    pub fn with_persistence(
+        mut self,
+        persistence: VoxelPersistenceConfig,
+    ) -> Result<Self, VoxelMapperRunError> {
+        if !persistence.validate() {
+            return Err(VoxelMapperRunError::InvalidConfiguration);
+        }
+        self.persistence = Some(persistence);
+        Ok(self)
     }
 
     /// Run until the point-cloud input ends. Pose and point-cloud sources may
@@ -456,6 +475,7 @@ impl VoxelMapperRunner {
         let point_layout = self.point_layout.clone();
         let free_delta = self.free_delta;
         let occupied_delta = self.occupied_delta;
+        let persistence = self.persistence;
         let worker = thread::Builder::new()
             .name("auki-voxel-mapper".into())
             .spawn(move || {
@@ -464,6 +484,7 @@ impl VoxelMapperRunner {
                     point_layout,
                     free_delta,
                     occupied_delta,
+                    persistence,
                     worker_jobs,
                     updates_tx,
                 )
@@ -665,9 +686,12 @@ fn run_voxel_worker(
     point_layout: Rangefinder,
     free_delta: f32,
     occupied_delta: f32,
+    persistence: Option<VoxelPersistenceConfig>,
     jobs: Arc<LatestVoxelJobSlot>,
     updates: tokio::sync::mpsc::Sender<Result<VoxelWorkerOutput, VoxelizerError>>,
 ) {
+    let mut persistence =
+        persistence.map(|config| VoxelPersistenceFilter::new(config, occupied_delta));
     while let Some(job) = jobs.receive() {
         let result = voxelizer
             .map_point_cloud(
@@ -677,10 +701,22 @@ fn run_voxel_worker(
                 free_delta,
                 occupied_delta,
             )
-            .map(|update| VoxelWorkerOutput {
-                timestamp_ns: job.timestamp_ns,
-                update,
+            .map(|update| {
+                let update = match &mut persistence {
+                    Some(filter) => filter.apply(job.timestamp_ns, update),
+                    None => update,
+                };
+                VoxelWorkerOutput {
+                    timestamp_ns: job.timestamp_ns,
+                    update,
+                }
             });
+        if result
+            .as_ref()
+            .is_ok_and(|output| output.update.voxel_chunks.is_empty())
+        {
+            continue;
+        }
         let failed = result.is_err();
         if updates.blocking_send(result).is_err() || failed {
             jobs.cancel();

@@ -9,6 +9,7 @@ use auki_registry::{LogRef, Rangefinder, RegistryRef, VoxelMap};
 use crate::{
     MapUpdateSink, MapperInput, MapperInputBindingError, PoseAlignmentConfig, ValidatedFrameAlias,
     VoxelMapperMapFrameBinding, VoxelMapperRunError, VoxelMapperRunReport, VoxelMapperRunner,
+    VoxelPersistenceConfig,
 };
 
 /// Runtime tuning for the SDK-composed voxel Mapper service.
@@ -18,6 +19,8 @@ pub struct VoxelMapperServiceConfig {
     pub free_delta: f32,
     /// Additive occupied evidence written at each ray endpoint.
     pub occupied_delta: f32,
+    /// Optional time-based reliability filter for the persistent map.
+    pub persistence: Option<VoxelPersistenceConfig>,
     /// Pose-alignment buffer behavior.
     pub alignment: PoseAlignmentConfig,
 }
@@ -27,6 +30,7 @@ impl Default for VoxelMapperServiceConfig {
         Self {
             free_delta: -0.2,
             occupied_delta: 0.8,
+            persistence: Some(VoxelPersistenceConfig::default()),
             alignment: PoseAlignmentConfig::default(),
         }
     }
@@ -241,7 +245,7 @@ pub async fn run_sdk_voxel_mapper<S: MapUpdateSink>(
         || VoxelMapperMapFrameBinding::Exact(sources.pose_frame.clone()),
         VoxelMapperMapFrameBinding::Aliased,
     );
-    let runner = VoxelMapperRunner::from_sdk_contract_with_frame_binding(
+    let mut runner = VoxelMapperRunner::from_sdk_contract_with_frame_binding(
         point_layout,
         sources.sensor_frame.clone(),
         map_frame_binding,
@@ -250,6 +254,9 @@ pub async fn run_sdk_voxel_mapper<S: MapUpdateSink>(
         config.occupied_delta,
         config.alignment,
     )?;
+    if let Some(persistence) = config.persistence {
+        runner = runner.with_persistence(persistence)?;
+    }
     let (point_cloud, pose) = sources.bind_inputs(point_cloud, pose)?;
     Ok(runner.run(point_cloud, pose, sink).await?)
 }
@@ -646,7 +653,10 @@ mod tests {
             point_cloud,
             pose,
             &sink,
-            Default::default(),
+            VoxelMapperServiceConfig {
+                persistence: None,
+                ..Default::default()
+            },
         )
         .await
         .unwrap();

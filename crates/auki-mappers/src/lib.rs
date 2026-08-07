@@ -2,6 +2,7 @@
 //! produce MapUpdates; they deliberately have no robot or ROS dependency.
 
 mod camera;
+mod persistence;
 
 use auki_datatypes::map::{ColorEvidenceDelta, MapUpdate, VoxelChunkUpdate, VoxelDelta};
 use auki_datatypes::point_cloud::Data as PointCloudData;
@@ -24,6 +25,7 @@ pub use discovery::{
     VoxelMapperSourceQuery, VoxelMapperSourceSelectionError, VoxelMapperSources,
     run_sdk_voxel_mapper,
 };
+pub use persistence::VoxelPersistenceConfig;
 
 pub use frame_alias::{FrameAliasError, ValidatedFrameAlias, VoxelMapperMapFrameBinding};
 

@@ -23,6 +23,7 @@ members = [
     "crates/auki-datatypes",
     "crates/auki-domain",
     "crates/auki-qr-detector",
+    "crates/auki-barcode-detector",
     "bindings/python/auki-domain-py",
     "crates/auki-registry",
     "bindings/python/auki-registry-py",

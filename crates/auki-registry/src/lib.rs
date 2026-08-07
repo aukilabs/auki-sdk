@@ -853,6 +853,7 @@ pub enum DetectorBody {
     Aruco(Aruco),
     Qr(Qr),
     Esl(Esl),
+    Barcode(Barcode),
     ObjectDetection(ObjectDetection),
     /// Developer-defined detector kind and content-addressed configuration.
     Custom(CustomDetector),
@@ -883,6 +884,9 @@ pub struct Qr {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Esl {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Barcode {}
 
 /// Generic ML-based object detection detector body. Carries the model
 /// name as the primary identity field; the output types list on
@@ -2258,6 +2262,31 @@ mod tests {
             .join(&entry.peer_id)
             .join("aukilabs__aruco__v1");
         assert!(expected_dir.is_dir(), "expected {expected_dir:?} to exist");
+    }
+
+
+    #[test]
+    fn barcode_detector_entry_round_trips_and_hash_is_stable() {
+        let entry = DetectorRegistryEntry {
+            peer_id: "galbot".into(),
+            detector_id: "aukilabs/barcode/v1".into(),
+            body: DetectorBody::Barcode(Barcode {}),
+            input_types: vec![DetectorInput {
+                sensor_kind: "camera".into(),
+                sensor_type: None,
+                image_encoding: Some("raw".into()),
+                pixel_format: Some("luma8".into()),
+            }],
+            output_types: vec!["barcode".into()],
+        };
+        let json = serde_json::to_value(&entry).unwrap();
+        assert_eq!(json["type"], "barcode");
+        let round_tripped: DetectorRegistryEntry = serde_json::from_value(json).unwrap();
+        assert_eq!(round_tripped, entry);
+        assert_eq!(entry.hash(), round_tripped.hash());
+        let again: DetectorRegistryEntry =
+            serde_json::from_str(&serde_json::to_string(&entry).unwrap()).unwrap();
+        assert_eq!(again.hash(), entry.hash());
     }
 
     #[test]

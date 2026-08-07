@@ -45,7 +45,7 @@ A sensor producer opens its `auki-logs` `Log<T>` at `handle.root()` and appends 
 
 ### Detector execution
 
-`RegisteredCameraDetector::register` is the bring-your-own detector entry point. A developer supplies a `CameraDetector` factory plus the registry body, accepted camera contracts, and declared output types. The SDK creates a fresh detector value for every started instance, validates the selected sensor against the registered contracts, owns cadence and provenance, and rejects any emitted output type that was not declared. Third-party implementations use `DetectorBody::Custom(CustomDetector { .. })`; `kind` is an open namespaced identifier and the configuration participates in the content-addressed registry hash. Built-in bodies such as `Qr` are conveniences, not a closed implementation list.
+`RegisteredCameraDetector::register` is the bring-your-own detector entry point. A developer supplies a `CameraDetector` factory plus the registry body, accepted camera contracts, and declared output types. The SDK creates a fresh detector value for every started instance, validates the selected sensor against the registered contracts, owns cadence and provenance, and rejects any emitted output type that was not declared. Third-party implementations use `DetectorBody::Custom(CustomDetector { .. })`; `kind` is an open namespaced identifier and the configuration participates in the content-addressed registry hash. Built-in bodies such as `Qr` and `Barcode` are conveniences, not a closed implementation list.
 
 ```rust,ignore
 let registered = RegisteredCameraDetector::register(
@@ -71,7 +71,7 @@ The streaming runner remains transport-neutral, preserving this crate's network-
 
 `CameraFrameHub::new(capacity)` provides bounded fanout when a viewer, cache, and multiple detectors share one network subscription. Samples hold `Arc<CameraFrame>`, so fanout does not copy image bytes. Slow subscribers skip overwritten frames rather than blocking the publisher; `lagged_frames()` exposes the aggregate drop count. Keep the hub alive across transport reconnects so detector instances can remain subscribed while the network supervisor replaces the underlying subscription.
 
-Detector crates may expose a typed application-facing adapter around `RegisteredCameraDetector`, as the QR reference crate does. `DetectorInstanceSpec::rolling(instance_id, cadence, retention, segment_duration)` contains only choices the application actually owns. The package derives the detector reference from its registered implementation and derives the input log, sensor, and clock references from the selected `SensorLogHandle`.
+Detector crates may expose a typed application-facing adapter around `RegisteredCameraDetector`, as `auki-qr-detector` (`DetectorBody::Qr`) and `auki-barcode-detector` (`DetectorBody::Barcode`) do. `DetectorInstanceSpec::rolling(instance_id, cadence, retention, segment_duration)` contains only choices the application actually owns. The package derives the detector reference from its registered implementation and derives the input log, sensor, and clock references from the selected `SensorLogHandle`.
 
 Remote detector inputs do not require materialization. Their Detection Log manifest binds the remote `LogRef`, Sensor Registry reference, and clock exactly as a local input does; only the frame transport differs.
 

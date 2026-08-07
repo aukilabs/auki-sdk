@@ -229,13 +229,14 @@ impl QrDetector {
     }
 
     /// Validate that a Camera Registry contract can be consumed by this
-    /// detector. JPEG is decoded to RGB8 before QR Lab converts to luminance.
+    /// detector. NV12 is scanned through its Y plane; JPEG is decoded to RGB8
+    /// before QR Lab converts to luminance.
     pub fn validate_camera(camera: &Camera) -> Result<(), QrDetectorError> {
         if camera.image_encoding == "jpeg" {
             return Ok(());
         }
         if camera.image_encoding != "raw"
-            || !matches!(camera.pixel_format.as_str(), "luma8" | "rgb8")
+            || !matches!(camera.pixel_format.as_str(), "luma8" | "rgb8" | "YUV_NV12")
         {
             return Err(QrDetectorError::IncompatibleCamera {
                 image_encoding: camera.image_encoding.clone(),
@@ -283,6 +284,12 @@ impl QrDetector {
                 DetectorInput {
                     sensor_kind: "camera".into(),
                     sensor_type: None,
+                    image_encoding: Some("raw".into()),
+                    pixel_format: Some("YUV_NV12".into()),
+                },
+                DetectorInput {
+                    sensor_kind: "camera".into(),
+                    sensor_type: None,
                     image_encoding: Some("jpeg".into()),
                     pixel_format: None,
                 },
@@ -325,6 +332,38 @@ impl QrDetector {
         let frame = Rgb8View::new(pixels, width, height, stride)
             .map_err(|error| QrDetectorError::InvalidFrame(error.to_string()))?;
         Ok(qr_detections(self.scanner.scan_rgb8(&frame)))
+    }
+
+    /// Scan the full-resolution Y plane of an NV12 frame.
+    ///
+    /// NV12 stores `height` padded luminance rows followed by half as many
+    /// interleaved UV rows using the same stride. The chroma plane is not
+    /// needed for QR detection, but its presence is validated so truncated
+    /// payloads cannot masquerade as valid NV12 frames.
+    pub fn detect_nv12(
+        &mut self,
+        pixels: &[u8],
+        width: usize,
+        height: usize,
+        stride: usize,
+    ) -> Result<QrDetections, QrDetectorError> {
+        let y_plane_len = stride.checked_mul(height).ok_or_else(|| {
+            QrDetectorError::InvalidFrame("NV12 Y-plane dimensions overflow".into())
+        })?;
+        let chroma_rows = height.div_ceil(2);
+        let frame_rows = height.checked_add(chroma_rows).ok_or_else(|| {
+            QrDetectorError::InvalidFrame("NV12 frame dimensions overflow".into())
+        })?;
+        let required_len = stride.checked_mul(frame_rows).ok_or_else(|| {
+            QrDetectorError::InvalidFrame("NV12 frame dimensions overflow".into())
+        })?;
+        if pixels.len() < required_len {
+            return Err(QrDetectorError::InvalidFrame(format!(
+                "NV12 frame has {} bytes, requires at least {required_len}",
+                pixels.len()
+            )));
+        }
+        self.detect_luma(&pixels[..y_plane_len], width, height, stride)
     }
 
     /// Decode and scan one JPEG frame.
@@ -375,6 +414,12 @@ impl CameraDetector for QrDetector {
     ) -> std::result::Result<Vec<DetectorOutput>, String> {
         let detections = match (camera.image_encoding.as_str(), camera.pixel_format.as_str()) {
             ("raw", "luma8") => self.detect_luma(
+                &frame.frame,
+                camera.width as usize,
+                camera.height as usize,
+                camera.row_stride_bytes as usize,
+            ),
+            ("raw", "YUV_NV12") => self.detect_nv12(
                 &frame.frame,
                 camera.width as usize,
                 camera.height as usize,
@@ -442,7 +487,7 @@ pub enum QrDetectorError {
     Package(#[from] CameraDetectorPackageError),
     /// The camera registry does not expose a supported raw or JPEG image.
     #[error(
-        "QR detector requires raw/luma8, raw/rgb8, or jpeg camera frames, got {image_encoding}/{pixel_format}"
+        "QR detector requires raw/luma8, raw/rgb8, raw/YUV_NV12, or jpeg camera frames, got {image_encoding}/{pixel_format}"
     )]
     IncompatibleCamera {
         /// Camera registry image encoding.
@@ -803,6 +848,61 @@ mod tests {
         camera.pixel_format = "rgb8".into();
         camera.row_stride_bytes = camera.width * 3;
         QrDetector::validate_camera(&camera).unwrap();
+    }
+
+    #[test]
+    fn raw_nv12_camera_decodes_qr_from_padded_y_plane() {
+        let payload = "auki://portal/nv12-test";
+        let (rgb, width, height, rgb_stride) = rendered_qr_rgb8(payload);
+        let y_stride = width + 8;
+        let mut nv12 = vec![128u8; y_stride * (height + height.div_ceil(2))];
+        for y in 0..height {
+            for x in 0..width {
+                nv12[y * y_stride + x] = rgb[y * rgb_stride + x * 3];
+            }
+        }
+
+        let mut camera = luma_camera();
+        camera.r#type = "rgb".into();
+        camera.width = width as u32;
+        camera.height = height as u32;
+        camera.pixel_format = "YUV_NV12".into();
+        camera.row_stride_bytes = y_stride as u32;
+        QrDetector::validate_camera(&camera).unwrap();
+
+        let outputs = QrDetector::default()
+            .process(
+                &CameraFrame {
+                    dynamic_intrinsics: None,
+                    frame: nv12,
+                },
+                &camera,
+            )
+            .unwrap();
+        let detections = QrDetections::decode(&outputs[0].data).unwrap();
+        assert!(detections.codes.iter().any(|code| code.payload == payload));
+    }
+
+    #[test]
+    fn truncated_nv12_chroma_plane_is_rejected() {
+        let mut camera = luma_camera();
+        camera.r#type = "rgb".into();
+        camera.pixel_format = "YUV_NV12".into();
+        let y_plane_only = vec![0; (camera.row_stride_bytes * camera.height) as usize];
+
+        let error = QrDetector::default()
+            .process(
+                &CameraFrame {
+                    dynamic_intrinsics: None,
+                    frame: y_plane_only,
+                },
+                &camera,
+            )
+            .unwrap_err();
+        assert!(
+            error.contains("NV12 frame has"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

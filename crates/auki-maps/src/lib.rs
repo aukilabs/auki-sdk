@@ -590,7 +590,12 @@ impl VoxelMapAccumulator {
         let voxels = chunk
             .voxels
             .iter()
-            .filter(|(_, evidence)| evidence.occupancy >= threshold)
+            // Color and semantic evidence are attributes of occupied space;
+            // neither may make a cleared voxel renderable on its own. Keep
+            // the caller's threshold inclusive, but always require strictly
+            // positive occupancy evidence even when the threshold is zero or
+            // negative.
+            .filter(|(_, evidence)| evidence.occupancy > 0.0 && evidence.occupancy >= threshold)
             .map(|(local, evidence)| {
                 let center = |chunk_axis: i32, local_axis: u32| {
                     (f64::from(chunk_axis) * dimension + f64::from(local_axis) + 0.5) * voxel_size

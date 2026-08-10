@@ -72,11 +72,13 @@ pub use auki_network::discovery_client::DiscoveryError as DiscoveryClientError;
 use auki_network::heartbeat_protocol::HEARTBEAT_TIMEOUT;
 use auki_network::info_protocol::InfoResponse;
 use auki_network::join_protocol::{JoinRequest, JoinResponse};
+use auki_network::leave_protocol::LeaveRequest;
 use auki_network::network_runtime::{
     AllowedPeer, BroadcastDiagnosticError, DiagnosticEvent, HeartbeatNtpSampleObservation,
-    HeartbeatTimestampSource, InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime,
-    PeerLivenessEvent, RegistryRequestEvent, RequestInfoError, RequestRegistryError,
-    RequestResourcesError, ResourcesRequestEvent, SendJoinRequestError, SpawnError,
+    HeartbeatTimestampSource, InfoRequestEvent, JoinEvent, LeaveEvent, MembershipEvent,
+    NetworkRuntime, PeerLivenessEvent, RegistryRequestEvent, RequestInfoError,
+    RequestRegistryError, RequestResourcesError, ResourcesRequestEvent, SendJoinRequestError,
+    SpawnError,
 };
 use auki_network::stream_runtime::StreamProvider;
 use auki_network::swarm::Behaviour;
@@ -577,6 +579,9 @@ pub struct ClusterManager {
     /// the `Mutex<Option<_>>::take()` pattern (idempotent against
     /// concurrent / repeated `shutdown` calls).
     join_handler_task: Mutex<Option<JoinHandle<()>>>,
+    /// Task that drains inbound `/auki/leave/0.0.1` events (Manager
+    /// evicts + gossips + Acks). Cancelled on `shutdown`.
+    leave_handler_task: Mutex<Option<JoinHandle<()>>>,
     /// Task that drains heartbeat-carrier events from the runtime,
     /// runs the domain-side heartbeat timer, runs the cluster-
     /// internal election on Manager death, and orchestrates
@@ -979,6 +984,7 @@ impl ClusterManager {
             resources_events_rx,
             registry_events_rx,
             diagnostic_events_rx,
+            leave_events_rx,
         ) = NetworkRuntime::spawn(
             swarm,
             vec![],
@@ -1009,6 +1015,16 @@ impl ClusterManager {
         // 5. Drain inbound `/auki/join/0.0.1` events.
         let join_handler_task = Mutex::new(Some(spawn_join_handler(
             join_events_rx,
+            cluster_name.clone(),
+            local_peer_id,
+            manager_peer_id.clone(),
+            membership.clone(),
+            runtime.handle(),
+        )));
+
+        // 5b. Drain inbound `/auki/leave/0.0.1` events.
+        let leave_handler_task = Mutex::new(Some(spawn_leave_handler(
+            leave_events_rx,
             cluster_name.clone(),
             local_peer_id,
             manager_peer_id.clone(),
@@ -1109,6 +1125,7 @@ impl ClusterManager {
             domain_clock_sources,
             liveness_check_task,
             join_handler_task,
+            leave_handler_task,
             liveness_handler_task,
             membership_handler_task,
             info_handler_task,
@@ -1798,6 +1815,7 @@ impl ClusterManager {
             resources_events_rx,
             registry_events_rx,
             diagnostic_events_rx,
+            leave_events_rx,
         ) = NetworkRuntime::spawn(
             swarm,
             vec![AllowedPeer {
@@ -1883,6 +1901,15 @@ impl ClusterManager {
         //    `manager_peer_id` per call).
         let join_handler_task = Mutex::new(Some(spawn_join_handler(
             join_events_rx,
+            cluster_name.clone(),
+            local_peer_id,
+            manager_peer_id.clone(),
+            membership.clone(),
+            runtime.handle(),
+        )));
+
+        let leave_handler_task = Mutex::new(Some(spawn_leave_handler(
+            leave_events_rx,
             cluster_name.clone(),
             local_peer_id,
             manager_peer_id.clone(),
@@ -1982,6 +2009,7 @@ impl ClusterManager {
             domain_clock_sources,
             liveness_check_task,
             join_handler_task,
+            leave_handler_task,
             liveness_handler_task,
             membership_handler_task,
             info_handler_task,
@@ -2032,8 +2060,29 @@ impl ClusterManager {
             return Ok(());
         }
 
-        // 1. Cancel background tasks FIRST so we stop touching
-        //    Discovery / membership between teardown steps.
+        // 0b. Graceful leave: notify Manager before tearing down the
+        //     transport so membership can shrink without waiting for
+        //     PEER_LOSS_TIMEOUT. Best-effort — timeout/errors continue.
+        let manager = *self.manager_peer_id.lock().expect("manager_peer_id lock");
+        if manager != self.local_peer_id {
+            match self
+                .runtime
+                .send_leave_request(manager, LeaveRequest)
+                .await
+            {
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!(
+                        "auki-domain: cluster {:?}: graceful leave notify failed: {e} \
+                         (continuing shutdown; Manager may wait for loss timeout)",
+                        self.cluster_name
+                    );
+                }
+            }
+        }
+
+        // 1. Cancel background tasks so we stop touching Discovery /
+        //    membership between teardown steps.
         if let Some(task) = self
             .liveness_check_task
             .lock()
@@ -2046,6 +2095,14 @@ impl ClusterManager {
             .join_handler_task
             .lock()
             .expect("join_handler_task lock")
+            .take()
+        {
+            task.abort();
+        }
+        if let Some(task) = self
+            .leave_handler_task
+            .lock()
+            .expect("leave_handler_task lock")
             .take()
         {
             task.abort();
@@ -2102,8 +2159,7 @@ impl ClusterManager {
         // 2. Deregister from Discovery only if we're the last
         //    member. Otherwise leave the cluster alive for the
         //    survivors' election + handoff (see fn doc).
-        let was_manager =
-            *self.manager_peer_id.lock().expect("manager_peer_id lock") == self.local_peer_id;
+        let was_manager = manager == self.local_peer_id;
         let am_last = self.membership.lock().expect("membership lock").peers.len() <= 1;
         let result = if was_manager && am_last {
             self.discovery.deregister(self.cluster_name.clone()).await
@@ -2127,6 +2183,7 @@ impl Drop for ClusterManager {
     fn drop(&mut self) {
         for slot in [
             &self.join_handler_task,
+            &self.leave_handler_task,
             &self.liveness_handler_task,
             &self.membership_handler_task,
             &self.info_handler_task,
@@ -4067,6 +4124,71 @@ fn admit_or_refresh(
 /// the updated allow-list via the runtime handle; non-Manager
 /// peers reject with `"not the manager"`. The task lives for the
 /// lifetime of the `ClusterManager`; cancelled on `shutdown`.
+/// Drain inbound `/auki/leave/0.0.1`: Manager evicts + gossips + Acks;
+/// non-Manager drops without Ack (leaver times out and shuts down).
+fn spawn_leave_handler(
+    mut rx: mpsc::Receiver<LeaveEvent>,
+    cluster_name: String,
+    local_peer_id: PeerId,
+    manager_peer_id: Arc<Mutex<PeerId>>,
+    membership: Arc<Mutex<ClusterMembership>>,
+    runtime: auki_network::NetworkRuntimeHandle,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            let LeaveEvent { peer, request: _, ack } = event;
+
+            let am_manager =
+                *manager_peer_id.lock().expect("manager_peer_id lock") == local_peer_id;
+            if !am_manager {
+                // Drop ack — silent close per leave protocol contract.
+                continue;
+            }
+
+            // Update membership, Ack while still allow-listed, then drop the
+            // peer from the allow-list. Allow-list removal closes the
+            // connection and must not race the Ack write.
+            let new_allow_list = {
+                let mut m = membership.lock().expect("membership lock");
+                m.peers.retain(|p| p.peer_id != peer);
+                m.peers
+                    .iter()
+                    .filter(|p| p.peer_id != local_peer_id)
+                    .map(|p| AllowedPeer {
+                        peer_id: p.peer_id,
+                        multiaddrs: p.multiaddrs.clone(),
+                    })
+                    .collect::<Vec<_>>()
+            };
+
+            let (written_tx, written_rx) = tokio::sync::oneshot::channel();
+            if ack.send(written_tx).is_ok() {
+                let _ = written_rx.await;
+            }
+
+            if let Err(e) = runtime.set_allowed_peers(new_allow_list).await {
+                eprintln!(
+                    "auki-domain: leave handler for cluster {cluster_name:?}: \
+                     set_allowed_peers failed for {peer}: {e}"
+                );
+            }
+            sync_heartbeat_targets(
+                &runtime,
+                local_peer_id,
+                &manager_peer_id,
+                &membership,
+                &cluster_name,
+            )
+            .await;
+            broadcast_current_membership(&runtime, &manager_peer_id, &membership);
+            eprintln!(
+                "auki-domain: leave handler for cluster {cluster_name:?}: \
+                 graceful leave from {peer}"
+            );
+        }
+    })
+}
+
 fn spawn_join_handler(
     mut rx: mpsc::Receiver<JoinEvent>,
     cluster_name: String,

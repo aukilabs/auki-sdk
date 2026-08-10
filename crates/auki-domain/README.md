@@ -18,7 +18,7 @@ The SDK's network-presence layer. An app that wants its peer and session visible
 - `Domain::fetch_map_catalog(peer)` — fetches `/auki/resources/0.4.0` Map Log rows. `Domain::open_map_stream(peer, row, read_from)` validates the authenticated writer and accept-time Map/clock identity before exposing typed replay plus live `MapUpdate`s.
 - `Domain::open_message_channel(peer, &row)` — verifies the discovered row owner equals the authenticated serving peer and returns a persistent `MessageChannelSender`. `Domain::send_message(...)` is the open/send-once convenience.
 - `Domain::cluster_manager()` → `&ClusterManager` — escape hatch to the engine (membership, Manager state, domain clock estimates, participant info, stream opens).
-- `Domain::leave()` (async) — clean shutdown of the cluster presence.
+- `Domain::leave()` (async) — clean shutdown of the cluster presence. Non-Managers best-effort notify the Manager over `/auki/leave/0.0.1` (wait ≤2s for Ack) so membership can shrink immediately; then local teardown. Crash/partition still uses heartbeat loss timeout.
 - `catalog_of(&Peer, &Session)` → `Vec<ResourceEntry>` — pure helper, no network; builds exactly the rows `Domain` would serve. Useful for tests and dry runs.
 
 `DomainConfig` fields: `target: ClusterTarget`, `local_identity: PeerIdentity`, `local_multiaddrs: Vec<Multiaddr>`, `discovery_url: String`, `swarm: Swarm<Behaviour>`, `stream_provider: StreamProvider`, `daemon_info: DaemonInfo`.

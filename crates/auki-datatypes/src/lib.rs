@@ -168,6 +168,11 @@ pub mod join {
     }
 }
 
+/// `auki.leave` — `/auki/leave/0.0.1` request/response (empty Ack).
+pub mod leave {
+    include!(concat!(env!("OUT_DIR"), "/auki.leave.rs"));
+}
+
 /// `auki.info` — `/auki/info/0.0.1` request/response messages.
 pub mod info {
     include!(concat!(env!("OUT_DIR"), "/auki.info.rs"));

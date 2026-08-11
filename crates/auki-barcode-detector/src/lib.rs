@@ -1,9 +1,10 @@
 //! rxing-backed typed barcode detections carried by the Auki SDK's generic
 //! [`DetectionFrame`](auki_datatypes::detection::DetectionFrame) envelope.
 //!
-//! This crate is deliberately limited to 1D / retail barcode scanning. It does
-//! not associate payloads with portals, ESL SKUs, or shelf geometry; those
-//! product-specific responsibilities belong to a later consumer.
+//! This crate is a first-class SDK barcode detector. By default it enables all
+//! rxing 1D formats; apps may pass an explicit format allowlist (including 2D
+//! formats when needed). Higher-level mapping of payloads to application
+//! entities stays outside this crate.
 
 use auki_datatypes::detection::DetectionFrame;
 use auki_registry::{Barcode, Camera, DetectorBody, DetectorInput, RegistryRef, SensorBody};
@@ -123,60 +124,80 @@ pub const BARCODE_DETECTION_TYPE: &str = "barcode";
 /// Current on-wire schema version for [`BarcodeDetections`].
 pub const BARCODE_DETECTION_SCHEMA_VERSION: u32 = 1;
 
-/// Cactus-aligned symbology allowlist for the decoder.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum BarcodeSymbologyProfile {
-    /// Retail product codes: EAN-13/8, UPC-E, Code128, GS1 DataBar (+ Expanded).
-    #[default]
-    Product,
-    /// ESL / shelf-edge codes: Code128/39/93, Codabar, ITF.
-    Esl,
-    /// Union of [`Self::Product`] and [`Self::Esl`].
-    All,
+/// All rxing [`BarcodeFormat`] variants (for allowlist parsing).
+const ALL_BARCODE_FORMATS: &[BarcodeFormat] = &[
+    BarcodeFormat::AZTEC,
+    BarcodeFormat::CODABAR,
+    BarcodeFormat::CODE_39,
+    BarcodeFormat::CODE_93,
+    BarcodeFormat::CODE_128,
+    BarcodeFormat::DATA_MATRIX,
+    BarcodeFormat::EAN_8,
+    BarcodeFormat::EAN_13,
+    BarcodeFormat::ITF,
+    BarcodeFormat::MAXICODE,
+    BarcodeFormat::PDF_417,
+    BarcodeFormat::QR_CODE,
+    BarcodeFormat::MICRO_QR_CODE,
+    BarcodeFormat::RECTANGULAR_MICRO_QR_CODE,
+    BarcodeFormat::RSS_14,
+    BarcodeFormat::RSS_EXPANDED,
+    BarcodeFormat::TELEPEN,
+    BarcodeFormat::UPC_A,
+    BarcodeFormat::UPC_E,
+    BarcodeFormat::UPC_EAN_EXTENSION,
+    BarcodeFormat::DXFilmEdge,
+    BarcodeFormat::UNSUPORTED_FORMAT,
+];
+
+/// Default 1D formats when [`BarcodeDetectorConfig::formats`] is `None`.
+fn default_1d_formats() -> HashSet<BarcodeFormat> {
+    HashSet::from([
+        BarcodeFormat::CODABAR,
+        BarcodeFormat::CODE_39,
+        BarcodeFormat::CODE_93,
+        BarcodeFormat::CODE_128,
+        BarcodeFormat::EAN_8,
+        BarcodeFormat::EAN_13,
+        BarcodeFormat::ITF,
+        BarcodeFormat::RSS_14,
+        BarcodeFormat::RSS_EXPANDED,
+        BarcodeFormat::TELEPEN,
+        BarcodeFormat::UPC_A,
+        BarcodeFormat::UPC_E,
+        BarcodeFormat::UPC_EAN_EXTENSION,
+        BarcodeFormat::DXFilmEdge,
+    ])
 }
 
-impl BarcodeSymbologyProfile {
-    fn formats(self) -> HashSet<BarcodeFormat> {
-        match self {
-            Self::Product => HashSet::from([
-                BarcodeFormat::EAN_13,
-                BarcodeFormat::EAN_8,
-                BarcodeFormat::UPC_E,
-                BarcodeFormat::CODE_128,
-                BarcodeFormat::RSS_14,
-                BarcodeFormat::RSS_EXPANDED,
-            ]),
-            Self::Esl => HashSet::from([
-                BarcodeFormat::CODE_128,
-                BarcodeFormat::CODE_39,
-                BarcodeFormat::CODE_93,
-                BarcodeFormat::CODABAR,
-                BarcodeFormat::ITF,
-            ]),
-            Self::All => {
-                let mut formats = Self::Product.formats();
-                formats.extend(Self::Esl.formats());
-                formats
+/// Emit the exact rxing `BarcodeFormat` enum variant name (Debug spelling).
+fn format_variant_name(format: BarcodeFormat) -> String {
+    format!("{format:?}")
+}
+
+/// Parse an allowlist entry against rxing enum variant names, case-insensitively.
+fn parse_format_name(name: &str) -> Option<BarcodeFormat> {
+    ALL_BARCODE_FORMATS
+        .iter()
+        .copied()
+        .find(|format| format_variant_name(*format).eq_ignore_ascii_case(name))
+}
+
+fn resolve_formats(
+    config: &BarcodeDetectorConfig,
+) -> Result<HashSet<BarcodeFormat>, BarcodeDetectorError> {
+    match &config.formats {
+        None => Ok(default_1d_formats()),
+        Some(names) if names.is_empty() => Err(BarcodeDetectorError::EmptyFormatsAllowlist),
+        Some(names) => {
+            let mut formats = HashSet::with_capacity(names.len());
+            for name in names {
+                let format = parse_format_name(name)
+                    .ok_or_else(|| BarcodeDetectorError::UnknownFormat(name.clone()))?;
+                formats.insert(format);
             }
+            Ok(formats)
         }
-    }
-
-    fn allows(self, format: BarcodeFormat) -> bool {
-        self.formats().contains(&format)
-    }
-}
-
-/// Collapse rxing formats to Cactus `eslLabel` wire labels.
-fn wire_symbology(format: BarcodeFormat) -> Option<&'static str> {
-    match format {
-        BarcodeFormat::CODE_128 | BarcodeFormat::CODE_39 | BarcodeFormat::CODE_93 => {
-            Some("code128")
-        }
-        BarcodeFormat::EAN_13 | BarcodeFormat::EAN_8 | BarcodeFormat::UPC_E => Some("ean13"),
-        BarcodeFormat::RSS_14 | BarcodeFormat::RSS_EXPANDED => Some("gs1DataBar"),
-        BarcodeFormat::ITF => Some("itf"),
-        BarcodeFormat::CODABAR => Some("codabar"),
-        _ => None,
     }
 }
 
@@ -194,8 +215,8 @@ pub struct PixelCorner {
 pub struct BarcodeDetection {
     /// Decoded payload text.
     pub payload: String,
-    /// Cactus wire symbology label (`code128`, `ean13`, `gs1DataBar`, `codabar`, `itf`).
-    pub symbology: String,
+    /// rxing [`BarcodeFormat`] enum variant name (e.g. `EAN_13`, `CODE_128`).
+    pub format: String,
     /// Coarse source-frame corners in strict `TL, TR, BR, BL` order.
     pub corners_px: [PixelCorner; 4],
 }
@@ -239,20 +260,28 @@ impl BarcodeDetections {
 }
 
 /// Decoder configuration used by [`BarcodeDetector`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BarcodeDetectorConfig {
-    /// Active symbology allowlist.
-    pub profile: BarcodeSymbologyProfile,
+    /// Optional format allowlist using rxing `BarcodeFormat` variant names
+    /// (`EAN_13`, `CODE_128`, `RSS_14`, …). Matching is case-insensitive.
+    ///
+    /// - `None` — detect all default **1D** formats.
+    /// - `Some(list)` — detect only the listed formats (may include 2D).
+    /// - `Some([])` — rejected as an empty allowlist.
+    pub formats: Option<Vec<String>>,
 }
 
 /// Stateful barcode detector. Retain one instance when processing a video stream.
 pub struct BarcodeDetector {
-    config: BarcodeDetectorConfig,
+    formats: HashSet<BarcodeFormat>,
 }
 
 impl BarcodeDetector {
-    pub fn new(config: BarcodeDetectorConfig) -> Self {
-        Self { config }
+    /// Build a detector from `config`, resolving the format allowlist.
+    pub fn new(config: BarcodeDetectorConfig) -> Result<Self, BarcodeDetectorError> {
+        Ok(Self {
+            formats: resolve_formats(&config)?,
+        })
     }
 
     /// Validate that a Camera Registry contract can be consumed by this
@@ -287,7 +316,7 @@ impl BarcodeDetector {
         peer: &Peer,
         detector_id: &str,
     ) -> Result<RegisteredBarcodeDetector, BarcodeDetectorError> {
-        let config = self.config;
+        let formats = self.formats.clone();
         let inner = RegisteredCameraDetector::register(
             peer,
             detector_id,
@@ -319,7 +348,9 @@ impl BarcodeDetector {
                 },
             ],
             vec![BARCODE_DETECTION_TYPE.into()],
-            move || BarcodeDetector::new(config),
+            move || BarcodeDetector {
+                formats: formats.clone(),
+            },
         )?;
         Ok(RegisteredBarcodeDetector { inner })
     }
@@ -446,7 +477,7 @@ impl BarcodeDetector {
 
         let mut hints = DecodeHints {
             TryHarder: Some(true),
-            PossibleFormats: Some(self.config.profile.formats()),
+            PossibleFormats: Some(self.formats.clone()),
             ..Default::default()
         };
 
@@ -463,7 +494,7 @@ impl BarcodeDetector {
             schema_version: BARCODE_DETECTION_SCHEMA_VERSION,
             codes: results
                 .into_iter()
-                .filter_map(|result| map_rxing_result(result, self.config.profile))
+                .filter_map(|result| map_rxing_result(result, &self.formats))
                 .collect(),
         })
     }
@@ -512,22 +543,21 @@ impl CameraDetector for BarcodeDetector {
 
 impl Default for BarcodeDetector {
     fn default() -> Self {
-        Self::new(BarcodeDetectorConfig::default())
+        Self::new(BarcodeDetectorConfig::default()).expect("default barcode config is valid")
     }
 }
 
 fn map_rxing_result(
     result: RXingResult,
-    profile: BarcodeSymbologyProfile,
+    allowed: &HashSet<BarcodeFormat>,
 ) -> Option<BarcodeDetection> {
     let format = *result.getBarcodeFormat();
-    if !profile.allows(format) {
+    if !allowed.contains(&format) {
         return None;
     }
-    let symbology = wire_symbology(format)?.to_string();
     Some(BarcodeDetection {
         payload: result.getText().to_string(),
-        symbology,
+        format: format_variant_name(format),
         corners_px: corners_from_points(result.getPoints()),
     })
 }
@@ -670,6 +700,12 @@ pub enum BarcodeDetectorError {
     /// Generic detector package registration, startup, or execution failed.
     #[error("detector package: {0}")]
     Package(#[from] CameraDetectorPackageError),
+    /// The formats allowlist was explicitly empty.
+    #[error("barcode detector formats allowlist is empty")]
+    EmptyFormatsAllowlist,
+    /// An allowlist entry is not a known rxing `BarcodeFormat` variant name.
+    #[error("unknown barcode format name: {0}")]
+    UnknownFormat(String),
     /// The camera registry does not expose a supported raw or JPEG image.
     #[error(
         "barcode detector requires raw/luma8, raw/rgb8, raw/YUV_NV12, or jpeg camera frames, got {image_encoding}/{pixel_format}"
@@ -743,7 +779,7 @@ mod tests {
             schema_version: BARCODE_DETECTION_SCHEMA_VERSION,
             codes: vec![BarcodeDetection {
                 payload: EAN13_PAYLOAD.into(),
-                symbology: "ean13".into(),
+                format: "EAN_13".into(),
                 corners_px: [
                     PixelCorner { x: 1.0, y: 2.0 },
                     PixelCorner { x: 3.0, y: 2.0 },
@@ -822,13 +858,30 @@ mod tests {
     }
 
     #[test]
-    fn wire_labels_match_cactus_collapse() {
-        assert_eq!(wire_symbology(BarcodeFormat::CODE_39), Some("code128"));
-        assert_eq!(wire_symbology(BarcodeFormat::EAN_8), Some("ean13"));
-        assert_eq!(wire_symbology(BarcodeFormat::RSS_14), Some("gs1DataBar"));
-        assert_eq!(wire_symbology(BarcodeFormat::ITF), Some("itf"));
-        assert_eq!(wire_symbology(BarcodeFormat::CODABAR), Some("codabar"));
-        assert_eq!(wire_symbology(BarcodeFormat::QR_CODE), None);
+    fn format_variant_names_match_debug_spelling() {
+        assert_eq!(format_variant_name(BarcodeFormat::EAN_13), "EAN_13");
+        assert_eq!(format_variant_name(BarcodeFormat::CODE_128), "CODE_128");
+        assert_eq!(format_variant_name(BarcodeFormat::RSS_14), "RSS_14");
+        assert_eq!(format_variant_name(BarcodeFormat::DXFilmEdge), "DXFilmEdge");
+        assert_eq!(parse_format_name("ean_13"), Some(BarcodeFormat::EAN_13));
+        assert_eq!(parse_format_name("Code_128"), Some(BarcodeFormat::CODE_128));
+        assert_eq!(parse_format_name("not-a-format"), None);
+    }
+
+    #[test]
+    fn empty_and_unknown_formats_are_rejected() {
+        assert!(matches!(
+            BarcodeDetector::new(BarcodeDetectorConfig {
+                formats: Some(vec![]),
+            }),
+            Err(BarcodeDetectorError::EmptyFormatsAllowlist)
+        ));
+        assert!(matches!(
+            BarcodeDetector::new(BarcodeDetectorConfig {
+                formats: Some(vec!["ean13".into()]),
+            }),
+            Err(BarcodeDetectorError::UnknownFormat(_))
+        ));
     }
 
     #[test]
@@ -841,18 +894,16 @@ mod tests {
     }
 
     #[test]
-    fn synthetic_ean13_product_profile_decodes_payload_and_corners() {
+    fn synthetic_ean13_default_config_decodes_payload_and_corners() {
         let (luma, width, height) = rendered_ean13_luma(EAN13_PAYLOAD);
-        let mut detector = BarcodeDetector::new(BarcodeDetectorConfig {
-            profile: BarcodeSymbologyProfile::Product,
-        });
+        let mut detector = BarcodeDetector::default();
         let detections = detector
             .detect_luma(&luma, width, height, width)
             .expect("detect_luma");
         assert_eq!(detections.codes.len(), 1);
         let code = &detections.codes[0];
         assert_eq!(code.payload, EAN13_PAYLOAD);
-        assert_eq!(code.symbology, "ean13");
+        assert_eq!(code.format, "EAN_13");
         assert_eq!(code.corners_px.len(), 4);
         // Corners should span a non-degenerate region inside the padded frame.
         let xs: Vec<f64> = code.corners_px.iter().map(|c| c.x).collect();
@@ -883,7 +934,38 @@ mod tests {
         assert_eq!(outputs[0].r#type, BARCODE_DETECTION_TYPE);
         let via_process = BarcodeDetections::decode(&outputs[0].data).unwrap();
         assert_eq!(via_process.codes[0].payload, EAN13_PAYLOAD);
-        assert_eq!(via_process.codes[0].symbology, "ean13");
+        assert_eq!(via_process.codes[0].format, "EAN_13");
+    }
+
+    #[test]
+    fn format_allowlist_excludes_unlisted_formats() {
+        let (luma, width, height) = rendered_ean13_luma(EAN13_PAYLOAD);
+
+        // CODE_128-only allowlist must not return the synthetic EAN-13.
+        let mut restricted = BarcodeDetector::new(BarcodeDetectorConfig {
+            formats: Some(vec!["CODE_128".into()]),
+        })
+        .expect("CODE_128 allowlist is valid");
+        let restricted_hits = restricted
+            .detect_luma(&luma, width, height, width)
+            .expect("detect_luma");
+        assert!(
+            restricted_hits.codes.is_empty(),
+            "CODE_128 allowlist must not decode EAN-13, got {:?}",
+            restricted_hits.codes
+        );
+
+        // Explicit EAN_13 allowlist still decodes the same frame.
+        let mut allowed = BarcodeDetector::new(BarcodeDetectorConfig {
+            formats: Some(vec!["EAN_13".into()]),
+        })
+        .expect("EAN_13 allowlist is valid");
+        let allowed_hits = allowed
+            .detect_luma(&luma, width, height, width)
+            .expect("detect_luma");
+        assert_eq!(allowed_hits.codes.len(), 1);
+        assert_eq!(allowed_hits.codes[0].payload, EAN13_PAYLOAD);
+        assert_eq!(allowed_hits.codes[0].format, "EAN_13");
     }
 
     #[test]
@@ -924,11 +1006,9 @@ mod tests {
         )
         .unwrap();
 
-        let detector = BarcodeDetector::new(BarcodeDetectorConfig {
-            profile: BarcodeSymbologyProfile::Product,
-        })
-        .register(&peer, "barcode-beta-1")
-        .unwrap();
+        let detector = BarcodeDetector::default()
+            .register(&peer, "barcode-beta-1")
+            .unwrap();
         let task = detector
             .start(
                 &session,
@@ -997,7 +1077,7 @@ mod tests {
         let decoded = BarcodeDetections::decode(&entries[0].payload.data).unwrap();
         assert_eq!(decoded.codes.len(), 1);
         assert_eq!(decoded.codes[0].payload, EAN13_PAYLOAD);
-        assert_eq!(decoded.codes[0].symbology, "ean13");
+        assert_eq!(decoded.codes[0].format, "EAN_13");
         assert_eq!(decoded.codes[0].corners_px.len(), 4);
 
         task.shutdown().unwrap();

@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "rxing-backed Auki SDK Detector producing typed 1D/retail barcode Detection Log payloads."
+description = "rxing-backed Auki SDK Detector producing typed barcode Detection Log payloads."
 
 [dependencies]
 auki-datatypes = { path = "../auki-datatypes" }

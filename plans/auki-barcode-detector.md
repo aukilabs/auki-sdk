@@ -69,7 +69,7 @@ Living document — update in place when later work changes earlier conclusions.
 
 ## 5. Verification design
 
-- **Acceptance:** `cargo +1.88.0 test -p auki-barcode-detector` green; default config synthetic EAN-13 → `format == "EAN_13"` + 4 corners; optional allowlist restricts formats; unknown format name rejected; schema round-trip; Detection Log smoke `type == "barcode"`; no Cactus/profile/QR-copy language in crate README / Cargo description.
+- **Acceptance:** `cargo test -p auki-barcode-detector` green; default config synthetic EAN-13 → `format == "EAN_13"` + 4 corners; optional allowlist restricts formats; unknown format name rejected; schema round-trip; Detection Log smoke `type == "barcode"`; no Cactus/profile/QR-copy language in crate README / Cargo description.
 - **CI:** Workspace member.
 - **Out of scope v1:** App Expo cutover, Vision parity, product regex.
 
@@ -102,7 +102,7 @@ Living document — update in place when later work changes earlier conclusions.
 
 ### S6 (2026-08-07)
 - Review: approve ([code-reviewer](40552946-5349-4def-8feb-7d8dba082819))
-- Verify: pass — `cargo +1.88.0 test -p auki-barcode-detector` 9/9; allowlist + EAN_13 + Detection Log ([behavior-verifier](86e51c64-d4bf-4e82-8162-9658f584da45))
+- Verify: pass — `cargo test -p auki-barcode-detector` 9/9; allowlist + EAN_13 + Detection Log ([behavior-verifier](86e51c64-d4bf-4e82-8162-9658f584da45))
 - Code: tests + README polish in `auki-barcode-detector`
 
 ## Gate (stage 11)

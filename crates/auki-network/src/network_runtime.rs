@@ -59,7 +59,7 @@ use crate::registries_protocol::{
     read_registry_request, read_registry_response, write_registry_request, write_registry_response,
 };
 use crate::blobs_protocol::{
-    BLOBS_PROTOCOL, BlobRequest, BlobResponseMeta, BlobsProtocolError, read_blob_request,
+    BLOBS_PROTOCOL, BlobChunkMeta, BlobRequest, BlobResponse, BlobsProtocolError, read_blob_request,
     read_blob_response, write_blob_request, write_blob_response,
 };
 use crate::resources_protocol::{
@@ -475,6 +475,12 @@ pub enum RequestBlobError {
     Timeout(Duration),
     #[error("blob not found")]
     NotFound,
+    #[error("remote blob error: {0}")]
+    RemoteError(String),
+    #[error("assembled bytes fail SHA-256 verification")]
+    HashMismatch,
+    #[error("remote total_size changed mid-fetch: was {expected}, got {actual}")]
+    SizeMismatch { expected: u64, actual: u64 },
     #[error("invalid remote blob response: {0}")]
     InvalidResponse(String),
 }
@@ -1230,56 +1236,104 @@ impl NetworkRuntime {
         .map_err(RequestResourcesV4Error::Protocol)
     }
 
+    /// Fetch one chunk on a fresh substream. Prefer [`Self::request_blob`]
+    /// for full assemblies — that reuses one substream across rounds.
     pub async fn request_blob_chunk(
         &self,
         peer_id: PeerId,
         request: BlobRequest,
-    ) -> Result<(BlobResponseMeta, Vec<u8>), RequestBlobError> {
+    ) -> Result<(BlobChunkMeta, Vec<u8>), RequestBlobError> {
         let mut control = self.stream_control.clone();
         let mut substream = match tokio::time::timeout(
             RESOURCES_REQUEST_TIMEOUT,
             control.open_stream(peer_id, BLOBS_PROTOCOL.clone()),
-        ).await {
+        )
+        .await
+        {
             Err(_) => return Err(RequestBlobError::Timeout(RESOURCES_REQUEST_TIMEOUT)),
-            Ok(Err(libp2p_stream::OpenStreamError::UnsupportedProtocol(_))) => return Err(RequestBlobError::UnsupportedProtocol),
+            Ok(Err(libp2p_stream::OpenStreamError::UnsupportedProtocol(_))) => {
+                return Err(RequestBlobError::UnsupportedProtocol)
+            }
             Ok(Err(error)) => return Err(RequestBlobError::OpenStream(error)),
             Ok(Ok(stream)) => stream,
         };
-        write_blob_request(&mut substream, &request).await.map_err(RequestBlobError::Protocol)?;
-        let (meta, chunk) = tokio::time::timeout(RESOURCES_REQUEST_TIMEOUT, read_blob_response(&mut substream))
-            .await
-            .map_err(|_| RequestBlobError::Timeout(RESOURCES_REQUEST_TIMEOUT))?
-            .map_err(RequestBlobError::Protocol)?;
-        if meta.sha256 != request.sha256 || meta.offset != request.offset {
-            return Err(RequestBlobError::InvalidResponse("response address or offset differs from request".into()));
-        }
-        Ok((meta, chunk))
+        blob_round_trip(&mut substream, &request).await
     }
 
-    pub async fn request_blob(&self, peer_id: PeerId, sha256: String) -> Result<Vec<u8>, RequestBlobError> {
+    /// Fetch and SHA-256 verify a full blob over one `/auki/blobs/0.1.0`
+    /// substream (multi-round request/response until complete).
+    pub async fn request_blob(
+        &self,
+        peer_id: PeerId,
+        sha256: String,
+    ) -> Result<Vec<u8>, RequestBlobError> {
+        let mut control = self.stream_control.clone();
+        let mut substream = match tokio::time::timeout(
+            RESOURCES_REQUEST_TIMEOUT,
+            control.open_stream(peer_id, BLOBS_PROTOCOL.clone()),
+        )
+        .await
+        {
+            Err(_) => return Err(RequestBlobError::Timeout(RESOURCES_REQUEST_TIMEOUT)),
+            Ok(Err(libp2p_stream::OpenStreamError::UnsupportedProtocol(_))) => {
+                return Err(RequestBlobError::UnsupportedProtocol)
+            }
+            Ok(Err(error)) => return Err(RequestBlobError::OpenStream(error)),
+            Ok(Ok(stream)) => stream,
+        };
+
         let mut bytes = Vec::new();
-        let mut offset = 0;
+        let mut offset = 0u64;
+        let mut expected_total: Option<u64> = None;
         loop {
-            let (meta, chunk) = self.request_blob_chunk(peer_id, BlobRequest {
+            let request = BlobRequest {
                 sha256: sha256.clone(),
                 offset,
                 max_len: crate::blobs_protocol::MAX_BLOB_CHUNK_BYTES,
-            }).await?;
-            if meta.total_size == 0 && meta.chunk_len == 0 {
-                return Err(RequestBlobError::NotFound);
+            };
+            let (meta, chunk) = blob_round_trip(&mut substream, &request).await?;
+            if meta.total_size > crate::blobs_protocol::MAX_BLOB_BYTES {
+                return Err(RequestBlobError::InvalidResponse(
+                    "total_size exceeds MAX_BLOB_BYTES".into(),
+                ));
             }
-            if meta.total_size > crate::blobs_protocol::MAX_BLOB_BYTES || chunk.is_empty() {
-                return Err(RequestBlobError::InvalidResponse("invalid blob chunk".into()));
+            match expected_total {
+                None => {
+                    expected_total = Some(meta.total_size);
+                    bytes.reserve(meta.total_size as usize);
+                }
+                Some(expected) if expected != meta.total_size => {
+                    return Err(RequestBlobError::SizeMismatch {
+                        expected,
+                        actual: meta.total_size,
+                    });
+                }
+                Some(_) => {}
+            }
+            if meta.total_size == 0 {
+                break;
+            }
+            if chunk.is_empty() {
+                if offset == meta.total_size {
+                    break;
+                }
+                return Err(RequestBlobError::InvalidResponse(
+                    "empty chunk before end of blob".into(),
+                ));
             }
             bytes.extend_from_slice(&chunk);
             offset += chunk.len() as u64;
-            if offset == meta.total_size { break; }
+            if offset == meta.total_size {
+                break;
+            }
             if offset > meta.total_size {
-                return Err(RequestBlobError::InvalidResponse("chunk exceeds advertised size".into()));
+                return Err(RequestBlobError::InvalidResponse(
+                    "chunk exceeds advertised size".into(),
+                ));
             }
         }
         if auki_registry::sha256_hex(&bytes) != sha256 {
-            return Err(RequestBlobError::InvalidResponse("assembled bytes fail SHA-256 verification".into()));
+            return Err(RequestBlobError::HashMismatch);
         }
         Ok(bytes)
     }
@@ -3498,44 +3552,94 @@ async fn handle_inbound_resources_v4_substream(
     let _ = write_resources_response_v4(&mut substream, &response).await;
 }
 
+async fn blob_round_trip<S>(
+    stream: &mut S,
+    request: &BlobRequest,
+) -> Result<(BlobChunkMeta, Vec<u8>), RequestBlobError>
+where
+    S: futures::AsyncRead + futures::AsyncWrite + Unpin,
+{
+    write_blob_request(stream, request)
+        .await
+        .map_err(RequestBlobError::Protocol)?;
+    let (response, chunk) = tokio::time::timeout(RESOURCES_REQUEST_TIMEOUT, read_blob_response(stream))
+        .await
+        .map_err(|_| RequestBlobError::Timeout(RESOURCES_REQUEST_TIMEOUT))?
+        .map_err(RequestBlobError::Protocol)?;
+    match response {
+        BlobResponse::NotFound => Err(RequestBlobError::NotFound),
+        BlobResponse::Error { reason } => Err(RequestBlobError::RemoteError(reason)),
+        BlobResponse::Ok(meta) => {
+            if meta.sha256 != request.sha256 || meta.offset != request.offset {
+                return Err(RequestBlobError::InvalidResponse(
+                    "response address or offset differs from request".into(),
+                ));
+            }
+            Ok((meta, chunk))
+        }
+    }
+}
+
+fn serve_blob_request(app_root: Option<&std::path::Path>, request: &BlobRequest) -> (BlobResponse, Vec<u8>) {
+    let Some(app_root) = app_root else {
+        return (BlobResponse::NotFound, Vec::new());
+    };
+    let Ok(Some(blob)) = auki_registry::get_blob(app_root, &request.sha256) else {
+        return (BlobResponse::NotFound, Vec::new());
+    };
+    let total_size = blob.len() as u64;
+    if request.offset > total_size {
+        return (
+            BlobResponse::Error {
+                reason: "offset past end of blob".into(),
+            },
+            Vec::new(),
+        );
+    }
+    if request.offset == total_size {
+        return (
+            BlobResponse::Ok(BlobChunkMeta {
+                sha256: request.sha256.clone(),
+                offset: request.offset,
+                total_size,
+                chunk_len: 0,
+            }),
+            Vec::new(),
+        );
+    }
+    let start = request.offset as usize;
+    let end = (start + request.max_len as usize).min(blob.len());
+    let chunk = blob[start..end].to_vec();
+    (
+        BlobResponse::Ok(BlobChunkMeta {
+            sha256: request.sha256.clone(),
+            offset: request.offset,
+            total_size,
+            chunk_len: chunk.len() as u32,
+        }),
+        chunk,
+    )
+}
+
+/// Drain inbound `/auki/blobs/0.1.0` requests on one substream until EOF.
 async fn handle_inbound_blob_substream(
     mut substream: libp2p::Stream,
     blob_app_root: SharedBlobAppRoot,
 ) {
-    let Ok(request) = read_blob_request(&mut substream).await else {
-        return;
-    };
-    let app_root = blob_app_root.lock().expect("blob_app_root lock").clone();
-    let Some(app_root) = app_root else {
-        let meta = BlobResponseMeta { sha256: request.sha256, offset: request.offset, total_size: 0, chunk_len: 0 };
-        let _ = write_blob_response(&mut substream, &meta, &[]).await;
-        return;
-    };
-    let Ok(Some(blob)) = auki_registry::get_blob(&app_root, &request.sha256) else {
-        let meta = BlobResponseMeta { sha256: request.sha256, offset: request.offset, total_size: 0, chunk_len: 0 };
-        let _ = write_blob_response(&mut substream, &meta, &[]).await;
-        return;
-    };
-    if request.offset >= blob.len() as u64 {
-        let meta = BlobResponseMeta {
-            sha256: request.sha256,
-            offset: request.offset,
-            total_size: blob.len() as u64,
-            chunk_len: 0,
+    loop {
+        let request = match read_blob_request(&mut substream).await {
+            Ok(request) => request,
+            Err(_) => return,
         };
-        let _ = write_blob_response(&mut substream, &meta, &[]).await;
-        return;
+        let app_root = blob_app_root.lock().expect("blob_app_root lock").clone();
+        let (response, chunk) = serve_blob_request(app_root.as_deref(), &request);
+        if write_blob_response(&mut substream, &response, &chunk)
+            .await
+            .is_err()
+        {
+            return;
+        }
     }
-    let start = request.offset as usize;
-    let end = (start + request.max_len as usize).min(blob.len());
-    let chunk = &blob[start..end];
-    let meta = BlobResponseMeta {
-        sha256: request.sha256,
-        offset: request.offset,
-        total_size: blob.len() as u64,
-        chunk_len: chunk.len() as u32,
-    };
-    let _ = write_blob_response(&mut substream, &meta, chunk).await;
 }
 
 /// Per-substream task for an inbound `/auki/registries/0.0.1`
@@ -4965,5 +5069,171 @@ mod tests {
 
         receiver_runtime.shutdown();
         sender_runtime.shutdown();
+    }
+
+    #[test]
+    fn serve_blob_request_not_found_and_chunking() {
+        let tmp = tempfile::tempdir().unwrap();
+        let payload = b"abcdefghij"; // 10 bytes
+        let sha = auki_registry::put_blob(tmp.path(), payload).unwrap();
+
+        assert!(matches!(
+            serve_blob_request(None, &BlobRequest {
+                sha256: sha.clone(),
+                offset: 0,
+                max_len: 4,
+            }).0,
+            BlobResponse::NotFound
+        ));
+        assert!(matches!(
+            serve_blob_request(Some(tmp.path()), &BlobRequest {
+                sha256: "0".repeat(64),
+                offset: 0,
+                max_len: 4,
+            }).0,
+            BlobResponse::NotFound
+        ));
+
+        let (resp, chunk) = serve_blob_request(
+            Some(tmp.path()),
+            &BlobRequest {
+                sha256: sha.clone(),
+                offset: 0,
+                max_len: 4,
+            },
+        );
+        match resp {
+            BlobResponse::Ok(meta) => {
+                assert_eq!(meta.total_size, 10);
+                assert_eq!(meta.chunk_len, 4);
+                assert_eq!(chunk, b"abcd");
+            }
+            other => panic!("expected Ok, got {other:?}"),
+        }
+
+        let (resp, chunk) = serve_blob_request(
+            Some(tmp.path()),
+            &BlobRequest {
+                sha256: sha.clone(),
+                offset: 10,
+                max_len: 4,
+            },
+        );
+        match resp {
+            BlobResponse::Ok(meta) => {
+                assert_eq!(meta.offset, 10);
+                assert_eq!(meta.chunk_len, 0);
+                assert!(chunk.is_empty());
+            }
+            other => panic!("expected empty Ok at EOF, got {other:?}"),
+        }
+
+        let (resp, _) = serve_blob_request(
+            Some(tmp.path()),
+            &BlobRequest {
+                sha256: sha,
+                offset: 11,
+                max_len: 4,
+            },
+        );
+        assert!(matches!(resp, BlobResponse::Error { .. }));
+    }
+
+    #[tokio::test]
+    async fn blob_round_trip_maps_typed_status_errors() {
+        let hash = "e".repeat(64);
+        // Stream that ignores writes and serves a scripted response body.
+        struct Scripted {
+            reads: futures::io::Cursor<Vec<u8>>,
+        }
+        impl futures::AsyncRead for Scripted {
+            fn poll_read(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+                buf: &mut [u8],
+            ) -> std::task::Poll<std::io::Result<usize>> {
+                std::pin::Pin::new(&mut self.reads).poll_read(cx, buf)
+            }
+        }
+        impl futures::AsyncWrite for Scripted {
+            fn poll_write(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+                buf: &[u8],
+            ) -> std::task::Poll<std::io::Result<usize>> {
+                std::task::Poll::Ready(Ok(buf.len()))
+            }
+            fn poll_flush(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Ready(Ok(()))
+            }
+            fn poll_close(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Ready(Ok(()))
+            }
+        }
+
+        let mut scripted = Vec::new();
+        write_blob_response(&mut scripted, &BlobResponse::NotFound, &[])
+            .await
+            .unwrap();
+        let mut stream = Scripted {
+            reads: futures::io::Cursor::new(scripted),
+        };
+        let err = blob_round_trip(
+            &mut stream,
+            &BlobRequest {
+                sha256: hash.clone(),
+                offset: 0,
+                max_len: 8,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, RequestBlobError::NotFound));
+
+        let mut scripted = Vec::new();
+        write_blob_response(
+            &mut scripted,
+            &BlobResponse::Error {
+                reason: "boom".into(),
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+        let mut stream = Scripted {
+            reads: futures::io::Cursor::new(scripted),
+        };
+        let err = blob_round_trip(
+            &mut stream,
+            &BlobRequest {
+                sha256: hash,
+                offset: 0,
+                max_len: 8,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, RequestBlobError::RemoteError(reason) if reason == "boom"));
+    }
+
+    #[test]
+    fn request_blob_error_variants_cover_hash_and_size() {
+        // Document the typed variants the assembler uses (no swarm needed).
+        let hash_err = RequestBlobError::HashMismatch;
+        assert_eq!(
+            hash_err.to_string(),
+            "assembled bytes fail SHA-256 verification"
+        );
+        let size_err = RequestBlobError::SizeMismatch {
+            expected: 10,
+            actual: 12,
+        };
+        assert!(size_err.to_string().contains("total_size changed mid-fetch"));
     }
 }

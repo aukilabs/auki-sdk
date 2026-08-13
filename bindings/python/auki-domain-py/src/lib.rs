@@ -2849,6 +2849,15 @@ fn map_fetch_blob_error(e: RustRequestBlobError) -> PyErr {
             PyRuntimeError::new_err("remote peer does not support blob transfer")
         }
         RustRequestBlobError::NotFound => PyFileNotFoundError::new_err("blob not found"),
+        RustRequestBlobError::RemoteError(reason) => {
+            PyRuntimeError::new_err(format!("remote blob error: {reason}"))
+        }
+        RustRequestBlobError::HashMismatch => {
+            PyValueError::new_err("assembled bytes fail SHA-256 verification")
+        }
+        RustRequestBlobError::SizeMismatch { expected, actual } => PyValueError::new_err(format!(
+            "remote total_size changed mid-fetch: was {expected}, got {actual}"
+        )),
         RustRequestBlobError::InvalidResponse(error) => {
             PyValueError::new_err(format!("invalid blob response: {error}"))
         }

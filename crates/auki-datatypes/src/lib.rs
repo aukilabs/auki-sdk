@@ -168,6 +168,33 @@ pub mod join {
     }
 }
 
+/// `auki.blob` — `/auki/blobs/0.1.0` request/response messages.
+pub mod blob {
+    include!(concat!(env!("OUT_DIR"), "/auki.blob.rs"));
+
+    impl BlobResponse {
+        pub fn ok(chunk: blob_response::Chunk) -> Self {
+            Self {
+                status: Some(blob_response::Status::Ok(chunk)),
+            }
+        }
+
+        pub fn not_found() -> Self {
+            Self {
+                status: Some(blob_response::Status::NotFound(blob_response::NotFound {})),
+            }
+        }
+
+        pub fn error(reason: impl Into<String>) -> Self {
+            Self {
+                status: Some(blob_response::Status::Error(blob_response::Error {
+                    reason: reason.into(),
+                })),
+            }
+        }
+    }
+}
+
 /// `auki.info` — `/auki/info/0.0.1` request/response messages.
 pub mod info {
     include!(concat!(env!("OUT_DIR"), "/auki.info.rs"));

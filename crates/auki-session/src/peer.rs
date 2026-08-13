@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use auki_registry::{
     AxisConvention, DetectorBody, DetectorRegistryEntry, FrameRegistryEntry, Handedness,
-    LengthUnit, MapBody, MapRegistryEntry, RegistryRef, SensorBody, SensorRegistryEntry,
+    LengthUnit, MapBody, MapRegistryEntry, RegistryRef, DeviceModelBody, DeviceModelRegistryEntry,
+    SensorBody, SensorRegistryEntry,
 };
 use parking_lot::RwLock;
 
@@ -130,6 +131,7 @@ pub(crate) struct PeerInner {
     pub(crate) frames: RegistryStore<FrameRegistryEntry>,
     pub(crate) detectors: RegistryStore<DetectorRegistryEntry>,
     pub(crate) maps: RegistryStore<MapRegistryEntry>,
+    pub(crate) device_models: RegistryStore<DeviceModelRegistryEntry>,
 }
 
 impl Peer {
@@ -143,6 +145,7 @@ impl Peer {
                 frames: RegistryStore::default(),
                 detectors: RegistryStore::default(),
                 maps: RegistryStore::default(),
+                device_models: RegistryStore::default(),
             })),
         }
     }
@@ -275,6 +278,20 @@ impl Peer {
         Ok(registry_ref)
     }
 
+    pub fn register_device_model(&self, id: &str, body: DeviceModelBody) -> Result<RegistryRef> {
+        DeviceModelRegistryEntry::validate_id(id)?;
+        let mut inner = self.inner.write();
+        let entry = DeviceModelRegistryEntry {
+            peer_id: inner.peer_id.clone(),
+            device_model_id: id.to_string(),
+            body,
+        };
+        let registry_ref = entry.registry_ref();
+        auki_registry::write_device_model(&inner.storage_root, &entry)?;
+        inner.device_models.insert(id, entry);
+        Ok(registry_ref)
+    }
+
     /// Start a new session on this peer: mints a fresh `session_id` and
     /// registers the session's monotonic + UTC clocks in the corrected shape
     /// (`epoch: null` for monotonic, `unit: "ns"`, UTC `device-local`,
@@ -320,6 +337,12 @@ impl PeerRegistries {
     }
     pub fn map(&self, map_id: &str) -> Option<MapRegistryEntry> {
         self.inner.read().maps.get(map_id).cloned()
+    }
+    pub fn device_model(&self, id: &str) -> Option<DeviceModelRegistryEntry> {
+        self.inner.read().device_models.get(id).cloned()
+    }
+    pub fn device_models(&self) -> Vec<DeviceModelRegistryEntry> {
+        self.inner.read().device_models.iter().map(|(_, entry)| entry.clone()).collect()
     }
 }
 

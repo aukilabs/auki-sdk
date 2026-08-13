@@ -790,6 +790,26 @@ impl Peer {
         })
     }
 
+    /// Register a Device Model Registry entry from a body dictionary.
+    fn register_device_model(
+        &self,
+        py: Python<'_>,
+        device_model_id: &str,
+        body: &Bound<'_, PyAny>,
+    ) -> PyResult<registry_py::RegistryRef> {
+        let body: registry::DeviceModelBody = parse_py(py, body, "body")?;
+        let r = self
+            .inner
+            .lock()
+            .register_device_model(device_model_id, body)
+            .map_err(map_session_error)?;
+        Ok(registry_py::RegistryRef {
+            peer_id: r.peer_id,
+            id: r.id,
+            hash: r.hash,
+        })
+    }
+
     /// Start a fresh session on this peer.
     ///
     /// Mints a new ``session_id`` and registers the session's monotonic + UTC

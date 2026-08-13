@@ -19,6 +19,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 // ─── Registry ID Validation ──────────────────────────────────────────────────
 
@@ -68,6 +69,111 @@ pub struct RegistryRef {
 pub struct LogRef {
     pub source_peer_id: String,
     pub resource_id: String,
+}
+
+// ─── Device Model Registry ──────────────────────────────────────────────────
+
+/// One mesh file referenced by a Device Model Registry entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeshBlobRef {
+    pub path: String,
+    pub sha256: String,
+}
+
+/// On-wire `type` for a device model. URDF now; glTF/GLB later for phones/glasses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DeviceModelFormat {
+    Urdf {
+        urdf_sha256: String,
+        #[serde(default)]
+        meshes: Vec<MeshBlobRef>,
+    },
+}
+
+/// Immutable model metadata. Payload blobs are addressed independently so
+/// meshes can be shared across otherwise distinct model revisions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceModelBody {
+    pub model_id: String,
+    #[serde(flatten)]
+    pub format: DeviceModelFormat,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_convention: Option<String>,
+}
+
+impl DeviceModelBody {
+    pub fn as_urdf(&self) -> Option<(&str, &[MeshBlobRef])> {
+        match &self.format {
+            DeviceModelFormat::Urdf { urdf_sha256, meshes } => {
+                Some((urdf_sha256.as_str(), meshes.as_slice()))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceModelRegistryEntry {
+    pub peer_id: String,
+    pub device_model_id: String,
+    #[serde(flatten)]
+    pub body: DeviceModelBody,
+}
+
+impl DeviceModelRegistryEntry {
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        canonicalize(self)
+    }
+
+    pub fn hash(&self) -> String {
+        auki_hash::hash_jcs_bytes(&self.canonical_bytes())
+    }
+
+    pub fn registry_ref(&self) -> RegistryRef {
+        RegistryRef {
+            peer_id: self.peer_id.clone(),
+            id: self.device_model_id.clone(),
+            hash: self.hash(),
+        }
+    }
+
+    pub fn validate_id(id: &str) -> std::result::Result<(), RegistryIdError> {
+        validate_registry_id(id)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.peer_id.is_empty() {
+            return Err(Error::InvalidDeviceModel("peer_id must not be empty".into()));
+        }
+        validate_registry_id(&self.device_model_id)
+            .map_err(|error| Error::InvalidDeviceModel(format!("invalid device_model_id: {error}")))?;
+        if self.body.model_id.is_empty() {
+            return Err(Error::InvalidDeviceModel("model_id must not be empty".into()));
+        }
+        match &self.body.format {
+            DeviceModelFormat::Urdf { urdf_sha256, meshes } => {
+                if !is_sha256_hex(urdf_sha256) {
+                    return Err(Error::InvalidDeviceModel(
+                        "urdf_sha256 must be 64 lowercase hex characters".into(),
+                    ));
+                }
+                let mut paths = std::collections::BTreeSet::new();
+                for mesh in meshes {
+                    if mesh.path.is_empty() || !paths.insert(&mesh.path) {
+                        return Err(Error::InvalidDeviceModel(
+                            "mesh paths must be non-empty and unique".into(),
+                        ));
+                    }
+                    if !is_sha256_hex(&mesh.sha256) {
+                        return Err(Error::InvalidDeviceModel(
+                            "mesh sha256 must be 64 lowercase hex characters".into(),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 // ─── Map Registry ───────────────────────────────────────────────────────────
@@ -964,6 +1070,10 @@ pub enum Error {
     },
     /// A map registry entry declares an invalid voxel-grid contract.
     InvalidMap(String),
+    /// A device model entry has invalid metadata or blob references.
+    InvalidDeviceModel(String),
+    /// A blob SHA-256 is invalid or its bytes do not match its address.
+    InvalidBlob(String),
 }
 
 impl std::fmt::Display for Error {
@@ -989,6 +1099,8 @@ impl std::fmt::Display for Error {
                 "sensor {sensor_id:?} references missing frame ({frame_id:?}, {frame_hash:?})"
             ),
             Error::InvalidMap(msg) => write!(f, "invalid map: {msg}"),
+            Error::InvalidDeviceModel(msg) => write!(f, "invalid device model: {msg}"),
+            Error::InvalidBlob(msg) => write!(f, "invalid blob: {msg}"),
         }
     }
 }
@@ -1180,6 +1292,89 @@ pub fn read_map(
     Ok(Some(entry))
 }
 
+/// Write a Device Model Registry entry under
+/// `<app_root>/registries/device_models/...`.
+pub fn write_device_model(
+    app_root: &Path,
+    entry: &DeviceModelRegistryEntry,
+) -> Result<WriteOutcome> {
+    entry.validate()?;
+    let bytes = entry.canonical_bytes();
+    let hash = auki_hash::hash_jcs_bytes(&bytes);
+    let path = auki_layout::device_model_entry_path(
+        app_root,
+        &entry.peer_id,
+        &entry.device_model_id,
+        &hash,
+    );
+    write_entry_at(&path, hash, &bytes)
+}
+
+/// Read a Device Model Registry entry by `(peer_id, device_model_id, hash)`.
+pub fn read_device_model(
+    app_root: &Path,
+    peer_id: &str,
+    device_model_id: &str,
+    hash: &str,
+) -> Result<Option<DeviceModelRegistryEntry>> {
+    let path = auki_layout::device_model_entry_path(app_root, peer_id, device_model_id, hash);
+    let Some(bytes) = read_at(&path)? else {
+        return Ok(None);
+    };
+    let entry: DeviceModelRegistryEntry =
+        serde_json::from_slice(&bytes).map_err(|e| Error::Json(e.to_string()))?;
+    if entry.peer_id != peer_id {
+        return Err(Error::IdMismatch {
+            expected: peer_id.to_owned(),
+            found: entry.peer_id,
+        });
+    }
+    if entry.device_model_id != device_model_id {
+        return Err(Error::IdMismatch {
+            expected: device_model_id.to_owned(),
+            found: entry.device_model_id,
+        });
+    }
+    entry.validate()?;
+    Ok(Some(entry))
+}
+
+/// SHA-256, encoded as lowercase hexadecimal.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+/// Persist a content-addressed blob and return its SHA-256 address.
+pub fn put_blob(app_root: &Path, bytes: &[u8]) -> Result<String> {
+    let sha256 = sha256_hex(bytes);
+    let path = auki_layout::blob_path(app_root, &sha256);
+    if !path.exists() {
+        let dir = path.parent().expect("blob path has parent");
+        fs::create_dir_all(dir)?;
+        atomic_write(&path, bytes)?;
+    }
+    Ok(sha256)
+}
+
+/// Fetch a blob only when the requested address is a valid lowercase SHA-256.
+pub fn get_blob(app_root: &Path, sha256: &str) -> Result<Option<Vec<u8>>> {
+    if !is_sha256_hex(sha256) {
+        return Err(Error::InvalidBlob("sha256 must be 64 lowercase hex characters".into()));
+    }
+    let Some(bytes) = read_at(&auki_layout::blob_path(app_root, sha256))? else {
+        return Ok(None);
+    };
+    if sha256_hex(&bytes) != sha256 {
+        return Err(Error::InvalidBlob("on-disk bytes do not match SHA-256 address".into()));
+    }
+    Ok(Some(bytes))
+}
+
+/// Whether an addressable blob exists locally.
+pub fn blob_exists(app_root: &Path, sha256: &str) -> Result<bool> {
+    Ok(get_blob(app_root, sha256)?.is_some())
+}
+
 // `build_sensor_log_manifest` moved to [`auki-manifests`] in Step 0 of the
 // auki-datatypes migration.
 
@@ -1238,6 +1433,10 @@ fn read_at(path: &Path) -> Result<Option<Vec<u8>>> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(Error::Io(e)),
     }
+}
+
+pub fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn atomic_write(target: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -2520,6 +2719,38 @@ mod id_charset_tests {
             write_map(tmp.path(), &invalid),
             Err(Error::InvalidMap(_))
         ));
+    }
+
+    #[test]
+    fn device_model_and_blobs_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let urdf = put_blob(tmp.path(), b"<robot name='test'/>").unwrap();
+        let mesh = put_blob(tmp.path(), b"mesh bytes").unwrap();
+        let entry = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "unitree/g1".into(),
+            body: DeviceModelBody {
+                model_id: "unitree_g1".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf.clone(),
+                    meshes: vec![MeshBlobRef {
+                        path: "meshes/body.glb".into(),
+                        sha256: mesh.clone(),
+                    }],
+                },
+                root_convention: Some("ros_rep_103".into()),
+            },
+        };
+        let bytes = entry.canonical_bytes();
+        let json = std::str::from_utf8(&bytes).unwrap();
+        assert!(json.contains(r#""type":"urdf""#));
+        let outcome = write_device_model(tmp.path(), &entry).unwrap();
+        assert_eq!(
+            read_device_model(tmp.path(), "galbot", "unitree/g1", outcome.hash()).unwrap(),
+            Some(entry)
+        );
+        assert_eq!(get_blob(tmp.path(), &mesh).unwrap(), Some(b"mesh bytes".to_vec()));
+        assert!(blob_exists(tmp.path(), &urdf).unwrap());
     }
 
     #[test]

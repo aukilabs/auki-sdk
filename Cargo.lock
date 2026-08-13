@@ -1029,6 +1029,7 @@ dependencies = [
  "auki-logs",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 1.0.69",
 ]

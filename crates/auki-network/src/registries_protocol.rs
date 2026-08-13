@@ -65,6 +65,8 @@ pub enum RegistryKind {
     Detector,
     /// Map Registry (`MapRegistryEntry`).
     Map,
+    /// Device Model Registry (`DeviceModelRegistryEntry`).
+    DeviceModel,
 }
 
 impl RegistryKind {
@@ -77,6 +79,7 @@ impl RegistryKind {
             RegistryKind::Frame => "frame",
             RegistryKind::Detector => "detector",
             RegistryKind::Map => "map",
+            RegistryKind::DeviceModel => "device_model",
         }
     }
 }
@@ -93,7 +96,7 @@ pub struct RegistryRequest {
     /// Registry namespace.
     pub kind: RegistryKind,
     /// Registry id (`sensor_id`, `clock_id`, `frame_id`, `detector_id`, or
-    /// `map_id`).
+    /// `map_id`, or `device_model_id`).
     pub id: String,
     /// Expected XXH3-128 hash of the canonical JSON entry bytes.
     pub hash: String,

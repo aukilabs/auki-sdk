@@ -637,6 +637,30 @@ fn write_map(py: Python<'_>, app_root: PathBuf, entry: &Bound<'_, PyAny>) -> PyR
 }
 
 #[pyfunction]
+fn write_device_model(py: Python<'_>, app_root: PathBuf, entry: &Bound<'_, PyAny>) -> PyResult<String> {
+    let entry: registry::DeviceModelRegistryEntry = parse_py(py, entry, "device model")?;
+    registry::write_device_model(&app_root, &entry).map(write_outcome_hash).map_err(map_registry_error)
+}
+
+#[pyfunction]
+fn put_blob(app_root: PathBuf, bytes: &[u8]) -> PyResult<String> {
+    registry::put_blob(&app_root, bytes).map_err(map_registry_error)
+}
+
+#[pyfunction]
+fn get_blob(py: Python<'_>, app_root: PathBuf, sha256: &str) -> PyResult<PyObject> {
+    match registry::get_blob(&app_root, sha256).map_err(map_registry_error)? {
+        Some(bytes) => Ok(pyo3::types::PyBytes::new_bound(py, &bytes).into_any().unbind()),
+        None => Ok(py.None()),
+    }
+}
+
+#[pyfunction]
+fn sha256_hex(bytes: &[u8]) -> String {
+    registry::sha256_hex(bytes)
+}
+
+#[pyfunction]
 fn read_frame(
     py: Python<'_>,
     app_root: PathBuf,
@@ -729,6 +753,10 @@ fn auki_registry(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(write_sensor, m)?)?;
     m.add_function(wrap_pyfunction!(write_clock, m)?)?;
     m.add_function(wrap_pyfunction!(write_map, m)?)?;
+    m.add_function(wrap_pyfunction!(write_device_model, m)?)?;
+    m.add_function(wrap_pyfunction!(put_blob, m)?)?;
+    m.add_function(wrap_pyfunction!(get_blob, m)?)?;
+    m.add_function(wrap_pyfunction!(sha256_hex, m)?)?;
     m.add_function(wrap_pyfunction!(read_frame, m)?)?;
     m.add_function(wrap_pyfunction!(read_sensor, m)?)?;
     m.add_function(wrap_pyfunction!(read_clock, m)?)?;

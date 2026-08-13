@@ -58,6 +58,10 @@ use crate::registries_protocol::{
     REGISTRIES_PROTOCOL, RegistriesProtocolError, RegistryRequest, RegistryResponse,
     read_registry_request, read_registry_response, write_registry_request, write_registry_response,
 };
+use crate::blobs_protocol::{
+    BLOBS_PROTOCOL, BlobRequest, BlobResponseMeta, BlobsProtocolError, read_blob_request,
+    read_blob_response, write_blob_request, write_blob_response,
+};
 use crate::resources_protocol::{
     RESOURCES_PROTOCOL, ResourcesProtocolError, ResourcesRequest, ResourcesResponse,
     read_resources_request, read_resources_response, write_resources_request,
@@ -80,6 +84,14 @@ use crate::resources_v4_protocol::{
     write_resources_request as write_resources_request_v4,
     write_resources_response as write_resources_response_v4,
 };
+use crate::resources_v5_protocol::{
+    RESOURCES_PROTOCOL as RESOURCES_V5_PROTOCOL,
+    ResourcesProtocolError as ResourcesV5ProtocolError, ResourcesRequest as ResourcesRequestV5,
+    ResourcesResponse as ResourcesResponseV5, read_resources_request as read_resources_request_v5,
+    read_resources_response as read_resources_response_v5,
+    write_resources_request as write_resources_request_v5,
+    write_resources_response as write_resources_response_v5,
+};
 #[cfg(test)]
 use crate::{
     PeerIdentity,
@@ -96,6 +108,7 @@ use libp2p::{Multiaddr, PeerId, StreamProtocol, Swarm, swarm::SwarmEvent};
 use libp2p_stream::Control;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -406,6 +419,14 @@ pub trait MapCatalogProvider: Send + Sync {
 
 type SharedMapCatalogProvider = Arc<Mutex<Option<Arc<dyn MapCatalogProvider>>>>;
 
+/// Live source for `/auki/resources/0.5.0` Device Model rows.
+pub trait DeviceModelCatalogProvider: Send + Sync {
+    fn device_model_catalog(&self) -> ResourcesResponseV5;
+}
+
+type SharedDeviceModelCatalogProvider = Arc<Mutex<Option<Arc<dyn DeviceModelCatalogProvider>>>>;
+pub type SharedBlobAppRoot = Arc<Mutex<Option<PathBuf>>>;
+
 /// Errors from [`NetworkRuntime::request_resources_catalog`].
 #[derive(Debug, thiserror::Error)]
 pub enum RequestResourcesError {
@@ -454,6 +475,41 @@ pub enum RequestResourcesV4Error {
     Protocol(#[source] ResourcesV4ProtocolError),
     #[error("resources v4 request timed out after {0:?}")]
     Timeout(Duration),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RequestResourcesV5Error {
+    #[error("remote peer does not support Resource Catalog v0.5")]
+    UnsupportedProtocol,
+    #[error("open_stream: {0}")]
+    OpenStream(#[source] libp2p_stream::OpenStreamError),
+    #[error("protocol: {0}")]
+    Protocol(#[source] ResourcesV5ProtocolError),
+    #[error("resources v5 request timed out after {0:?}")]
+    Timeout(Duration),
+}
+
+fn map_resources_v5_open_error(error: libp2p_stream::OpenStreamError) -> RequestResourcesV5Error {
+    match error {
+        libp2p_stream::OpenStreamError::UnsupportedProtocol(_) => RequestResourcesV5Error::UnsupportedProtocol,
+        error => RequestResourcesV5Error::OpenStream(error),
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RequestBlobError {
+    #[error("remote peer does not support blob transfer")]
+    UnsupportedProtocol,
+    #[error("open_stream: {0}")]
+    OpenStream(#[source] libp2p_stream::OpenStreamError),
+    #[error("protocol: {0}")]
+    Protocol(#[source] BlobsProtocolError),
+    #[error("blob request timed out after {0:?}")]
+    Timeout(Duration),
+    #[error("blob not found")]
+    NotFound,
+    #[error("invalid remote blob response: {0}")]
+    InvalidResponse(String),
 }
 
 fn map_resources_v4_open_error(error: libp2p_stream::OpenStreamError) -> RequestResourcesV4Error {
@@ -803,6 +859,8 @@ pub struct NetworkRuntime {
     /// Receiver-owned live message channels registered on this peer.
     message_router: MessageChannelRouter,
     map_catalog_provider: SharedMapCatalogProvider,
+    device_model_catalog_provider: SharedDeviceModelCatalogProvider,
+    blob_app_root: SharedBlobAppRoot,
 }
 
 /// Cloneable handle to a [`NetworkRuntime`] for command-style
@@ -987,6 +1045,8 @@ impl NetworkRuntime {
         let (diagnostic_events_tx, diagnostic_events_rx) = mpsc::channel::<DiagnosticEvent>(64);
         let message_router = MessageChannelRouter::new(local_peer_id);
         let map_catalog_provider: SharedMapCatalogProvider = Arc::new(Mutex::new(None));
+        let device_model_catalog_provider: SharedDeviceModelCatalogProvider = Arc::new(Mutex::new(None));
+        let blob_app_root: SharedBlobAppRoot = Arc::new(Mutex::new(None));
         let task = handle.spawn(run_task(
             swarm,
             allowed_peers,
@@ -1007,6 +1067,8 @@ impl NetworkRuntime {
             diagnostic_events_tx,
             message_router.clone(),
             map_catalog_provider.clone(),
+            device_model_catalog_provider.clone(),
+            blob_app_root.clone(),
         ));
         Ok((
             Self {
@@ -1020,6 +1082,8 @@ impl NetworkRuntime {
                 command_tx,
                 message_router,
                 map_catalog_provider,
+                device_model_catalog_provider,
+                blob_app_root,
             },
             join_events_rx,
             liveness_rx,
@@ -1173,6 +1237,17 @@ impl NetworkRuntime {
             .expect("map_catalog_provider lock") = Some(provider);
     }
 
+    pub fn set_device_model_catalog_provider(&self, provider: Arc<dyn DeviceModelCatalogProvider>) {
+        *self
+            .device_model_catalog_provider
+            .lock()
+            .expect("device_model_catalog_provider lock") = Some(provider);
+    }
+
+    pub fn set_blob_app_root(&self, app_root: impl Into<PathBuf>) {
+        *self.blob_app_root.lock().expect("blob_app_root lock") = Some(app_root.into());
+    }
+
     /// Fetch a cluster peer's current Map Log catalog over
     /// `/auki/resources/0.4.0`.
     pub async fn request_map_catalog(
@@ -1198,6 +1273,82 @@ impl NetworkRuntime {
         .await
         .map_err(|_| RequestResourcesV4Error::Timeout(RESOURCES_REQUEST_TIMEOUT))?
         .map_err(RequestResourcesV4Error::Protocol)
+    }
+
+    pub async fn request_device_model_catalog(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<ResourcesResponseV5, RequestResourcesV5Error> {
+        let mut control = self.stream_control.clone();
+        let mut substream = match tokio::time::timeout(
+            RESOURCES_REQUEST_TIMEOUT,
+            control.open_stream(peer_id, RESOURCES_V5_PROTOCOL.clone()),
+        ).await {
+            Err(_) => return Err(RequestResourcesV5Error::Timeout(RESOURCES_REQUEST_TIMEOUT)),
+            Ok(Err(error)) => return Err(map_resources_v5_open_error(error)),
+            Ok(Ok(stream)) => stream,
+        };
+        write_resources_request_v5(&mut substream, &ResourcesRequestV5::all())
+            .await
+            .map_err(RequestResourcesV5Error::Protocol)?;
+        tokio::time::timeout(RESOURCES_REQUEST_TIMEOUT, read_resources_response_v5(&mut substream))
+            .await
+            .map_err(|_| RequestResourcesV5Error::Timeout(RESOURCES_REQUEST_TIMEOUT))?
+            .map_err(RequestResourcesV5Error::Protocol)
+    }
+
+    pub async fn request_blob_chunk(
+        &self,
+        peer_id: PeerId,
+        request: BlobRequest,
+    ) -> Result<(BlobResponseMeta, Vec<u8>), RequestBlobError> {
+        let mut control = self.stream_control.clone();
+        let mut substream = match tokio::time::timeout(
+            RESOURCES_REQUEST_TIMEOUT,
+            control.open_stream(peer_id, BLOBS_PROTOCOL.clone()),
+        ).await {
+            Err(_) => return Err(RequestBlobError::Timeout(RESOURCES_REQUEST_TIMEOUT)),
+            Ok(Err(libp2p_stream::OpenStreamError::UnsupportedProtocol(_))) => return Err(RequestBlobError::UnsupportedProtocol),
+            Ok(Err(error)) => return Err(RequestBlobError::OpenStream(error)),
+            Ok(Ok(stream)) => stream,
+        };
+        write_blob_request(&mut substream, &request).await.map_err(RequestBlobError::Protocol)?;
+        let (meta, chunk) = tokio::time::timeout(RESOURCES_REQUEST_TIMEOUT, read_blob_response(&mut substream))
+            .await
+            .map_err(|_| RequestBlobError::Timeout(RESOURCES_REQUEST_TIMEOUT))?
+            .map_err(RequestBlobError::Protocol)?;
+        if meta.sha256 != request.sha256 || meta.offset != request.offset {
+            return Err(RequestBlobError::InvalidResponse("response address or offset differs from request".into()));
+        }
+        Ok((meta, chunk))
+    }
+
+    pub async fn request_blob(&self, peer_id: PeerId, sha256: String) -> Result<Vec<u8>, RequestBlobError> {
+        let mut bytes = Vec::new();
+        let mut offset = 0;
+        loop {
+            let (meta, chunk) = self.request_blob_chunk(peer_id, BlobRequest {
+                sha256: sha256.clone(),
+                offset,
+                max_len: crate::blobs_protocol::MAX_BLOB_CHUNK_BYTES,
+            }).await?;
+            if meta.total_size == 0 && meta.chunk_len == 0 {
+                return Err(RequestBlobError::NotFound);
+            }
+            if meta.total_size > crate::blobs_protocol::MAX_BLOB_BYTES || chunk.is_empty() {
+                return Err(RequestBlobError::InvalidResponse("invalid blob chunk".into()));
+            }
+            bytes.extend_from_slice(&chunk);
+            offset += chunk.len() as u64;
+            if offset == meta.total_size { break; }
+            if offset > meta.total_size {
+                return Err(RequestBlobError::InvalidResponse("chunk exceeds advertised size".into()));
+            }
+        }
+        if auki_registry::sha256_hex(&bytes) != sha256 {
+            return Err(RequestBlobError::InvalidResponse("assembled bytes fail SHA-256 verification".into()));
+        }
+        Ok(bytes)
     }
 
     /// Atomically register a receiver-owned live message channel and its
@@ -2063,6 +2214,8 @@ async fn run_task(
     diagnostic_events_tx: mpsc::Sender<DiagnosticEvent>,
     message_router: MessageChannelRouter,
     map_catalog_provider: SharedMapCatalogProvider,
+    device_model_catalog_provider: SharedDeviceModelCatalogProvider,
+    blob_app_root: SharedBlobAppRoot,
 ) {
     let mut swarm = swarm;
     let local_peer_id = *swarm.local_peer_id();
@@ -2173,6 +2326,20 @@ async fn run_task(
     let mut incoming_resources_v4: std::pin::Pin<
         Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
     > = match inbound_control.accept(RESOURCES_V4_PROTOCOL.clone()) {
+        Ok(s) => s.boxed(),
+        Err(_already_registered) => futures::stream::pending().boxed(),
+    };
+
+    let mut incoming_resources_v5: std::pin::Pin<
+        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
+    > = match inbound_control.accept(RESOURCES_V5_PROTOCOL.clone()) {
+        Ok(s) => s.boxed(),
+        Err(_already_registered) => futures::stream::pending().boxed(),
+    };
+
+    let mut incoming_blobs: std::pin::Pin<
+        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
+    > = match inbound_control.accept(BLOBS_PROTOCOL.clone()) {
         Ok(s) => s.boxed(),
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
@@ -2421,6 +2588,26 @@ async fn run_task(
                     substream,
                     map_catalog_provider.clone(),
                 ));
+            }
+
+            resources = incoming_resources_v5.next() => {
+                let Some((peer, substream)) = resources else { return; };
+                if !known_peers.contains_key(&peer) {
+                    drop(substream);
+                    continue;
+                }
+                tokio::spawn(handle_inbound_resources_v5_substream(
+                    peer, substream, device_model_catalog_provider.clone(),
+                ));
+            }
+
+            blob = incoming_blobs.next() => {
+                let Some((peer, substream)) = blob else { return; };
+                if !known_peers.contains_key(&peer) {
+                    drop(substream);
+                    continue;
+                }
+                tokio::spawn(handle_inbound_blob_substream(substream, blob_app_root.clone()));
             }
 
             registry = incoming_registries.next() => {
@@ -3397,6 +3584,64 @@ async fn handle_inbound_resources_v4_substream(
             resources: Vec::new(),
         });
     let _ = write_resources_response_v4(&mut substream, &response).await;
+}
+
+async fn handle_inbound_resources_v5_substream(
+    _peer: PeerId,
+    mut substream: libp2p::Stream,
+    device_model_catalog_provider: SharedDeviceModelCatalogProvider,
+) {
+    if read_resources_request_v5(&mut substream).await.is_err() {
+        return;
+    }
+    let provider = device_model_catalog_provider
+        .lock()
+        .expect("device_model_catalog_provider lock")
+        .clone();
+    let response = provider
+        .map(|provider| provider.device_model_catalog())
+        .unwrap_or_else(|| ResourcesResponseV5 { resources: Vec::new() });
+    let _ = write_resources_response_v5(&mut substream, &response).await;
+}
+
+async fn handle_inbound_blob_substream(
+    mut substream: libp2p::Stream,
+    blob_app_root: SharedBlobAppRoot,
+) {
+    let Ok(request) = read_blob_request(&mut substream).await else {
+        return;
+    };
+    let app_root = blob_app_root.lock().expect("blob_app_root lock").clone();
+    let Some(app_root) = app_root else {
+        let meta = BlobResponseMeta { sha256: request.sha256, offset: request.offset, total_size: 0, chunk_len: 0 };
+        let _ = write_blob_response(&mut substream, &meta, &[]).await;
+        return;
+    };
+    let Ok(Some(blob)) = auki_registry::get_blob(&app_root, &request.sha256) else {
+        let meta = BlobResponseMeta { sha256: request.sha256, offset: request.offset, total_size: 0, chunk_len: 0 };
+        let _ = write_blob_response(&mut substream, &meta, &[]).await;
+        return;
+    };
+    if request.offset >= blob.len() as u64 {
+        let meta = BlobResponseMeta {
+            sha256: request.sha256,
+            offset: request.offset,
+            total_size: blob.len() as u64,
+            chunk_len: 0,
+        };
+        let _ = write_blob_response(&mut substream, &meta, &[]).await;
+        return;
+    }
+    let start = request.offset as usize;
+    let end = (start + request.max_len as usize).min(blob.len());
+    let chunk = &blob[start..end];
+    let meta = BlobResponseMeta {
+        sha256: request.sha256,
+        offset: request.offset,
+        total_size: blob.len() as u64,
+        chunk_len: chunk.len() as u32,
+    };
+    let _ = write_blob_response(&mut substream, &meta, chunk).await;
 }
 
 /// Per-substream task for an inbound `/auki/registries/0.0.1`

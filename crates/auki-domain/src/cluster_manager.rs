@@ -56,9 +56,9 @@ use auki_network::registries_protocol::{
     RegistryEntryEnvelope, RegistryKind, RegistryRequest, RegistryResponse,
 };
 use auki_network::resources_protocol::{ResourceEntry, ResourcesRequest, ResourcesResponse};
-use auki_network::{MapCatalogProvider, ParticipantInfo, SessionHandle};
+use auki_network::{MapCatalogProvider, ParticipantInfo, DeviceModelCatalogProvider, SessionHandle};
 use auki_registry::{
-    ClockRegistryEntry, DetectorRegistryEntry, FrameRegistryEntry, MapRegistryEntry,
+    ClockRegistryEntry, DetectorRegistryEntry, FrameRegistryEntry, MapRegistryEntry, DeviceModelRegistryEntry,
     SensorRegistryEntry,
 };
 use auki_time::SessionClock;
@@ -1472,6 +1472,11 @@ impl ClusterManager {
         self.runtime.set_map_catalog_provider(provider);
     }
 
+    /// Install the live Device Model catalog served over Resource Catalog v0.5.
+    pub fn set_device_model_catalog_provider(&self, provider: Arc<dyn DeviceModelCatalogProvider>) {
+        self.runtime.set_device_model_catalog_provider(provider);
+    }
+
     /// Register (or replace) the producer-local app root used to
     /// serve `/auki/registries/0.0.1` requests. The SDK reads existing
     /// registry files from this app root via `auki-registry` and
@@ -1481,10 +1486,12 @@ impl ClusterManager {
     /// `entry: None`, which means "this peer does not have that exact
     /// registry entry" from the consumer's perspective.
     pub fn set_registry_app_root(&self, app_root: impl Into<PathBuf>) {
+        let app_root = app_root.into();
         *self
             .registry_app_root
             .lock()
-            .expect("registry_app_root lock") = Some(app_root.into());
+            .expect("registry_app_root lock") = Some(app_root.clone());
+        self.runtime.set_blob_app_root(app_root);
     }
 
     /// Fetch a cluster peer's current generalized resource catalog
@@ -1549,6 +1556,23 @@ impl ClusterManager {
         peer_id: PeerId,
     ) -> Result<auki_network::ResourcesResponseV4, FetchMapCatalogError> {
         Ok(self.runtime.request_map_catalog(peer_id).await?)
+    }
+
+    /// Fetch a cluster peer's Device Model catalog over Resource Catalog v0.5.
+    pub async fn fetch_device_model_catalog(
+        &self,
+        peer_id: PeerId,
+    ) -> Result<auki_network::ResourcesResponseV5, FetchDeviceModelCatalogError> {
+        Ok(self.runtime.request_device_model_catalog(peer_id).await?)
+    }
+
+    /// Fetch and SHA-256 verify one content-addressed blob from a cluster peer.
+    pub async fn fetch_blob(
+        &self,
+        peer_id: PeerId,
+        sha256: impl Into<String>,
+    ) -> Result<Vec<u8>, auki_network::RequestBlobError> {
+        self.runtime.request_blob(peer_id, sha256.into()).await
     }
 
     /// Atomically bind a receiver-owned message-channel catalog row to the
@@ -1704,6 +1728,29 @@ impl ClusterManager {
                 "invalid Map Registry contract: {error}"
             ))
         })?;
+        Ok(entry)
+    }
+
+    /// Fetch and verify a peer's Device Model Registry entry by exact hash.
+    pub async fn fetch_device_model_entry(
+        &self,
+        peer_id: PeerId,
+        device_model_id: impl Into<String>,
+        device_model_hash: impl Into<String>,
+    ) -> Result<DeviceModelRegistryEntry, FetchRegistryEntryError> {
+        let expected_peer_id = peer_id.to_string();
+        let id = device_model_id.into();
+        let hash = device_model_hash.into();
+        let envelope = self
+            .fetch_registry_envelope(peer_id, RegistryKind::DeviceModel, id.clone(), hash)
+            .await?;
+        let entry: DeviceModelRegistryEntry = serde_json::from_str(&envelope.canonical_json)?;
+        if entry.peer_id != expected_peer_id || entry.device_model_id != id {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(
+                "decoded device model identity mismatch".into(),
+            ));
+        }
+        entry.validate().map_err(|error| FetchRegistryEntryError::InvalidEnvelope(error.to_string()))?;
         Ok(entry)
     }
 
@@ -3459,10 +3506,30 @@ pub enum FetchMapCatalogError {
     Request(auki_network::RequestResourcesV4Error),
 }
 
+/// Errors from [`ClusterManager::fetch_device_model_catalog`].
+#[derive(Debug, Error)]
+pub enum FetchDeviceModelCatalogError {
+    /// The remote peer does not implement Resource Catalog v0.5.
+    #[error("remote peer does not support Resource Catalog v0.5")]
+    UnsupportedProtocol,
+    /// libp2p, wire, or timeout failure during the request.
+    #[error("request_device_model_catalog: {0}")]
+    Request(auki_network::RequestResourcesV5Error),
+}
+
 impl From<auki_network::RequestResourcesV4Error> for FetchMapCatalogError {
     fn from(error: auki_network::RequestResourcesV4Error) -> Self {
         match error {
             auki_network::RequestResourcesV4Error::UnsupportedProtocol => Self::UnsupportedProtocol,
+            error => Self::Request(error),
+        }
+    }
+}
+
+impl From<auki_network::RequestResourcesV5Error> for FetchDeviceModelCatalogError {
+    fn from(error: auki_network::RequestResourcesV5Error) -> Self {
+        match error {
+            auki_network::RequestResourcesV5Error::UnsupportedProtocol => Self::UnsupportedProtocol,
             error => Self::Request(error),
         }
     }
@@ -3703,6 +3770,14 @@ fn read_registry_envelope(
             };
             Ok(Some(envelope_for_map(entry)))
         }
+        RegistryKind::DeviceModel => {
+            let Some(entry) =
+                auki_registry::read_device_model(app_root, peer_id, &request.id, &request.hash)?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(envelope_for_device_model(entry)))
+        }
     }
 }
 
@@ -3751,6 +3826,16 @@ fn envelope_for_map(entry: MapRegistryEntry) -> RegistryEntryEnvelope {
     RegistryEntryEnvelope {
         kind: RegistryKind::Map,
         id: entry.map_id,
+        hash: auki_hash::hash_jcs_bytes(&bytes),
+        canonical_json: String::from_utf8(bytes).expect("JCS output is UTF-8 JSON"),
+    }
+}
+
+fn envelope_for_device_model(entry: DeviceModelRegistryEntry) -> RegistryEntryEnvelope {
+    let bytes = entry.canonical_bytes();
+    RegistryEntryEnvelope {
+        kind: RegistryKind::DeviceModel,
+        id: entry.device_model_id,
         hash: auki_hash::hash_jcs_bytes(&bytes),
         canonical_json: String::from_utf8(bytes).expect("JCS output is UTF-8 JSON"),
     }

@@ -123,7 +123,13 @@ pub mod resources_v3_protocol;
 pub mod resources_v4_protocol;
 
 #[cfg(feature = "swarm")]
+pub mod resources_v5_protocol;
+
+#[cfg(feature = "swarm")]
 pub mod registries_protocol;
+
+#[cfg(feature = "swarm")]
+pub mod blobs_protocol;
 
 // ─── SessionHandle ────────────────────────────────────────────────────────────
 
@@ -146,9 +152,9 @@ pub trait SessionHandle: Send + Sync {
 pub use network_runtime::{
     AllowedPeer, BroadcastDiagnosticError, BroadcastMembershipError, DiagnosticEvent,
     HeartbeatNtpSampleObservation, HeartbeatTimestampSource, HeartbeatTimingObservation,
-    InfoRequestEvent, JoinEvent, MapCatalogProvider, MembershipEvent, NetworkRuntime,
+    InfoRequestEvent, JoinEvent, MapCatalogProvider, DeviceModelCatalogProvider, MembershipEvent, NetworkRuntime,
     NetworkRuntimeHandle, PeerLivenessEvent, RegistryRequestEvent, RequestInfoError,
-    RequestRegistryError, RequestResourcesError, RequestResourcesV3Error, RequestResourcesV4Error,
+    RequestBlobError, RequestRegistryError, RequestResourcesError, RequestResourcesV3Error, RequestResourcesV4Error, RequestResourcesV5Error,
     ResourcesRequestEvent, SendJoinRequestError, SpawnError, UpdateError, UpdateReport,
 };
 
@@ -175,6 +181,18 @@ pub use resources_v4_protocol::{
     MapLogResource, RESOURCES_PROTOCOL as RESOURCES_V4_PROTOCOL,
     ResourcesProtocolError as ResourcesProtocolErrorV4, ResourcesRequest as ResourcesRequestV4,
     ResourcesResponse as ResourcesResponseV4,
+};
+
+#[cfg(feature = "swarm")]
+pub use resources_v5_protocol::{
+    DeviceModelResource, RESOURCES_PROTOCOL as RESOURCES_V5_PROTOCOL,
+    ResourcesProtocolError as ResourcesProtocolErrorV5, ResourcesRequest as ResourcesRequestV5,
+    ResourcesResponse as ResourcesResponseV5,
+};
+
+#[cfg(feature = "swarm")]
+pub use blobs_protocol::{
+    BlobRequest, BlobResponseMeta, BLOBS_PROTOCOL, MAX_BLOB_BYTES, MAX_BLOB_CHUNK_BYTES,
 };
 
 #[cfg(all(feature = "swarm", feature = "swift-bindings"))]

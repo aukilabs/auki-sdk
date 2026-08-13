@@ -23,9 +23,9 @@ use auki_network::stream_runtime::StreamProvider;
 use auki_network::stream_runtime::{SourceStream, StreamDispatch, StreamItem, StreamSubscription};
 use auki_network::swarm::Behaviour;
 use auki_network::{
-    MapCatalogProvider, DeviceModelCatalogProvider, MapLogResource, MessageChannelRegistration, MessageChannelResource,
+    MapCatalogProvider, MapLogResource, MessageChannelRegistration, MessageChannelResource,
     MessageChannelSender, OpenMessageChannelError, PeerIdentity, RegistrationError,
-    ResourcesProtocolErrorV4, ResourcesResponseV4, ResourcesResponseV5, DeviceModelResource, SendMessageError, SessionHandle, Swarm,
+    ResourcesProtocolErrorV4, ResourcesResponseV4, SendMessageError, SessionHandle, Swarm,
     resources_v3_protocol::{
         ResourcesProtocolError as ResourcesProtocolErrorV3, ResourcesRequest as ResourcesRequestV3,
         ResourcesResponse as ResourcesResponseV3,
@@ -417,8 +417,6 @@ impl Domain {
         manager.set_session_handle(handle);
         let map_catalog_provider: Arc<dyn MapCatalogProvider> = catalog.clone();
         manager.set_map_catalog_provider(map_catalog_provider);
-        let device_model_catalog_provider: Arc<dyn DeviceModelCatalogProvider> = catalog.clone();
-        manager.set_device_model_catalog_provider(device_model_catalog_provider);
 
         let mut registrations = HashMap::new();
         for (resource, capacity) in message_channels {
@@ -502,12 +500,16 @@ impl Domain {
         self.manager.fetch_map_catalog(peer_id).await
     }
 
-    /// Fetch a peer's Device Model catalog over Resource Catalog v0.5.
-    pub async fn fetch_device_model_catalog(
+    /// List `(id, hash)` pairs for one registry kind on a peer.
+    pub async fn list_registry_entries(
         &self,
         peer_id: PeerId,
-    ) -> Result<ResourcesResponseV5, crate::cluster_manager::FetchDeviceModelCatalogError> {
-        self.manager.fetch_device_model_catalog(peer_id).await
+        kind: auki_network::registries_protocol::RegistryKind,
+    ) -> Result<
+        Vec<auki_network::registries_protocol::RegistryListEntry>,
+        crate::cluster_manager::FetchRegistryEntryError,
+    > {
+        self.manager.list_registry_entries(peer_id, kind).await
     }
 
     /// Fetch and verify a device-model registry entry by its content hash.
@@ -880,21 +882,6 @@ impl MapCatalogProvider for DomainCatalog {
     fn map_catalog(&self) -> ResourcesResponseV4 {
         ResourcesResponseV4 {
             resources: map_catalog_from_logs(&self.logs),
-        }
-    }
-}
-
-impl DeviceModelCatalogProvider for DomainCatalog {
-    fn device_model_catalog(&self) -> ResourcesResponseV5 {
-        ResourcesResponseV5 {
-            resources: self.registries.device_models().into_iter().map(|entry| {
-                DeviceModelResource {
-                    source_peer_id: entry.peer_id.clone(),
-                    writer_peer_id: entry.peer_id.clone(),
-                    resource_id: entry.device_model_id.clone(),
-                    model: entry.registry_ref(),
-                }
-            }).collect(),
         }
     }
 }

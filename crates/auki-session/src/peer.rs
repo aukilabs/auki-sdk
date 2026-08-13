@@ -292,6 +292,24 @@ impl Peer {
         Ok(registry_ref)
     }
 
+    /// Rewrite + blob a URDF package, then register the device-model entry.
+    ///
+    /// `id` overrides the URDF robot name when `Some`; otherwise the id from
+    /// [`auki_registry::put_urdf_package`] is used.
+    pub fn register_urdf_package(
+        &self,
+        id: Option<&str>,
+        urdf_path: &std::path::Path,
+        root_convention: Option<String>,
+    ) -> Result<RegistryRef> {
+        let package = {
+            let inner = self.inner.read();
+            auki_registry::put_urdf_package(&inner.storage_root, urdf_path, root_convention)?
+        };
+        let device_model_id = id.unwrap_or(package.device_model_id.as_str());
+        self.register_device_model(device_model_id, package.body)
+    }
+
     /// Start a new session on this peer: mints a fresh `session_id` and
     /// registers the session's monotonic + UTC clocks in the corrected shape
     /// (`epoch: null` for monotonic, `unit: "ns"`, UTC `device-local`,

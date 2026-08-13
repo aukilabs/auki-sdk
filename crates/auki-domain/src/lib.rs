@@ -28,14 +28,14 @@ pub mod stream_manifest;
 #[cfg(feature = "native_runtime")]
 pub use auki_network::SessionHandle;
 #[cfg(feature = "native_runtime")]
-pub use auki_network::registries_protocol::RegistryKind;
+pub use auki_network::registries_protocol::{RegistryKind, RegistryListEntry};
 #[cfg(feature = "native_runtime")]
 pub use auki_network::resources_protocol::{ResourceEntry, ResourcesRequest, ResourcesResponse};
 #[cfg(feature = "native_runtime")]
 pub use auki_network::stream_protocol::{ReadFrom, map::MapUpdate};
 #[cfg(feature = "native_runtime")]
 pub use auki_network::{
-    MapLogResource, MessageChannelResource, MessageChannelSender, ResourceEntryV3, DeviceModelResource,
+    MapLogResource, MessageChannelResource, MessageChannelSender, ResourceEntryV3,
     ResourceVariantV3, ResourcesRequestV3, ResourcesResponseV3, ResourcesResponseV4,
 };
 #[cfg(feature = "native_runtime")]
@@ -48,7 +48,7 @@ pub use auki_time::{ClockTransformEstimate, DomainClockEstimate};
 pub use cluster_manager::{
     AdmitError, BootstrapError, ClusterManager, ClusterTarget, CreateClusterError, DaemonInfo,
     DiagnosticMessage, DiscoveryClientError, DiscoveryClusterEntry, DomainClockEstimateUnavailable,
-    DomainTimeNowError, FetchMapCatalogError, FetchDeviceModelCatalogError, FetchParticipantInfoError, FetchRegistryEntryError,
+    DomainTimeNowError, FetchMapCatalogError, FetchParticipantInfoError, FetchRegistryEntryError,
     FetchResourcesCatalogError, FetchResourcesCatalogV3Error, InboundDiagnosticMessage,
     JoinClusterError, LIVENESS_CHECK_INTERVAL, ManagerLossAction, ResourceCatalogProvider,
     decide_manager_loss_action, elect_successor,

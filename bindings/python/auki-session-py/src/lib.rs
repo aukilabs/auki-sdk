@@ -810,6 +810,26 @@ impl Peer {
         })
     }
 
+    /// Rewrite + blob a URDF package and register the device-model entry.
+    #[pyo3(signature = (urdf_path, device_model_id=None, root_convention=None))]
+    fn register_urdf_package(
+        &self,
+        urdf_path: PathBuf,
+        device_model_id: Option<&str>,
+        root_convention: Option<String>,
+    ) -> PyResult<registry_py::RegistryRef> {
+        let r = self
+            .inner
+            .lock()
+            .register_urdf_package(device_model_id, &urdf_path, root_convention)
+            .map_err(map_session_error)?;
+        Ok(registry_py::RegistryRef {
+            peer_id: r.peer_id,
+            id: r.id,
+            hash: r.hash,
+        })
+    }
+
     /// Start a fresh session on this peer.
     ///
     /// Mints a new ``session_id`` and registers the session's monotonic + UTC

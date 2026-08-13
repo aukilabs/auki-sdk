@@ -156,6 +156,13 @@ pub fn map_entry_path(app_root: &Path, peer_id: &str, map_id: &str, hash: &str) 
         .join(format!("{hash}.json"))
 }
 
+/// `<app_root>/registries/device_models/<peer_id>`.
+pub fn device_models_peer_dir(app_root: &Path, peer_id: &str) -> PathBuf {
+    registries_root(app_root)
+        .join(DEVICE_MODELS_DIR)
+        .join(id_to_segment(peer_id))
+}
+
 /// `<app_root>/registries/device_models/<peer_id>/<model_id>/<hash>.json`.
 pub fn device_model_entry_path(
     app_root: &Path,
@@ -163,9 +170,7 @@ pub fn device_model_entry_path(
     model_id: &str,
     hash: &str,
 ) -> PathBuf {
-    registries_root(app_root)
-        .join(DEVICE_MODELS_DIR)
-        .join(id_to_segment(peer_id))
+    device_models_peer_dir(app_root, peer_id)
         .join(id_to_segment(model_id))
         .join(format!("{hash}.json"))
 }

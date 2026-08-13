@@ -16,7 +16,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1339,6 +1339,71 @@ pub fn read_device_model(
     Ok(Some(entry))
 }
 
+/// One `(id, hash)` row from [`list_device_models`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceModelListEntry {
+    /// `device_model_id` from the registry entry.
+    pub id: String,
+    /// XXH3-128 of the entry's canonical JSON bytes.
+    pub hash: String,
+}
+
+/// Enumerate device-model registry entries for `peer_id` under `app_root`.
+///
+/// Walks `<app_root>/registries/device_models/<peer>/…` and returns every
+/// valid `(device_model_id, hash)` pair. Missing peer dirs yield an empty
+/// list. Malformed files are skipped with no error (same soft-fail spirit
+/// as an empty List response on the wire).
+pub fn list_device_models(app_root: &Path, peer_id: &str) -> Result<Vec<DeviceModelListEntry>> {
+    let peer_dir = auki_layout::device_models_peer_dir(app_root, peer_id);
+    let Ok(model_dirs) = fs::read_dir(&peer_dir) else {
+        return Ok(Vec::new());
+    };
+    let mut entries = Vec::new();
+    for model_dir in model_dirs {
+        let model_dir = model_dir?;
+        if !model_dir.file_type()?.is_dir() {
+            continue;
+        }
+        let Ok(files) = fs::read_dir(model_dir.path()) else {
+            continue;
+        };
+        for file in files {
+            let file = file?;
+            let path = file.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(bytes) = read_at(&path)? else {
+                continue;
+            };
+            let Ok(entry) = serde_json::from_slice::<DeviceModelRegistryEntry>(&bytes) else {
+                continue;
+            };
+            if entry.peer_id != peer_id {
+                continue;
+            }
+            if entry.validate().is_err() {
+                continue;
+            }
+            let hash = entry.hash();
+            let file_stem = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or_default();
+            if file_stem != hash {
+                continue;
+            }
+            entries.push(DeviceModelListEntry {
+                id: entry.device_model_id,
+                hash,
+            });
+        }
+    }
+    entries.sort_by(|a, b| (&a.id, &a.hash).cmp(&(&b.id, &b.hash)));
+    Ok(entries)
+}
+
 /// SHA-256, encoded as lowercase hexadecimal.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -1373,6 +1438,221 @@ pub fn get_blob(app_root: &Path, sha256: &str) -> Result<Option<Vec<u8>>> {
 /// Whether an addressable blob exists locally.
 pub fn blob_exists(app_root: &Path, sha256: &str) -> Result<bool> {
     Ok(get_blob(app_root, sha256)?.is_some())
+}
+
+/// Result of [`put_urdf_package`]: rewritten URDF + mesh blobs on disk and
+/// a ready-to-register [`DeviceModelBody`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PutUrdfPackage {
+    /// Stable id taken from the URDF `<robot name>` (lowercased), or the
+    /// package directory name when the attribute is missing.
+    pub device_model_id: String,
+    /// Body suitable for [`write_device_model`] / session `register_device_model`.
+    pub body: DeviceModelBody,
+}
+
+/// Rewrite mesh `filename`s to package-relative paths, `put_blob` the URDF
+/// and every referenced mesh, and return a [`DeviceModelBody`].
+///
+/// Fails if the URDF references any mesh that cannot be resolved beside the
+/// URDF package directory. Rewrite happens once at publish time so consumers
+/// do not need a second path rewrite after dig.
+pub fn put_urdf_package(
+    app_root: &Path,
+    urdf_path: &Path,
+    root_convention: Option<String>,
+) -> Result<PutUrdfPackage> {
+    let urdf_bytes = fs::read(urdf_path).map_err(Error::Io)?;
+    let urdf_text = String::from_utf8(urdf_bytes).map_err(|error| {
+        Error::InvalidDeviceModel(format!("URDF is not UTF-8: {error}"))
+    })?;
+    let device_model_id = urdf_robot_name(&urdf_text)
+        .or_else(|| {
+            urdf_path
+                .parent()
+                .and_then(|parent| parent.file_name())
+                .and_then(|name| name.to_str())
+                .map(|name| name.to_ascii_lowercase())
+        })
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "robot".into());
+
+    let mesh_refs = collect_urdf_mesh_filenames(&urdf_text);
+    let package_dir = urdf_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+
+    let mut rewritten = urdf_text;
+    let mut meshes = Vec::new();
+    let mut seen_paths = std::collections::BTreeSet::new();
+    // Replace from the end so earlier offsets stay valid.
+    for (start, end, original) in mesh_refs.into_iter().rev() {
+        let rel = normalize_mesh_rel_path(&original);
+        if rel.is_empty() {
+            return Err(Error::InvalidDeviceModel(
+                "URDF mesh filename resolved to an empty path".into(),
+            ));
+        }
+        rewritten.replace_range(start..end, &rel);
+        if !seen_paths.insert(rel.clone()) {
+            continue;
+        }
+        let resolved = resolve_urdf_mesh(&package_dir, &original, &rel);
+        let Some(resolved) = resolved else {
+            return Err(Error::InvalidDeviceModel(format!(
+                "URDF references mesh {original:?} but none resolved beside {}",
+                package_dir.display()
+            )));
+        };
+        let mesh_bytes = fs::read(&resolved).map_err(Error::Io)?;
+        let sha256 = put_blob(app_root, &mesh_bytes)?;
+        meshes.push(MeshBlobRef {
+            path: rel,
+            sha256,
+        });
+    }
+    meshes.sort_by(|a, b| a.path.cmp(&b.path));
+
+    if rewritten.contains("filename=\"package://") || rewritten.contains("filename='package://") {
+        return Err(Error::InvalidDeviceModel(
+            "URDF still contains package:// mesh refs after rewrite".into(),
+        ));
+    }
+
+    let urdf_sha256 = put_blob(app_root, rewritten.as_bytes())?;
+    let body = DeviceModelBody {
+        model_id: device_model_id.clone(),
+        format: DeviceModelFormat::Urdf {
+            urdf_sha256,
+            meshes,
+        },
+        root_convention,
+    };
+    Ok(PutUrdfPackage {
+        device_model_id,
+        body,
+    })
+}
+
+fn urdf_robot_name(urdf: &str) -> Option<String> {
+    let marker = "<robot";
+    let start = urdf.find(marker)?;
+    let after = &urdf[start..];
+    let end = after.find('>')?;
+    let tag = &after[..end];
+    for quote in ['"', '\''] {
+        let key = format!("name={quote}");
+        if let Some(name_start) = tag.find(&key) {
+            let value_start = name_start + key.len();
+            let rest = &tag[value_start..];
+            if let Some(value_end) = rest.find(quote) {
+                let name = rest[..value_end].trim().to_ascii_lowercase();
+                if !name.is_empty() {
+                    return Some(name);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// `(value_start, value_end, original_value)` for every `filename="…"` / `filename='…'`.
+fn collect_urdf_mesh_filenames(urdf: &str) -> Vec<(usize, usize, String)> {
+    let mut out = Vec::new();
+    let bytes = urdf.as_bytes();
+    let mut i = 0;
+    while i + 10 < bytes.len() {
+        if !urdf[i..].starts_with("filename=") {
+            i += 1;
+            continue;
+        }
+        let quote_idx = i + "filename=".len();
+        let quote = match bytes.get(quote_idx).copied() {
+            Some(b'"') | Some(b'\'') => bytes[quote_idx] as char,
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        let value_start = quote_idx + 1;
+        let Some(rel) = urdf[value_start..].find(quote) else {
+            i += 1;
+            continue;
+        };
+        let value_end = value_start + rel;
+        out.push((
+            value_start,
+            value_end,
+            urdf[value_start..value_end].to_string(),
+        ));
+        i = value_end + 1;
+    }
+    out
+}
+
+/// Strip ROS `package://pkg/` so mesh paths are package-relative.
+pub fn normalize_mesh_rel_path(path: &str) -> String {
+    let path = path.trim().trim_start_matches('/');
+    if let Some(rest) = path.strip_prefix("package://") {
+        if let Some((_, relative)) = rest.split_once('/') {
+            return relative.trim_start_matches('/').to_string();
+        }
+        return rest.to_string();
+    }
+    path.to_string()
+}
+
+fn resolve_urdf_mesh(package_dir: &Path, original: &str, rel: &str) -> Option<PathBuf> {
+    let basename = Path::new(rel).file_name()?;
+    let mut candidates = vec![
+        package_dir.join(rel),
+        package_dir.join("meshes").join(basename),
+        package_dir
+            .parent()
+            .unwrap_or(package_dir)
+            .join(rel),
+        package_dir
+            .parent()
+            .unwrap_or(package_dir)
+            .join("meshes")
+            .join(basename),
+        // Booster K1 vendor tree (L16b).
+        PathBuf::from("/opt/booster/Gait/configs/K1/meshes").join(basename),
+    ];
+    if let Some(rest) = original.strip_prefix("package://") {
+        let (pkg, relative) = rest
+            .split_once('/')
+            .map(|(pkg, relative)| (pkg, relative))
+            .unwrap_or((rest, ""));
+        candidates.push(package_dir.join(rest));
+        candidates.push(package_dir.join(pkg).join(relative));
+        if let Some(parent) = package_dir.parent() {
+            candidates.push(parent.join(rest));
+            candidates.push(parent.join(pkg).join(relative));
+        }
+        for env_key in ["AMENT_PREFIX_PATH", "ROS_PACKAGE_PATH"] {
+            let Ok(value) = std::env::var(env_key) else {
+                continue;
+            };
+            for prefix in value.split(':').filter(|prefix| !prefix.is_empty()) {
+                let root = PathBuf::from(prefix);
+                if env_key == "AMENT_PREFIX_PATH" {
+                    candidates.push(root.join("share").join(pkg).join(relative));
+                    candidates.push(
+                        root.join("share")
+                            .join(pkg)
+                            .join("meshes")
+                            .join(basename),
+                    );
+                } else {
+                    candidates.push(root.join(pkg).join(relative));
+                    candidates.push(root.join(pkg).join("meshes").join(basename));
+                }
+            }
+        }
+    }
+    candidates.into_iter().find(|path| path.is_file())
 }
 
 // `build_sensor_log_manifest` moved to [`auki-manifests`] in Step 0 of the
@@ -2751,6 +3031,38 @@ mod id_charset_tests {
         );
         assert_eq!(get_blob(tmp.path(), &mesh).unwrap(), Some(b"mesh bytes".to_vec()));
         assert!(blob_exists(tmp.path(), &urdf).unwrap());
+        let listed = list_device_models(tmp.path(), "galbot").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "unitree/g1");
+        assert_eq!(listed[0].hash, outcome.hash());
+    }
+
+    #[test]
+    fn put_urdf_package_rewrites_and_blobs() {
+        let pkg = tempfile::tempdir().unwrap();
+        let meshes = pkg.path().join("meshes");
+        fs::create_dir_all(&meshes).unwrap();
+        fs::write(meshes.join("body.stl"), b"mesh").unwrap();
+        let urdf_path = pkg.path().join("robot.urdf");
+        fs::write(
+            &urdf_path,
+            r#"<robot name="K1">
+                <link name="base">
+                  <visual><geometry><mesh filename="package://K1_URDF_Serial/meshes/body.stl"/></geometry></visual>
+                </link>
+            </robot>"#,
+        )
+        .unwrap();
+        let app = tempfile::tempdir().unwrap();
+        let package = put_urdf_package(app.path(), &urdf_path, Some("ros_body".into())).unwrap();
+        assert_eq!(package.device_model_id, "k1");
+        let (urdf_sha, meshes) = package.body.as_urdf().unwrap();
+        assert_eq!(meshes.len(), 1);
+        assert_eq!(meshes[0].path, "meshes/body.stl");
+        let urdf = get_blob(app.path(), urdf_sha).unwrap().unwrap();
+        let text = String::from_utf8(urdf).unwrap();
+        assert!(text.contains(r#"filename="meshes/body.stl""#));
+        assert!(!text.contains("package://"));
     }
 
     #[test]

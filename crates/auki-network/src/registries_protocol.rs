@@ -1,5 +1,5 @@
-//! `/auki/registries/0.2.0` — libp2p protocol for fetching a peer's
-//! content-addressed registry entries over the cluster's libp2p plane.
+//! `/auki/registries/0.3.0` — libp2p protocol for listing and fetching a
+//! peer's content-addressed registry entries over the cluster's libp2p plane.
 //!
 //! ## Why this exists
 //!
@@ -12,20 +12,25 @@
 //! libp2p so the cluster trust boundary is the only one metadata flows
 //! through.
 //!
+//! Device models are the same kind of object: immutable, content-addressed
+//! registry JSON. Discovery is a [`RegistryRequest::List`], not a resource
+//! catalog.
+//!
 //! ## Shape
 //!
-//! Request-response over one substream. Client opens, writes a
-//! [`RegistryRequest`] naming `kind + id + hash`, reads a
-//! [`RegistryResponse`], closes.
+//! Request-response over one substream. Tagged request/response:
 //!
 //! ```text
-//! Initiator → Responder:  RegistryRequest { kind, id, hash }
-//! Responder → Initiator:  RegistryResponse { entry: Some(...) | None }
+//! Get:  RegistryRequest::Get { kind, id, hash }
+//!       → RegistryResponse::Get { entry: Some(...) | None }
+//!
+//! List: RegistryRequest::List { kind }
+//!       → RegistryResponse::List { entries: [{ id, hash }, ...] }
 //! ```
 //!
-//! `None` means the peer understood the protocol but does not have
-//! that exact entry. Transport failures, malformed frames, and timeouts
-//! remain protocol/request errors at the runtime layer.
+//! `Get` with `entry: None` means the peer understood the protocol but does
+//! not have that exact entry. Transport failures, malformed frames, and
+//! timeouts remain protocol/request errors at the runtime layer.
 //!
 //! ## Wire format
 //!
@@ -38,9 +43,9 @@ use libp2p::StreamProtocol;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// libp2p protocol id for content-addressed registry entry fetches.
+/// libp2p protocol id for content-addressed registry list + get.
 /// Stable; bump version only on an incompatible wire-shape change.
-pub const REGISTRIES_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/registries/0.2.0");
+pub const REGISTRIES_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/registries/0.3.0");
 
 /// Cap on a single framed message. Registry entries are tiny today
 /// (~100s of bytes), but 64 KiB leaves room for future sensor bodies
@@ -57,11 +62,7 @@ pub enum RegistryKind {
     Clock,
     /// Frame Registry (`FrameRegistryEntry`).
     Frame,
-    /// Detector Registry (`DetectorRegistryEntry`). Cuba T4 +
-    /// `/auki/registries/0.0.1` protocol extension. Symmetric with
-    /// `Sensor` — same on-disk shape under
-    /// `<app_root>/registries/detectors/<id>/<hash>.json`, same
-    /// canonical-bytes + content-addressed-hash model.
+    /// Detector Registry (`DetectorRegistryEntry`).
     Detector,
     /// Map Registry (`MapRegistryEntry`).
     Map,
@@ -92,23 +93,67 @@ impl std::fmt::Display for RegistryKind {
 
 /// Body of the request the initiator sends.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RegistryRequest {
-    /// Registry namespace.
-    pub kind: RegistryKind,
-    /// Registry id (`sensor_id`, `clock_id`, `frame_id`, `detector_id`, or
-    /// `map_id`, or `device_model_id`).
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum RegistryRequest {
+    /// Fetch one exact content-addressed entry.
+    Get {
+        /// Registry namespace.
+        kind: RegistryKind,
+        /// Registry id (`sensor_id`, `clock_id`, `frame_id`, `detector_id`,
+        /// `map_id`, or `device_model_id`).
+        id: String,
+        /// Expected XXH3-128 hash of the canonical JSON entry bytes.
+        hash: String,
+    },
+    /// Enumerate `(id, hash)` pairs for one registry namespace.
+    List {
+        /// Registry namespace to list.
+        kind: RegistryKind,
+    },
+}
+
+impl RegistryRequest {
+    /// Construct a Get request.
+    pub fn get(kind: RegistryKind, id: impl Into<String>, hash: impl Into<String>) -> Self {
+        Self::Get {
+            kind,
+            id: id.into(),
+            hash: hash.into(),
+        }
+    }
+
+    /// Construct a List request.
+    pub fn list(kind: RegistryKind) -> Self {
+        Self::List { kind }
+    }
+}
+
+/// One row returned by [`RegistryResponse::List`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RegistryListEntry {
+    /// Registry id.
     pub id: String,
-    /// Expected XXH3-128 hash of the canonical JSON entry bytes.
+    /// XXH3-128 hash of the entry's canonical JSON bytes.
     pub hash: String,
 }
 
 /// Body of the response the responder sends.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RegistryResponse {
-    /// `Some` when the peer has the exact entry. `None` means the
-    /// peer reached the registry handler but does not have that
-    /// `(kind, id, hash)` entry.
-    pub entry: Option<RegistryEntryEnvelope>,
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum RegistryResponse {
+    /// Reply to [`RegistryRequest::Get`].
+    Get {
+        /// `Some` when the peer has the exact entry. `None` means the
+        /// peer reached the registry handler but does not have that
+        /// `(kind, id, hash)` entry.
+        entry: Option<RegistryEntryEnvelope>,
+    },
+    /// Reply to [`RegistryRequest::List`].
+    List {
+        /// Known `(id, hash)` pairs for the requested kind. Empty when
+        /// none are published or the kind is not listed yet.
+        entries: Vec<RegistryListEntry>,
+    },
 }
 
 /// Returned registry entry payload.
@@ -248,12 +293,8 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn request_round_trips() {
-        let req = RegistryRequest {
-            kind: RegistryKind::Frame,
-            id: "K1-LIVE01/head_cam_points".into(),
-            hash: "abc123".into(),
-        };
+    async fn get_request_round_trips() {
+        let req = RegistryRequest::get(RegistryKind::Frame, "K1-LIVE01/head_cam_points", "abc123");
         let mut buf = Vec::new();
         write_registry_request(&mut buf, &req).await.unwrap();
         let mut cursor = futures::io::Cursor::new(buf);
@@ -262,8 +303,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn response_round_trips() {
-        let resp = RegistryResponse {
+    async fn list_request_round_trips() {
+        let req = RegistryRequest::list(RegistryKind::DeviceModel);
+        let mut buf = Vec::new();
+        write_registry_request(&mut buf, &req).await.unwrap();
+        let mut cursor = futures::io::Cursor::new(buf);
+        let back = read_registry_request(&mut cursor).await.unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[tokio::test]
+    async fn get_response_round_trips() {
+        let resp = RegistryResponse::Get {
             entry: Some(RegistryEntryEnvelope {
                 kind: RegistryKind::Frame,
                 id: "K1-LIVE01/head_cam_points".into(),
@@ -279,8 +330,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_response_round_trips() {
-        let resp = RegistryResponse { entry: None };
+    async fn list_response_round_trips() {
+        let resp = RegistryResponse::List {
+            entries: vec![RegistryListEntry {
+                id: "k1".into(),
+                hash: "deadbeef".into(),
+            }],
+        };
+        let mut buf = Vec::new();
+        write_registry_response(&mut buf, &resp).await.unwrap();
+        let mut cursor = futures::io::Cursor::new(buf);
+        let back = read_registry_response(&mut cursor).await.unwrap();
+        assert_eq!(resp, back);
+    }
+
+    #[tokio::test]
+    async fn missing_get_response_round_trips() {
+        let resp = RegistryResponse::Get { entry: None };
         let mut buf = Vec::new();
         write_registry_response(&mut buf, &resp).await.unwrap();
         let mut cursor = futures::io::Cursor::new(buf);
@@ -300,14 +366,19 @@ mod tests {
     /// Pins the envelope field names for cross-language consumers.
     #[test]
     fn wire_shape_locked_field_names() {
-        let json = serde_json::to_string(&RegistryRequest {
-            kind: RegistryKind::Frame,
-            id: "frame".into(),
-            hash: "hash".into(),
-        })
+        let json = serde_json::to_string(&RegistryRequest::get(
+            RegistryKind::Frame,
+            "frame",
+            "hash",
+        ))
         .unwrap();
+        assert!(json.contains(r#""op":"get""#), "{json}");
         assert!(json.contains(r#""kind":"frame""#), "{json}");
         assert!(json.contains(r#""id":"frame""#), "{json}");
         assert!(json.contains(r#""hash":"hash""#), "{json}");
+
+        let list = serde_json::to_string(&RegistryRequest::list(RegistryKind::DeviceModel)).unwrap();
+        assert!(list.contains(r#""op":"list""#), "{list}");
+        assert!(list.contains(r#""kind":"device_model""#), "{list}");
     }
 }

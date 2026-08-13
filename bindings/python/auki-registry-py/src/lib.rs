@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use auki_registry_rs as registry;
 use pyo3::exceptions::{PyOSError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyModule};
+use pyo3::types::{PyAny, PyDict, PyModule};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -661,6 +661,29 @@ fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 #[pyfunction]
+#[pyo3(signature = (app_root, urdf_path, root_convention=None))]
+fn put_urdf_package(
+    py: Python<'_>,
+    app_root: PathBuf,
+    urdf_path: PathBuf,
+    root_convention: Option<String>,
+) -> PyResult<PyObject> {
+    let package = registry::put_urdf_package(&app_root, &urdf_path, root_convention)
+        .map_err(map_registry_error)?;
+    let dict = PyDict::new_bound(py);
+    dict.set_item("device_model_id", package.device_model_id)?;
+    dict.set_item("body", struct_to_pyobject(py, &package.body)?)?;
+    Ok(dict.into_any().unbind())
+}
+
+#[pyfunction]
+fn list_device_models(py: Python<'_>, app_root: PathBuf, peer_id: &str) -> PyResult<PyObject> {
+    let entries =
+        registry::list_device_models(&app_root, peer_id).map_err(map_registry_error)?;
+    struct_to_pyobject(py, &entries)
+}
+
+#[pyfunction]
 fn read_frame(
     py: Python<'_>,
     app_root: PathBuf,
@@ -757,6 +780,8 @@ fn auki_registry(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(put_blob, m)?)?;
     m.add_function(wrap_pyfunction!(get_blob, m)?)?;
     m.add_function(wrap_pyfunction!(sha256_hex, m)?)?;
+    m.add_function(wrap_pyfunction!(put_urdf_package, m)?)?;
+    m.add_function(wrap_pyfunction!(list_device_models, m)?)?;
     m.add_function(wrap_pyfunction!(read_frame, m)?)?;
     m.add_function(wrap_pyfunction!(read_sensor, m)?)?;
     m.add_function(wrap_pyfunction!(read_clock, m)?)?;

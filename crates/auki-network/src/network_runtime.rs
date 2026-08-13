@@ -84,14 +84,6 @@ use crate::resources_v4_protocol::{
     write_resources_request as write_resources_request_v4,
     write_resources_response as write_resources_response_v4,
 };
-use crate::resources_v5_protocol::{
-    RESOURCES_PROTOCOL as RESOURCES_V5_PROTOCOL,
-    ResourcesProtocolError as ResourcesV5ProtocolError, ResourcesRequest as ResourcesRequestV5,
-    ResourcesResponse as ResourcesResponseV5, read_resources_request as read_resources_request_v5,
-    read_resources_response as read_resources_response_v5,
-    write_resources_request as write_resources_request_v5,
-    write_resources_response as write_resources_response_v5,
-};
 #[cfg(test)]
 use crate::{
     PeerIdentity,
@@ -419,12 +411,6 @@ pub trait MapCatalogProvider: Send + Sync {
 
 type SharedMapCatalogProvider = Arc<Mutex<Option<Arc<dyn MapCatalogProvider>>>>;
 
-/// Live source for `/auki/resources/0.5.0` Device Model rows.
-pub trait DeviceModelCatalogProvider: Send + Sync {
-    fn device_model_catalog(&self) -> ResourcesResponseV5;
-}
-
-type SharedDeviceModelCatalogProvider = Arc<Mutex<Option<Arc<dyn DeviceModelCatalogProvider>>>>;
 pub type SharedBlobAppRoot = Arc<Mutex<Option<PathBuf>>>;
 
 /// Errors from [`NetworkRuntime::request_resources_catalog`].
@@ -478,25 +464,6 @@ pub enum RequestResourcesV4Error {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum RequestResourcesV5Error {
-    #[error("remote peer does not support Resource Catalog v0.5")]
-    UnsupportedProtocol,
-    #[error("open_stream: {0}")]
-    OpenStream(#[source] libp2p_stream::OpenStreamError),
-    #[error("protocol: {0}")]
-    Protocol(#[source] ResourcesV5ProtocolError),
-    #[error("resources v5 request timed out after {0:?}")]
-    Timeout(Duration),
-}
-
-fn map_resources_v5_open_error(error: libp2p_stream::OpenStreamError) -> RequestResourcesV5Error {
-    match error {
-        libp2p_stream::OpenStreamError::UnsupportedProtocol(_) => RequestResourcesV5Error::UnsupportedProtocol,
-        error => RequestResourcesV5Error::OpenStream(error),
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
 pub enum RequestBlobError {
     #[error("remote peer does not support blob transfer")]
     UnsupportedProtocol,
@@ -534,11 +501,10 @@ pub struct RegistryRequestEvent {
     /// The peer-id of the requester. Authenticated by libp2p's noise
     /// handshake at connection-establishment time.
     pub peer: PeerId,
-    /// Requested registry kind + id + hash.
+    /// List or Get request body.
     pub request: RegistryRequest,
-    /// One-shot channel to reply on. Send a [`RegistryResponse`]
-    /// containing either the canonical JSON entry or `None` when this
-    /// peer does not have the exact `(kind, id, hash)` entry.
+    /// One-shot channel to reply on. Send a matching [`RegistryResponse`]
+    /// (`Get` with entry or `None`, or `List` with entries).
     /// Dropping the sender without sending closes the substream
     /// silently — the requester sees a
     /// [`RegistriesProtocolError::Io`] with `UnexpectedEof`.
@@ -859,7 +825,6 @@ pub struct NetworkRuntime {
     /// Receiver-owned live message channels registered on this peer.
     message_router: MessageChannelRouter,
     map_catalog_provider: SharedMapCatalogProvider,
-    device_model_catalog_provider: SharedDeviceModelCatalogProvider,
     blob_app_root: SharedBlobAppRoot,
 }
 
@@ -1045,7 +1010,6 @@ impl NetworkRuntime {
         let (diagnostic_events_tx, diagnostic_events_rx) = mpsc::channel::<DiagnosticEvent>(64);
         let message_router = MessageChannelRouter::new(local_peer_id);
         let map_catalog_provider: SharedMapCatalogProvider = Arc::new(Mutex::new(None));
-        let device_model_catalog_provider: SharedDeviceModelCatalogProvider = Arc::new(Mutex::new(None));
         let blob_app_root: SharedBlobAppRoot = Arc::new(Mutex::new(None));
         let task = handle.spawn(run_task(
             swarm,
@@ -1067,7 +1031,6 @@ impl NetworkRuntime {
             diagnostic_events_tx,
             message_router.clone(),
             map_catalog_provider.clone(),
-            device_model_catalog_provider.clone(),
             blob_app_root.clone(),
         ));
         Ok((
@@ -1082,7 +1045,6 @@ impl NetworkRuntime {
                 command_tx,
                 message_router,
                 map_catalog_provider,
-                device_model_catalog_provider,
                 blob_app_root,
             },
             join_events_rx,
@@ -1237,13 +1199,6 @@ impl NetworkRuntime {
             .expect("map_catalog_provider lock") = Some(provider);
     }
 
-    pub fn set_device_model_catalog_provider(&self, provider: Arc<dyn DeviceModelCatalogProvider>) {
-        *self
-            .device_model_catalog_provider
-            .lock()
-            .expect("device_model_catalog_provider lock") = Some(provider);
-    }
-
     pub fn set_blob_app_root(&self, app_root: impl Into<PathBuf>) {
         *self.blob_app_root.lock().expect("blob_app_root lock") = Some(app_root.into());
     }
@@ -1273,28 +1228,6 @@ impl NetworkRuntime {
         .await
         .map_err(|_| RequestResourcesV4Error::Timeout(RESOURCES_REQUEST_TIMEOUT))?
         .map_err(RequestResourcesV4Error::Protocol)
-    }
-
-    pub async fn request_device_model_catalog(
-        &self,
-        peer_id: PeerId,
-    ) -> Result<ResourcesResponseV5, RequestResourcesV5Error> {
-        let mut control = self.stream_control.clone();
-        let mut substream = match tokio::time::timeout(
-            RESOURCES_REQUEST_TIMEOUT,
-            control.open_stream(peer_id, RESOURCES_V5_PROTOCOL.clone()),
-        ).await {
-            Err(_) => return Err(RequestResourcesV5Error::Timeout(RESOURCES_REQUEST_TIMEOUT)),
-            Ok(Err(error)) => return Err(map_resources_v5_open_error(error)),
-            Ok(Ok(stream)) => stream,
-        };
-        write_resources_request_v5(&mut substream, &ResourcesRequestV5::all())
-            .await
-            .map_err(RequestResourcesV5Error::Protocol)?;
-        tokio::time::timeout(RESOURCES_REQUEST_TIMEOUT, read_resources_response_v5(&mut substream))
-            .await
-            .map_err(|_| RequestResourcesV5Error::Timeout(RESOURCES_REQUEST_TIMEOUT))?
-            .map_err(RequestResourcesV5Error::Protocol)
     }
 
     pub async fn request_blob_chunk(
@@ -1380,11 +1313,9 @@ impl NetworkRuntime {
         .await
     }
 
-    /// Fetch one registry entry from a cluster peer over the
-    /// `/auki/registries/0.0.1` libp2p protocol. The request names
-    /// the registry `kind + id + hash`; the response is either the
-    /// canonical JSON entry envelope or `None` when the peer does not
-    /// have that exact entry.
+    /// Fetch or list registry entries from a cluster peer over
+    /// `/auki/registries/0.3.0`. Pass [`RegistryRequest::Get`] for one
+    /// exact entry or [`RegistryRequest::List`] to enumerate `(id, hash)`.
     ///
     /// `peer_id` must be on the local allow-list — libp2p refuses
     /// the substream otherwise. Higher layers are responsible for
@@ -2214,7 +2145,6 @@ async fn run_task(
     diagnostic_events_tx: mpsc::Sender<DiagnosticEvent>,
     message_router: MessageChannelRouter,
     map_catalog_provider: SharedMapCatalogProvider,
-    device_model_catalog_provider: SharedDeviceModelCatalogProvider,
     blob_app_root: SharedBlobAppRoot,
 ) {
     let mut swarm = swarm;
@@ -2326,13 +2256,6 @@ async fn run_task(
     let mut incoming_resources_v4: std::pin::Pin<
         Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
     > = match inbound_control.accept(RESOURCES_V4_PROTOCOL.clone()) {
-        Ok(s) => s.boxed(),
-        Err(_already_registered) => futures::stream::pending().boxed(),
-    };
-
-    let mut incoming_resources_v5: std::pin::Pin<
-        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
-    > = match inbound_control.accept(RESOURCES_V5_PROTOCOL.clone()) {
         Ok(s) => s.boxed(),
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
@@ -2587,17 +2510,6 @@ async fn run_task(
                     peer,
                     substream,
                     map_catalog_provider.clone(),
-                ));
-            }
-
-            resources = incoming_resources_v5.next() => {
-                let Some((peer, substream)) = resources else { return; };
-                if !known_peers.contains_key(&peer) {
-                    drop(substream);
-                    continue;
-                }
-                tokio::spawn(handle_inbound_resources_v5_substream(
-                    peer, substream, device_model_catalog_provider.clone(),
                 ));
             }
 
@@ -3584,24 +3496,6 @@ async fn handle_inbound_resources_v4_substream(
             resources: Vec::new(),
         });
     let _ = write_resources_response_v4(&mut substream, &response).await;
-}
-
-async fn handle_inbound_resources_v5_substream(
-    _peer: PeerId,
-    mut substream: libp2p::Stream,
-    device_model_catalog_provider: SharedDeviceModelCatalogProvider,
-) {
-    if read_resources_request_v5(&mut substream).await.is_err() {
-        return;
-    }
-    let provider = device_model_catalog_provider
-        .lock()
-        .expect("device_model_catalog_provider lock")
-        .clone();
-    let response = provider
-        .map(|provider| provider.device_model_catalog())
-        .unwrap_or_else(|| ResourcesResponseV5 { resources: Vec::new() });
-    let _ = write_resources_response_v5(&mut substream, &response).await;
 }
 
 async fn handle_inbound_blob_substream(

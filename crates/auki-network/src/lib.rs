@@ -123,9 +123,6 @@ pub mod resources_v3_protocol;
 pub mod resources_v4_protocol;
 
 #[cfg(feature = "swarm")]
-pub mod resources_v5_protocol;
-
-#[cfg(feature = "swarm")]
 pub mod registries_protocol;
 
 #[cfg(feature = "swarm")]
@@ -152,9 +149,9 @@ pub trait SessionHandle: Send + Sync {
 pub use network_runtime::{
     AllowedPeer, BroadcastDiagnosticError, BroadcastMembershipError, DiagnosticEvent,
     HeartbeatNtpSampleObservation, HeartbeatTimestampSource, HeartbeatTimingObservation,
-    InfoRequestEvent, JoinEvent, MapCatalogProvider, DeviceModelCatalogProvider, MembershipEvent, NetworkRuntime,
+    InfoRequestEvent, JoinEvent, MapCatalogProvider, MembershipEvent, NetworkRuntime,
     NetworkRuntimeHandle, PeerLivenessEvent, RegistryRequestEvent, RequestInfoError,
-    RequestBlobError, RequestRegistryError, RequestResourcesError, RequestResourcesV3Error, RequestResourcesV4Error, RequestResourcesV5Error,
+    RequestBlobError, RequestRegistryError, RequestResourcesError, RequestResourcesV3Error, RequestResourcesV4Error,
     ResourcesRequestEvent, SendJoinRequestError, SpawnError, UpdateError, UpdateReport,
 };
 
@@ -181,13 +178,6 @@ pub use resources_v4_protocol::{
     MapLogResource, RESOURCES_PROTOCOL as RESOURCES_V4_PROTOCOL,
     ResourcesProtocolError as ResourcesProtocolErrorV4, ResourcesRequest as ResourcesRequestV4,
     ResourcesResponse as ResourcesResponseV4,
-};
-
-#[cfg(feature = "swarm")]
-pub use resources_v5_protocol::{
-    DeviceModelResource, RESOURCES_PROTOCOL as RESOURCES_V5_PROTOCOL,
-    ResourcesProtocolError as ResourcesProtocolErrorV5, ResourcesRequest as ResourcesRequestV5,
-    ResourcesResponse as ResourcesResponseV5,
 };
 
 #[cfg(feature = "swarm")]
@@ -598,7 +588,7 @@ mod protocol_id_tests {
     #[test]
     fn protocols_bumped_to_v0_2_0() {
         assert_eq!(RESOURCES_PROTOCOL.to_string(), "/auki/resources/0.2.0");
-        assert_eq!(REGISTRIES_PROTOCOL.to_string(), "/auki/registries/0.2.0");
+        assert_eq!(REGISTRIES_PROTOCOL.to_string(), "/auki/registries/0.3.0");
         assert_eq!(STREAM_PROTOCOL, "/auki/stream/0.2.0");
     }
 }

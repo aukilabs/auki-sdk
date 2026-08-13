@@ -29,7 +29,6 @@ use auki_domain_rs::{
     ClusterMember as RustClusterMember, ClusterMembership as RustClusterMembership,
     ClusterTarget as RustClusterTarget, CreateClusterError as RustCreateClusterError,
     DaemonInfo as RustDaemonInfo, FetchMapCatalogError as RustFetchMapCatalogError,
-    FetchDeviceModelCatalogError as RustFetchDeviceModelCatalogError,
     FetchRegistryEntryError as RustFetchRegistryEntryError,
     FetchResourcesCatalogError as RustFetchResourcesCatalogError,
     FetchResourcesCatalogV3Error as RustFetchResourcesCatalogV3Error,
@@ -38,7 +37,7 @@ use auki_domain_rs::{
     MessageChannelSender as RustMessageChannelSender,
     ResourceCatalogProvider as RustResourceCatalogProvider, ResourceEntry as RustResourceEntry,
     ResourceEntryV3 as RustResourceEntryV3, ResourceVariantV3 as RustResourceVariantV3,
-    DeviceModelResource as RustDeviceModelResource,
+    RegistryKind as RustRegistryKind, RegistryListEntry as RustRegistryListEntry,
     ResourcesRequestV3 as RustResourcesRequestV3,
     StreamManifestBuilder as RustStreamManifestBuilder,
 };
@@ -61,7 +60,6 @@ use auki_network::{
     MapCatalogProvider as RustMapCatalogProvider,
     MessageChannelRegistration as RustMessageChannelRegistration,
     RequestBlobError as RustRequestBlobError,
-    DeviceModelCatalogProvider as RustDeviceModelCatalogProvider,
 };
 use auki_network_py::PyClusterEntry;
 use auki_network_py::stream_types::{
@@ -1070,99 +1068,6 @@ fn extract_map_log_resources(obj: &Bound<'_, PyAny>) -> PyResult<Vec<RustMapLogR
                 "map catalog provider returned an item that is not a MapLogResource",
             )
         })?;
-        resources.push(entry.inner.clone());
-    }
-    Ok(resources)
-}
-
-// ─── DeviceModelResource pyclass (/auki/resources/0.5.0) ────────────
-
-#[pyclass(name = "DeviceModelResource")]
-#[derive(Clone)]
-pub struct PyDeviceModelResource {
-    inner: RustDeviceModelResource,
-}
-
-#[pymethods]
-impl PyDeviceModelResource {
-    #[staticmethod]
-    fn from_json(s: &str) -> PyResult<Self> {
-        let inner: RustDeviceModelResource = serde_json::from_str(s)
-            .map_err(|e| PyValueError::new_err(format!("invalid DeviceModelResource JSON: {e}")))?;
-        inner
-            .validate()
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(Self { inner })
-    }
-
-    #[staticmethod]
-    fn from_dict(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let json = py.import_bound("json")?;
-        let encoded: String = json.call_method1("dumps", (value,))?.extract()?;
-        Self::from_json(&encoded)
-    }
-
-    #[getter]
-    fn source_peer_id(&self) -> &str {
-        &self.inner.source_peer_id
-    }
-
-    #[getter]
-    fn writer_peer_id(&self) -> &str {
-        &self.inner.writer_peer_id
-    }
-
-    #[getter]
-    fn resource_id(&self) -> &str {
-        &self.inner.resource_id
-    }
-
-    #[getter]
-    fn model<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        registry_ref_to_dict(py, &self.inner.model)
-    }
-
-    fn to_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.inner)
-            .map_err(|e| PyTypeError::new_err(format!("serializing DeviceModelResource: {e}")))
-    }
-}
-
-struct PyDeviceModelCatalogProvider {
-    callable: Py<PyAny>,
-}
-
-impl RustDeviceModelCatalogProvider for PyDeviceModelCatalogProvider {
-    fn device_model_catalog(&self) -> auki_network::resources_v5_protocol::ResourcesResponse {
-        let resources = Python::with_gil(|py| {
-            self.callable
-                .bind(py)
-                .call0()
-                .and_then(|value| extract_device_model_resources(&value))
-                .unwrap_or_else(|error| {
-                    eprintln!("auki-domain-py: device_model_catalog_provider callable failed: {error}");
-                    Vec::new()
-                })
-        });
-        auki_network::resources_v5_protocol::ResourcesResponse { resources }
-    }
-}
-
-fn extract_device_model_resources(
-    obj: &Bound<'_, PyAny>,
-) -> PyResult<Vec<RustDeviceModelResource>> {
-    let mut resources = Vec::new();
-    for item in obj.iter().map_err(|_| {
-        PyTypeError::new_err("device model catalog provider must return an iterable of DeviceModelResource")
-    })? {
-        let item = item?;
-        let entry = item
-            .extract::<PyRef<'_, PyDeviceModelResource>>()
-            .map_err(|_| {
-                PyTypeError::new_err(
-                    "device model catalog provider returned an item that is not a DeviceModelResource",
-                )
-            })?;
         resources.push(entry.inner.clone());
     }
     Ok(resources)
@@ -2211,15 +2116,6 @@ impl PyClusterManager {
         })
     }
 
-    /// Register the Device Model catalog served over `/auki/resources/0.5.0`.
-    fn set_device_model_catalog_provider(&self, callable: Py<PyAny>) -> PyResult<()> {
-        let provider = Arc::new(PyDeviceModelCatalogProvider { callable });
-        self.with_inner(|manager| {
-            manager.set_device_model_catalog_provider(provider);
-            Ok(())
-        })
-    }
-
     /// Register (or replace) the app root for hash-pinned registry entries.
     fn set_registry_app_root(&self, py: Python<'_>, app_root: &Bound<'_, PyAny>) -> PyResult<()> {
         let path = pathlike_to_pathbuf(py, app_root, "app_root")?;
@@ -2396,31 +2292,37 @@ impl PyClusterManager {
         })
     }
 
-    /// Fetch a peer's Device Model catalog over `/auki/resources/0.5.0`.
-    fn fetch_device_model_catalog(
+    /// List registry `(id, hash)` pairs for `kind` on a peer (`/auki/registries/0.3.0`).
+    ///
+    /// `kind` is a snake_case string (`device_model`, `sensor`, …). Returns a
+    /// list of dicts `{ "id": …, "hash": … }`.
+    fn list_registry_entries(
         &self,
         py: Python<'_>,
         peer_id: &str,
-    ) -> PyResult<Vec<PyDeviceModelResource>> {
+        kind: &str,
+    ) -> PyResult<Vec<PyObject>> {
         let peer_id = parse_peer_id(peer_id)?;
+        let kind = parse_registry_kind(kind)?;
         let inner = self.inner.clone();
-        py.allow_threads(|| {
+        let entries = py.allow_threads(|| {
             shared_runtime().block_on(async move {
                 let guard = inner.lock().expect("ClusterManager lock");
                 let manager = guard
                     .as_ref()
                     .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
-                let response = manager
-                    .fetch_device_model_catalog(peer_id)
+                manager
+                    .list_registry_entries(peer_id, kind)
                     .await
-                    .map_err(map_fetch_device_model_catalog_error)?;
-                Ok(response
-                    .resources
-                    .into_iter()
-                    .map(|inner| PyDeviceModelResource { inner })
-                    .collect())
+                    .map_err(map_fetch_registry_entry_error)
             })
-        })
+        })?;
+        entries
+            .into_iter()
+            .map(|entry| {
+                registry_list_entry_to_dict(py, &entry).map(|dict| dict.into_any().unbind())
+            })
+            .collect()
     }
 
     /// Fetch and verify a peer's Sensor Registry entry.
@@ -2894,15 +2796,28 @@ fn map_fetch_map_catalog_error(e: RustFetchMapCatalogError) -> PyErr {
     }
 }
 
-fn map_fetch_device_model_catalog_error(e: RustFetchDeviceModelCatalogError) -> PyErr {
-    match e {
-        RustFetchDeviceModelCatalogError::UnsupportedProtocol => {
-            PyRuntimeError::new_err("remote peer does not support Device Model discovery")
-        }
-        RustFetchDeviceModelCatalogError::Request(error) => {
-            PyOSError::new_err(format!("fetch_device_model_catalog: {error}"))
-        }
+fn parse_registry_kind(kind: &str) -> PyResult<RustRegistryKind> {
+    match kind {
+        "sensor" => Ok(RustRegistryKind::Sensor),
+        "clock" => Ok(RustRegistryKind::Clock),
+        "frame" => Ok(RustRegistryKind::Frame),
+        "detector" => Ok(RustRegistryKind::Detector),
+        "map" => Ok(RustRegistryKind::Map),
+        "device_model" => Ok(RustRegistryKind::DeviceModel),
+        other => Err(PyValueError::new_err(format!(
+            "unknown registry kind {other:?}; expected sensor|clock|frame|detector|map|device_model"
+        ))),
     }
+}
+
+fn registry_list_entry_to_dict<'py>(
+    py: Python<'py>,
+    entry: &RustRegistryListEntry,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new_bound(py);
+    dict.set_item("id", &entry.id)?;
+    dict.set_item("hash", &entry.hash)?;
+    Ok(dict)
 }
 
 fn map_fetch_registry_entry_error(e: RustFetchRegistryEntryError) -> PyErr {
@@ -2977,7 +2892,6 @@ fn auki_domain(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyParticipantInfo>()?;
     m.add_class::<PyResourceEntry>()?;
     m.add_class::<PyMapLogResource>()?;
-    m.add_class::<PyDeviceModelResource>()?;
     m.add_class::<PyMessageEvent>()?;
     m.add_class::<PyMessageChannelResource>()?;
     m.add_class::<PyMessageChannelReceiver>()?;

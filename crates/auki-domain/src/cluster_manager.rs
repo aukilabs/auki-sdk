@@ -53,10 +53,10 @@ use auki_network::discovery_client::{
 };
 use auki_network::heartbeat_protocol::HeartbeatDomainClock;
 use auki_network::registries_protocol::{
-    RegistryEntryEnvelope, RegistryKind, RegistryRequest, RegistryResponse,
+    RegistryEntryEnvelope, RegistryKind, RegistryListEntry, RegistryRequest, RegistryResponse,
 };
 use auki_network::resources_protocol::{ResourceEntry, ResourcesRequest, ResourcesResponse};
-use auki_network::{MapCatalogProvider, ParticipantInfo, DeviceModelCatalogProvider, SessionHandle};
+use auki_network::{MapCatalogProvider, ParticipantInfo, SessionHandle};
 use auki_registry::{
     ClockRegistryEntry, DetectorRegistryEntry, FrameRegistryEntry, MapRegistryEntry, DeviceModelRegistryEntry,
     SensorRegistryEntry,
@@ -1472,19 +1472,15 @@ impl ClusterManager {
         self.runtime.set_map_catalog_provider(provider);
     }
 
-    /// Install the live Device Model catalog served over Resource Catalog v0.5.
-    pub fn set_device_model_catalog_provider(&self, provider: Arc<dyn DeviceModelCatalogProvider>) {
-        self.runtime.set_device_model_catalog_provider(provider);
-    }
-
     /// Register (or replace) the producer-local app root used to
-    /// serve `/auki/registries/0.0.1` requests. The SDK reads existing
-    /// registry files from this app root via `auki-registry` and
-    /// returns canonical JSON entries to cluster peers.
+    /// serve `/auki/registries/0.3.0` Get/List and blob requests. The SDK
+    /// reads existing registry files from this app root via `auki-registry`
+    /// and returns canonical JSON entries to cluster peers.
     ///
-    /// Inbound registry requests received before this call answer with
+    /// Inbound Get requests received before this call answer with
     /// `entry: None`, which means "this peer does not have that exact
-    /// registry entry" from the consumer's perspective.
+    /// registry entry" from the consumer's perspective. List answers with
+    /// an empty entries vector.
     pub fn set_registry_app_root(&self, app_root: impl Into<PathBuf>) {
         let app_root = app_root.into();
         *self
@@ -1558,12 +1554,25 @@ impl ClusterManager {
         Ok(self.runtime.request_map_catalog(peer_id).await?)
     }
 
-    /// Fetch a cluster peer's Device Model catalog over Resource Catalog v0.5.
-    pub async fn fetch_device_model_catalog(
+    /// List `(id, hash)` pairs for one registry kind on a cluster peer.
+    pub async fn list_registry_entries(
         &self,
         peer_id: PeerId,
-    ) -> Result<auki_network::ResourcesResponseV5, FetchDeviceModelCatalogError> {
-        Ok(self.runtime.request_device_model_catalog(peer_id).await?)
+        kind: RegistryKind,
+    ) -> Result<Vec<RegistryListEntry>, FetchRegistryEntryError> {
+        if self.stopped.load(Ordering::SeqCst) {
+            return Err(FetchRegistryEntryError::Stopped);
+        }
+        let response = self
+            .runtime
+            .request_registry_entry(peer_id, RegistryRequest::list(kind))
+            .await?;
+        match response {
+            RegistryResponse::List { entries } => Ok(entries),
+            RegistryResponse::Get { .. } => Err(FetchRegistryEntryError::InvalidEnvelope(
+                "registry peer replied with Get to a List request".into(),
+            )),
+        }
     }
 
     /// Fetch and SHA-256 verify one content-addressed blob from a cluster peer.
@@ -1768,14 +1777,15 @@ impl ClusterManager {
             .runtime
             .request_registry_entry(
                 peer_id,
-                RegistryRequest {
-                    kind,
-                    id: id.clone(),
-                    hash: hash.clone(),
-                },
+                RegistryRequest::get(kind, id.clone(), hash.clone()),
             )
             .await?;
-        let Some(envelope) = response.entry else {
+        let RegistryResponse::Get { entry } = response else {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(
+                "registry peer replied with List to a Get request".into(),
+            ));
+        };
+        let Some(envelope) = entry else {
             return Err(FetchRegistryEntryError::NotFound { kind, id, hash });
         };
         verify_registry_envelope(&envelope, kind, &id, &hash)?;
@@ -3506,30 +3516,10 @@ pub enum FetchMapCatalogError {
     Request(auki_network::RequestResourcesV4Error),
 }
 
-/// Errors from [`ClusterManager::fetch_device_model_catalog`].
-#[derive(Debug, Error)]
-pub enum FetchDeviceModelCatalogError {
-    /// The remote peer does not implement Resource Catalog v0.5.
-    #[error("remote peer does not support Resource Catalog v0.5")]
-    UnsupportedProtocol,
-    /// libp2p, wire, or timeout failure during the request.
-    #[error("request_device_model_catalog: {0}")]
-    Request(auki_network::RequestResourcesV5Error),
-}
-
 impl From<auki_network::RequestResourcesV4Error> for FetchMapCatalogError {
     fn from(error: auki_network::RequestResourcesV4Error) -> Self {
         match error {
             auki_network::RequestResourcesV4Error::UnsupportedProtocol => Self::UnsupportedProtocol,
-            error => Self::Request(error),
-        }
-    }
-}
-
-impl From<auki_network::RequestResourcesV5Error> for FetchDeviceModelCatalogError {
-    fn from(error: auki_network::RequestResourcesV5Error) -> Self {
-        match error {
-            auki_network::RequestResourcesV5Error::UnsupportedProtocol => Self::UnsupportedProtocol,
             error => Self::Request(error),
         }
     }
@@ -3674,12 +3664,9 @@ fn spawn_resources_handler(
     })
 }
 
-/// Spawn a task that drains inbound `/auki/registries/0.0.1` requests
-/// from `rx` and replies with the requested canonical JSON registry
-/// entry if it exists under the registered app root.
-///
-/// `entry: None` is the v0 not-found response: the peer understood
-/// the protocol but does not have that exact `(kind, id, hash)` entry.
+/// Spawn a task that drains inbound `/auki/registries/0.3.0` requests
+/// from `rx` and replies with Get envelopes or List rows from the
+/// registered app root.
 fn spawn_registry_handler(
     mut rx: mpsc::Receiver<RegistryRequestEvent>,
     app_root: Arc<Mutex<Option<PathBuf>>>,
@@ -3688,20 +3675,37 @@ fn spawn_registry_handler(
     tokio::spawn(async move {
         while let Some(RegistryRequestEvent { peer, request, ack }) = rx.recv().await {
             let root = app_root.lock().expect("registry_app_root lock").clone();
-            let entry = match root {
-                Some(root) => match read_registry_envelope(&root, &local_peer_id, &request) {
-                    Ok(entry) => entry,
-                    Err(e) => {
-                        eprintln!(
-                            "auki-domain: registry handler for {peer}: {:?} {:?}@{} failed: {e}",
-                            request.kind, request.id, request.hash
-                        );
-                        None
+            let response = match (&root, &request) {
+                (Some(root), RegistryRequest::Get { kind, id, hash }) => {
+                    match read_registry_envelope(root, &local_peer_id, *kind, id, hash) {
+                        Ok(entry) => RegistryResponse::Get { entry },
+                        Err(e) => {
+                            eprintln!(
+                                "auki-domain: registry Get for {peer}: {kind} {id}@{hash} failed: {e}"
+                            );
+                            RegistryResponse::Get { entry: None }
+                        }
                     }
+                }
+                (None, RegistryRequest::Get { .. }) => RegistryResponse::Get { entry: None },
+                (Some(root), RegistryRequest::List { kind }) => {
+                    match list_registry_refs(root, &local_peer_id, *kind) {
+                        Ok(entries) => RegistryResponse::List { entries },
+                        Err(e) => {
+                            eprintln!(
+                                "auki-domain: registry List for {peer}: {kind} failed: {e}"
+                            );
+                            RegistryResponse::List {
+                                entries: Vec::new(),
+                            }
+                        }
+                    }
+                }
+                (None, RegistryRequest::List { .. }) => RegistryResponse::List {
+                    entries: Vec::new(),
                 },
-                None => None,
             };
-            let _ = ack.send(RegistryResponse { entry });
+            let _ = ack.send(response);
         }
     })
 }
@@ -3727,57 +3731,72 @@ fn spawn_diagnostic_handler(
 fn read_registry_envelope(
     app_root: &std::path::Path,
     peer_id: &str,
-    request: &RegistryRequest,
+    kind: RegistryKind,
+    id: &str,
+    hash: &str,
 ) -> Result<Option<RegistryEntryEnvelope>, auki_registry::Error> {
-    match request.kind {
+    match kind {
         RegistryKind::Sensor => {
-            let Some(entry) =
-                auki_registry::read_sensor(app_root, peer_id, &request.id, &request.hash)?
-            else {
+            let Some(entry) = auki_registry::read_sensor(app_root, peer_id, id, hash)? else {
                 return Ok(None);
             };
             Ok(Some(envelope_for_sensor(entry)))
         }
         RegistryKind::Clock => {
-            let Some(entry) =
-                auki_registry::read_clock(app_root, peer_id, &request.id, &request.hash)?
-            else {
+            let Some(entry) = auki_registry::read_clock(app_root, peer_id, id, hash)? else {
                 return Ok(None);
             };
             Ok(Some(envelope_for_clock(entry)))
         }
         RegistryKind::Frame => {
-            let Some(entry) =
-                auki_registry::read_frame(app_root, peer_id, &request.id, &request.hash)?
-            else {
+            let Some(entry) = auki_registry::read_frame(app_root, peer_id, id, hash)? else {
                 return Ok(None);
             };
             Ok(Some(envelope_for_frame(entry)))
         }
         RegistryKind::Detector => {
-            let Some(entry) =
-                auki_registry::read_detector(app_root, peer_id, &request.id, &request.hash)?
-            else {
+            let Some(entry) = auki_registry::read_detector(app_root, peer_id, id, hash)? else {
                 return Ok(None);
             };
             Ok(Some(envelope_for_detector(entry)))
         }
         RegistryKind::Map => {
-            let Some(entry) =
-                auki_registry::read_map(app_root, peer_id, &request.id, &request.hash)?
-            else {
+            let Some(entry) = auki_registry::read_map(app_root, peer_id, id, hash)? else {
                 return Ok(None);
             };
             Ok(Some(envelope_for_map(entry)))
         }
         RegistryKind::DeviceModel => {
-            let Some(entry) =
-                auki_registry::read_device_model(app_root, peer_id, &request.id, &request.hash)?
-            else {
+            let Some(entry) = auki_registry::read_device_model(app_root, peer_id, id, hash)? else {
                 return Ok(None);
             };
             Ok(Some(envelope_for_device_model(entry)))
         }
+    }
+}
+
+fn list_registry_refs(
+    app_root: &std::path::Path,
+    peer_id: &str,
+    kind: RegistryKind,
+) -> Result<Vec<RegistryListEntry>, auki_registry::Error> {
+    match kind {
+        RegistryKind::DeviceModel => {
+            let entries = auki_registry::list_device_models(app_root, peer_id)?;
+            Ok(entries
+                .into_iter()
+                .map(|entry| RegistryListEntry {
+                    id: entry.id,
+                    hash: entry.hash,
+                })
+                .collect())
+        }
+        // Other kinds: wire supports List; disk walk not implemented in v0.
+        RegistryKind::Sensor
+        | RegistryKind::Clock
+        | RegistryKind::Frame
+        | RegistryKind::Detector
+        | RegistryKind::Map => Ok(Vec::new()),
     }
 }
 
@@ -4899,11 +4918,9 @@ mod tests {
         let envelope = read_registry_envelope(
             dir.path(),
             peer_id,
-            &RegistryRequest {
-                kind: RegistryKind::Frame,
-                id: entry.frame_id.clone(),
-                hash: hash.clone(),
-            },
+            RegistryKind::Frame,
+            &entry.frame_id,
+            &hash,
         )
         .unwrap()
         .expect("entry exists");
@@ -4939,11 +4956,9 @@ mod tests {
         let envelope = read_registry_envelope(
             dir.path(),
             peer_id,
-            &RegistryRequest {
-                kind: RegistryKind::Detector,
-                id: entry.detector_id.clone(),
-                hash: hash.clone(),
-            },
+            RegistryKind::Detector,
+            &entry.detector_id,
+            &hash,
         )
         .unwrap()
         .expect("entry exists");
@@ -4994,11 +5009,9 @@ mod tests {
         let envelope = read_registry_envelope(
             dir.path(),
             peer_id,
-            &RegistryRequest {
-                kind: RegistryKind::Map,
-                id: entry.map_id.clone(),
-                hash: hash.clone(),
-            },
+            RegistryKind::Map,
+            &entry.map_id,
+            &hash,
         )
         .unwrap()
         .expect("entry exists");

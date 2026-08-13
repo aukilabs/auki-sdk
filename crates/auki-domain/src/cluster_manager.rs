@@ -1494,12 +1494,15 @@ impl ClusterManager {
     /// over `/auki/resources/0.2.0`. This is the canonical discovery
     /// path for currently-requestable sensor, pose, time-transform, and
     /// detection logs.
+    ///
+    /// Local peer requests short-circuit to the in-process catalog
+    /// provider / session handle — libp2p cannot dial self.
     pub async fn fetch_resources_catalog(
         &self,
         peer_id: PeerId,
     ) -> Result<ResourcesResponse, FetchResourcesCatalogError> {
-        let response = self.runtime.request_resources_catalog(peer_id).await?;
-        Ok(response)
+        self.fetch_resources_catalog_with(peer_id, ResourcesRequest::all())
+            .await
     }
 
     /// Fetch a cluster peer's generalized resource catalog with an
@@ -1510,11 +1513,51 @@ impl ClusterManager {
         peer_id: PeerId,
         request: ResourcesRequest,
     ) -> Result<ResourcesResponse, FetchResourcesCatalogError> {
+        if peer_id == self.local_peer_id {
+            return Ok(self.local_resources_catalog(&request));
+        }
         let response = self
             .runtime
             .request_resources_catalog_with(peer_id, request)
             .await?;
         Ok(response)
+    }
+
+    fn local_resources_catalog(&self, request: &ResourcesRequest) -> ResourcesResponse {
+        let provider = self
+            .resource_catalog_provider
+            .lock()
+            .expect("resource_catalog_provider lock")
+            .clone();
+        let resources = if let Some(provider) = provider {
+            provider.snapshot_for_request(request, None)
+        } else {
+            let all_resources = {
+                let guard = self.session_handle.lock().expect("session_handle lock");
+                match guard.as_ref() {
+                    Some(h) => h.catalog(),
+                    None => Vec::new(),
+                }
+            };
+            if request.variants.is_empty() {
+                all_resources
+            } else {
+                use auki_network::resources_protocol::{Variant, VariantContent};
+                all_resources
+                    .into_iter()
+                    .filter(|r| {
+                        let row_variant = match &r.variant_content {
+                            VariantContent::SensorLog { .. } => Variant::SensorLog,
+                            VariantContent::PoseLog { .. } => Variant::PoseLog,
+                            VariantContent::TimeTransformLog { .. } => Variant::TimeTransformLog,
+                            VariantContent::DetectionLog { .. } => Variant::DetectionLog,
+                        };
+                        request.variants.contains(&row_variant)
+                    })
+                    .collect()
+            }
+        };
+        ResourcesResponse { resources }
     }
 
     /// Fetch a cluster peer's Resource Catalog v0.3 explicitly.
@@ -1555,6 +1598,9 @@ impl ClusterManager {
     }
 
     /// List `(id, hash)` pairs for one registry kind on a cluster peer.
+    ///
+    /// Local peer requests short-circuit to the registered app root —
+    /// libp2p cannot dial self.
     pub async fn list_registry_entries(
         &self,
         peer_id: PeerId,
@@ -1562,6 +1608,18 @@ impl ClusterManager {
     ) -> Result<Vec<RegistryListEntry>, FetchRegistryEntryError> {
         if self.stopped.load(Ordering::SeqCst) {
             return Err(FetchRegistryEntryError::Stopped);
+        }
+        if peer_id == self.local_peer_id {
+            let root = self
+                .registry_app_root
+                .lock()
+                .expect("registry_app_root lock")
+                .clone();
+            return match root {
+                Some(root) => list_registry_refs(&root, &self.local_peer_id.to_string(), kind)
+                    .map_err(|error| FetchRegistryEntryError::InvalidEnvelope(error.to_string())),
+                None => Ok(Vec::new()),
+            };
         }
         let response = self
             .runtime
@@ -1772,6 +1830,33 @@ impl ClusterManager {
     ) -> Result<RegistryEntryEnvelope, FetchRegistryEntryError> {
         if self.stopped.load(Ordering::SeqCst) {
             return Err(FetchRegistryEntryError::Stopped);
+        }
+        if peer_id == self.local_peer_id {
+            let root = self
+                .registry_app_root
+                .lock()
+                .expect("registry_app_root lock")
+                .clone();
+            let Some(root) = root else {
+                return Err(FetchRegistryEntryError::NotFound {
+                    kind,
+                    id,
+                    hash,
+                });
+            };
+            let entry = read_registry_envelope(
+                &root,
+                &self.local_peer_id.to_string(),
+                kind,
+                &id,
+                &hash,
+            )
+            .map_err(|error| FetchRegistryEntryError::InvalidEnvelope(error.to_string()))?;
+            let Some(envelope) = entry else {
+                return Err(FetchRegistryEntryError::NotFound { kind, id, hash });
+            };
+            verify_registry_envelope(&envelope, kind, &id, &hash)?;
+            return Ok(envelope);
         }
         let response = self
             .runtime

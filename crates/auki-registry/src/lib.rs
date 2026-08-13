@@ -14,9 +14,11 @@
 //! across all sessions of the same app. Hash-keyed writes are idempotent, so
 //! the same sensor entry produces the same `<hash>.json` regardless of session.
 
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1348,18 +1350,20 @@ pub struct DeviceModelListEntry {
     pub hash: String,
 }
 
-/// Enumerate device-model registry entries for `peer_id` under `app_root`.
+/// Enumerate device-model registry tips for `peer_id` under `app_root`.
 ///
-/// Walks `<app_root>/registries/device_models/<peer>/…` and returns every
-/// valid `(device_model_id, hash)` pair. Missing peer dirs yield an empty
-/// list. Malformed files are skipped with no error (same soft-fail spirit
-/// as an empty List response on the wire).
+/// Walks `<app_root>/registries/device_models/<peer>/…` and returns **one**
+/// `(device_model_id, hash)` per id — the tip with the newest file mtime
+/// (hash tie-break). Older content-addressed siblings stay on disk but are
+/// omitted from List. Missing peer dirs yield an empty list. Malformed
+/// files are skipped with no error (same soft-fail spirit as an empty List
+/// response on the wire).
 pub fn list_device_models(app_root: &Path, peer_id: &str) -> Result<Vec<DeviceModelListEntry>> {
     let peer_dir = auki_layout::device_models_peer_dir(app_root, peer_id);
     let Ok(model_dirs) = fs::read_dir(&peer_dir) else {
         return Ok(Vec::new());
     };
-    let mut entries = Vec::new();
+    let mut tips: HashMap<String, (SystemTime, DeviceModelListEntry)> = HashMap::new();
     for model_dir in model_dirs {
         let model_dir = model_dir?;
         if !model_dir.file_type()?.is_dir() {
@@ -1394,12 +1398,27 @@ pub fn list_device_models(app_root: &Path, peer_id: &str) -> Result<Vec<DeviceMo
             if file_stem != hash {
                 continue;
             }
-            entries.push(DeviceModelListEntry {
-                id: entry.device_model_id,
+            let mtime = file
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .unwrap_or(UNIX_EPOCH);
+            let id = entry.device_model_id;
+            let candidate = DeviceModelListEntry {
+                id: id.clone(),
                 hash,
-            });
+            };
+            match tips.get(&id) {
+                Some((existing_mtime, existing))
+                    if *existing_mtime > mtime
+                        || (*existing_mtime == mtime && existing.hash >= candidate.hash) => {}
+                _ => {
+                    tips.insert(id, (mtime, candidate));
+                }
+            }
         }
     }
+    let mut entries: Vec<DeviceModelListEntry> =
+        tips.into_values().map(|(_, entry)| entry).collect();
     entries.sort_by(|a, b| (&a.id, &a.hash).cmp(&(&b.id, &b.hash)));
     Ok(entries)
 }
@@ -3035,6 +3054,52 @@ mod id_charset_tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, "unitree/g1");
         assert_eq!(listed[0].hash, outcome.hash());
+    }
+
+    #[test]
+    fn list_device_models_returns_mtime_tip_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let urdf_a = put_blob(tmp.path(), b"<robot name='a'/>").unwrap();
+        let urdf_b = put_blob(tmp.path(), b"<robot name='b'/>").unwrap();
+        let mesh = put_blob(tmp.path(), b"mesh").unwrap();
+        let older = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "k1".into(),
+            body: DeviceModelBody {
+                model_id: "k1".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf_a,
+                    meshes: vec![MeshBlobRef {
+                        path: "meshes/body.stl".into(),
+                        sha256: mesh.clone(),
+                    }],
+                },
+                root_convention: Some("ros_body".into()),
+            },
+        };
+        let newer = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "k1".into(),
+            body: DeviceModelBody {
+                model_id: "k1".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf_b,
+                    meshes: vec![MeshBlobRef {
+                        path: "meshes/body.stl".into(),
+                        sha256: mesh,
+                    }],
+                },
+                root_convention: Some("ros_body".into()),
+            },
+        };
+        let older_hash = write_device_model(tmp.path(), &older).unwrap().hash().to_string();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let newer_hash = write_device_model(tmp.path(), &newer).unwrap().hash().to_string();
+        assert_ne!(older_hash, newer_hash);
+        let listed = list_device_models(tmp.path(), "galbot").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "k1");
+        assert_eq!(listed[0].hash, newer_hash);
     }
 
     #[test]

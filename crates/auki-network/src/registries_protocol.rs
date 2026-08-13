@@ -28,9 +28,11 @@
 //!       → RegistryResponse::List { entries: [{ id, hash }, ...] }
 //! ```
 //!
-//! `Get` with `entry: None` means the peer understood the protocol but does
-//! not have that exact entry. Transport failures, malformed frames, and
-//! timeouts remain protocol/request errors at the runtime layer.
+//! For `device_model`, List is tip-per-id (newest on-disk mtime). Older
+//! content-addressed siblings remain fetchable by Get when the hash is
+//! known. `Get` with `entry: None` means the peer understood the protocol
+//! but does not have that exact entry. Transport failures, malformed
+//! frames, and timeouts remain protocol/request errors at the runtime layer.
 //!
 //! ## Wire format
 //!

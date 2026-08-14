@@ -1422,9 +1422,9 @@ impl NetworkRuntime {
     /// `/auki/registries/0.3.0`. Pass [`RegistryRequest::Get`] for one
     /// exact entry or [`RegistryRequest::List`] to enumerate `(id, hash)`.
     ///
-    /// Get falls back to `/auki/registries/0.2.0` when the peer does not
-    /// speak 0.3. List does not fall back — it returns
-    /// [`RequestRegistryError::UnsupportedProtocol`].
+    /// Non-`device_model` Get falls back to `/auki/registries/0.2.0` when
+    /// the peer does not speak 0.3. List and `device_model` Get do not
+    /// fall back — they return [`RequestRegistryError::UnsupportedProtocol`].
     ///
     /// `peer_id` must be on the local allow-list — libp2p refuses
     /// the substream otherwise. Higher layers are responsible for
@@ -1440,12 +1440,11 @@ impl NetworkRuntime {
         let mut substream = match tokio::time::timeout(REGISTRIES_REQUEST_TIMEOUT, open_fut).await {
             Err(_) => return Err(RequestRegistryError::Timeout(REGISTRIES_REQUEST_TIMEOUT)),
             Ok(Err(libp2p_stream::OpenStreamError::UnsupportedProtocol(_))) => {
-                return match &request {
-                    RegistryRequest::Get { kind, id, hash } => {
-                        request_registry_entry_v2(self, peer_id, *kind, id.clone(), hash.clone())
-                            .await
+                return match registry_v2_fallback(&request) {
+                    Some((kind, id, hash)) => {
+                        request_registry_entry_v2(self, peer_id, kind, id, hash).await
                     }
-                    RegistryRequest::List { .. } => Err(RequestRegistryError::UnsupportedProtocol),
+                    None => Err(RequestRegistryError::UnsupportedProtocol),
                 };
             }
             Ok(Err(e)) => return Err(RequestRegistryError::OpenStream(e)),
@@ -3844,6 +3843,19 @@ async fn handle_inbound_registry_v2_substream(
     let _ = write_registry_response_v2(&mut substream, &RegistryResponseV2 { entry }).await;
 }
 
+/// Whether an outbound registries request may fall back to 0.2 when the
+/// peer lacks 0.3. Only non-`device_model` Get is eligible — List and
+/// `device_model` Get require 0.3 (inbound v2 answers `device_model` with
+/// a lying `entry: None`).
+fn registry_v2_fallback(request: &RegistryRequest) -> Option<(RegistryKind, String, String)> {
+    match request {
+        RegistryRequest::Get { kind, id, hash } if *kind != RegistryKind::DeviceModel => {
+            Some((*kind, id.clone(), hash.clone()))
+        }
+        _ => None,
+    }
+}
+
 async fn request_registry_entry_v2(
     runtime: &NetworkRuntime,
     peer_id: PeerId,
@@ -5602,5 +5614,34 @@ mod tests {
         assert_eq!(catalog.len(), 1);
         assert_eq!(catalog[0].resource_id, "local-events");
         runtime.shutdown();
+    }
+
+    #[test]
+    fn registry_v2_fallback_allows_sensor_get() {
+        let request = RegistryRequest::get(RegistryKind::Sensor, "cam", "abc");
+        let Some((kind, id, hash)) = registry_v2_fallback(&request) else {
+            panic!("sensor Get must fall back to 0.2");
+        };
+        assert_eq!(kind, RegistryKind::Sensor);
+        assert_eq!(id, "cam");
+        assert_eq!(hash, "abc");
+    }
+
+    #[test]
+    fn registry_v2_fallback_rejects_device_model_get() {
+        let request = RegistryRequest::get(RegistryKind::DeviceModel, "k1", "deadbeef");
+        assert!(
+            registry_v2_fallback(&request).is_none(),
+            "device_model Get must not fall back to 0.2"
+        );
+    }
+
+    #[test]
+    fn registry_v2_fallback_rejects_list() {
+        let request = RegistryRequest::list(RegistryKind::DeviceModel);
+        assert!(
+            registry_v2_fallback(&request).is_none(),
+            "List must not fall back to 0.2"
+        );
     }
 }

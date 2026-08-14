@@ -4001,12 +4001,14 @@ fn list_registry_refs(
                 })
                 .collect())
         }
-        // Callers must reject unsupported kinds before List (see registry_response_for).
         RegistryKind::Sensor
         | RegistryKind::Clock
         | RegistryKind::Frame
         | RegistryKind::Detector
-        | RegistryKind::Map => unreachable!("list is only implemented for device_model"),
+        | RegistryKind::Map => Err(auki_registry::Error::InvalidDeviceModel(format!(
+            "list is only implemented for device_model (got {})",
+            kind.as_str()
+        ))),
     }
 }
 
@@ -5845,6 +5847,16 @@ mod tests {
             response,
             RegistryResponse::Error { reason } if reason.contains("device_model")
         ));
+    }
+
+    #[test]
+    fn list_registry_refs_unsupported_kind_is_err_not_panic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = list_registry_refs(tmp.path(), "peer", RegistryKind::Sensor).unwrap_err();
+        assert!(
+            matches!(err, auki_registry::Error::InvalidDeviceModel(ref msg) if msg.contains("device_model")),
+            "expected InvalidDeviceModel, got {err:?}"
+        );
     }
 
     #[test]

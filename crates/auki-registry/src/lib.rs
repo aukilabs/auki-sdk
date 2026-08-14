@@ -1751,32 +1751,80 @@ fn urdf_robot_name(urdf: &str) -> Option<String> {
     let after = &urdf[start..];
     let end = after.find('>')?;
     let tag = &after[..end];
-    for quote in ['"', '\''] {
-        let key = format!("name={quote}");
-        if let Some(name_start) = tag.find(&key) {
-            let value_start = name_start + key.len();
-            let rest = &tag[value_start..];
-            if let Some(value_end) = rest.find(quote) {
-                let name = rest[..value_end].trim().to_ascii_lowercase();
-                if !name.is_empty() {
-                    return Some(name);
-                }
+    let bytes = tag.as_bytes();
+    let mut i = 0;
+    while i + 4 < bytes.len() {
+        if !tag[i..].starts_with("name") {
+            i += 1;
+            continue;
+        }
+        if i > 0 {
+            let prev = bytes[i - 1];
+            if !(prev == b'<' || prev.is_ascii_whitespace()) {
+                i += 1;
+                continue;
             }
         }
+        let mut j = i + "name".len();
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        if bytes.get(j) != Some(&b'=') {
+            i += 1;
+            continue;
+        }
+        j += 1;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        let quote = match bytes.get(j).copied() {
+            Some(b'"') | Some(b'\'') => bytes[j] as char,
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        let value_start = j + 1;
+        let Some(rel) = tag[value_start..].find(quote) else {
+            i += 1;
+            continue;
+        };
+        let name = tag[value_start..value_start + rel].trim().to_ascii_lowercase();
+        if !name.is_empty() {
+            return Some(name);
+        }
+        i = value_start + rel + 1;
     }
     None
+}
+
+/// If `urdf[i..]` opens an XML comment, return the index just past `-->`
+/// (or EOF if unclosed). Otherwise `None`.
+fn skip_xml_comment(urdf: &str, i: usize) -> Option<usize> {
+    if !urdf[i..].starts_with("<!--") {
+        return None;
+    }
+    match urdf[i + 4..].find("-->") {
+        Some(end) => Some(i + 4 + end + 3),
+        None => Some(urdf.len()),
+    }
 }
 
 /// `(value_start, value_end, original_value)` for every `<mesh … filename="…">`.
 ///
 /// Ignores `mesh_filename=` / comment / non-mesh tags. Only attributes on a
 /// `<mesh` element whose previous character is whitespace or `<` count.
-/// Allows ASCII whitespace around `=` (`filename = "…"`).
+/// Allows ASCII whitespace around `=` (`filename = "…"`). Skips `<!-- … -->`
+/// so commented mesh refs do not participate in rewrite.
 fn collect_urdf_mesh_filenames(urdf: &str) -> Vec<(usize, usize, String)> {
     let mut out = Vec::new();
     let bytes = urdf.as_bytes();
     let mut i = 0;
     while i + 8 < bytes.len() {
+        if let Some(next) = skip_xml_comment(urdf, i) {
+            i = next;
+            continue;
+        }
         if !urdf[i..].starts_with("filename") {
             i += 1;
             continue;
@@ -1838,10 +1886,15 @@ fn collect_urdf_mesh_filenames(urdf: &str) -> Vec<(usize, usize, String)> {
 
 /// True when a mesh `filename` attribute still points at `package://…`
 /// (including spaced `filename = "…"` forms the scanner might miss).
+/// Skips `<!-- … -->` so commented refs do not fail leftover checks.
 fn urdf_has_leftover_package_mesh_filename(urdf: &str) -> bool {
     let bytes = urdf.as_bytes();
     let mut i = 0;
     while i + 8 < bytes.len() {
+        if let Some(next) = skip_xml_comment(urdf, i) {
+            i = next;
+            continue;
+        }
         if !urdf[i..].starts_with("filename") {
             i += 1;
             continue;
@@ -3558,6 +3611,44 @@ mod id_charset_tests {
     }
 
     #[test]
+    fn collect_urdf_mesh_filenames_skips_commented_mesh() {
+        let urdf = r#"<robot name="K1">
+            <!-- <mesh filename="package://dead/meshes/skip.stl"/> -->
+            <link name="base">
+              <visual><geometry><mesh filename="meshes/body.stl"/></geometry></visual>
+            </link>
+        </robot>"#;
+        let refs = collect_urdf_mesh_filenames(urdf);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].2, "meshes/body.stl");
+        assert!(!urdf_has_leftover_package_mesh_filename(urdf));
+    }
+
+    #[test]
+    fn put_urdf_package_ignores_commented_package_mesh() {
+        let pkg = tempfile::tempdir().unwrap();
+        let meshes = pkg.path().join("meshes");
+        fs::create_dir_all(&meshes).unwrap();
+        fs::write(meshes.join("body.stl"), b"mesh").unwrap();
+        let urdf_path = pkg.path().join("robot.urdf");
+        fs::write(
+            &urdf_path,
+            r#"<robot name="K1">
+                <!-- <mesh filename="package://K1_URDF_Serial/meshes/gone.stl"/> -->
+                <link name="base">
+                  <visual><geometry><mesh filename="meshes/body.stl"/></geometry></visual>
+                </link>
+            </robot>"#,
+        )
+        .unwrap();
+        let app = tempfile::tempdir().unwrap();
+        let package = put_urdf_package(app.path(), &urdf_path, None, None).unwrap();
+        let (_, mesh_refs) = package.body.as_urdf().unwrap();
+        assert_eq!(mesh_refs.len(), 1);
+        assert_eq!(mesh_refs[0].path, "meshes/body.stl");
+    }
+
+    #[test]
     fn collect_urdf_mesh_filenames_accepts_spaced_equals() {
         let urdf = r#"<robot name="K1">
             <link name="base" mesh_filename = "attr.stl">
@@ -3567,6 +3658,39 @@ mod id_charset_tests {
         let refs = collect_urdf_mesh_filenames(urdf);
         assert_eq!(refs.len(), 1);
         assert_eq!(refs[0].2, "meshes/body.stl");
+    }
+
+    #[test]
+    fn urdf_robot_name_accepts_spaced_equals() {
+        assert_eq!(
+            urdf_robot_name(r#"<robot name = "K1">"#).as_deref(),
+            Some("k1")
+        );
+        assert_eq!(
+            urdf_robot_name(r#"<robot name='G1'>"#).as_deref(),
+            Some("g1")
+        );
+    }
+
+    #[test]
+    fn put_urdf_package_uses_spaced_robot_name() {
+        let pkg = tempfile::tempdir().unwrap();
+        let meshes = pkg.path().join("meshes");
+        fs::create_dir_all(&meshes).unwrap();
+        fs::write(meshes.join("body.stl"), b"mesh").unwrap();
+        let urdf_path = pkg.path().join("robot.urdf");
+        fs::write(
+            &urdf_path,
+            r#"<robot name = "K1">
+                <link name="base">
+                  <visual><geometry><mesh filename="meshes/body.stl"/></geometry></visual>
+                </link>
+            </robot>"#,
+        )
+        .unwrap();
+        let app = tempfile::tempdir().unwrap();
+        let package = put_urdf_package(app.path(), &urdf_path, None, None).unwrap();
+        assert_eq!(package.device_model_id, "k1");
     }
 
     #[test]

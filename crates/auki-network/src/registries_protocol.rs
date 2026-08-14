@@ -33,7 +33,7 @@
 //! (`RegistryRequestV2` / `RegistryResponseV2`) so mixed clusters can
 //! resolve sensor/clock/frame/detector/map entries. List and
 //! `device_model` require 0.3. Outbound clients dial 0.3 first and fall
-//! back to 0.2 only for Get when the peer lacks 0.3.
+//! back to 0.2 only for non-`device_model` Get when the peer lacks 0.3.
 //!
 //! For `device_model`, List is tip-per-id (last successful
 //! `write_device_model` via the on-disk TIP pointer; mtime is only a

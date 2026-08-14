@@ -294,8 +294,10 @@ impl Peer {
 
     /// Rewrite + blob a URDF package, then register the device-model entry.
     ///
-    /// `id` overrides the URDF robot name when `Some`; otherwise the id from
-    /// [`auki_registry::put_urdf_package`] is used.
+    /// `id` overrides the List/Get key (`device_model_id`) when `Some`;
+    /// otherwise the id from [`auki_registry::put_urdf_package`] is used.
+    /// `body.model_id` stays the URDF robot name even when `id` overrides
+    /// the registry key — consumers must key List/Get on `device_model_id`.
     pub fn register_urdf_package(
         &self,
         id: Option<&str>,

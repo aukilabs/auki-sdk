@@ -2870,6 +2870,9 @@ fn map_fetch_blob_error(e: RustRequestBlobError) -> PyErr {
         RustRequestBlobError::Timeout(timeout) => {
             PyOSError::new_err(format!("fetch_blob timed out after {timeout:?}"))
         }
+        RustRequestBlobError::Stopped => {
+            PyRuntimeError::new_err("ClusterManager has been shut down")
+        }
     }
 }
 

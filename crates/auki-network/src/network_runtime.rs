@@ -409,6 +409,10 @@ pub const RESOURCES_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// because blob chunks can be up to 1 MiB.
 pub const BLOBS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How long [`NetworkRuntime::request_blob`] may spend assembling after
+/// the substream is open (covers multi-chunk fetch of up to MAX_BLOB_BYTES).
+pub const BLOBS_FETCH_TIMEOUT: Duration = Duration::from_secs(180);
+
 /// Live source for `/auki/resources/0.4.0` Map Log rows.
 pub trait MapCatalogProvider: Send + Sync {
     fn map_catalog(&self) -> ResourcesResponseV4;
@@ -488,6 +492,8 @@ pub enum RequestBlobError {
     SizeMismatch { expected: u64, actual: u64 },
     #[error("invalid remote blob response: {0}")]
     InvalidResponse(String),
+    #[error("ClusterManager has been shut down")]
+    Stopped,
 }
 
 fn map_resources_v4_open_error(error: libp2p_stream::OpenStreamError) -> RequestResourcesV4Error {
@@ -1287,60 +1293,67 @@ impl NetworkRuntime {
             Ok(Ok(stream)) => stream,
         };
 
-        let mut bytes = Vec::new();
-        let mut offset = 0u64;
-        let mut expected_total: Option<u64> = None;
-        loop {
-            let request = BlobRequest {
-                sha256: sha256.clone(),
-                offset,
-                max_len: crate::blobs_protocol::MAX_BLOB_CHUNK_BYTES,
-            };
-            let (meta, chunk) = blob_round_trip(&mut substream, &request).await?;
-            if meta.total_size > crate::blobs_protocol::MAX_BLOB_BYTES {
-                return Err(RequestBlobError::InvalidResponse(
-                    "total_size exceeds MAX_BLOB_BYTES".into(),
-                ));
-            }
-            match expected_total {
-                None => {
-                    expected_total = Some(meta.total_size);
-                    bytes.reserve(meta.total_size as usize);
+        let assemble = async {
+            let mut bytes = Vec::new();
+            let mut offset = 0u64;
+            let mut expected_total: Option<u64> = None;
+            loop {
+                let request = BlobRequest {
+                    sha256: sha256.clone(),
+                    offset,
+                    max_len: crate::blobs_protocol::MAX_BLOB_CHUNK_BYTES,
+                };
+                let (meta, chunk) = blob_round_trip(&mut substream, &request).await?;
+                if meta.total_size > crate::blobs_protocol::MAX_BLOB_BYTES {
+                    return Err(RequestBlobError::InvalidResponse(
+                        "total_size exceeds MAX_BLOB_BYTES".into(),
+                    ));
                 }
-                Some(expected) if expected != meta.total_size => {
-                    return Err(RequestBlobError::SizeMismatch {
-                        expected,
-                        actual: meta.total_size,
-                    });
+                match expected_total {
+                    None => {
+                        expected_total = Some(meta.total_size);
+                        bytes.reserve(meta.total_size as usize);
+                    }
+                    Some(expected) if expected != meta.total_size => {
+                        return Err(RequestBlobError::SizeMismatch {
+                            expected,
+                            actual: meta.total_size,
+                        });
+                    }
+                    Some(_) => {}
                 }
-                Some(_) => {}
-            }
-            if meta.total_size == 0 {
-                break;
-            }
-            if chunk.is_empty() {
+                if meta.total_size == 0 {
+                    break;
+                }
+                if chunk.is_empty() {
+                    if offset == meta.total_size {
+                        break;
+                    }
+                    return Err(RequestBlobError::InvalidResponse(
+                        "empty chunk before end of blob".into(),
+                    ));
+                }
+                bytes.extend_from_slice(&chunk);
+                offset += chunk.len() as u64;
                 if offset == meta.total_size {
                     break;
                 }
-                return Err(RequestBlobError::InvalidResponse(
-                    "empty chunk before end of blob".into(),
-                ));
+                if offset > meta.total_size {
+                    return Err(RequestBlobError::InvalidResponse(
+                        "chunk exceeds advertised size".into(),
+                    ));
+                }
             }
-            bytes.extend_from_slice(&chunk);
-            offset += chunk.len() as u64;
-            if offset == meta.total_size {
-                break;
+            if auki_registry::sha256_hex(&bytes) != sha256 {
+                return Err(RequestBlobError::HashMismatch);
             }
-            if offset > meta.total_size {
-                return Err(RequestBlobError::InvalidResponse(
-                    "chunk exceeds advertised size".into(),
-                ));
-            }
+            Ok(bytes)
+        };
+
+        match tokio::time::timeout(BLOBS_FETCH_TIMEOUT, assemble).await {
+            Err(_) => Err(RequestBlobError::Timeout(BLOBS_FETCH_TIMEOUT)),
+            Ok(result) => result,
         }
-        if auki_registry::sha256_hex(&bytes) != sha256 {
-            return Err(RequestBlobError::HashMismatch);
-        }
-        Ok(bytes)
     }
 
     /// Atomically register a receiver-owned live message channel and its
@@ -3564,8 +3577,9 @@ async fn blob_round_trip<S>(
 where
     S: futures::AsyncRead + futures::AsyncWrite + Unpin,
 {
-    write_blob_request(stream, request)
+    tokio::time::timeout(BLOBS_REQUEST_TIMEOUT, write_blob_request(stream, request))
         .await
+        .map_err(|_| RequestBlobError::Timeout(BLOBS_REQUEST_TIMEOUT))?
         .map_err(RequestBlobError::Protocol)?;
     let (response, chunk) = tokio::time::timeout(BLOBS_REQUEST_TIMEOUT, read_blob_response(stream))
         .await
@@ -3601,9 +3615,28 @@ fn serve_blob_request(app_root: Option<&std::path::Path>, request: &BlobRequest)
             }),
             range.chunk,
         ),
-        Err(error) => (
+        Err(auki_registry::Error::InvalidBlob(msg)) if msg == "offset past end of blob" => (
             BlobResponse::Error {
-                reason: error.to_string(),
+                reason: "offset past end of blob".into(),
+            },
+            Vec::new(),
+        ),
+        Err(auki_registry::Error::Io(_)) => (
+            BlobResponse::Error {
+                reason: "io".into(),
+            },
+            Vec::new(),
+        ),
+        Err(auki_registry::Error::InvalidBlob(_))
+        | Err(auki_registry::Error::BlobHashMismatch) => (
+            BlobResponse::Error {
+                reason: "invalid blob".into(),
+            },
+            Vec::new(),
+        ),
+        Err(_) => (
+            BlobResponse::Error {
+                reason: "invalid blob".into(),
             },
             Vec::new(),
         ),
@@ -3616,9 +3649,14 @@ async fn handle_inbound_blob_substream(
     blob_app_root: SharedBlobAppRoot,
 ) {
     loop {
-        let request = match read_blob_request(&mut substream).await {
-            Ok(request) => request,
-            Err(_) => return,
+        let request = match tokio::time::timeout(
+            BLOBS_REQUEST_TIMEOUT,
+            read_blob_request(&mut substream),
+        )
+        .await
+        {
+            Ok(Ok(request)) => request,
+            Ok(Err(_)) | Err(_) => return,
         };
         let app_root = blob_app_root.lock().expect("blob_app_root lock").clone();
         let (response, chunk) = serve_blob_request(app_root.as_deref(), &request);

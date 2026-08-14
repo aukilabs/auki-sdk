@@ -26,13 +26,16 @@
 //!
 //! List: RegistryRequest::List { kind }
 //!       → RegistryResponse::List { entries: [{ id, hash }, ...] }
+//!         or RegistryResponse::Error { reason } when List is unsupported
 //! ```
 //!
-//! For `device_model`, List is tip-per-id (newest on-disk mtime). Older
-//! content-addressed siblings remain fetchable by Get when the hash is
-//! known. `Get` with `entry: None` means the peer understood the protocol
-//! but does not have that exact entry. Transport failures, malformed
-//! frames, and timeouts remain protocol/request errors at the runtime layer.
+//! For `device_model`, List is tip-per-id (last successful
+//! `write_device_model` via the on-disk TIP pointer; mtime is only a
+//! fallback for pre-TIP trees). Older content-addressed siblings remain
+//! fetchable by Get when the hash is known. `Get` with `entry: None`
+//! means the peer understood the protocol but does not have that exact
+//! entry. Transport failures, malformed frames, and timeouts remain
+//! protocol/request errors at the runtime layer.
 //!
 //! ## Wire format
 //!
@@ -153,8 +156,14 @@ pub enum RegistryResponse {
     /// Reply to [`RegistryRequest::List`].
     List {
         /// Known `(id, hash)` pairs for the requested kind. Empty when
-        /// none are published or the kind is not listed yet.
+        /// none are published.
         entries: Vec<RegistryListEntry>,
+    },
+    /// Peer understood the request but cannot fulfill it (e.g. List for
+    /// a kind that is not implemented yet).
+    Error {
+        /// Stable, non-path reason string.
+        reason: String,
     },
 }
 
@@ -382,5 +391,12 @@ mod tests {
         let list = serde_json::to_string(&RegistryRequest::list(RegistryKind::DeviceModel)).unwrap();
         assert!(list.contains(r#""op":"list""#), "{list}");
         assert!(list.contains(r#""kind":"device_model""#), "{list}");
+
+        let err = serde_json::to_string(&RegistryResponse::Error {
+            reason: "list is only implemented for device_model".into(),
+        })
+        .unwrap();
+        assert!(err.contains(r#""op":"error""#), "{err}");
+        assert!(err.contains(r#""reason":"list is only implemented for device_model""#), "{err}");
     }
 }

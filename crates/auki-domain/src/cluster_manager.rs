@@ -1638,6 +1638,9 @@ impl ClusterManager {
             RegistryResponse::Get { .. } => Err(FetchRegistryEntryError::InvalidEnvelope(
                 "registry peer replied with Get to a List request".into(),
             )),
+            RegistryResponse::Error { reason } => {
+                Err(FetchRegistryEntryError::InvalidEnvelope(reason))
+            }
         }
     }
 
@@ -1652,9 +1655,7 @@ impl ClusterManager {
     ) -> Result<Vec<u8>, auki_network::RequestBlobError> {
         let sha256 = sha256.into();
         if self.stopped.load(Ordering::SeqCst) {
-            return Err(auki_network::RequestBlobError::InvalidResponse(
-                "ClusterManager has been shut down".into(),
-            ));
+            return Err(auki_network::RequestBlobError::Stopped);
         }
         if peer_id == self.local_peer_id {
             let root = self
@@ -1890,10 +1891,16 @@ impl ClusterManager {
                 RegistryRequest::get(kind, id.clone(), hash.clone()),
             )
             .await?;
-        let RegistryResponse::Get { entry } = response else {
-            return Err(FetchRegistryEntryError::InvalidEnvelope(
-                "registry peer replied with List to a Get request".into(),
-            ));
+        let entry = match response {
+            RegistryResponse::Get { entry } => entry,
+            RegistryResponse::List { .. } => {
+                return Err(FetchRegistryEntryError::InvalidEnvelope(
+                    "registry peer replied with List to a Get request".into(),
+                ));
+            }
+            RegistryResponse::Error { reason } => {
+                return Err(FetchRegistryEntryError::InvalidEnvelope(reason));
+            }
         };
         let Some(envelope) = entry else {
             return Err(FetchRegistryEntryError::NotFound { kind, id, hash });
@@ -3799,14 +3806,20 @@ fn spawn_registry_handler(
                 }
                 (None, RegistryRequest::Get { .. }) => RegistryResponse::Get { entry: None },
                 (Some(root), RegistryRequest::List { kind }) => {
-                    match list_registry_refs(root, &local_peer_id, *kind) {
-                        Ok(entries) => RegistryResponse::List { entries },
-                        Err(e) => {
-                            eprintln!(
-                                "auki-domain: registry List for {peer}: {kind} failed: {e}"
-                            );
-                            RegistryResponse::List {
-                                entries: Vec::new(),
+                    if !matches!(kind, RegistryKind::DeviceModel) {
+                        RegistryResponse::Error {
+                            reason: "list is only implemented for device_model".into(),
+                        }
+                    } else {
+                        match list_registry_refs(root, &local_peer_id, *kind) {
+                            Ok(entries) => RegistryResponse::List { entries },
+                            Err(e) => {
+                                eprintln!(
+                                    "auki-domain: registry List for {peer}: {kind} failed: {e}"
+                                );
+                                RegistryResponse::List {
+                                    entries: Vec::new(),
+                                }
                             }
                         }
                     }
@@ -3901,12 +3914,14 @@ fn list_registry_refs(
                 })
                 .collect())
         }
-        // Other kinds: wire supports List; disk walk not implemented in v0.
         RegistryKind::Sensor
         | RegistryKind::Clock
         | RegistryKind::Frame
         | RegistryKind::Detector
-        | RegistryKind::Map => Ok(Vec::new()),
+        | RegistryKind::Map => Err(auki_registry::Error::InvalidDeviceModel(format!(
+            "list is only implemented for device_model (got {})",
+            kind.as_str()
+        ))),
     }
 }
 
@@ -3921,7 +3936,7 @@ fn fetch_local_blob(
     match auki_registry::get_blob(root, sha256) {
         Ok(Some(bytes)) => Ok(bytes),
         Ok(None) => Err(auki_network::RequestBlobError::NotFound),
-        Err(auki_registry::Error::InvalidBlob(msg)) if msg.contains("do not match SHA-256") => {
+        Err(auki_registry::Error::BlobHashMismatch) => {
             Err(auki_network::RequestBlobError::HashMismatch)
         }
         Err(error) => Err(auki_network::RequestBlobError::InvalidResponse(

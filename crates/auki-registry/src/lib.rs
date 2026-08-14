@@ -1080,8 +1080,10 @@ pub enum Error {
     InvalidMap(String),
     /// A device model entry has invalid metadata or blob references.
     InvalidDeviceModel(String),
-    /// A blob SHA-256 is invalid or its bytes do not match its address.
+    /// A blob SHA-256 is invalid or its on-disk size is out of bounds.
     InvalidBlob(String),
+    /// On-disk blob bytes do not match the requested SHA-256 address.
+    BlobHashMismatch,
 }
 
 impl std::fmt::Display for Error {
@@ -1109,6 +1111,9 @@ impl std::fmt::Display for Error {
             Error::InvalidMap(msg) => write!(f, "invalid map: {msg}"),
             Error::InvalidDeviceModel(msg) => write!(f, "invalid device model: {msg}"),
             Error::InvalidBlob(msg) => write!(f, "invalid blob: {msg}"),
+            Error::BlobHashMismatch => {
+                write!(f, "on-disk bytes do not match SHA-256 address")
+            }
         }
     }
 }
@@ -1332,22 +1337,22 @@ pub fn write_device_model(
 fn ensure_device_model_blobs(app_root: &Path, entry: &DeviceModelRegistryEntry) -> Result<()> {
     match &entry.body.format {
         DeviceModelFormat::Urdf { urdf_sha256, meshes } => {
-            if !blob_exists(app_root, urdf_sha256)? {
-                return Err(Error::InvalidDeviceModel(format!(
-                    "referenced blob {urdf_sha256} not found"
-                )));
-            }
+            ensure_blob_verified(app_root, urdf_sha256)?;
             for mesh in meshes {
-                if !blob_exists(app_root, &mesh.sha256)? {
-                    return Err(Error::InvalidDeviceModel(format!(
-                        "referenced blob {} not found",
-                        mesh.sha256
-                    )));
-                }
+                ensure_blob_verified(app_root, &mesh.sha256)?;
             }
         }
     }
     Ok(())
+}
+
+fn ensure_blob_verified(app_root: &Path, sha256: &str) -> Result<()> {
+    match get_blob(app_root, sha256)? {
+        Some(_) => Ok(()),
+        None => Err(Error::InvalidDeviceModel(format!(
+            "referenced blob {sha256} not found"
+        ))),
+    }
 }
 
 /// Read a Device Model Registry entry by `(peer_id, device_model_id, hash)`.
@@ -1391,12 +1396,13 @@ pub struct DeviceModelListEntry {
 /// Enumerate device-model registry tips for `peer_id` under `app_root`.
 ///
 /// Walks `<app_root>/registries/device_models/<peer>/…` and returns **one**
-/// `(device_model_id, hash)` per id. Prefers the on-disk `TIP` pointer
-/// written by [`write_device_model`]; falls back to newest file mtime
-/// (hash tie-break) for trees that predate TIP. Older content-addressed
-/// siblings stay on disk but are omitted from List. Missing peer dirs
-/// yield an empty list. Malformed files are skipped with no error (same
-/// soft-fail spirit as an empty List response on the wire).
+/// `(device_model_id, hash)` per id. Prefers the on-disk `TIP` pointer from
+/// the last successful [`write_device_model`]; falls back to newest file
+/// mtime (hash tie-break) for trees that predate TIP. Older
+/// content-addressed siblings stay on disk but are omitted from List.
+/// Missing peer dirs yield an empty list. Malformed files are skipped
+/// with no error (same soft-fail spirit as an empty List response on the
+/// wire).
 pub fn list_device_models(app_root: &Path, peer_id: &str) -> Result<Vec<DeviceModelListEntry>> {
     let peer_dir = auki_layout::device_models_peer_dir(app_root, peer_id);
     let Ok(model_dirs) = fs::read_dir(&peer_dir) else {
@@ -1458,7 +1464,8 @@ fn read_device_model_tip(
         return Ok(None);
     };
     let hash = hash.trim();
-    if hash.is_empty() {
+    // TIP must look like an auki-hash XXH3-128 identity (32 lowercase hex).
+    if !is_registry_entry_hash(hash) {
         return Ok(None);
     }
     let entry_path = model_dir.join(format!("{hash}.json"));
@@ -1589,7 +1596,7 @@ pub fn get_blob(app_root: &Path, sha256: &str) -> Result<Option<Vec<u8>>> {
         )));
     }
     if sha256_hex(&bytes) != sha256 {
-        return Err(Error::InvalidBlob("on-disk bytes do not match SHA-256 address".into()));
+        return Err(Error::BlobHashMismatch);
     }
     Ok(Some(bytes))
 }
@@ -1732,13 +1739,36 @@ fn urdf_robot_name(urdf: &str) -> Option<String> {
     None
 }
 
-/// `(value_start, value_end, original_value)` for every `filename="…"` / `filename='…'`.
+/// `(value_start, value_end, original_value)` for every `<mesh … filename="…">`.
+///
+/// Ignores `mesh_filename=` / comment / non-mesh tags. Only attributes on a
+/// `<mesh` element whose previous character is whitespace or `<` count.
 fn collect_urdf_mesh_filenames(urdf: &str) -> Vec<(usize, usize, String)> {
     let mut out = Vec::new();
     let bytes = urdf.as_bytes();
     let mut i = 0;
     while i + 10 < bytes.len() {
         if !urdf[i..].starts_with("filename=") {
+            i += 1;
+            continue;
+        }
+        if i > 0 {
+            let prev = bytes[i - 1];
+            if !(prev == b'<' || prev.is_ascii_whitespace()) {
+                i += 1;
+                continue;
+            }
+        }
+        let Some(tag_start) = urdf[..i].rfind('<') else {
+            i += 1;
+            continue;
+        };
+        let after_lt = &urdf[tag_start + 1..i];
+        let tag_name = after_lt
+            .split(|c: char| c.is_ascii_whitespace())
+            .next()
+            .unwrap_or("");
+        if !tag_name.eq_ignore_ascii_case("mesh") {
             i += 1;
             continue;
         }
@@ -1814,51 +1844,19 @@ fn path_has_parent_dir(path: &Path) -> bool {
     path.components().any(|c| matches!(c, Component::ParentDir))
 }
 
+/// Resolve a mesh path fail-closed: only the exact package-relative path
+/// (plus explicit `package://pkg/rel` joins under `package_dir`). No
+/// basename or parent-directory guesses — those can steal the wrong file.
 fn resolve_urdf_mesh(package_dir: &Path, original: &str, rel: &str) -> Option<PathBuf> {
-    let basename = Path::new(rel).file_name()?;
-    let mut candidates = vec![
-        package_dir.join(rel),
-        package_dir.join("meshes").join(basename),
-        package_dir
-            .parent()
-            .unwrap_or(package_dir)
-            .join(rel),
-        package_dir
-            .parent()
-            .unwrap_or(package_dir)
-            .join("meshes")
-            .join(basename),
-    ];
+    let mut candidates = vec![package_dir.join(rel)];
     if let Some(rest) = original.strip_prefix("package://") {
         let (pkg, relative) = rest
             .split_once('/')
             .map(|(pkg, relative)| (pkg, relative))
             .unwrap_or((rest, ""));
         candidates.push(package_dir.join(rest));
-        candidates.push(package_dir.join(pkg).join(relative));
-        if let Some(parent) = package_dir.parent() {
-            candidates.push(parent.join(rest));
-            candidates.push(parent.join(pkg).join(relative));
-        }
-        for env_key in ["AMENT_PREFIX_PATH", "ROS_PACKAGE_PATH"] {
-            let Ok(value) = std::env::var(env_key) else {
-                continue;
-            };
-            for prefix in value.split(':').filter(|prefix| !prefix.is_empty()) {
-                let root = PathBuf::from(prefix);
-                if env_key == "AMENT_PREFIX_PATH" {
-                    candidates.push(root.join("share").join(pkg).join(relative));
-                    candidates.push(
-                        root.join("share")
-                            .join(pkg)
-                            .join("meshes")
-                            .join(basename),
-                    );
-                } else {
-                    candidates.push(root.join(pkg).join(relative));
-                    candidates.push(root.join(pkg).join("meshes").join(basename));
-                }
-            }
+        if !relative.is_empty() {
+            candidates.push(package_dir.join(pkg).join(relative));
         }
     }
     candidates.into_iter().find(|path| {
@@ -1931,6 +1929,11 @@ fn read_at(path: &Path) -> Result<Option<Vec<u8>>> {
 
 pub fn is_sha256_hex(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Whether `value` is a 32-character lowercase hex XXH3-128 registry entry hash.
+pub fn is_registry_entry_hash(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn atomic_write(target: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -3252,7 +3255,7 @@ mod id_charset_tests {
     }
 
     #[test]
-    fn list_device_models_returns_mtime_tip_only() {
+    fn list_device_models_returns_tip_pointer() {
         let tmp = tempfile::tempdir().unwrap();
         let urdf_a = put_blob(tmp.path(), b"<robot name='a'/>").unwrap();
         let urdf_b = put_blob(tmp.path(), b"<robot name='b'/>").unwrap();
@@ -3294,7 +3297,7 @@ mod id_charset_tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, "k1");
         assert_eq!(listed[0].hash, newer_hash);
-        // TIP pointer is what List prefers (not mtime).
+        // TIP pointer is what List prefers (last successful write).
         let tip_path = auki_layout::device_model_entry_path(tmp.path(), "galbot", "k1", &newer_hash)
             .parent()
             .unwrap()
@@ -3372,6 +3375,77 @@ mod id_charset_tests {
             write_device_model(tmp.path(), &entry),
             Err(Error::InvalidDeviceModel(_))
         ));
+    }
+
+    #[test]
+    fn write_device_model_rejects_hash_mismatched_blob() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fake_sha = "a".repeat(64);
+        let path = auki_layout::blob_path(tmp.path(), &fake_sha);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"garbage-not-matching-sha").unwrap();
+        let entry = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "bad".into(),
+            body: DeviceModelBody {
+                model_id: "bad".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: fake_sha,
+                    meshes: vec![],
+                },
+                root_convention: None,
+            },
+        };
+        assert!(matches!(
+            write_device_model(tmp.path(), &entry),
+            Err(Error::BlobHashMismatch)
+        ));
+        let tip = auki_layout::device_model_entry_path(tmp.path(), "galbot", "bad", "x")
+            .parent()
+            .unwrap()
+            .join("TIP");
+        assert!(!tip.exists());
+    }
+
+    #[test]
+    fn put_urdf_package_does_not_steal_basename() {
+        let pkg = tempfile::tempdir().unwrap();
+        let meshes = pkg.path().join("meshes");
+        fs::create_dir_all(&meshes).unwrap();
+        // Collision mesh exists at the basename path, but visual path is absent.
+        fs::write(meshes.join("body.stl"), b"collision").unwrap();
+        let urdf_path = pkg.path().join("robot.urdf");
+        fs::write(
+            &urdf_path,
+            r#"<robot name="K1">
+                <link name="base">
+                  <visual><geometry><mesh filename="meshes/visual/body.stl"/></geometry></visual>
+                </link>
+            </robot>"#,
+        )
+        .unwrap();
+        let app = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            put_urdf_package(app.path(), &urdf_path, None),
+            Err(Error::InvalidDeviceModel(_))
+        ));
+        assert!(list_device_models(app.path(), "unused").unwrap().is_empty());
+        // No blobs should have been written under a stolen basename.
+        let blobs = app.path().join("blobs");
+        assert!(!blobs.exists() || fs::read_dir(&blobs).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn collect_urdf_mesh_filenames_only_mesh_tags() {
+        let urdf = r#"<robot name="K1">
+            <!-- filename="comment.stl" -->
+            <link name="base" mesh_filename="attr.stl">
+              <visual><geometry><mesh filename="meshes/body.stl"/></geometry></visual>
+            </link>
+        </robot>"#;
+        let refs = collect_urdf_mesh_filenames(urdf);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].2, "meshes/body.stl");
     }
 
     #[test]

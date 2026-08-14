@@ -261,7 +261,7 @@ For peer-to-peer participation. Not REST-shaped, but they are public protocols t
 | `/auki/membership/0.0.1` | Manager gossips its peer id plus membership JSON to current members. |
 | `/auki/info/0.0.1` | Peer-to-peer `ParticipantInfo` fetch. |
 | `/auki/resources/0.2.0` | Peer-to-peer resource catalog fetch. Returns `ResourceEntry` rows discriminated by `variant`: `sensor_log` \| `pose_log` \| `time_transform_log` \| `detection_log`. Each row carries the canonical source / writer split (`source_peer_id`, `writer_peer_id`) plus variant-specific `sensor` / `pose` / `manifest` blocks. (Replaced the v0 `sensor_stream` / `transform_edge` / `pose_stream` row types in #216.) |
-| `/auki/registries/0.3.0` | Peer-to-peer hash-pinned registry Get + tip-only `device_model` List. |
+| `/auki/registries/0.3.0` | Peer-to-peer hash-pinned registry Get + tip-only `device_model` List (last successful write via TIP). |
 | `/auki/blobs/0.1.0` | Content-addressed binary blob transfer (URDF / mesh bytes). |
 | `/auki/stream/0.2.0` | Live streaming. `StreamRequest { source_peer_id, resource_id, from }` opens a substream against the canonical owner of a log; samples flow as prost-encoded `StreamMessage` frames carrying camera, point cloud, joint-encoder, audio, or pose `SpatialTransform` payloads. |
 
@@ -281,7 +281,7 @@ The main live paths are:
 | `/auki/join/0.0.1` + `/auki/membership/0.0.1` | Membership convergence | Join request/response plus Manager-gossiped Manager id + membership JSON. |
 | `/auki/heartbeat/0.0.1` | Peer-side liveness | Pairwise heartbeat frames used to detect Manager death. |
 | `/auki/info/0.0.1` + `/auki/resources/0.2.0` | Peer metadata and resource discovery | `ParticipantInfo`, plus the peer's `ResourceEntry` catalog: `sensor_log` / `pose_log` / `time_transform_log` / `detection_log` rows with explicit `source_peer_id` / `writer_peer_id`. |
-| `/auki/registries/0.3.0` | Registry metadata | Hash-pinned Sensor / Clock / Frame / Detector / Map / Device Model Registry entries as canonical JSON; tip-only `device_model` List. |
+| `/auki/registries/0.3.0` | Registry metadata | Hash-pinned Sensor / Clock / Frame / Detector / Map / Device Model Registry entries as canonical JSON; tip-only `device_model` List (last successful write via TIP). |
 | `/auki/blobs/0.1.0` | Binary blobs | Content-addressed URDF / mesh bytes referenced by device models. |
 | `/auki/stream/0.2.0` | Typed live data streaming | Prost-encoded `StreamMessage` frames opened via `StreamRequest { source_peer_id, resource_id, from }`. Today: camera, point cloud, joint encoders, audio, and pose `SpatialTransform`. |
 

@@ -16,7 +16,8 @@
 //! ```
 
 use auki_registry::{
-    ClockRegistryEntry, DetectorRegistryEntry, FrameRegistryEntry, SensorRegistryEntry,
+    ClockRegistryEntry, DetectorRegistryEntry, DeviceModelRegistryEntry, FrameRegistryEntry,
+    SensorRegistryEntry,
 };
 use std::fs;
 use std::path::Path;
@@ -121,4 +122,9 @@ fn frame_unity_locked() {
 #[test]
 fn detector_object_detection_locked() {
     assert_round_trip::<DetectorRegistryEntry>("detector_object_detection.json");
+}
+
+#[test]
+fn device_model_urdf_locked() {
+    assert_round_trip::<DeviceModelRegistryEntry>("device_model_urdf.json");
 }

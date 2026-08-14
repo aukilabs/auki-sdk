@@ -660,6 +660,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
     registry::sha256_hex(bytes)
 }
 
+/// Rewrite + blob a URDF. Package dir is the URDF's parent (flattened meshes only).
 #[pyfunction]
 #[pyo3(signature = (app_root, urdf_path, root_convention=None))]
 fn put_urdf_package(

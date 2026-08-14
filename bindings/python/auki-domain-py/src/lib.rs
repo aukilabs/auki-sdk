@@ -2822,6 +2822,9 @@ fn registry_list_entry_to_dict<'py>(
 
 fn map_fetch_registry_entry_error(e: RustFetchRegistryEntryError) -> PyErr {
     match e {
+        RustFetchRegistryEntryError::UnsupportedProtocol => {
+            PyRuntimeError::new_err("remote peer does not support registries 0.3")
+        }
         RustFetchRegistryEntryError::Request(err) => {
             PyOSError::new_err(format!("fetch_registry_entry: {err}"))
         }

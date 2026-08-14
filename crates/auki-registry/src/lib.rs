@@ -1638,6 +1638,21 @@ pub struct PutUrdfPackage {
 /// Rewrite mesh `filename`s to package-relative paths, `put_blob` the URDF
 /// and every referenced mesh, and return a [`DeviceModelBody`].
 ///
+/// # Package layout (flattened only)
+///
+/// The package directory is the **parent of the `.urdf` file**. Mesh paths
+/// must resolve as `urdf_dir.join(relative_path)` (plus the existing
+/// `package://pkg/rel` joins under that same dir). Stock ROS trees with
+/// `pkg/urdf/robot.urdf` + `pkg/meshes/` are **out of contract** — flatten
+/// the pack (URDF beside `meshes/`, as K1/Galbot advertise URDFs do) or
+/// this call fails closed.
+///
+/// # Mesh attribute parsing
+///
+/// Only `<mesh filename="…">` / `'…'` with **no spaces around `=`** are
+/// collected. `filename = "…"` is ignored and will leave unresolved
+/// `package://` refs (also a hard error after rewrite).
+///
 /// Fails if the URDF references any mesh that cannot be resolved beside the
 /// URDF package directory. Rewrite happens once at publish time so consumers
 /// do not need a second path rewrite after dig.

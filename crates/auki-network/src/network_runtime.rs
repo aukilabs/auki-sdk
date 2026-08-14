@@ -55,8 +55,11 @@ use crate::message_protocol::{
     handle_inbound_substream as handle_inbound_message, open_message_channel,
 };
 use crate::registries_protocol::{
-    REGISTRIES_PROTOCOL, RegistriesProtocolError, RegistryRequest, RegistryResponse,
-    read_registry_request, read_registry_response, write_registry_request, write_registry_response,
+    REGISTRIES_PROTOCOL, REGISTRIES_PROTOCOL_V2, RegistriesProtocolError, RegistryKind,
+    RegistryRequest, RegistryRequestV2, RegistryResponse, RegistryResponseV2,
+    read_registry_request, read_registry_request_v2, read_registry_response,
+    read_registry_response_v2, write_registry_request, write_registry_request_v2,
+    write_registry_response, write_registry_response_v2,
 };
 use crate::blobs_protocol::{
     BLOBS_PROTOCOL, BlobChunkMeta, BlobRequest, BlobResponse, BlobsProtocolError, read_blob_request,
@@ -540,6 +543,10 @@ pub const REGISTRIES_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// Errors from [`NetworkRuntime::request_registry_entry`].
 #[derive(Debug, thiserror::Error)]
 pub enum RequestRegistryError {
+    /// Remote peer does not speak `/auki/registries/0.3.0` (and Get
+    /// fallback to 0.2 was not applicable, e.g. List).
+    #[error("remote peer does not support registries 0.3")]
+    UnsupportedProtocol,
     /// `libp2p_stream::Control::open_stream` failed (peer not
     /// reachable, not on the allow-list, etc.).
     #[error("open_stream: {0}")]
@@ -1389,6 +1396,10 @@ impl NetworkRuntime {
     /// `/auki/registries/0.3.0`. Pass [`RegistryRequest::Get`] for one
     /// exact entry or [`RegistryRequest::List`] to enumerate `(id, hash)`.
     ///
+    /// Get falls back to `/auki/registries/0.2.0` when the peer does not
+    /// speak 0.3. List does not fall back — it returns
+    /// [`RequestRegistryError::UnsupportedProtocol`].
+    ///
     /// `peer_id` must be on the local allow-list — libp2p refuses
     /// the substream otherwise. Higher layers are responsible for
     /// hashing `canonical_json.as_bytes()` and decoding the typed
@@ -1399,11 +1410,18 @@ impl NetworkRuntime {
         request: RegistryRequest,
     ) -> Result<RegistryResponse, RequestRegistryError> {
         let mut control = self.stream_control.clone();
-        let proto = REGISTRIES_PROTOCOL.clone();
-
-        let open_fut = control.open_stream(peer_id, proto);
+        let open_fut = control.open_stream(peer_id, REGISTRIES_PROTOCOL.clone());
         let mut substream = match tokio::time::timeout(REGISTRIES_REQUEST_TIMEOUT, open_fut).await {
             Err(_) => return Err(RequestRegistryError::Timeout(REGISTRIES_REQUEST_TIMEOUT)),
+            Ok(Err(libp2p_stream::OpenStreamError::UnsupportedProtocol(_))) => {
+                return match &request {
+                    RegistryRequest::Get { kind, id, hash } => {
+                        request_registry_entry_v2(self, peer_id, *kind, id.clone(), hash.clone())
+                            .await
+                    }
+                    RegistryRequest::List { .. } => Err(RequestRegistryError::UnsupportedProtocol),
+                };
+            }
             Ok(Err(e)) => return Err(RequestRegistryError::OpenStream(e)),
             Ok(Ok(s)) => s,
         };
@@ -2348,6 +2366,14 @@ async fn run_task(
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
 
+    // Legacy Get-only `/auki/registries/0.2.0` for mixed-cluster peers.
+    let mut incoming_registries_v2: std::pin::Pin<
+        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
+    > = match inbound_control.accept(REGISTRIES_PROTOCOL_V2.clone()) {
+        Ok(s) => s.boxed(),
+        Err(_already_registered) => futures::stream::pending().boxed(),
+    };
+
     // Register inbound `/auki/diagnostic/0.0.1` substream acceptance.
     let diagnostic_proto = StreamProtocol::try_from_owned(DIAGNOSTIC_PROTOCOL.to_string())
         .expect("DIAGNOSTIC_PROTOCOL is a valid libp2p protocol id");
@@ -2605,6 +2631,16 @@ async fn run_task(
                 }
                 let tx = registry_events_tx.clone();
                 tokio::spawn(handle_inbound_registry_substream(peer, substream, tx));
+            }
+
+            registry = incoming_registries_v2.next() => {
+                let Some((peer, substream)) = registry else { return; };
+                if !known_peers.contains_key(&peer) {
+                    drop(substream);
+                    continue;
+                }
+                let tx = registry_events_tx.clone();
+                tokio::spawn(handle_inbound_registry_v2_substream(peer, substream, tx));
             }
 
             diagnostic = incoming_diagnostics.next() => {
@@ -3721,6 +3757,97 @@ async fn handle_inbound_registry_substream(
     if let Err(e) = write_registry_response(&mut substream, &response).await {
         eprintln!("auki-network: registry substream to {peer}: write response failed: {e}");
     }
+}
+
+/// Legacy `/auki/registries/0.2.0` Get-only inbound path.
+///
+/// Translates untagged Get into [`RegistryRequest::Get`], reuses the
+/// owner's registry handler, and writes an untagged response. List /
+/// Error owner replies close the substream without a v2 body.
+/// `device_model` Gets answer `{entry: null}` without dialing the owner.
+async fn handle_inbound_registry_v2_substream(
+    peer: PeerId,
+    mut substream: libp2p::Stream,
+    registry_events_tx: mpsc::Sender<RegistryRequestEvent>,
+) {
+    let request = match read_registry_request_v2(&mut substream).await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("auki-network: registry v2 substream from {peer}: read failed: {e}");
+            return;
+        }
+    };
+
+    if matches!(request.kind, RegistryKind::DeviceModel) {
+        let _ = write_registry_response_v2(
+            &mut substream,
+            &RegistryResponseV2 { entry: None },
+        )
+        .await;
+        return;
+    }
+
+    let (ack_tx, ack_rx) = oneshot::channel();
+    if registry_events_tx
+        .send(RegistryRequestEvent {
+            peer,
+            request: RegistryRequest::get(request.kind, request.id, request.hash),
+            ack: ack_tx,
+        })
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    let response = match tokio::time::timeout(REGISTRIES_RESPONSE_TIMEOUT, ack_rx).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) | Err(_) => return,
+    };
+
+    let entry = match response {
+        RegistryResponse::Get { entry } => entry,
+        RegistryResponse::List { .. } | RegistryResponse::Error { .. } => return,
+    };
+    let _ = write_registry_response_v2(&mut substream, &RegistryResponseV2 { entry }).await;
+}
+
+async fn request_registry_entry_v2(
+    runtime: &NetworkRuntime,
+    peer_id: PeerId,
+    kind: RegistryKind,
+    id: String,
+    hash: String,
+) -> Result<RegistryResponse, RequestRegistryError> {
+    let mut control = runtime.stream_control.clone();
+    let open_fut = control.open_stream(peer_id, REGISTRIES_PROTOCOL_V2.clone());
+    let mut substream = match tokio::time::timeout(REGISTRIES_REQUEST_TIMEOUT, open_fut).await {
+        Err(_) => return Err(RequestRegistryError::Timeout(REGISTRIES_REQUEST_TIMEOUT)),
+        Ok(Err(libp2p_stream::OpenStreamError::UnsupportedProtocol(_))) => {
+            return Err(RequestRegistryError::UnsupportedProtocol);
+        }
+        Ok(Err(e)) => return Err(RequestRegistryError::OpenStream(e)),
+        Ok(Ok(s)) => s,
+    };
+
+    let request = RegistryRequestV2 { kind, id, hash };
+    write_registry_request_v2(&mut substream, &request)
+        .await
+        .map_err(RequestRegistryError::Protocol)?;
+
+    let response = match tokio::time::timeout(
+        REGISTRIES_REQUEST_TIMEOUT,
+        read_registry_response_v2(&mut substream),
+    )
+    .await
+    {
+        Err(_) => return Err(RequestRegistryError::Timeout(REGISTRIES_REQUEST_TIMEOUT)),
+        Ok(Err(e)) => return Err(RequestRegistryError::Protocol(e)),
+        Ok(Ok(r)) => r,
+    };
+    Ok(RegistryResponse::Get {
+        entry: response.entry,
+    })
 }
 
 /// Reads exactly one diagnostic message and forwards it to the owner.
@@ -5286,5 +5413,98 @@ mod tests {
             actual: 12,
         };
         assert!(size_err.to_string().contains("total_size changed mid-fetch"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn request_blob_fetches_and_verifies_across_two_runtimes() {
+        let producer_identity = PeerIdentity::from_seed(&[91; 32]);
+        let consumer_identity = PeerIdentity::from_seed(&[92; 32]);
+        let producer_peer = producer_identity.peer_id();
+        let consumer_peer = consumer_identity.peer_id();
+
+        let mut producer_swarm = build_swarm(
+            &producer_identity,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+        let producer_addr = wait_for_test_listen_addr(&mut producer_swarm).await;
+        let consumer_swarm = build_swarm(
+            &consumer_identity,
+            SwarmConfig {
+                listen_addresses: vec![],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+
+        let (
+            producer_runtime,
+            _producer_joins,
+            _producer_liveness,
+            _producer_memberships,
+            _producer_info,
+            _producer_resources,
+            _producer_registries,
+            _producer_diagnostics,
+        ) = NetworkRuntime::spawn(
+            producer_swarm,
+            vec![AllowedPeer {
+                peer_id: consumer_peer,
+                multiaddrs: vec![],
+            }],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+        let (
+            consumer_runtime,
+            _consumer_joins,
+            _consumer_liveness,
+            _consumer_memberships,
+            _consumer_info,
+            _consumer_resources,
+            _consumer_registries,
+            _consumer_diagnostics,
+        ) = NetworkRuntime::spawn(
+            consumer_swarm,
+            vec![AllowedPeer {
+                peer_id: producer_peer,
+                multiaddrs: vec![producer_addr],
+            }],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let payload = b"swarm-blob-bytes-0123456789";
+        let sha = auki_registry::put_blob(tmp.path(), payload).unwrap();
+        producer_runtime.set_blob_app_root(tmp.path());
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !consumer_runtime.connected_peers().contains(&producer_peer) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("peers connect");
+
+        let bytes = consumer_runtime
+            .request_blob(producer_peer, sha.clone())
+            .await
+            .unwrap();
+        assert_eq!(bytes, payload);
+
+        let missing = consumer_runtime
+            .request_blob(producer_peer, "0".repeat(64))
+            .await
+            .unwrap_err();
+        assert!(matches!(missing, RequestBlobError::NotFound));
+
+        producer_runtime.shutdown();
+        consumer_runtime.shutdown();
     }
 }

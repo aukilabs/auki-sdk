@@ -29,6 +29,12 @@
 //!         or RegistryResponse::Error { reason } when List is unsupported
 //! ```
 //!
+//! Peers also still **accept** untagged `/auki/registries/0.2.0` Get
+//! (`RegistryRequestV2` / `RegistryResponseV2`) so mixed clusters can
+//! resolve sensor/clock/frame/detector/map entries. List and
+//! `device_model` require 0.3. Outbound clients dial 0.3 first and fall
+//! back to 0.2 only for Get when the peer lacks 0.3.
+//!
 //! For `device_model`, List is tip-per-id (last successful
 //! `write_device_model` via the on-disk TIP pointer; mtime is only a
 //! fallback for pre-TIP trees). Older content-addressed siblings remain
@@ -51,6 +57,10 @@ use thiserror::Error;
 /// libp2p protocol id for content-addressed registry list + get.
 /// Stable; bump version only on an incompatible wire-shape change.
 pub const REGISTRIES_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/registries/0.3.0");
+
+/// Legacy Get-only protocol. Still accepted inbound; outbound Get may
+/// fall back here when the peer does not speak 0.3.
+pub const REGISTRIES_PROTOCOL_V2: StreamProtocol = StreamProtocol::new("/auki/registries/0.2.0");
 
 /// Cap on a single framed message. Registry entries are tiny today
 /// (~100s of bytes), but 64 KiB leaves room for future sensor bodies
@@ -131,6 +141,24 @@ impl RegistryRequest {
     pub fn list(kind: RegistryKind) -> Self {
         Self::List { kind }
     }
+}
+
+/// Untagged 0.2 Get request (`{ kind, id, hash }` — no `op` field).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RegistryRequestV2 {
+    /// Registry namespace.
+    pub kind: RegistryKind,
+    /// Registry id.
+    pub id: String,
+    /// Expected XXH3-128 hash of the canonical JSON entry bytes.
+    pub hash: String,
+}
+
+/// Untagged 0.2 Get response (`{ entry }` — no `op` field).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RegistryResponseV2 {
+    /// `Some` when the peer has the exact entry.
+    pub entry: Option<RegistryEntryEnvelope>,
 }
 
 /// One row returned by [`RegistryResponse::List`].
@@ -224,6 +252,28 @@ where
     write_json(stream, msg).await
 }
 
+/// Write a legacy 0.2 Get request.
+pub async fn write_registry_request_v2<S>(
+    stream: &mut S,
+    msg: &RegistryRequestV2,
+) -> Result<(), RegistriesProtocolError>
+where
+    S: AsyncWriteExt + Unpin,
+{
+    write_json(stream, msg).await
+}
+
+/// Write a legacy 0.2 Get response.
+pub async fn write_registry_response_v2<S>(
+    stream: &mut S,
+    msg: &RegistryResponseV2,
+) -> Result<(), RegistriesProtocolError>
+where
+    S: AsyncWriteExt + Unpin,
+{
+    write_json(stream, msg).await
+}
+
 /// Read a [`RegistryRequest`] from `stream`.
 pub async fn read_registry_request<S>(
     stream: &mut S,
@@ -238,6 +288,26 @@ where
 pub async fn read_registry_response<S>(
     stream: &mut S,
 ) -> Result<RegistryResponse, RegistriesProtocolError>
+where
+    S: AsyncReadExt + Unpin,
+{
+    read_json(stream).await
+}
+
+/// Read a legacy 0.2 Get request.
+pub async fn read_registry_request_v2<S>(
+    stream: &mut S,
+) -> Result<RegistryRequestV2, RegistriesProtocolError>
+where
+    S: AsyncReadExt + Unpin,
+{
+    read_json(stream).await
+}
+
+/// Read a legacy 0.2 Get response.
+pub async fn read_registry_response_v2<S>(
+    stream: &mut S,
+) -> Result<RegistryResponseV2, RegistriesProtocolError>
 where
     S: AsyncReadExt + Unpin,
 {
@@ -366,6 +436,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn v2_request_round_trips_without_op() {
+        let req = RegistryRequestV2 {
+            kind: RegistryKind::Frame,
+            id: "frame".into(),
+            hash: "hash".into(),
+        };
+        let mut buf = Vec::new();
+        write_registry_request_v2(&mut buf, &req).await.unwrap();
+        let mut cursor = futures::io::Cursor::new(buf);
+        let back = read_registry_request_v2(&mut cursor).await.unwrap();
+        assert_eq!(req, back);
+    }
+
+    #[tokio::test]
+    async fn v2_response_round_trips_without_op() {
+        let resp = RegistryResponseV2 {
+            entry: Some(RegistryEntryEnvelope {
+                kind: RegistryKind::Clock,
+                id: "clk".into(),
+                hash: "h".into(),
+                canonical_json: "{}".into(),
+            }),
+        };
+        let mut buf = Vec::new();
+        write_registry_response_v2(&mut buf, &resp).await.unwrap();
+        let mut cursor = futures::io::Cursor::new(buf);
+        let back = read_registry_response_v2(&mut cursor).await.unwrap();
+        assert_eq!(resp, back);
+    }
+
+    #[tokio::test]
     async fn read_rejects_oversized_length_prefix() {
         let mut buf = (MAX_REGISTRIES_FRAME_BYTES + 1).to_be_bytes().to_vec();
         buf.extend(std::iter::repeat(0u8).take(8));
@@ -398,5 +499,32 @@ mod tests {
         .unwrap();
         assert!(err.contains(r#""op":"error""#), "{err}");
         assert!(err.contains(r#""reason":"list is only implemented for device_model""#), "{err}");
+
+        let v2 = serde_json::to_string(&RegistryRequestV2 {
+            kind: RegistryKind::Frame,
+            id: "frame".into(),
+            hash: "hash".into(),
+        })
+        .unwrap();
+        assert!(!v2.contains(r#""op""#), "{v2}");
+        assert!(v2.contains(r#""kind":"frame""#), "{v2}");
+    }
+
+    #[test]
+    fn v2_get_maps_to_v3_get_shape() {
+        let v2 = RegistryRequestV2 {
+            kind: RegistryKind::Sensor,
+            id: "cam".into(),
+            hash: "abc".into(),
+        };
+        let v3 = RegistryRequest::get(v2.kind, v2.id.clone(), v2.hash.clone());
+        match v3 {
+            RegistryRequest::Get { kind, id, hash } => {
+                assert_eq!(kind, RegistryKind::Sensor);
+                assert_eq!(id, "cam");
+                assert_eq!(hash, "abc");
+            }
+            RegistryRequest::List { .. } => panic!("Get must not become List"),
+        }
     }
 }

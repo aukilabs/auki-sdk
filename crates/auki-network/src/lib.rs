@@ -581,7 +581,7 @@ mod swift_bindings_tests {
 
 #[cfg(all(test, feature = "swarm"))]
 mod protocol_id_tests {
-    use crate::registries_protocol::REGISTRIES_PROTOCOL;
+    use crate::registries_protocol::{REGISTRIES_PROTOCOL, REGISTRIES_PROTOCOL_V2};
     use crate::resources_protocol::RESOURCES_PROTOCOL;
     use crate::stream_protocol::STREAM_PROTOCOL;
 
@@ -589,6 +589,7 @@ mod protocol_id_tests {
     fn protocols_bumped_to_v0_2_0() {
         assert_eq!(RESOURCES_PROTOCOL.to_string(), "/auki/resources/0.2.0");
         assert_eq!(REGISTRIES_PROTOCOL.to_string(), "/auki/registries/0.3.0");
+        assert_eq!(REGISTRIES_PROTOCOL_V2.to_string(), "/auki/registries/0.2.0");
         assert_eq!(STREAM_PROTOCOL, "/auki/stream/0.2.0");
     }
 }

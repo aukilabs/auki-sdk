@@ -178,6 +178,7 @@ App code never touches libp2p protocol plumbing directly. Apps construct a `Peer
 | `/auki/membership/0.0.1` | Manager gossips membership |
 | `/auki/info/0.0.1` | Peer-to-peer `ParticipantInfo` exchange |
 | `/auki/resources/0.2.0` | Catalog row fetch (one row per peer-owned log) |
+| `/auki/registries/0.2.0` | Legacy Get-only (untagged `{ kind, id, hash }` → `{ entry }`). Still accepted inbound; outbound Get falls back here when the peer lacks 0.3. |
 | `/auki/registries/0.3.0` | Hash-pinned registry Get + tip-only `device_model` List (last successful write via TIP) |
 | `/auki/blobs/0.1.0` | Content-addressed binary blob transfer |
 | `/auki/stream/0.2.0` | Typed live data streaming |

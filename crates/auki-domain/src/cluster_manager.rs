@@ -3654,9 +3654,13 @@ impl From<auki_network::RequestResourcesV3Error> for FetchResourcesCatalogV3Erro
 /// Errors from `ClusterManager::fetch_*_entry`.
 #[derive(Debug, Error)]
 pub enum FetchRegistryEntryError {
+    /// Remote peer does not speak `/auki/registries/0.3.0` (List, or
+    /// Get with no 0.2 fallback available).
+    #[error("remote peer does not support registries 0.3")]
+    UnsupportedProtocol,
     /// libp2p / wire / timeout failure during the request.
     #[error("request_registry_entry: {0}")]
-    Request(#[from] RequestRegistryError),
+    Request(RequestRegistryError),
     /// The peer replied cleanly but does not have the exact entry.
     #[error("registry entry not found: kind={kind} id={id:?} hash={hash}")]
     NotFound {
@@ -3687,6 +3691,15 @@ pub enum FetchRegistryEntryError {
     /// [`ClusterManager::shutdown`] has been called.
     #[error("ClusterManager has been shut down")]
     Stopped,
+}
+
+impl From<RequestRegistryError> for FetchRegistryEntryError {
+    fn from(error: RequestRegistryError) -> Self {
+        match error {
+            RequestRegistryError::UnsupportedProtocol => Self::UnsupportedProtocol,
+            error => Self::Request(error),
+        }
+    }
 }
 
 fn verify_registry_envelope(
@@ -3792,45 +3805,58 @@ fn spawn_registry_handler(
     tokio::spawn(async move {
         while let Some(RegistryRequestEvent { peer, request, ack }) = rx.recv().await {
             let root = app_root.lock().expect("registry_app_root lock").clone();
-            let response = match (&root, &request) {
-                (Some(root), RegistryRequest::Get { kind, id, hash }) => {
-                    match read_registry_envelope(root, &local_peer_id, *kind, id, hash) {
-                        Ok(entry) => RegistryResponse::Get { entry },
-                        Err(e) => {
-                            eprintln!(
-                                "auki-domain: registry Get for {peer}: {kind} {id}@{hash} failed: {e}"
-                            );
-                            RegistryResponse::Get { entry: None }
-                        }
-                    }
-                }
-                (None, RegistryRequest::Get { .. }) => RegistryResponse::Get { entry: None },
-                (Some(root), RegistryRequest::List { kind }) => {
-                    if !matches!(kind, RegistryKind::DeviceModel) {
-                        RegistryResponse::Error {
-                            reason: "list is only implemented for device_model".into(),
-                        }
-                    } else {
-                        match list_registry_refs(root, &local_peer_id, *kind) {
-                            Ok(entries) => RegistryResponse::List { entries },
-                            Err(e) => {
-                                eprintln!(
-                                    "auki-domain: registry List for {peer}: {kind} failed: {e}"
-                                );
-                                RegistryResponse::List {
-                                    entries: Vec::new(),
-                                }
-                            }
-                        }
-                    }
-                }
-                (None, RegistryRequest::List { .. }) => RegistryResponse::List {
-                    entries: Vec::new(),
-                },
-            };
+            let response = registry_response_for(root.as_deref(), &local_peer_id, &request);
+            if let RegistryResponse::Error { reason } = &response {
+                eprintln!(
+                    "auki-domain: registry request for {peer}: {request:?} failed: {reason}"
+                );
+            }
             let _ = ack.send(response);
         }
     })
+}
+
+/// Build a [`RegistryResponse`] from the local app root for one inbound request.
+///
+/// List IO / read failures return [`RegistryResponse::Error`] so clients do not
+/// confuse a broken peer with an empty tip set. Missing peer dirs stay empty List
+/// (`list_device_models` soft-fails). Get read failures stay `entry: None`.
+fn registry_response_for(
+    root: Option<&std::path::Path>,
+    local_peer_id: &str,
+    request: &RegistryRequest,
+) -> RegistryResponse {
+    match (root, request) {
+        (Some(root), RegistryRequest::Get { kind, id, hash }) => {
+            match read_registry_envelope(root, local_peer_id, *kind, id, hash) {
+                Ok(entry) => RegistryResponse::Get { entry },
+                Err(e) => {
+                    eprintln!(
+                        "auki-domain: registry Get: {kind} {id}@{hash} failed: {e}"
+                    );
+                    RegistryResponse::Get { entry: None }
+                }
+            }
+        }
+        (None, RegistryRequest::Get { .. }) => RegistryResponse::Get { entry: None },
+        (Some(root), RegistryRequest::List { kind }) => {
+            if !matches!(kind, RegistryKind::DeviceModel) {
+                RegistryResponse::Error {
+                    reason: "list is only implemented for device_model".into(),
+                }
+            } else {
+                match list_registry_refs(root, local_peer_id, *kind) {
+                    Ok(entries) => RegistryResponse::List { entries },
+                    Err(_) => RegistryResponse::Error {
+                        reason: "list failed".into(),
+                    },
+                }
+            }
+        }
+        (None, RegistryRequest::List { .. }) => RegistryResponse::List {
+            entries: Vec::new(),
+        },
+    }
 }
 
 fn spawn_diagnostic_handler(
@@ -3914,14 +3940,12 @@ fn list_registry_refs(
                 })
                 .collect())
         }
+        // Callers must reject unsupported kinds before List (see registry_response_for).
         RegistryKind::Sensor
         | RegistryKind::Clock
         | RegistryKind::Frame
         | RegistryKind::Detector
-        | RegistryKind::Map => Err(auki_registry::Error::InvalidDeviceModel(format!(
-            "list is only implemented for device_model (got {})",
-            kind.as_str()
-        ))),
+        | RegistryKind::Map => unreachable!("list is only implemented for device_model"),
     }
 }
 
@@ -5708,6 +5732,58 @@ mod tests {
         assert!(!list_registry_kind_supported(RegistryKind::Frame));
         assert!(!list_registry_kind_supported(RegistryKind::Detector));
         assert!(!list_registry_kind_supported(RegistryKind::Map));
+    }
+
+    #[test]
+    fn registry_response_list_io_failure_is_error_not_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let peer_id = "galbot";
+        // Peer model dir exists, but TIP is a directory so reading it is IO Err.
+        let model_dir = auki_layout::device_models_peer_dir(tmp.path(), peer_id).join("k1");
+        std::fs::create_dir_all(model_dir.join("TIP")).unwrap();
+
+        let response = registry_response_for(
+            Some(tmp.path()),
+            peer_id,
+            &RegistryRequest::list(RegistryKind::DeviceModel),
+        );
+        assert!(
+            matches!(
+                response,
+                RegistryResponse::Error { ref reason } if reason == "list failed"
+            ),
+            "expected Error, got {response:?}"
+        );
+    }
+
+    #[test]
+    fn registry_response_list_missing_peer_dir_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let response = registry_response_for(
+            Some(tmp.path()),
+            "missing-peer",
+            &RegistryRequest::list(RegistryKind::DeviceModel),
+        );
+        assert_eq!(
+            response,
+            RegistryResponse::List {
+                entries: Vec::new()
+            }
+        );
+    }
+
+    #[test]
+    fn registry_response_list_unsupported_kind_is_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let response = registry_response_for(
+            Some(tmp.path()),
+            "peer",
+            &RegistryRequest::list(RegistryKind::Sensor),
+        );
+        assert!(matches!(
+            response,
+            RegistryResponse::Error { reason } if reason.contains("device_model")
+        ));
     }
 
     #[test]

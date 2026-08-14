@@ -1524,8 +1524,11 @@ pub fn put_blob(app_root: &Path, bytes: &[u8]) -> Result<String> {
     let sha256 = sha256_hex(bytes);
     let path = auki_layout::blob_path(app_root, &sha256);
     if path.exists() {
-        get_blob(app_root, &sha256)?;
-        return Ok(sha256);
+        match get_blob(app_root, &sha256)? {
+            Some(_) => return Ok(sha256),
+            // exists() raced with a delete (or non-file) — fall through and write.
+            None => {}
+        }
     }
     let dir = path.parent().expect("blob path has parent");
     fs::create_dir_all(dir)?;
@@ -3431,6 +3434,15 @@ mod id_charset_tests {
             Err(Error::BlobHashMismatch)
         ));
         assert_eq!(fs::read(&path).unwrap(), b"garbage-at-this-sha");
+    }
+
+    #[test]
+    fn put_blob_is_idempotent_when_existing_matches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let payload = b"idempotent-bytes";
+        let sha = put_blob(tmp.path(), payload).unwrap();
+        assert_eq!(put_blob(tmp.path(), payload).unwrap(), sha);
+        assert_eq!(get_blob(tmp.path(), &sha).unwrap().unwrap(), payload);
     }
 
     #[test]

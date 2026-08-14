@@ -596,7 +596,7 @@ pub struct ClusterManager {
     /// from the runtime, snapshots resource providers, and replies.
     /// Cancelled on `shutdown`.
     resources_handler_task: Mutex<Option<JoinHandle<()>>>,
-    /// Task that drains inbound `/auki/registries/0.0.1` requests
+    /// Task that drains inbound `/auki/registries/0.3.0` requests
     /// from the runtime, reads the requested entry from
     /// producer-local registry storage, and replies. Cancelled on
     /// `shutdown`.
@@ -1079,7 +1079,7 @@ impl ClusterManager {
             session_handle.clone(),
         )));
 
-        // 10. Drain inbound /auki/registries/0.0.1 requests. Read
+        // 10. Drain inbound /auki/registries/0.3.0 requests. Read
         //     the exact registry entry from app-root storage if the
         //     daemon has registered an app root.
         let registry_handler_task = Mutex::new(Some(spawn_registry_handler(
@@ -1599,6 +1599,9 @@ impl ClusterManager {
 
     /// List `(id, hash)` pairs for one registry kind on a cluster peer.
     ///
+    /// Only [`RegistryKind::DeviceModel`] is implemented. Other kinds return
+    /// [`FetchRegistryEntryError::InvalidEnvelope`] before dialing.
+    ///
     /// Local peer requests short-circuit to the registered app root —
     /// libp2p cannot dial self.
     pub async fn list_registry_entries(
@@ -1608,6 +1611,11 @@ impl ClusterManager {
     ) -> Result<Vec<RegistryListEntry>, FetchRegistryEntryError> {
         if self.stopped.load(Ordering::SeqCst) {
             return Err(FetchRegistryEntryError::Stopped);
+        }
+        if !list_registry_kind_supported(kind) {
+            return Err(FetchRegistryEntryError::InvalidEnvelope(
+                "list is only implemented for device_model".into(),
+            ));
         }
         if peer_id == self.local_peer_id {
             let root = self
@@ -1634,12 +1642,29 @@ impl ClusterManager {
     }
 
     /// Fetch and SHA-256 verify one content-addressed blob from a cluster peer.
+    ///
+    /// Local peer requests short-circuit to the registered app root —
+    /// libp2p cannot dial self.
     pub async fn fetch_blob(
         &self,
         peer_id: PeerId,
         sha256: impl Into<String>,
     ) -> Result<Vec<u8>, auki_network::RequestBlobError> {
-        self.runtime.request_blob(peer_id, sha256.into()).await
+        let sha256 = sha256.into();
+        if self.stopped.load(Ordering::SeqCst) {
+            return Err(auki_network::RequestBlobError::InvalidResponse(
+                "ClusterManager has been shut down".into(),
+            ));
+        }
+        if peer_id == self.local_peer_id {
+            let root = self
+                .registry_app_root
+                .lock()
+                .expect("registry_app_root lock")
+                .clone();
+            return fetch_local_blob(root.as_deref(), &sha256);
+        }
+        self.runtime.request_blob(peer_id, sha256).await
     }
 
     /// Atomically bind a receiver-owned message-channel catalog row to the
@@ -1666,7 +1691,7 @@ impl ClusterManager {
     }
 
     /// Fetch and verify a peer's `SensorRegistryEntry` by exact
-    /// `(sensor_id, sensor_hash)` over `/auki/registries/0.0.1`.
+    /// `(sensor_id, sensor_hash)` over `/auki/registries/0.3.0`.
     ///
     /// The SDK verifies the returned canonical JSON bytes hash to the
     /// requested hash before decoding, then checks the decoded
@@ -1693,7 +1718,7 @@ impl ClusterManager {
     }
 
     /// Fetch and verify a peer's `ClockRegistryEntry` by exact
-    /// `(clock_id, clock_hash)` over `/auki/registries/0.0.1`.
+    /// `(clock_id, clock_hash)` over `/auki/registries/0.3.0`.
     pub async fn fetch_clock_entry(
         &self,
         peer_id: PeerId,
@@ -1716,7 +1741,7 @@ impl ClusterManager {
     }
 
     /// Fetch and verify a peer's `FrameRegistryEntry` by exact
-    /// `(frame_id, frame_hash)` over `/auki/registries/0.0.1`.
+    /// `(frame_id, frame_hash)` over `/auki/registries/0.3.0`.
     pub async fn fetch_frame_entry(
         &self,
         peer_id: PeerId,
@@ -1739,7 +1764,7 @@ impl ClusterManager {
     }
 
     /// Fetch and verify a peer's `DetectorRegistryEntry` by exact
-    /// `(detector_id, detector_hash)` over `/auki/registries/0.0.1`.
+    /// `(detector_id, detector_hash)` over `/auki/registries/0.3.0`.
     /// Cuba T4 — closes Park-side detector enumeration without an HTTP
     /// shim. Symmetric with `fetch_sensor_entry`/`fetch_frame_entry`.
     pub async fn fetch_detector_entry(
@@ -1764,7 +1789,7 @@ impl ClusterManager {
     }
 
     /// Fetch and verify a peer's `MapRegistryEntry` by exact
-    /// `(map_id, map_hash)` over `/auki/registries/0.0.1`.
+    /// `(map_id, map_hash)` over `/auki/registries/0.3.0`.
     pub async fn fetch_map_entry(
         &self,
         peer_id: PeerId,
@@ -2094,7 +2119,7 @@ impl ClusterManager {
             session_handle.clone(),
         )));
 
-        // 11. Drain inbound /auki/registries/0.0.1 requests. Read
+        // 11. Drain inbound /auki/registries/0.3.0 requests. Read
         //     the exact registry entry from app-root storage if the
         //     daemon has registered an app root.
         let registry_handler_task = Mutex::new(Some(spawn_registry_handler(
@@ -3885,6 +3910,31 @@ fn list_registry_refs(
     }
 }
 
+/// Resolve a blob from the local app root (no libp2p dial).
+fn fetch_local_blob(
+    app_root: Option<&std::path::Path>,
+    sha256: &str,
+) -> Result<Vec<u8>, auki_network::RequestBlobError> {
+    let Some(root) = app_root else {
+        return Err(auki_network::RequestBlobError::NotFound);
+    };
+    match auki_registry::get_blob(root, sha256) {
+        Ok(Some(bytes)) => Ok(bytes),
+        Ok(None) => Err(auki_network::RequestBlobError::NotFound),
+        Err(auki_registry::Error::InvalidBlob(msg)) if msg.contains("do not match SHA-256") => {
+            Err(auki_network::RequestBlobError::HashMismatch)
+        }
+        Err(error) => Err(auki_network::RequestBlobError::InvalidResponse(
+            error.to_string(),
+        )),
+    }
+}
+
+/// Whether [`ClusterManager::list_registry_entries`] supports `kind`.
+fn list_registry_kind_supported(kind: RegistryKind) -> bool {
+    matches!(kind, RegistryKind::DeviceModel)
+}
+
 fn envelope_for_sensor(entry: SensorRegistryEntry) -> RegistryEntryEnvelope {
     let bytes = entry.canonical_bytes();
     RegistryEntryEnvelope {
@@ -5633,5 +5683,31 @@ mod tests {
             m.peers[0].join_ts_ns, 42,
             "election order must not reshuffle on rejoin"
         );
+    }
+
+    #[test]
+    fn list_registry_kind_only_device_model() {
+        assert!(list_registry_kind_supported(RegistryKind::DeviceModel));
+        assert!(!list_registry_kind_supported(RegistryKind::Sensor));
+        assert!(!list_registry_kind_supported(RegistryKind::Clock));
+        assert!(!list_registry_kind_supported(RegistryKind::Frame));
+        assert!(!list_registry_kind_supported(RegistryKind::Detector));
+        assert!(!list_registry_kind_supported(RegistryKind::Map));
+    }
+
+    #[test]
+    fn fetch_local_blob_reads_app_root_without_dial() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sha = auki_registry::put_blob(tmp.path(), b"local-blob").unwrap();
+        let bytes = fetch_local_blob(Some(tmp.path()), &sha).unwrap();
+        assert_eq!(bytes, b"local-blob");
+        assert!(matches!(
+            fetch_local_blob(None, &sha),
+            Err(auki_network::RequestBlobError::NotFound)
+        ));
+        assert!(matches!(
+            fetch_local_blob(Some(tmp.path()), &"0".repeat(64)),
+            Err(auki_network::RequestBlobError::NotFound)
+        ));
     }
 }

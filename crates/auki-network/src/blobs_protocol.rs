@@ -24,8 +24,8 @@ pub const BLOBS_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/blobs/0.1.
 /// Cap on a single raw chunk payload.
 pub const MAX_BLOB_CHUNK_BYTES: u32 = 1024 * 1024;
 
-/// Cap on a single blob's total size.
-pub const MAX_BLOB_BYTES: u64 = 64 * 1024 * 1024;
+/// Cap on a single blob's total size (owned by `auki-registry`).
+pub use auki_registry::MAX_BLOB_BYTES;
 
 /// Cap on a framed protobuf meta message.
 const MAX_META_BYTES: u32 = 16 * 1024;

@@ -2294,7 +2294,7 @@ impl PyClusterManager {
 
     /// List registry `(id, hash)` pairs for `kind` on a peer (`/auki/registries/0.3.0`).
     ///
-    /// `kind` is a snake_case string (`device_model`, `sensor`, …). Returns a
+    /// Only `device_model` is implemented today. Other kinds raise. Returns a
     /// list of dicts `{ "id": …, "hash": … }`.
     fn list_registry_entries(
         &self,

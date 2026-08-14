@@ -356,7 +356,7 @@ rate. Their Sensor Log manifest intentionally has no `frame`; each
 ## What the consumer gets in one catalog fetch
 
 - **Log identity** — variant, resource_id, source/writer split.
-- **Sensor metadata** — closed kind, open type string, and a content-addressed hash linking to the full `SensorRegistryEntry` (resolution via `/auki/registries/0.2.0`).
+- **Sensor metadata** — closed kind, open type string, and a content-addressed hash linking to the full `SensorRegistryEntry` (resolution via `/auki/registries/0.3.0`).
 - **Clock identity** — registry ref in the manifest block; resolve by hash to get unit, epoch, scope.
 - **Spatial frame identity** — registry ref in the manifest block; resolve to get handedness, axes, units.
 - **Coverage** — bytes, entries, duration on the `available` block; time bounds on `head` (live) or `extent` (sealed).

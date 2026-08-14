@@ -16,9 +16,15 @@
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Cap on a single content-addressed blob's total size (put + serve).
+pub const MAX_BLOB_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Filename under a device-model id directory that points at the List tip hash.
+const DEVICE_MODEL_TIP_FILE: &str = "TIP";
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1296,11 +1302,16 @@ pub fn read_map(
 
 /// Write a Device Model Registry entry under
 /// `<app_root>/registries/device_models/...`.
+///
+/// Requires every referenced blob (`urdf_sha256` / mesh shas) to already
+/// exist under `app_root`. On success, updates the model directory's
+/// [`DEVICE_MODEL_TIP_FILE`] so List returns this hash as the tip.
 pub fn write_device_model(
     app_root: &Path,
     entry: &DeviceModelRegistryEntry,
 ) -> Result<WriteOutcome> {
     entry.validate()?;
+    ensure_device_model_blobs(app_root, entry)?;
     let bytes = entry.canonical_bytes();
     let hash = auki_hash::hash_jcs_bytes(&bytes);
     let path = auki_layout::device_model_entry_path(
@@ -1309,7 +1320,34 @@ pub fn write_device_model(
         &entry.device_model_id,
         &hash,
     );
-    write_entry_at(&path, hash, &bytes)
+    let outcome = write_entry_at(&path, hash.clone(), &bytes)?;
+    let tip_path = path
+        .parent()
+        .expect("device model entry path has parent")
+        .join(DEVICE_MODEL_TIP_FILE);
+    atomic_write(&tip_path, hash.as_bytes())?;
+    Ok(outcome)
+}
+
+fn ensure_device_model_blobs(app_root: &Path, entry: &DeviceModelRegistryEntry) -> Result<()> {
+    match &entry.body.format {
+        DeviceModelFormat::Urdf { urdf_sha256, meshes } => {
+            if !blob_exists(app_root, urdf_sha256)? {
+                return Err(Error::InvalidDeviceModel(format!(
+                    "referenced blob {urdf_sha256} not found"
+                )));
+            }
+            for mesh in meshes {
+                if !blob_exists(app_root, &mesh.sha256)? {
+                    return Err(Error::InvalidDeviceModel(format!(
+                        "referenced blob {} not found",
+                        mesh.sha256
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Read a Device Model Registry entry by `(peer_id, device_model_id, hash)`.
@@ -1353,11 +1391,12 @@ pub struct DeviceModelListEntry {
 /// Enumerate device-model registry tips for `peer_id` under `app_root`.
 ///
 /// Walks `<app_root>/registries/device_models/<peer>/…` and returns **one**
-/// `(device_model_id, hash)` per id — the tip with the newest file mtime
-/// (hash tie-break). Older content-addressed siblings stay on disk but are
-/// omitted from List. Missing peer dirs yield an empty list. Malformed
-/// files are skipped with no error (same soft-fail spirit as an empty List
-/// response on the wire).
+/// `(device_model_id, hash)` per id. Prefers the on-disk `TIP` pointer
+/// written by [`write_device_model`]; falls back to newest file mtime
+/// (hash tie-break) for trees that predate TIP. Older content-addressed
+/// siblings stay on disk but are omitted from List. Missing peer dirs
+/// yield an empty list. Malformed files are skipped with no error (same
+/// soft-fail spirit as an empty List response on the wire).
 pub fn list_device_models(app_root: &Path, peer_id: &str) -> Result<Vec<DeviceModelListEntry>> {
     let peer_dir = auki_layout::device_models_peer_dir(app_root, peer_id);
     let Ok(model_dirs) = fs::read_dir(&peer_dir) else {
@@ -1369,7 +1408,12 @@ pub fn list_device_models(app_root: &Path, peer_id: &str) -> Result<Vec<DeviceMo
         if !model_dir.file_type()?.is_dir() {
             continue;
         }
-        let Ok(files) = fs::read_dir(model_dir.path()) else {
+        let model_path = model_dir.path();
+        if let Some(tip) = read_device_model_tip(&model_path, peer_id)? {
+            tips.insert(tip.id.clone(), (SystemTime::now(), tip));
+            continue;
+        }
+        let Ok(files) = fs::read_dir(&model_path) else {
             continue;
         };
         for file in files {
@@ -1378,35 +1422,14 @@ pub fn list_device_models(app_root: &Path, peer_id: &str) -> Result<Vec<DeviceMo
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
             }
-            let Some(bytes) = read_at(&path)? else {
+            let Some(candidate) = load_device_model_list_candidate(&path, peer_id)? else {
                 continue;
             };
-            let Ok(entry) = serde_json::from_slice::<DeviceModelRegistryEntry>(&bytes) else {
-                continue;
-            };
-            if entry.peer_id != peer_id {
-                continue;
-            }
-            if entry.validate().is_err() {
-                continue;
-            }
-            let hash = entry.hash();
-            let file_stem = path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .unwrap_or_default();
-            if file_stem != hash {
-                continue;
-            }
             let mtime = file
                 .metadata()
                 .and_then(|meta| meta.modified())
                 .unwrap_or(UNIX_EPOCH);
-            let id = entry.device_model_id;
-            let candidate = DeviceModelListEntry {
-                id: id.clone(),
-                hash,
-            };
+            let id = candidate.id.clone();
             match tips.get(&id) {
                 Some((existing_mtime, existing))
                     if *existing_mtime > mtime
@@ -1423,6 +1446,55 @@ pub fn list_device_models(app_root: &Path, peer_id: &str) -> Result<Vec<DeviceMo
     Ok(entries)
 }
 
+fn read_device_model_tip(
+    model_dir: &Path,
+    peer_id: &str,
+) -> Result<Option<DeviceModelListEntry>> {
+    let tip_path = model_dir.join(DEVICE_MODEL_TIP_FILE);
+    let Some(raw) = read_at(&tip_path)? else {
+        return Ok(None);
+    };
+    let Ok(hash) = String::from_utf8(raw) else {
+        return Ok(None);
+    };
+    let hash = hash.trim();
+    if hash.is_empty() {
+        return Ok(None);
+    }
+    let entry_path = model_dir.join(format!("{hash}.json"));
+    Ok(load_device_model_list_candidate(&entry_path, peer_id)?)
+}
+
+fn load_device_model_list_candidate(
+    path: &Path,
+    peer_id: &str,
+) -> Result<Option<DeviceModelListEntry>> {
+    let Some(bytes) = read_at(path)? else {
+        return Ok(None);
+    };
+    let Ok(entry) = serde_json::from_slice::<DeviceModelRegistryEntry>(&bytes) else {
+        return Ok(None);
+    };
+    if entry.peer_id != peer_id {
+        return Ok(None);
+    }
+    if entry.validate().is_err() {
+        return Ok(None);
+    }
+    let hash = entry.hash();
+    let file_stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default();
+    if file_stem != hash {
+        return Ok(None);
+    }
+    Ok(Some(DeviceModelListEntry {
+        id: entry.device_model_id,
+        hash,
+    }))
+}
+
 /// SHA-256, encoded as lowercase hexadecimal.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
@@ -1430,6 +1502,11 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 /// Persist a content-addressed blob and return its SHA-256 address.
 pub fn put_blob(app_root: &Path, bytes: &[u8]) -> Result<String> {
+    if bytes.len() as u64 > MAX_BLOB_BYTES {
+        return Err(Error::InvalidBlob(format!(
+            "blob exceeds MAX_BLOB_BYTES ({MAX_BLOB_BYTES})"
+        )));
+    }
     let sha256 = sha256_hex(bytes);
     let path = auki_layout::blob_path(app_root, &sha256);
     if !path.exists() {
@@ -1440,6 +1517,64 @@ pub fn put_blob(app_root: &Path, bytes: &[u8]) -> Result<String> {
     Ok(sha256)
 }
 
+/// One range read from a content-addressed blob (no full-file SHA verify).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobRange {
+    /// Full on-disk blob size in bytes.
+    pub total_size: u64,
+    /// Raw bytes starting at the requested offset (length ≤ `max_len`).
+    pub chunk: Vec<u8>,
+}
+
+/// Seek + read at most `max_len` bytes from a blob without loading the whole
+/// file. Returns `Ok(None)` when the address is absent. Errors on invalid
+/// sha, oversized on-disk size, offset past end, or IO.
+pub fn read_blob_range(
+    app_root: &Path,
+    sha256: &str,
+    offset: u64,
+    max_len: u32,
+) -> Result<Option<BlobRange>> {
+    if !is_sha256_hex(sha256) {
+        return Err(Error::InvalidBlob(
+            "sha256 must be 64 lowercase hex characters".into(),
+        ));
+    }
+    if max_len == 0 {
+        return Err(Error::InvalidBlob("max_len must be at least 1".into()));
+    }
+    let path = auki_layout::blob_path(app_root, sha256);
+    let meta = match fs::metadata(&path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(Error::Io(e)),
+    };
+    let total_size = meta.len();
+    if total_size > MAX_BLOB_BYTES {
+        return Err(Error::InvalidBlob(format!(
+            "on-disk blob exceeds MAX_BLOB_BYTES ({MAX_BLOB_BYTES})"
+        )));
+    }
+    if offset > total_size {
+        return Err(Error::InvalidBlob(
+            "offset past end of blob".into(),
+        ));
+    }
+    if offset == total_size {
+        return Ok(Some(BlobRange {
+            total_size,
+            chunk: Vec::new(),
+        }));
+    }
+    let mut file = File::open(&path)?;
+    file.seek(SeekFrom::Start(offset))?;
+    let remaining = (total_size - offset) as usize;
+    let to_read = remaining.min(max_len as usize);
+    let mut chunk = vec![0u8; to_read];
+    file.read_exact(&mut chunk)?;
+    Ok(Some(BlobRange { total_size, chunk }))
+}
+
 /// Fetch a blob only when the requested address is a valid lowercase SHA-256.
 pub fn get_blob(app_root: &Path, sha256: &str) -> Result<Option<Vec<u8>>> {
     if !is_sha256_hex(sha256) {
@@ -1448,15 +1583,38 @@ pub fn get_blob(app_root: &Path, sha256: &str) -> Result<Option<Vec<u8>>> {
     let Some(bytes) = read_at(&auki_layout::blob_path(app_root, sha256))? else {
         return Ok(None);
     };
+    if bytes.len() as u64 > MAX_BLOB_BYTES {
+        return Err(Error::InvalidBlob(format!(
+            "on-disk blob exceeds MAX_BLOB_BYTES ({MAX_BLOB_BYTES})"
+        )));
+    }
     if sha256_hex(&bytes) != sha256 {
         return Err(Error::InvalidBlob("on-disk bytes do not match SHA-256 address".into()));
     }
     Ok(Some(bytes))
 }
 
-/// Whether an addressable blob exists locally.
+/// Whether an addressable blob exists locally (presence only; does not
+/// re-hash the full file — use [`get_blob`] when verification is required).
 pub fn blob_exists(app_root: &Path, sha256: &str) -> Result<bool> {
-    Ok(get_blob(app_root, sha256)?.is_some())
+    if !is_sha256_hex(sha256) {
+        return Err(Error::InvalidBlob(
+            "sha256 must be 64 lowercase hex characters".into(),
+        ));
+    }
+    let path = auki_layout::blob_path(app_root, sha256);
+    match fs::metadata(&path) {
+        Ok(meta) => {
+            if meta.len() > MAX_BLOB_BYTES {
+                return Err(Error::InvalidBlob(format!(
+                    "on-disk blob exceeds MAX_BLOB_BYTES ({MAX_BLOB_BYTES})"
+                )));
+            }
+            Ok(true)
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(Error::Io(e)),
+    }
 }
 
 /// Result of [`put_urdf_package`]: rewritten URDF + mesh blobs on disk and
@@ -1495,6 +1653,8 @@ pub fn put_urdf_package(
         })
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "robot".into());
+    validate_registry_id(&device_model_id)
+        .map_err(|error| Error::InvalidDeviceModel(format!("invalid device_model_id: {error}")))?;
 
     let mesh_refs = collect_urdf_mesh_filenames(&urdf_text);
     let package_dir = urdf_path
@@ -1508,11 +1668,7 @@ pub fn put_urdf_package(
     // Replace from the end so earlier offsets stay valid.
     for (start, end, original) in mesh_refs.into_iter().rev() {
         let rel = normalize_mesh_rel_path(&original);
-        if rel.is_empty() {
-            return Err(Error::InvalidDeviceModel(
-                "URDF mesh filename resolved to an empty path".into(),
-            ));
-        }
+        validate_mesh_rel_path(&rel)?;
         rewritten.replace_range(start..end, &rel);
         if !seen_paths.insert(rel.clone()) {
             continue;
@@ -1622,6 +1778,42 @@ pub fn normalize_mesh_rel_path(path: &str) -> String {
     path.to_string()
 }
 
+/// Reject empty, absolute, or `..`-containing mesh relative paths.
+pub fn validate_mesh_rel_path(rel: &str) -> Result<()> {
+    if rel.is_empty() {
+        return Err(Error::InvalidDeviceModel(
+            "URDF mesh filename resolved to an empty path".into(),
+        ));
+    }
+    let path = Path::new(rel);
+    if path.is_absolute() {
+        return Err(Error::InvalidDeviceModel(format!(
+            "URDF mesh path must be relative, got {rel:?}"
+        )));
+    }
+    for component in path.components() {
+        match component {
+            Component::Normal(_) => {}
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(Error::InvalidDeviceModel(format!(
+                    "URDF mesh path must not contain '..': {rel:?}"
+                )));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(Error::InvalidDeviceModel(format!(
+                    "URDF mesh path must be relative, got {rel:?}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn path_has_parent_dir(path: &Path) -> bool {
+    path.components().any(|c| matches!(c, Component::ParentDir))
+}
+
 fn resolve_urdf_mesh(package_dir: &Path, original: &str, rel: &str) -> Option<PathBuf> {
     let basename = Path::new(rel).file_name()?;
     let mut candidates = vec![
@@ -1636,8 +1828,6 @@ fn resolve_urdf_mesh(package_dir: &Path, original: &str, rel: &str) -> Option<Pa
             .unwrap_or(package_dir)
             .join("meshes")
             .join(basename),
-        // Booster K1 vendor tree (L16b).
-        PathBuf::from("/opt/booster/Gait/configs/K1/meshes").join(basename),
     ];
     if let Some(rest) = original.strip_prefix("package://") {
         let (pkg, relative) = rest
@@ -1671,7 +1861,12 @@ fn resolve_urdf_mesh(package_dir: &Path, original: &str, rel: &str) -> Option<Pa
             }
         }
     }
-    candidates.into_iter().find(|path| path.is_file())
+    candidates.into_iter().find(|path| {
+        if path_has_parent_dir(path) {
+            return false;
+        }
+        path.is_file()
+    })
 }
 
 // `build_sensor_log_manifest` moved to [`auki-manifests`] in Step 0 of the
@@ -3093,13 +3288,90 @@ mod id_charset_tests {
             },
         };
         let older_hash = write_device_model(tmp.path(), &older).unwrap().hash().to_string();
-        std::thread::sleep(std::time::Duration::from_millis(20));
         let newer_hash = write_device_model(tmp.path(), &newer).unwrap().hash().to_string();
         assert_ne!(older_hash, newer_hash);
         let listed = list_device_models(tmp.path(), "galbot").unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, "k1");
         assert_eq!(listed[0].hash, newer_hash);
+        // TIP pointer is what List prefers (not mtime).
+        let tip_path = auki_layout::device_model_entry_path(tmp.path(), "galbot", "k1", &newer_hash)
+            .parent()
+            .unwrap()
+            .join("TIP");
+        assert_eq!(std::fs::read_to_string(tip_path).unwrap().trim(), newer_hash);
+    }
+
+    #[test]
+    fn put_blob_rejects_oversized() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bytes = vec![0u8; (MAX_BLOB_BYTES as usize) + 1];
+        assert!(matches!(
+            put_blob(tmp.path(), &bytes),
+            Err(Error::InvalidBlob(_))
+        ));
+    }
+
+    #[test]
+    fn read_blob_range_chunks_and_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let payload = b"abcdefghij";
+        let sha = put_blob(tmp.path(), payload).unwrap();
+        assert!(read_blob_range(tmp.path(), &"0".repeat(64), 0, 4)
+            .unwrap()
+            .is_none());
+        let range = read_blob_range(tmp.path(), &sha, 0, 4).unwrap().unwrap();
+        assert_eq!(range.total_size, 10);
+        assert_eq!(range.chunk, b"abcd");
+        let range = read_blob_range(tmp.path(), &sha, 8, 4).unwrap().unwrap();
+        assert_eq!(range.chunk, b"ij");
+        let eof = read_blob_range(tmp.path(), &sha, 10, 4).unwrap().unwrap();
+        assert!(eof.chunk.is_empty());
+        assert!(matches!(
+            read_blob_range(tmp.path(), &sha, 11, 4),
+            Err(Error::InvalidBlob(_))
+        ));
+    }
+
+    #[test]
+    fn put_urdf_package_rejects_parent_dir_mesh() {
+        let pkg = tempfile::tempdir().unwrap();
+        let urdf_path = pkg.path().join("robot.urdf");
+        fs::write(
+            &urdf_path,
+            r#"<robot name="evil">
+                <link name="base">
+                  <visual><geometry><mesh filename="../etc/passwd"/></geometry></visual>
+                </link>
+            </robot>"#,
+        )
+        .unwrap();
+        let app = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            put_urdf_package(app.path(), &urdf_path, None),
+            Err(Error::InvalidDeviceModel(_))
+        ));
+    }
+
+    #[test]
+    fn write_device_model_requires_blobs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let entry = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "missing".into(),
+            body: DeviceModelBody {
+                model_id: "missing".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: "a".repeat(64),
+                    meshes: vec![],
+                },
+                root_convention: None,
+            },
+        };
+        assert!(matches!(
+            write_device_model(tmp.path(), &entry),
+            Err(Error::InvalidDeviceModel(_))
+        ));
     }
 
     #[test]

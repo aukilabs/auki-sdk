@@ -70,7 +70,7 @@ The libp2p substrate and the cluster lifecycle layer.
 
 ### [`auki-network`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-network)
 
-libp2p substrate: TCP/QUIC, Noise, Yamux, Circuit Relay v2, identify, ping. On top of that, the seven peer protocols (`/auki/join`, `/auki/heartbeat`, `/auki/membership`, `/auki/info`, `/auki/resources/0.2.0`, `/auki/registries/0.2.0`, `/auki/stream/0.2.0`), the typed stream payload registry, the Discovery HTTP client (with relay-address hints for browser-compatible reachability), and the `SessionHandle` trait that breaks the would-be `auki-domain ↔ auki-session` cycle.
+libp2p substrate: TCP/QUIC, Noise, Yamux, Circuit Relay v2, identify, ping. On top of that, the peer protocols (`/auki/join`, `/auki/heartbeat`, `/auki/membership`, `/auki/info`, `/auki/resources/0.2.0`, `/auki/registries/0.3.0`, `/auki/blobs/0.1.0`, `/auki/stream/0.2.0`), the typed stream payload registry, the Discovery HTTP client (with relay-address hints for browser-compatible reachability), and the `SessionHandle` trait that breaks the would-be `auki-domain ↔ auki-session` cycle.
 
 ### [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain)
 

@@ -404,6 +404,11 @@ const RESOURCES_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 /// error.
 pub const RESOURCES_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long a single `/auki/blobs/0.1.0` open or request/response round
+/// waits before returning a timeout error. Larger than catalog timeouts
+/// because blob chunks can be up to 1 MiB.
+pub const BLOBS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Live source for `/auki/resources/0.4.0` Map Log rows.
 pub trait MapCatalogProvider: Send + Sync {
     fn map_catalog(&self) -> ResourcesResponseV4;
@@ -494,7 +499,7 @@ fn map_resources_v4_open_error(error: libp2p_stream::OpenStreamError) -> Request
     }
 }
 
-/// Inbound `/auki/registries/0.0.1` event surfaced by the runtime to
+/// Inbound `/auki/registries/0.3.0` event surfaced by the runtime to
 /// its owner via the channel returned from [`NetworkRuntime::spawn`].
 ///
 /// The owner (typically `auki-domain`'s `ClusterManager`) resolves the
@@ -975,7 +980,7 @@ impl NetworkRuntime {
     /// gossip events + a receiver for inbound `/auki/info/0.0.1`
     /// participant-info requests + a receiver for inbound
     /// `/auki/resources/0.2.0` resource-catalog requests + a receiver for
-    /// inbound `/auki/registries/0.0.1` registry-entry requests.
+    /// inbound `/auki/registries/0.3.0` registry-entry requests.
     /// Owners that don't care about any of them (e.g. tests) can drop
     /// the receivers; the runtime drops events with no receiver.
     #[allow(clippy::type_complexity)]
@@ -1245,12 +1250,12 @@ impl NetworkRuntime {
     ) -> Result<(BlobChunkMeta, Vec<u8>), RequestBlobError> {
         let mut control = self.stream_control.clone();
         let mut substream = match tokio::time::timeout(
-            RESOURCES_REQUEST_TIMEOUT,
+            BLOBS_REQUEST_TIMEOUT,
             control.open_stream(peer_id, BLOBS_PROTOCOL.clone()),
         )
         .await
         {
-            Err(_) => return Err(RequestBlobError::Timeout(RESOURCES_REQUEST_TIMEOUT)),
+            Err(_) => return Err(RequestBlobError::Timeout(BLOBS_REQUEST_TIMEOUT)),
             Ok(Err(libp2p_stream::OpenStreamError::UnsupportedProtocol(_))) => {
                 return Err(RequestBlobError::UnsupportedProtocol)
             }
@@ -1269,12 +1274,12 @@ impl NetworkRuntime {
     ) -> Result<Vec<u8>, RequestBlobError> {
         let mut control = self.stream_control.clone();
         let mut substream = match tokio::time::timeout(
-            RESOURCES_REQUEST_TIMEOUT,
+            BLOBS_REQUEST_TIMEOUT,
             control.open_stream(peer_id, BLOBS_PROTOCOL.clone()),
         )
         .await
         {
-            Err(_) => return Err(RequestBlobError::Timeout(RESOURCES_REQUEST_TIMEOUT)),
+            Err(_) => return Err(RequestBlobError::Timeout(BLOBS_REQUEST_TIMEOUT)),
             Ok(Err(libp2p_stream::OpenStreamError::UnsupportedProtocol(_))) => {
                 return Err(RequestBlobError::UnsupportedProtocol)
             }
@@ -2321,7 +2326,7 @@ async fn run_task(
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
 
-    // Register inbound `/auki/registries/0.0.1` substream acceptance.
+    // Register inbound `/auki/registries/0.3.0` substream acceptance.
     let registries_proto = REGISTRIES_PROTOCOL.clone();
     let mut incoming_registries: std::pin::Pin<
         Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
@@ -3562,9 +3567,9 @@ where
     write_blob_request(stream, request)
         .await
         .map_err(RequestBlobError::Protocol)?;
-    let (response, chunk) = tokio::time::timeout(RESOURCES_REQUEST_TIMEOUT, read_blob_response(stream))
+    let (response, chunk) = tokio::time::timeout(BLOBS_REQUEST_TIMEOUT, read_blob_response(stream))
         .await
-        .map_err(|_| RequestBlobError::Timeout(RESOURCES_REQUEST_TIMEOUT))?
+        .map_err(|_| RequestBlobError::Timeout(BLOBS_REQUEST_TIMEOUT))?
         .map_err(RequestBlobError::Protocol)?;
     match response {
         BlobResponse::NotFound => Err(RequestBlobError::NotFound),
@@ -3584,41 +3589,25 @@ fn serve_blob_request(app_root: Option<&std::path::Path>, request: &BlobRequest)
     let Some(app_root) = app_root else {
         return (BlobResponse::NotFound, Vec::new());
     };
-    let Ok(Some(blob)) = auki_registry::get_blob(app_root, &request.sha256) else {
-        return (BlobResponse::NotFound, Vec::new());
-    };
-    let total_size = blob.len() as u64;
-    if request.offset > total_size {
-        return (
-            BlobResponse::Error {
-                reason: "offset past end of blob".into(),
-            },
-            Vec::new(),
-        );
-    }
-    if request.offset == total_size {
-        return (
+    match auki_registry::read_blob_range(app_root, &request.sha256, request.offset, request.max_len)
+    {
+        Ok(None) => (BlobResponse::NotFound, Vec::new()),
+        Ok(Some(range)) => (
             BlobResponse::Ok(BlobChunkMeta {
                 sha256: request.sha256.clone(),
                 offset: request.offset,
-                total_size,
-                chunk_len: 0,
+                total_size: range.total_size,
+                chunk_len: range.chunk.len() as u32,
             }),
+            range.chunk,
+        ),
+        Err(error) => (
+            BlobResponse::Error {
+                reason: error.to_string(),
+            },
             Vec::new(),
-        );
+        ),
     }
-    let start = request.offset as usize;
-    let end = (start + request.max_len as usize).min(blob.len());
-    let chunk = blob[start..end].to_vec();
-    (
-        BlobResponse::Ok(BlobChunkMeta {
-            sha256: request.sha256.clone(),
-            offset: request.offset,
-            total_size,
-            chunk_len: chunk.len() as u32,
-        }),
-        chunk,
-    )
 }
 
 /// Drain inbound `/auki/blobs/0.1.0` requests on one substream until EOF.
@@ -3642,7 +3631,7 @@ async fn handle_inbound_blob_substream(
     }
 }
 
-/// Per-substream task for an inbound `/auki/registries/0.0.1`
+/// Per-substream task for an inbound `/auki/registries/0.3.0`
 /// request. Reads the framed [`RegistryRequest`], forwards it to the
 /// runtime's owner via a [`RegistryRequestEvent`], awaits the owner's
 /// reply (up to [`REGISTRIES_RESPONSE_TIMEOUT`]), writes the framed
@@ -5137,6 +5126,30 @@ mod tests {
             },
         );
         assert!(matches!(resp, BlobResponse::Error { .. }));
+    }
+
+    #[test]
+    fn serve_blob_request_oversized_on_disk_is_error_not_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sha = "f".repeat(64);
+        let path = tmp.path().join("blobs").join(&sha);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Write a file larger than MAX_BLOB_BYTES under a plausible address.
+        // Serve must map this to Error (not NotFound).
+        let oversized = vec![0u8; (auki_registry::MAX_BLOB_BYTES as usize) + 1];
+        std::fs::write(&path, &oversized).unwrap();
+        let (resp, _) = serve_blob_request(
+            Some(tmp.path()),
+            &BlobRequest {
+                sha256: sha,
+                offset: 0,
+                max_len: 4,
+            },
+        );
+        assert!(
+            matches!(resp, BlobResponse::Error { .. }),
+            "expected Error for oversized on-disk blob, got {resp:?}"
+        );
     }
 
     #[tokio::test]

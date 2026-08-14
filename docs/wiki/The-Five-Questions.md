@@ -178,7 +178,8 @@ App code never touches libp2p protocol plumbing directly. Apps construct a `Peer
 | `/auki/membership/0.0.1` | Manager gossips membership |
 | `/auki/info/0.0.1` | Peer-to-peer `ParticipantInfo` exchange |
 | `/auki/resources/0.2.0` | Catalog row fetch (one row per peer-owned log) |
-| `/auki/registries/0.2.0` | Hash-pinned registry entry fetch |
+| `/auki/registries/0.3.0` | Hash-pinned registry Get + tip-only `device_model` List |
+| `/auki/blobs/0.1.0` | Content-addressed binary blob transfer |
 | `/auki/stream/0.2.0` | Typed live data streaming |
 
 Plus an [HTTP control API](https://github.com/aukilabs/auki-sdk/blob/develop/docs/control-api.md) — a separate operator-facing surface for daemons that produce SDK sessions (BoosterApp, Sentinel), so any UI like [Park](https://github.com/aukilabs/park) can drive them through a uniform contract.

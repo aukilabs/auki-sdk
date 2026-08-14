@@ -10,8 +10,9 @@
 //! │   ├── sensors/<peer_id>/<sensor_id>/<hash>.json       ← shared across all sessions of this app
 //! │   ├── clocks/<peer_id>/<clock_id>/<hash>.json
 //! │   ├── frames/<peer_id>/<frame_id>/<hash>.json
-//! │   └── detectors/<peer_id>/<detector_id>/<hash>.json   ← Cuba T4
-//! │   └── device_models/<peer_id>/<model_id>/<hash>.json
+//! │   ├── detectors/<peer_id>/<detector_id>/<hash>.json   ← Cuba T4
+//! │   ├── maps/<peer_id>/<map_id>/<hash>.json
+//! │   └── device_models/<peer_id>/<model_id>/<hash>.json  (+ TIP pointer)
 //! └── <session>/
 //!     ├── timetransform_logs/<from_id>__<to_id>/
 //!     │   ├── log_manifest.json

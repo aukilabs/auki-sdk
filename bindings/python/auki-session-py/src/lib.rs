@@ -811,17 +811,23 @@ impl Peer {
     }
 
     /// Rewrite + blob a URDF package and register the device-model entry.
-    #[pyo3(signature = (urdf_path, device_model_id=None, root_convention=None))]
+    #[pyo3(signature = (urdf_path, device_model_id=None, root_convention=None, package_root=None))]
     fn register_urdf_package(
         &self,
         urdf_path: PathBuf,
         device_model_id: Option<&str>,
         root_convention: Option<String>,
+        package_root: Option<PathBuf>,
     ) -> PyResult<registry_py::RegistryRef> {
         let r = self
             .inner
             .lock()
-            .register_urdf_package(device_model_id, &urdf_path, root_convention)
+            .register_urdf_package(
+                device_model_id,
+                &urdf_path,
+                root_convention,
+                package_root.as_deref(),
+            )
             .map_err(map_session_error)?;
         Ok(registry_py::RegistryRef {
             peer_id: r.peer_id,

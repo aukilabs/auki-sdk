@@ -183,6 +183,7 @@ pub use resources_v4_protocol::{
 #[cfg(feature = "swarm")]
 pub use blobs_protocol::{
     BlobChunkMeta, BlobRequest, BlobResponse, BLOBS_PROTOCOL, MAX_BLOB_BYTES, MAX_BLOB_CHUNK_BYTES,
+    MAX_BLOB_ROUNDS,
 };
 
 #[cfg(all(feature = "swarm", feature = "swift-bindings"))]

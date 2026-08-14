@@ -15,7 +15,7 @@ The crate's scope is identity catalogs plus content-addressed binary blobs (`blo
 - `MapRegistryEntry` (`peer_id`, `map_id`, body) + `MapBody::Voxel(VoxelMap)`. The voxel contract pins the exact frame, voxel size, chunk dimension, additive evidence model, and semantic labels.
 - `DeviceModelRegistryEntry` (`peer_id`, `device_model_id`, body) + tagged `DeviceModelFormat::Urdf { urdf_sha256, meshes }` (glTF later). `write_device_model` requires every referenced blob to already exist and updates an on-disk `TIP` pointer so List returns one tip per id.
 - `put_blob` / `get_blob` / `read_blob_range` — SHA-256 content-addressed bytes under `<app_root>/blobs/<sha256>` (cap `MAX_BLOB_BYTES`).
-- `put_urdf_package(app_root, urdf_path, root_convention)` — rewrite mesh filenames, blob URDF + meshes, return a ready `DeviceModelBody`. **Flattened package only**: package dir is the URDF's parent; stock ROS `pkg/urdf/` + `pkg/meshes/` is out of contract.
+- `put_urdf_package(app_root, urdf_path, root_convention, package_root=None)` — rewrite mesh filenames, blob URDF + meshes, return a ready `DeviceModelBody`. Default package dir is the URDF's parent (flattened packs). Pass `package_root` for stock ROS `pkg/urdf/` + `pkg/meshes/` trees (fail-closed under that root).
 - `list_device_models(app_root, peer_id)` — tip-per-id List rows (TIP preferred; mtime fallback for pre-TIP trees).
 - `RegistryRef { peer_id, id, hash }` — shared reference type replacing per-field `(sensor_id, sensor_hash)` pairs in manifests and sensor bodies.
 - `LogRef { source_peer_id, resource_id }` — reference type for identifying logs by identity tuple (not a single content hash).

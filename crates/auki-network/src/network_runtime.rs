@@ -495,6 +495,8 @@ pub enum RequestBlobError {
     SizeMismatch { expected: u64, actual: u64 },
     #[error("invalid remote blob response: {0}")]
     InvalidResponse(String),
+    #[error("blob transfer exceeded MAX_BLOB_ROUNDS")]
+    TooManyRounds,
     #[error("ClusterManager has been shut down")]
     Stopped,
 }
@@ -1223,6 +1225,25 @@ impl NetworkRuntime {
             .expect("map_catalog_provider lock") = Some(provider);
     }
 
+    /// Snapshot the local Map Log catalog without dialing (empty if unset).
+    pub fn local_map_catalog(&self) -> ResourcesResponseV4 {
+        let provider = self
+            .map_catalog_provider
+            .lock()
+            .expect("map_catalog_provider lock")
+            .clone();
+        provider
+            .map(|provider| provider.map_catalog())
+            .unwrap_or_else(|| ResourcesResponseV4 {
+                resources: Vec::new(),
+            })
+    }
+
+    /// Snapshot locally registered `/auki/message/0.1.0` channel rows.
+    pub fn message_channel_catalog(&self) -> Vec<crate::resources_v3_protocol::MessageChannelResource> {
+        self.message_router.catalog()
+    }
+
     pub fn set_blob_app_root(&self, app_root: impl Into<PathBuf>) {
         *self.blob_app_root.lock().expect("blob_app_root lock") = Some(app_root.into());
     }
@@ -1304,13 +1325,18 @@ impl NetworkRuntime {
             let mut bytes = Vec::new();
             let mut offset = 0u64;
             let mut expected_total: Option<u64> = None;
+            let mut rounds = 0u32;
             loop {
+                if rounds >= crate::blobs_protocol::MAX_BLOB_ROUNDS {
+                    return Err(RequestBlobError::TooManyRounds);
+                }
                 let request = BlobRequest {
                     sha256: sha256.clone(),
                     offset,
                     max_len: crate::blobs_protocol::MAX_BLOB_CHUNK_BYTES,
                 };
                 let (meta, chunk) = blob_round_trip(&mut substream, &request).await?;
+                rounds += 1;
                 if meta.total_size > crate::blobs_protocol::MAX_BLOB_BYTES {
                     return Err(RequestBlobError::InvalidResponse(
                         "total_size exceeds MAX_BLOB_BYTES".into(),
@@ -3651,7 +3677,7 @@ fn serve_blob_request(app_root: Option<&std::path::Path>, request: &BlobRequest)
             }),
             range.chunk,
         ),
-        Err(auki_registry::Error::InvalidBlob(msg)) if msg == "offset past end of blob" => (
+        Err(auki_registry::Error::BlobOffsetPastEnd) => (
             BlobResponse::Error {
                 reason: "offset past end of blob".into(),
             },
@@ -3684,7 +3710,12 @@ async fn handle_inbound_blob_substream(
     mut substream: libp2p::Stream,
     blob_app_root: SharedBlobAppRoot,
 ) {
+    let mut rounds = 0u32;
     loop {
+        if rounds >= crate::blobs_protocol::MAX_BLOB_ROUNDS {
+            eprintln!("auki-network: inbound blob substream exceeded MAX_BLOB_ROUNDS; closing");
+            return;
+        }
         let request = match tokio::time::timeout(
             BLOBS_REQUEST_TIMEOUT,
             read_blob_request(&mut substream),
@@ -3702,6 +3733,7 @@ async fn handle_inbound_blob_substream(
         {
             return;
         }
+        rounds += 1;
     }
 }
 
@@ -5290,7 +5322,10 @@ mod tests {
                 max_len: 4,
             },
         );
-        assert!(matches!(resp, BlobResponse::Error { .. }));
+        assert!(matches!(
+            resp,
+            BlobResponse::Error { reason } if reason == "offset past end of blob"
+        ));
     }
 
     #[test]
@@ -5506,5 +5541,66 @@ mod tests {
 
         producer_runtime.shutdown();
         consumer_runtime.shutdown();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn local_map_catalog_empty_without_provider() {
+        let identity = PeerIdentity::from_seed(&[93; 32]);
+        let swarm = build_swarm(
+            &identity,
+            SwarmConfig {
+                listen_addresses: vec![],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+        let (runtime, _j, _l, _m, _i, _r, _reg, _d) = NetworkRuntime::spawn(
+            swarm,
+            vec![],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+        let catalog = runtime.local_map_catalog();
+        assert!(catalog.resources.is_empty());
+        runtime.shutdown();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn message_channel_catalog_lists_local_registration() {
+        use crate::resources_v3_protocol::MessageChannelResource;
+        use auki_registry::RegistryRef;
+
+        let identity = PeerIdentity::from_seed(&[94; 32]);
+        let peer_id = identity.peer_id();
+        let swarm = build_swarm(
+            &identity,
+            SwarmConfig {
+                listen_addresses: vec![],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+        let (runtime, _j, _l, _m, _i, _r, _reg, _d) = NetworkRuntime::spawn(
+            swarm,
+            vec![],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+        let resource = MessageChannelResource {
+            owner_peer_id: peer_id,
+            resource_id: "local-events".into(),
+            clock: RegistryRef {
+                peer_id: peer_id.to_string(),
+                id: "session/monotonic".into(),
+                hash: "clock-hash".into(),
+            },
+        };
+        let _reg = runtime.register_message_channel(resource.clone(), 4).unwrap();
+        let catalog = runtime.message_channel_catalog();
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].resource_id, "local-events");
+        runtime.shutdown();
     }
 }

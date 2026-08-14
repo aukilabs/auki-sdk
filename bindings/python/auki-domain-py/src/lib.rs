@@ -2864,6 +2864,9 @@ fn map_fetch_blob_error(e: RustRequestBlobError) -> PyErr {
         RustRequestBlobError::InvalidResponse(error) => {
             PyValueError::new_err(format!("invalid blob response: {error}"))
         }
+        RustRequestBlobError::TooManyRounds => {
+            PyValueError::new_err("blob transfer exceeded MAX_BLOB_ROUNDS")
+        }
         RustRequestBlobError::OpenStream(error) => {
             PyOSError::new_err(format!("fetch_blob open stream: {error}"))
         }

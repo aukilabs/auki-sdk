@@ -660,17 +660,24 @@ fn sha256_hex(bytes: &[u8]) -> String {
     registry::sha256_hex(bytes)
 }
 
-/// Rewrite + blob a URDF. Package dir is the URDF's parent (flattened meshes only).
+/// Rewrite + blob a URDF. Default package dir is the URDF's parent; pass
+/// ``package_root`` for stock ROS ``pkg/urdf`` + ``pkg/meshes`` trees.
 #[pyfunction]
-#[pyo3(signature = (app_root, urdf_path, root_convention=None))]
+#[pyo3(signature = (app_root, urdf_path, root_convention=None, package_root=None))]
 fn put_urdf_package(
     py: Python<'_>,
     app_root: PathBuf,
     urdf_path: PathBuf,
     root_convention: Option<String>,
+    package_root: Option<PathBuf>,
 ) -> PyResult<PyObject> {
-    let package = registry::put_urdf_package(&app_root, &urdf_path, root_convention)
-        .map_err(map_registry_error)?;
+    let package = registry::put_urdf_package(
+        &app_root,
+        &urdf_path,
+        root_convention,
+        package_root.as_deref(),
+    )
+    .map_err(map_registry_error)?;
     let dict = PyDict::new_bound(py);
     dict.set_item("device_model_id", package.device_model_id)?;
     dict.set_item("body", struct_to_pyobject(py, &package.body)?)?;

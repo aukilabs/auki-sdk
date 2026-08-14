@@ -1082,6 +1082,8 @@ pub enum Error {
     InvalidDeviceModel(String),
     /// A blob SHA-256 is invalid or its on-disk size is out of bounds.
     InvalidBlob(String),
+    /// Requested byte offset is past the end of the on-disk blob.
+    BlobOffsetPastEnd,
     /// On-disk blob bytes do not match the requested SHA-256 address.
     BlobHashMismatch,
 }
@@ -1111,6 +1113,7 @@ impl std::fmt::Display for Error {
             Error::InvalidMap(msg) => write!(f, "invalid map: {msg}"),
             Error::InvalidDeviceModel(msg) => write!(f, "invalid device model: {msg}"),
             Error::InvalidBlob(msg) => write!(f, "invalid blob: {msg}"),
+            Error::BlobOffsetPastEnd => write!(f, "offset past end of blob"),
             Error::BlobHashMismatch => {
                 write!(f, "on-disk bytes do not match SHA-256 address")
             }
@@ -1508,6 +1511,10 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// Persist a content-addressed blob and return its SHA-256 address.
+///
+/// If the address already exists on disk, verifies the stored bytes match
+/// `sha256` and returns without overwriting. A corrupt/mismatched file at
+/// that path surfaces as [`Error::BlobHashMismatch`].
 pub fn put_blob(app_root: &Path, bytes: &[u8]) -> Result<String> {
     if bytes.len() as u64 > MAX_BLOB_BYTES {
         return Err(Error::InvalidBlob(format!(
@@ -1516,11 +1523,13 @@ pub fn put_blob(app_root: &Path, bytes: &[u8]) -> Result<String> {
     }
     let sha256 = sha256_hex(bytes);
     let path = auki_layout::blob_path(app_root, &sha256);
-    if !path.exists() {
-        let dir = path.parent().expect("blob path has parent");
-        fs::create_dir_all(dir)?;
-        atomic_write(&path, bytes)?;
+    if path.exists() {
+        get_blob(app_root, &sha256)?;
+        return Ok(sha256);
     }
+    let dir = path.parent().expect("blob path has parent");
+    fs::create_dir_all(dir)?;
+    atomic_write(&path, bytes)?;
     Ok(sha256)
 }
 
@@ -1563,9 +1572,7 @@ pub fn read_blob_range(
         )));
     }
     if offset > total_size {
-        return Err(Error::InvalidBlob(
-            "offset past end of blob".into(),
-        ));
+        return Err(Error::BlobOffsetPastEnd);
     }
     if offset == total_size {
         return Ok(Some(BlobRange {
@@ -1638,28 +1645,27 @@ pub struct PutUrdfPackage {
 /// Rewrite mesh `filename`s to package-relative paths, `put_blob` the URDF
 /// and every referenced mesh, and return a [`DeviceModelBody`].
 ///
-/// # Package layout (flattened only)
+/// # Package layout
 ///
-/// The package directory is the **parent of the `.urdf` file**. Mesh paths
-/// must resolve as `urdf_dir.join(relative_path)` (plus the existing
-/// `package://pkg/rel` joins under that same dir). Stock ROS trees with
-/// `pkg/urdf/robot.urdf` + `pkg/meshes/` are **out of contract** — flatten
-/// the pack (URDF beside `meshes/`, as K1/Galbot advertise URDFs do) or
-/// this call fails closed.
+/// By default (`package_root = None`) the package directory is the **parent
+/// of the `.urdf` file** (flattened packs: URDF beside `meshes/`). Pass
+/// `package_root = Some(pkg)` for stock ROS trees where the URDF lives under
+/// `pkg/urdf/` and meshes under `pkg/meshes/` — mesh resolution is fail-closed
+/// under that root (no walk-up).
 ///
 /// # Mesh attribute parsing
 ///
-/// Only `<mesh filename="…">` / `'…'` with **no spaces around `=`** are
-/// collected. `filename = "…"` is ignored and will leave unresolved
-/// `package://` refs (also a hard error after rewrite).
+/// Collects `<mesh … filename="…">` / `'…'` including optional ASCII
+/// whitespace around `=` (`filename = "…"`). Still ignores `mesh_filename=`.
 ///
-/// Fails if the URDF references any mesh that cannot be resolved beside the
-/// URDF package directory. Rewrite happens once at publish time so consumers
-/// do not need a second path rewrite after dig.
+/// Fails if the URDF references any mesh that cannot be resolved under the
+/// package directory. Rewrite happens once at publish time so consumers do
+/// not need a second path rewrite after dig.
 pub fn put_urdf_package(
     app_root: &Path,
     urdf_path: &Path,
     root_convention: Option<String>,
+    package_root: Option<&Path>,
 ) -> Result<PutUrdfPackage> {
     let urdf_bytes = fs::read(urdf_path).map_err(Error::Io)?;
     let urdf_text = String::from_utf8(urdf_bytes).map_err(|error| {
@@ -1679,10 +1685,14 @@ pub fn put_urdf_package(
         .map_err(|error| Error::InvalidDeviceModel(format!("invalid device_model_id: {error}")))?;
 
     let mesh_refs = collect_urdf_mesh_filenames(&urdf_text);
-    let package_dir = urdf_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf();
+    let package_dir = package_root
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| {
+            urdf_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_path_buf()
+        });
 
     let mut rewritten = urdf_text;
     let mut meshes = Vec::new();
@@ -1711,7 +1721,7 @@ pub fn put_urdf_package(
     }
     meshes.sort_by(|a, b| a.path.cmp(&b.path));
 
-    if rewritten.contains("filename=\"package://") || rewritten.contains("filename='package://") {
+    if urdf_has_leftover_package_mesh_filename(&rewritten) {
         return Err(Error::InvalidDeviceModel(
             "URDF still contains package:// mesh refs after rewrite".into(),
         ));
@@ -1758,12 +1768,13 @@ fn urdf_robot_name(urdf: &str) -> Option<String> {
 ///
 /// Ignores `mesh_filename=` / comment / non-mesh tags. Only attributes on a
 /// `<mesh` element whose previous character is whitespace or `<` count.
+/// Allows ASCII whitespace around `=` (`filename = "…"`).
 fn collect_urdf_mesh_filenames(urdf: &str) -> Vec<(usize, usize, String)> {
     let mut out = Vec::new();
     let bytes = urdf.as_bytes();
     let mut i = 0;
-    while i + 10 < bytes.len() {
-        if !urdf[i..].starts_with("filename=") {
+    while i + 8 < bytes.len() {
+        if !urdf[i..].starts_with("filename") {
             i += 1;
             continue;
         }
@@ -1787,15 +1798,26 @@ fn collect_urdf_mesh_filenames(urdf: &str) -> Vec<(usize, usize, String)> {
             i += 1;
             continue;
         }
-        let quote_idx = i + "filename=".len();
-        let quote = match bytes.get(quote_idx).copied() {
-            Some(b'"') | Some(b'\'') => bytes[quote_idx] as char,
+        let mut j = i + "filename".len();
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        if bytes.get(j) != Some(&b'=') {
+            i += 1;
+            continue;
+        }
+        j += 1;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        let quote = match bytes.get(j).copied() {
+            Some(b'"') | Some(b'\'') => bytes[j] as char,
             _ => {
                 i += 1;
                 continue;
             }
         };
-        let value_start = quote_idx + 1;
+        let value_start = j + 1;
         let Some(rel) = urdf[value_start..].find(quote) else {
             i += 1;
             continue;
@@ -1809,6 +1831,51 @@ fn collect_urdf_mesh_filenames(urdf: &str) -> Vec<(usize, usize, String)> {
         i = value_end + 1;
     }
     out
+}
+
+/// True when a mesh `filename` attribute still points at `package://…`
+/// (including spaced `filename = "…"` forms the scanner might miss).
+fn urdf_has_leftover_package_mesh_filename(urdf: &str) -> bool {
+    let bytes = urdf.as_bytes();
+    let mut i = 0;
+    while i + 8 < bytes.len() {
+        if !urdf[i..].starts_with("filename") {
+            i += 1;
+            continue;
+        }
+        if i > 0 {
+            let prev = bytes[i - 1];
+            if !(prev == b'<' || prev.is_ascii_whitespace()) {
+                i += 1;
+                continue;
+            }
+        }
+        let mut j = i + "filename".len();
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        if bytes.get(j) != Some(&b'=') {
+            i += 1;
+            continue;
+        }
+        j += 1;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        let quote = match bytes.get(j).copied() {
+            Some(b'"') | Some(b'\'') => true,
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        let value_start = j + 1;
+        if quote && urdf[value_start..].starts_with("package://") {
+            return true;
+        }
+        i = value_start;
+    }
+    false
 }
 
 /// Strip ROS `package://pkg/` so mesh paths are package-relative.
@@ -3347,8 +3414,23 @@ mod id_charset_tests {
         assert!(eof.chunk.is_empty());
         assert!(matches!(
             read_blob_range(tmp.path(), &sha, 11, 4),
-            Err(Error::InvalidBlob(_))
+            Err(Error::BlobOffsetPastEnd)
         ));
+    }
+
+    #[test]
+    fn put_blob_rejects_existing_hash_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let payload = b"good-bytes";
+        let sha = sha256_hex(payload);
+        let path = auki_layout::blob_path(tmp.path(), &sha);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"garbage-at-this-sha").unwrap();
+        assert!(matches!(
+            put_blob(tmp.path(), payload),
+            Err(Error::BlobHashMismatch)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), b"garbage-at-this-sha");
     }
 
     #[test]
@@ -3366,7 +3448,7 @@ mod id_charset_tests {
         .unwrap();
         let app = tempfile::tempdir().unwrap();
         assert!(matches!(
-            put_urdf_package(app.path(), &urdf_path, None),
+            put_urdf_package(app.path(), &urdf_path, None, None),
             Err(Error::InvalidDeviceModel(_))
         ));
     }
@@ -3441,7 +3523,7 @@ mod id_charset_tests {
         .unwrap();
         let app = tempfile::tempdir().unwrap();
         assert!(matches!(
-            put_urdf_package(app.path(), &urdf_path, None),
+            put_urdf_package(app.path(), &urdf_path, None, None),
             Err(Error::InvalidDeviceModel(_))
         ));
         assert!(list_device_models(app.path(), "unused").unwrap().is_empty());
@@ -3456,6 +3538,18 @@ mod id_charset_tests {
             <!-- filename="comment.stl" -->
             <link name="base" mesh_filename="attr.stl">
               <visual><geometry><mesh filename="meshes/body.stl"/></geometry></visual>
+            </link>
+        </robot>"#;
+        let refs = collect_urdf_mesh_filenames(urdf);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].2, "meshes/body.stl");
+    }
+
+    #[test]
+    fn collect_urdf_mesh_filenames_accepts_spaced_equals() {
+        let urdf = r#"<robot name="K1">
+            <link name="base" mesh_filename = "attr.stl">
+              <visual><geometry><mesh filename = "meshes/body.stl"/></geometry></visual>
             </link>
         </robot>"#;
         let refs = collect_urdf_mesh_filenames(urdf);
@@ -3480,7 +3574,8 @@ mod id_charset_tests {
         )
         .unwrap();
         let app = tempfile::tempdir().unwrap();
-        let package = put_urdf_package(app.path(), &urdf_path, Some("ros_body".into())).unwrap();
+        let package =
+            put_urdf_package(app.path(), &urdf_path, Some("ros_body".into()), None).unwrap();
         assert_eq!(package.device_model_id, "k1");
         let (urdf_sha, meshes) = package.body.as_urdf().unwrap();
         assert_eq!(meshes.len(), 1);
@@ -3489,6 +3584,59 @@ mod id_charset_tests {
         let text = String::from_utf8(urdf).unwrap();
         assert!(text.contains(r#"filename="meshes/body.stl""#));
         assert!(!text.contains("package://"));
+    }
+
+    #[test]
+    fn put_urdf_package_rewrites_spaced_filename_attr() {
+        let pkg = tempfile::tempdir().unwrap();
+        let meshes = pkg.path().join("meshes");
+        fs::create_dir_all(&meshes).unwrap();
+        fs::write(meshes.join("body.stl"), b"mesh").unwrap();
+        let urdf_path = pkg.path().join("robot.urdf");
+        fs::write(
+            &urdf_path,
+            r#"<robot name="K1">
+                <link name="base">
+                  <visual><geometry><mesh filename = "package://K1_URDF_Serial/meshes/body.stl"/></geometry></visual>
+                </link>
+            </robot>"#,
+        )
+        .unwrap();
+        let app = tempfile::tempdir().unwrap();
+        let package = put_urdf_package(app.path(), &urdf_path, None, None).unwrap();
+        let (urdf_sha, _) = package.body.as_urdf().unwrap();
+        let text = String::from_utf8(get_blob(app.path(), urdf_sha).unwrap().unwrap()).unwrap();
+        assert!(text.contains(r#"filename = "meshes/body.stl""#));
+        assert!(!text.contains("package://"));
+    }
+
+    #[test]
+    fn put_urdf_package_accepts_stock_ros_with_package_root() {
+        let pkg = tempfile::tempdir().unwrap();
+        let urdf_dir = pkg.path().join("urdf");
+        let meshes = pkg.path().join("meshes");
+        fs::create_dir_all(&urdf_dir).unwrap();
+        fs::create_dir_all(&meshes).unwrap();
+        fs::write(meshes.join("body.stl"), b"mesh").unwrap();
+        let urdf_path = urdf_dir.join("robot.urdf");
+        fs::write(
+            &urdf_path,
+            r#"<robot name="stock">
+                <link name="base">
+                  <visual><geometry><mesh filename="package://pkg/meshes/body.stl"/></geometry></visual>
+                </link>
+            </robot>"#,
+        )
+        .unwrap();
+        let app = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            put_urdf_package(app.path(), &urdf_path, None, None),
+            Err(Error::InvalidDeviceModel(_))
+        ));
+        let package =
+            put_urdf_package(app.path(), &urdf_path, None, Some(pkg.path())).unwrap();
+        let (_, meshes) = package.body.as_urdf().unwrap();
+        assert_eq!(meshes[0].path, "meshes/body.stl");
     }
 
     #[test]

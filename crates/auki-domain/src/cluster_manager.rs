@@ -1583,10 +1583,68 @@ impl ClusterManager {
         request: auki_network::resources_v3_protocol::ResourcesRequest,
     ) -> Result<auki_network::resources_v3_protocol::ResourcesResponse, FetchResourcesCatalogV3Error>
     {
+        if peer_id == self.local_peer_id {
+            return Ok(self.local_resources_catalog_v3(&request));
+        }
         Ok(self
             .runtime
             .request_resources_catalog_v3_with(peer_id, request)
             .await?)
+    }
+
+    fn local_resources_catalog_v3(
+        &self,
+        request: &auki_network::resources_v3_protocol::ResourcesRequest,
+    ) -> auki_network::resources_v3_protocol::ResourcesResponse {
+        use auki_network::resources_v3_protocol::{
+            ResourceEntry as ResourceEntryV3, ResourceVariant as ResourceVariantV3,
+            ResourcesResponse as ResourcesResponseV3,
+        };
+
+        let wants_v2 = request.variants.is_empty()
+            || request
+                .variants
+                .iter()
+                .any(|variant| *variant != ResourceVariantV3::MessageChannel);
+        let mut resources = if wants_v2 {
+            let variants = request
+                .variants
+                .iter()
+                .filter_map(|variant| match variant {
+                    ResourceVariantV3::SensorLog => {
+                        Some(auki_network::resources_protocol::Variant::SensorLog)
+                    }
+                    ResourceVariantV3::PoseLog => {
+                        Some(auki_network::resources_protocol::Variant::PoseLog)
+                    }
+                    ResourceVariantV3::TimeTransformLog => {
+                        Some(auki_network::resources_protocol::Variant::TimeTransformLog)
+                    }
+                    ResourceVariantV3::DetectionLog => {
+                        Some(auki_network::resources_protocol::Variant::DetectionLog)
+                    }
+                    ResourceVariantV3::MessageChannel => None,
+                })
+                .collect();
+            self.local_resources_catalog(&ResourcesRequest { variants })
+                .resources
+                .into_iter()
+                .map(Box::new)
+                .map(ResourceEntryV3::V2)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        if request.includes(ResourceVariantV3::MessageChannel) {
+            resources.extend(
+                self.runtime
+                    .message_channel_catalog()
+                    .into_iter()
+                    .map(ResourceEntryV3::MessageChannel),
+            );
+        }
+        ResourcesResponseV3 { resources }.filtered(request)
     }
 
     /// Fetch a cluster peer's Map Log catalog over Resource Catalog v0.4.
@@ -1594,6 +1652,9 @@ impl ClusterManager {
         &self,
         peer_id: PeerId,
     ) -> Result<auki_network::ResourcesResponseV4, FetchMapCatalogError> {
+        if peer_id == self.local_peer_id {
+            return Ok(self.runtime.local_map_catalog());
+        }
         Ok(self.runtime.request_map_catalog(peer_id).await?)
     }
 

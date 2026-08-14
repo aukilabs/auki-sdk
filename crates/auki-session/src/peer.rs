@@ -298,15 +298,25 @@ impl Peer {
     /// otherwise the id from [`auki_registry::put_urdf_package`] is used.
     /// `body.model_id` stays the URDF robot name even when `id` overrides
     /// the registry key — consumers must key List/Get on `device_model_id`.
+    ///
+    /// `package_root` defaults to the URDF's parent when `None`. Pass the ROS
+    /// package directory when the URDF lives under `pkg/urdf/` and meshes under
+    /// `pkg/meshes/`.
     pub fn register_urdf_package(
         &self,
         id: Option<&str>,
         urdf_path: &std::path::Path,
         root_convention: Option<String>,
+        package_root: Option<&std::path::Path>,
     ) -> Result<RegistryRef> {
         let package = {
             let inner = self.inner.read();
-            auki_registry::put_urdf_package(&inner.storage_root, urdf_path, root_convention)?
+            auki_registry::put_urdf_package(
+                &inner.storage_root,
+                urdf_path,
+                root_convention,
+                package_root,
+            )?
         };
         let device_model_id = id.unwrap_or(package.device_model_id.as_str());
         self.register_device_model(device_model_id, package.body)

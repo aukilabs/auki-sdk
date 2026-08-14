@@ -444,6 +444,30 @@ async fn two_domains_discover_and_exchange_live_opaque_typed_messages() {
     };
     assert_eq!(discovered.clock, clock);
     assert_eq!(discovered, row);
+
+    // Local short-circuit: receiver sees its own channel without dialing self.
+    let local_v3 = receiver_domain
+        .fetch_resources_catalog_v3_with(
+            receiver_peer_id,
+            ResourcesRequestV3 {
+                variants: vec![ResourceVariantV3::MessageChannel],
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        local_v3.resources.as_slice(),
+        [ResourceEntryV3::MessageChannel(row)] if row.resource_id == "application-events"
+    ));
+    let local_maps = receiver_domain
+        .fetch_map_catalog(receiver_peer_id)
+        .await
+        .unwrap();
+    assert!(
+        local_maps.resources.is_empty(),
+        "empty map provider short-circuits to empty local catalog"
+    );
+
     assert!(matches!(
         sender_domain
             .open_message_channel(sender_peer_id, &discovered)

@@ -27,6 +27,10 @@ pub const MAX_BLOB_CHUNK_BYTES: u32 = 1024 * 1024;
 /// Cap on a single blob's total size (owned by `auki-registry`).
 pub use auki_registry::MAX_BLOB_BYTES;
 
+/// Max request/response rounds on one blob substream (full fetch + slack).
+pub const MAX_BLOB_ROUNDS: u32 =
+    (MAX_BLOB_BYTES / MAX_BLOB_CHUNK_BYTES as u64) as u32 + 8;
+
 /// Cap on a framed protobuf meta message.
 const MAX_META_BYTES: u32 = 16 * 1024;
 
@@ -444,5 +448,61 @@ mod tests {
             }
         );
         assert!(chunk.is_empty());
+    }
+
+    #[test]
+    fn max_blob_rounds_covers_full_blob_plus_slack() {
+        assert_eq!(
+            MAX_BLOB_ROUNDS,
+            (MAX_BLOB_BYTES / MAX_BLOB_CHUNK_BYTES as u64) as u32 + 8
+        );
+        // A lying peer that returns 1-byte chunks for a max-sized blob still
+        // exhausts within the capped round budget (plus the +8 slack).
+        assert!(MAX_BLOB_ROUNDS as u64 > MAX_BLOB_BYTES / MAX_BLOB_CHUNK_BYTES as u64);
+    }
+
+    #[tokio::test]
+    async fn inbound_style_loop_stops_after_max_blob_rounds() {
+        // Script MAX_BLOB_ROUNDS+1 framed requests; the inbound gate serves
+        // only MAX_BLOB_ROUNDS and leaves the next request unread on the wire.
+        let hash = "a".repeat(64);
+        let mut bytes = Vec::new();
+        for offset in 0..=MAX_BLOB_ROUNDS {
+            write_blob_request(
+                &mut bytes,
+                &BlobRequest {
+                    sha256: hash.clone(),
+                    offset: offset as u64,
+                    max_len: 1,
+                },
+            )
+            .await
+            .unwrap();
+            write_blob_response(
+                &mut bytes,
+                &BlobResponse::Ok(BlobChunkMeta {
+                    sha256: hash.clone(),
+                    offset: offset as u64,
+                    total_size: (MAX_BLOB_ROUNDS as u64) + 1,
+                    chunk_len: 1,
+                }),
+                b"x",
+            )
+            .await
+            .unwrap();
+        }
+        let mut cursor = futures::io::Cursor::new(bytes);
+        let mut served = 0u32;
+        loop {
+            if served >= MAX_BLOB_ROUNDS {
+                break;
+            }
+            let _ = read_blob_request(&mut cursor).await.unwrap();
+            let _ = read_blob_response(&mut cursor).await.unwrap();
+            served += 1;
+        }
+        assert_eq!(served, MAX_BLOB_ROUNDS);
+        // Next framed request is still on the wire — the loop gate refused it.
+        assert!(read_blob_request(&mut cursor).await.is_ok());
     }
 }

@@ -819,15 +819,20 @@ impl Peer {
         root_convention: Option<String>,
         package_root: Option<PathBuf>,
     ) -> PyResult<registry_py::RegistryRef> {
+        // Blob without holding the Peer mutex (mesh hashing can take seconds).
+        let storage_root = self.inner.lock().storage_root();
+        let package = registry::put_urdf_package(
+            &storage_root,
+            &urdf_path,
+            root_convention,
+            package_root.as_deref(),
+        )
+        .map_err(|e| map_session_error(session::SessionError::Registry(e)))?;
+        let id = device_model_id.unwrap_or(package.device_model_id.as_str());
         let r = self
             .inner
             .lock()
-            .register_urdf_package(
-                device_model_id,
-                &urdf_path,
-                root_convention,
-                package_root.as_deref(),
-            )
+            .register_device_model(id, package.body)
             .map_err(map_session_error)?;
         Ok(registry_py::RegistryRef {
             peer_id: r.peer_id,

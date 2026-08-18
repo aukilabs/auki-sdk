@@ -1478,9 +1478,8 @@ impl ClusterManager {
     /// and returns canonical JSON entries to cluster peers.
     ///
     /// Inbound Get requests received before this call answer with
-    /// `entry: None`, which means "this peer does not have that exact
-    /// registry entry" from the consumer's perspective. List answers with
-    /// an empty entries vector.
+    /// [`RegistryResponse::Error`] `"registry not configured"`. List answers
+    /// the same way (not an empty tip set).
     pub fn set_registry_app_root(&self, app_root: impl Into<PathBuf>) {
         let app_root = app_root.into();
         *self
@@ -1687,7 +1686,9 @@ impl ClusterManager {
             return match root {
                 Some(root) => list_registry_refs(&root, &self.local_peer_id.to_string(), kind)
                     .map_err(|error| FetchRegistryEntryError::InvalidEnvelope(error.to_string())),
-                None => Ok(Vec::new()),
+                None => Err(FetchRegistryEntryError::InvalidEnvelope(
+                    "registry not configured".into(),
+                )),
             };
         }
         let response = self
@@ -3879,9 +3880,11 @@ fn spawn_registry_handler(
 
 /// Build a [`RegistryResponse`] from the local app root for one inbound request.
 ///
-/// List IO / read failures return [`RegistryResponse::Error`] so clients do not
-/// confuse a broken peer with an empty tip set. Missing peer dirs stay empty List
-/// (`list_device_models` soft-fails). Get read failures stay `entry: None`.
+/// List and Get IO / read failures return [`RegistryResponse::Error`] so clients
+/// do not confuse a broken peer with an empty tip set or a missing entry.
+/// Missing peer dirs stay empty List (`list_device_models` soft-fails).
+/// `Ok(None)` on Get stays `{ entry: None }` (exact hash not present).
+/// Unconfigured app root (`None`) is Error, not empty/missing.
 fn registry_response_for(
     root: Option<&std::path::Path>,
     local_peer_id: &str,
@@ -3891,15 +3894,14 @@ fn registry_response_for(
         (Some(root), RegistryRequest::Get { kind, id, hash }) => {
             match read_registry_envelope(root, local_peer_id, *kind, id, hash) {
                 Ok(entry) => RegistryResponse::Get { entry },
-                Err(e) => {
-                    eprintln!(
-                        "auki-domain: registry Get: {kind} {id}@{hash} failed: {e}"
-                    );
-                    RegistryResponse::Get { entry: None }
-                }
+                Err(e) => RegistryResponse::Error {
+                    reason: format!("get failed: {e}"),
+                },
             }
         }
-        (None, RegistryRequest::Get { .. }) => RegistryResponse::Get { entry: None },
+        (None, RegistryRequest::Get { .. }) => RegistryResponse::Error {
+            reason: "registry not configured".into(),
+        },
         (Some(root), RegistryRequest::List { kind }) => {
             if !matches!(kind, RegistryKind::DeviceModel) {
                 RegistryResponse::Error {
@@ -3914,8 +3916,8 @@ fn registry_response_for(
                 }
             }
         }
-        (None, RegistryRequest::List { .. }) => RegistryResponse::List {
-            entries: Vec::new(),
+        (None, RegistryRequest::List { .. }) => RegistryResponse::Error {
+            reason: "registry not configured".into(),
         },
     }
 }
@@ -5817,6 +5819,50 @@ mod tests {
             ),
             "expected Error, got {response:?}"
         );
+    }
+
+    #[test]
+    fn registry_response_get_io_failure_is_error_not_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let peer_id = "galbot";
+        let hash = "a".repeat(32);
+        let path = auki_layout::device_model_entry_path(tmp.path(), peer_id, "k1", &hash);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        {
+            let f = std::fs::File::create(&path).unwrap();
+            f.set_len(auki_registry::MAX_DEVICE_MODEL_ENTRY_BYTES + 1)
+                .unwrap();
+        }
+        let response = registry_response_for(
+            Some(tmp.path()),
+            peer_id,
+            &RegistryRequest::get(RegistryKind::DeviceModel, "k1", hash),
+        );
+        assert!(
+            matches!(
+                response,
+                RegistryResponse::Error { ref reason } if reason.starts_with("get failed:")
+            ),
+            "expected Get Error, got {response:?}"
+        );
+    }
+
+    #[test]
+    fn registry_response_unconfigured_root_is_error() {
+        let list = registry_response_for(None, "peer", &RegistryRequest::list(RegistryKind::DeviceModel));
+        assert!(matches!(
+            list,
+            RegistryResponse::Error { ref reason } if reason == "registry not configured"
+        ));
+        let get = registry_response_for(
+            None,
+            "peer",
+            &RegistryRequest::get(RegistryKind::DeviceModel, "k1", "a".repeat(32)),
+        );
+        assert!(matches!(
+            get,
+            RegistryResponse::Error { ref reason } if reason == "registry not configured"
+        ));
     }
 
     #[test]

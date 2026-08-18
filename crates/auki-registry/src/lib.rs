@@ -46,14 +46,20 @@ pub enum RegistryIdError {
     Empty,
     #[error("registry id contains disallowed character {0:?}")]
     DisallowedChar(char),
+    /// `.` / `..` / empty path segments — `id_to_segment` only rewrites `/`,
+    /// so these would escape the peer/id directory on disk.
+    #[error("registry id contains reserved path segment {0:?}")]
+    ReservedPathSegment(String),
 }
 
 /// Validate that a registry id is suitable for use as a `(peer_id, id)` key.
 ///
 /// Rejects: empty strings, `>` (collides with the `->` separator in
 /// pose/time-transform resource_ids), `@` (collides with the detection
-/// separator), and whitespace. Forward slashes are allowed and treated
-/// as path separators downstream.
+/// separator), whitespace, and path segments that are empty / `.` / `..`
+/// (would escape the on-disk registry tree). Forward slashes are allowed
+/// and treated as path separators downstream (`a.b.c` and `foo/bar` stay
+/// legal).
 pub fn validate_registry_id(id: &str) -> std::result::Result<(), RegistryIdError> {
     if id.is_empty() {
         return Err(RegistryIdError::Empty);
@@ -61,6 +67,11 @@ pub fn validate_registry_id(id: &str) -> std::result::Result<(), RegistryIdError
     for c in id.chars() {
         if c == '>' || c == '@' || c.is_whitespace() {
             return Err(RegistryIdError::DisallowedChar(c));
+        }
+    }
+    for segment in id.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return Err(RegistryIdError::ReservedPathSegment(segment.to_owned()));
         }
     }
     Ok(())
@@ -1385,6 +1396,11 @@ pub fn read_device_model(
     device_model_id: &str,
     hash: &str,
 ) -> Result<Option<DeviceModelRegistryEntry>> {
+    if !is_registry_entry_hash(hash) {
+        return Err(Error::InvalidDeviceModel(
+            "hash must be 32 lowercase hex characters".into(),
+        ));
+    }
     let path = auki_layout::device_model_entry_path(app_root, peer_id, device_model_id, hash);
     let Some(bytes) = read_at_capped(&path, MAX_DEVICE_MODEL_ENTRY_BYTES)? else {
         return Ok(None);
@@ -1404,6 +1420,13 @@ pub fn read_device_model(
         });
     }
     entry.validate()?;
+    let content_hash = entry.hash();
+    if content_hash != hash {
+        return Err(Error::IdMismatch {
+            expected: hash.to_owned(),
+            found: content_hash,
+        });
+    }
     Ok(Some(entry))
 }
 
@@ -1695,6 +1718,40 @@ fn canonicalize<T: Serialize>(value: &T) -> Vec<u8> {
 
 fn write_entry_at(path: &Path, hash: String, bytes: &[u8]) -> Result<WriteOutcome> {
     if path.exists() {
+        let meta = match fs::metadata(path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                // exists() raced with a delete — fall through and write.
+                let dir = path.parent().expect("entry path has a parent");
+                fs::create_dir_all(dir)?;
+                atomic_write(path, bytes)?;
+                return Ok(WriteOutcome::Created(hash));
+            }
+            Err(e) => return Err(Error::Io(e)),
+        };
+        if meta.len() != bytes.len() as u64 {
+            return Err(Error::InvalidBlob(format!(
+                "existing registry entry at {} size {} does not match canonical bytes ({}) for hash {hash}",
+                path.display(),
+                meta.len(),
+                bytes.len()
+            )));
+        }
+        let on_disk = match read_at(path)? {
+            Some(b) => b,
+            None => {
+                let dir = path.parent().expect("entry path has a parent");
+                fs::create_dir_all(dir)?;
+                atomic_write(path, bytes)?;
+                return Ok(WriteOutcome::Created(hash));
+            }
+        };
+        if on_disk.as_slice() != bytes {
+            return Err(Error::InvalidBlob(format!(
+                "existing registry entry at {} does not match canonical bytes for hash {hash}",
+                path.display()
+            )));
+        }
         return Ok(WriteOutcome::AlreadyExists(hash));
     }
     let dir = path.parent().expect("entry path has a parent");
@@ -2969,6 +3026,17 @@ mod id_charset_tests {
     }
 
     #[test]
+    fn rejects_reserved_path_segments() {
+        for bad in ["..", ".", "foo/../bar", "foo//bar", "./bar", "foo/."] {
+            let result = validate_registry_id(bad);
+            assert!(
+                matches!(result, Err(RegistryIdError::ReservedPathSegment(_))),
+                "id {bad:?} should be rejected as reserved path segment, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
     fn allows_slash_underscore_dash_dot() {
         for good in [
             "foo/bar",
@@ -3371,6 +3439,76 @@ mod id_charset_tests {
             read_device_model(tmp.path(), "galbot", "k1", &hash),
             Err(Error::InvalidBlob(_))
         ));
+    }
+
+    #[test]
+    fn read_device_model_rejects_non_hex_hash() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            read_device_model(tmp.path(), "galbot", "k1", "../blobs/deadbeef"),
+            Err(Error::InvalidDeviceModel(_))
+        ));
+        assert!(matches!(
+            read_device_model(tmp.path(), "galbot", "k1", "not-a-hash"),
+            Err(Error::InvalidDeviceModel(_))
+        ));
+    }
+
+    #[test]
+    fn read_device_model_rejects_filename_hash_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let urdf = put_blob(tmp.path(), b"<robot name='test'/>").unwrap();
+        let entry = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "k1".into(),
+            body: DeviceModelBody {
+                model_id: "k1".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf,
+                    meshes: vec![],
+                },
+                root_convention: None,
+            },
+        };
+        let real_hash = entry.hash();
+        let wrong_hash = "b".repeat(32);
+        assert_ne!(real_hash, wrong_hash);
+        let path =
+            auki_layout::device_model_entry_path(tmp.path(), "galbot", "k1", &wrong_hash);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, entry.canonical_bytes()).unwrap();
+        assert!(matches!(
+            read_device_model(tmp.path(), "galbot", "k1", &wrong_hash),
+            Err(Error::IdMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn write_device_model_rejects_corrupt_existing_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let urdf = put_blob(tmp.path(), b"<robot name='test'/>").unwrap();
+        let entry = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "k1".into(),
+            body: DeviceModelBody {
+                model_id: "k1".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf,
+                    meshes: vec![],
+                },
+                root_convention: None,
+            },
+        };
+        let hash = entry.hash();
+        let path = auki_layout::device_model_entry_path(tmp.path(), "galbot", "k1", &hash);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"{\"not\":\"canonical\"}").unwrap();
+        assert!(matches!(
+            write_device_model(tmp.path(), &entry),
+            Err(Error::InvalidBlob(_))
+        ));
+        let tip = path.parent().unwrap().join("TIP");
+        assert!(!tip.exists());
     }
 
     #[test]

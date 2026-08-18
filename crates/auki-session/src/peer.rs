@@ -309,15 +309,14 @@ impl Peer {
         root_convention: Option<String>,
         package_root: Option<&std::path::Path>,
     ) -> Result<RegistryRef> {
-        let package = {
-            let inner = self.inner.read();
-            auki_registry::put_urdf_package(
-                &inner.storage_root,
-                urdf_path,
-                root_convention,
-                package_root,
-            )?
-        };
+        // Blob URDF + meshes without holding the peer lock (can take seconds).
+        let storage_root = self.storage_root();
+        let package = auki_registry::put_urdf_package(
+            &storage_root,
+            urdf_path,
+            root_convention,
+            package_root,
+        )?;
         let device_model_id = id.unwrap_or(package.device_model_id.as_str());
         self.register_device_model(device_model_id, package.body)
     }

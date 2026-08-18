@@ -78,15 +78,12 @@ pub fn put_urdf_package(
 
     let mut rewritten = urdf_text;
     let mut meshes = Vec::new();
-    let mut seen_paths = std::collections::BTreeSet::new();
+    let mut seen_paths = std::collections::BTreeMap::<String, PathBuf>::new();
     // Replace from the end so earlier offsets stay valid.
     for (start, end, original) in mesh_refs.into_iter().rev() {
         let rel = normalize_mesh_rel_path(&original);
         validate_mesh_rel_path(&rel)?;
         rewritten.replace_range(start..end, &rel);
-        if !seen_paths.insert(rel.clone()) {
-            continue;
-        }
         let resolved = resolve_urdf_mesh(&package_dir, &original, &rel);
         let Some(resolved) = resolved else {
             return Err(Error::InvalidDeviceModel(format!(
@@ -94,6 +91,14 @@ pub fn put_urdf_package(
                 package_dir.display()
             )));
         };
+        if let Some(prev) = seen_paths.get(&rel) {
+            if prev != &resolved {
+                return Err(Error::InvalidDeviceModel(format!(
+                    "mesh paths normalize to {rel:?} but resolve to different files"
+                )));
+            }
+            continue;
+        }
         let mesh_bytes = read_at_capped(&resolved, MAX_BLOB_BYTES)?.ok_or_else(|| {
             Error::Io(io::Error::new(
                 io::ErrorKind::NotFound,
@@ -101,6 +106,7 @@ pub fn put_urdf_package(
             ))
         })?;
         let sha256 = put_blob(app_root, &mesh_bytes)?;
+        seen_paths.insert(rel.clone(), resolved);
         meshes.push(MeshBlobRef {
             path: rel,
             sha256,
@@ -108,10 +114,15 @@ pub fn put_urdf_package(
     }
     meshes.sort_by(|a, b| a.path.cmp(&b.path));
 
-    if urdf_has_leftover_package_mesh_filename(&rewritten)? {
-        return Err(Error::InvalidDeviceModel(
-            "URDF still contains package:// mesh refs after rewrite".into(),
-        ));
+    // Fail closed on leftover URI schemes (file://, http://, package://, …)
+    // and any rewritten path that no longer passes the mesh-path contract.
+    for (_, _, value) in collect_urdf_mesh_filenames(&rewritten)? {
+        if value.contains("://") {
+            return Err(Error::InvalidDeviceModel(format!(
+                "URDF still contains URI mesh ref after rewrite: {value:?}"
+            )));
+        }
+        validate_mesh_rel_path(&value)?;
     }
 
     let urdf_sha256 = put_blob(app_root, rewritten.as_bytes())?;
@@ -269,6 +280,7 @@ fn filename_value_span(element: &str, raw_value: &str) -> Option<(usize, usize)>
 }
 
 /// True when a live `<mesh filename>` still points at `package://…`.
+#[cfg(test)]
 fn urdf_has_leftover_package_mesh_filename(urdf: &str) -> Result<bool> {
     Ok(collect_urdf_mesh_filenames(urdf)?
         .into_iter()
@@ -287,16 +299,24 @@ pub fn normalize_mesh_rel_path(path: &str) -> String {
     path.to_string()
 }
 
-/// Reject empty, absolute, or `..`-containing mesh relative paths.
+/// Reject empty, absolute, `..`-containing, or XML-unsafe mesh relative paths.
 ///
 /// Part of the device-model registry contract (not URDF-ingest-only): every
 /// `MeshBlobRef.path` must be package-relative so consumers can safely
-/// `cache.join(path)`.
+/// `cache.join(path)`. Paths are also spliced into URDF `filename="…"` spans
+/// at publish time, so quote / amp / angle / control bytes are rejected.
 pub fn validate_mesh_rel_path(rel: &str) -> Result<()> {
     if rel.is_empty() {
         return Err(Error::InvalidDeviceModel(
             "mesh path must not be empty".into(),
         ));
+    }
+    if rel.bytes().any(|b| {
+        b == b'"' || b == b'\'' || b == b'<' || b == b'>' || b == b'&' || b < 0x20
+    }) {
+        return Err(Error::InvalidDeviceModel(format!(
+            "mesh path contains XML-unsafe characters: {rel:?}"
+        )));
     }
     let path = Path::new(rel);
     if path.is_absolute() {
@@ -415,6 +435,99 @@ mod tests {
             put_urdf_package(app.path(), &urdf_path, None, None),
             Err(Error::InvalidDeviceModel(_))
         ));
+    }
+
+    #[test]
+    fn put_urdf_package_rejects_robot_name_dotdot() {
+        let pkg = tempfile::tempdir().unwrap();
+        let urdf_path = pkg.path().join("robot.urdf");
+        fs::write(
+            &urdf_path,
+            r#"<robot name="..">
+                <link name="base"/>
+            </robot>"#,
+        )
+        .unwrap();
+        let app = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            put_urdf_package(app.path(), &urdf_path, None, None),
+            Err(Error::InvalidDeviceModel(_))
+        ));
+    }
+
+    #[test]
+    fn put_urdf_package_rejects_xml_unsafe_mesh_path() {
+        let pkg = tempfile::tempdir().unwrap();
+        let meshes = pkg.path().join("meshes");
+        fs::create_dir_all(&meshes).unwrap();
+        // File on disk is fine; the filename attr carries a quote that would
+        // break out of the XML attribute if spliced raw.
+        fs::write(meshes.join("evil.stl"), b"mesh").unwrap();
+        let urdf_path = pkg.path().join("robot.urdf");
+        fs::write(
+            &urdf_path,
+            r#"<robot name="evil">
+                <link name="base">
+                  <visual><geometry><mesh filename="meshes/evil&quot; x=&quot;y.stl"/></geometry></visual>
+                </link>
+            </robot>"#,
+        )
+        .unwrap();
+        let app = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            put_urdf_package(app.path(), &urdf_path, None, None),
+            Err(Error::InvalidDeviceModel(_))
+        ));
+    }
+
+    #[test]
+    fn put_urdf_package_rejects_file_uri_mesh() {
+        let pkg = tempfile::tempdir().unwrap();
+        let urdf_path = pkg.path().join("robot.urdf");
+        fs::write(
+            &urdf_path,
+            r#"<robot name="evil">
+                <link name="base">
+                  <visual><geometry><mesh filename="file:///etc/passwd"/></geometry></visual>
+                </link>
+            </robot>"#,
+        )
+        .unwrap();
+        let app = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            put_urdf_package(app.path(), &urdf_path, None, None),
+            Err(Error::InvalidDeviceModel(_))
+        ));
+    }
+
+    #[test]
+    fn put_urdf_package_rejects_duplicate_rel_different_files() {
+        let pkg = tempfile::tempdir().unwrap();
+        // No package_dir/meshes/body.stl — so each package:// URI resolves under
+        // its own pkg_* tree. Both normalize to meshes/body.stl.
+        let a = pkg.path().join("pkg_a").join("meshes");
+        let b = pkg.path().join("pkg_b").join("meshes");
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        fs::write(a.join("body.stl"), b"bytes-a").unwrap();
+        fs::write(b.join("body.stl"), b"bytes-b").unwrap();
+        let urdf_path = pkg.path().join("robot.urdf");
+        fs::write(
+            &urdf_path,
+            r#"<robot name="K1">
+                <link name="base">
+                  <visual><geometry><mesh filename="package://pkg_a/meshes/body.stl"/></geometry></visual>
+                  <collision><geometry><mesh filename="package://pkg_b/meshes/body.stl"/></geometry></collision>
+                </link>
+            </robot>"#,
+        )
+        .unwrap();
+        let app = tempfile::tempdir().unwrap();
+        let err = put_urdf_package(app.path(), &urdf_path, None, None).unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidDeviceModel(ref msg) if msg.contains("different files")),
+            "expected different-files error, got {err:?}"
+        );
     }
 
     #[test]

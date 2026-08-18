@@ -3726,11 +3726,14 @@ async fn handle_inbound_blob_substream(
         };
         let app_root = blob_app_root.lock().expect("blob_app_root lock").clone();
         let (response, chunk) = serve_blob_request(app_root.as_deref(), &request);
-        if write_blob_response(&mut substream, &response, &chunk)
-            .await
-            .is_err()
+        match tokio::time::timeout(
+            BLOBS_REQUEST_TIMEOUT,
+            write_blob_response(&mut substream, &response, &chunk),
+        )
+        .await
         {
-            return;
+            Ok(Ok(())) => {}
+            Ok(Err(_)) | Err(_) => return,
         }
         rounds += 1;
     }
@@ -3749,10 +3752,21 @@ async fn handle_inbound_registry_substream(
     mut substream: libp2p::Stream,
     registry_events_tx: mpsc::Sender<RegistryRequestEvent>,
 ) {
-    let request = match read_registry_request(&mut substream).await {
-        Ok(r) => r,
-        Err(e) => {
+    let request = match tokio::time::timeout(
+        REGISTRIES_REQUEST_TIMEOUT,
+        read_registry_request(&mut substream),
+    )
+    .await
+    {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
             eprintln!("auki-network: registry substream from {peer}: read failed: {e}");
+            return;
+        }
+        Err(_) => {
+            eprintln!(
+                "auki-network: registry substream from {peer}: read timed out after {REGISTRIES_REQUEST_TIMEOUT:?}"
+            );
             return;
         }
     };
@@ -3785,8 +3799,22 @@ async fn handle_inbound_registry_substream(
         }
     };
 
-    if let Err(e) = write_registry_response(&mut substream, &response).await {
-        eprintln!("auki-network: registry substream to {peer}: write response failed: {e}");
+    match write_registry_response(&mut substream, &response).await {
+        Ok(()) => {}
+        Err(RegistriesProtocolError::FrameTooLarge { .. }) => {
+            // Oversized List/Get would otherwise look like EOF to the client.
+            let fallback = RegistryResponse::Error {
+                reason: "list too large".into(),
+            };
+            if let Err(e) = write_registry_response(&mut substream, &fallback).await {
+                eprintln!(
+                    "auki-network: registry substream to {peer}: write FrameTooLarge fallback failed: {e}"
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("auki-network: registry substream to {peer}: write response failed: {e}");
+        }
     }
 }
 
@@ -3802,10 +3830,21 @@ async fn handle_inbound_registry_v2_substream(
     mut substream: libp2p::Stream,
     registry_events_tx: mpsc::Sender<RegistryRequestEvent>,
 ) {
-    let request = match read_registry_request_v2(&mut substream).await {
-        Ok(r) => r,
-        Err(e) => {
+    let request = match tokio::time::timeout(
+        REGISTRIES_REQUEST_TIMEOUT,
+        read_registry_request_v2(&mut substream),
+    )
+    .await
+    {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
             eprintln!("auki-network: registry v2 substream from {peer}: read failed: {e}");
+            return;
+        }
+        Err(_) => {
+            eprintln!(
+                "auki-network: registry v2 substream from {peer}: read timed out after {REGISTRIES_REQUEST_TIMEOUT:?}"
+            );
             return;
         }
     };

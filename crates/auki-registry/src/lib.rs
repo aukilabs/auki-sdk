@@ -1458,7 +1458,8 @@ enum DeviceModelTipSource {
 /// (so a sibling dir cannot steal another id's tip). Older content-addressed
 /// siblings stay on disk but are omitted from List. Missing peer dirs yield
 /// an empty list; other peer-dir IO errors propagate. TIP/entry reads are
-/// size-capped; oversized or malformed files are skipped with no error.
+/// size-capped; oversized, malformed, or tip entries whose referenced blobs
+/// are missing are skipped with no error.
 pub fn list_device_models(app_root: &Path, peer_id: &str) -> Result<Vec<DeviceModelListEntry>> {
     let peer_dir = auki_layout::device_models_peer_dir(app_root, peer_id);
     let model_dirs = match fs::read_dir(&peer_dir) {
@@ -1473,7 +1474,7 @@ pub fn list_device_models(app_root: &Path, peer_id: &str) -> Result<Vec<DeviceMo
             continue;
         }
         let model_path = model_dir.path();
-        if let Some(tip) = read_device_model_tip(&model_path, peer_id)? {
+        if let Some(tip) = read_device_model_tip(app_root, &model_path, peer_id)? {
             tips.insert(tip.id.clone(), (DeviceModelTipSource::Tip, tip));
             continue;
         }
@@ -1486,7 +1487,7 @@ pub fn list_device_models(app_root: &Path, peer_id: &str) -> Result<Vec<DeviceMo
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
             }
-            let Some(candidate) = load_device_model_list_candidate(&path, peer_id)? else {
+            let Some(candidate) = load_device_model_list_candidate(app_root, &path, peer_id)? else {
                 continue;
             };
             let mtime = file
@@ -1512,6 +1513,7 @@ pub fn list_device_models(app_root: &Path, peer_id: &str) -> Result<Vec<DeviceMo
 }
 
 fn read_device_model_tip(
+    app_root: &Path,
     model_dir: &Path,
     peer_id: &str,
 ) -> Result<Option<DeviceModelListEntry>> {
@@ -1533,10 +1535,11 @@ fn read_device_model_tip(
         return Ok(None);
     }
     let entry_path = model_dir.join(format!("{hash}.json"));
-    Ok(load_device_model_list_candidate(&entry_path, peer_id)?)
+    Ok(load_device_model_list_candidate(app_root, &entry_path, peer_id)?)
 }
 
 fn load_device_model_list_candidate(
+    app_root: &Path,
     path: &Path,
     peer_id: &str,
 ) -> Result<Option<DeviceModelListEntry>> {
@@ -1573,10 +1576,39 @@ fn load_device_model_list_candidate(
     if file_stem != hash {
         return Ok(None);
     }
+    if !device_model_blobs_present(app_root, &entry)? {
+        return Ok(None);
+    }
     Ok(Some(DeviceModelListEntry {
         id: entry.device_model_id,
         hash,
     }))
+}
+
+/// Presence-only check for every blob referenced by a device-model entry.
+/// Missing or oversized-on-disk blobs skip the List candidate; other IO errors
+/// propagate so List does not look like an empty tip set.
+fn device_model_blobs_present(
+    app_root: &Path,
+    entry: &DeviceModelRegistryEntry,
+) -> Result<bool> {
+    match &entry.body.format {
+        DeviceModelFormat::Urdf { urdf_sha256, meshes } => {
+            match blob_exists(app_root, urdf_sha256) {
+                Ok(true) => {}
+                Ok(false) | Err(Error::InvalidBlob(_)) => return Ok(false),
+                Err(e) => return Err(e),
+            }
+            for mesh in meshes {
+                match blob_exists(app_root, &mesh.sha256) {
+                    Ok(true) => {}
+                    Ok(false) | Err(Error::InvalidBlob(_)) => return Ok(false),
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+    }
+    Ok(true)
 }
 
 /// SHA-256, encoded as lowercase hexadecimal.
@@ -1798,20 +1830,31 @@ fn read_at(path: &Path) -> Result<Option<Vec<u8>>> {
     }
 }
 
-/// Stat first, refuse files larger than `max`, then read. Avoids OOM on a
-/// planted oversized blob / URDF / mesh / registry file before verification.
+/// Open the path, refuse files larger than `max` via fstat on the fd, then
+/// read at most `max + 1` bytes. Avoids OOM on planted oversized files and
+/// closes the stat-then-`fs::read` TOCTOU where the file can grow between
+/// the size check and the unbounded read.
 pub(crate) fn read_at_capped(path: &Path, max: u64) -> Result<Option<Vec<u8>>> {
-    let meta = match fs::metadata(path) {
-        Ok(m) => m,
+    let file = match File::open(path) {
+        Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(Error::Io(e)),
     };
+    let meta = file.metadata().map_err(Error::Io)?;
     if meta.len() > max {
         return Err(Error::InvalidBlob(format!(
             "on-disk file exceeds size cap ({max} bytes)"
         )));
     }
-    read_at(path)
+    let mut limited = file.take(max.saturating_add(1));
+    let mut bytes = Vec::new();
+    limited.read_to_end(&mut bytes).map_err(Error::Io)?;
+    if bytes.len() as u64 > max {
+        return Err(Error::InvalidBlob(format!(
+            "on-disk file exceeds size cap ({max} bytes)"
+        )));
+    }
+    Ok(Some(bytes))
 }
 
 pub fn is_sha256_hex(value: &str) -> bool {
@@ -3701,16 +3744,32 @@ mod id_charset_tests {
         assert!(list_device_models(tmp.path(), "galbot").unwrap().is_empty());
     }
 
-
-
-
-
-
-
-
-
-
-
+    #[test]
+    fn list_device_models_skips_tip_when_referenced_blob_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let urdf = put_blob(tmp.path(), b"<robot name='gone'/>").unwrap();
+        let mesh = put_blob(tmp.path(), b"mesh").unwrap();
+        let entry = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "k1".into(),
+            body: DeviceModelBody {
+                model_id: "k1".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf.clone(),
+                    meshes: vec![MeshBlobRef {
+                        path: "meshes/body.stl".into(),
+                        sha256: mesh,
+                    }],
+                },
+                root_convention: None,
+            },
+        };
+        write_device_model(tmp.path(), &entry).unwrap();
+        assert_eq!(list_device_models(tmp.path(), "galbot").unwrap().len(), 1);
+        fs::remove_file(auki_layout::blob_path(tmp.path(), &urdf)).unwrap();
+        // TIP and mtime fallback both go through the candidate loader.
+        assert!(list_device_models(tmp.path(), "galbot").unwrap().is_empty());
+    }
 
     #[test]
     fn scalar_sensor_is_non_spatial_and_content_addressed() {

@@ -798,11 +798,14 @@ impl Peer {
         body: &Bound<'_, PyAny>,
     ) -> PyResult<registry_py::RegistryRef> {
         let body: registry::DeviceModelBody = parse_py(py, body, "body")?;
-        let r = self
-            .inner
-            .lock()
-            .register_device_model(device_model_id, body)
-            .map_err(map_session_error)?;
+        let device_model_id = device_model_id.to_string();
+        let inner = self.inner.clone();
+        let r = py.allow_threads(|| {
+            inner
+                .lock()
+                .register_device_model(&device_model_id, body)
+                .map_err(map_session_error)
+        })?;
         Ok(registry_py::RegistryRef {
             peer_id: r.peer_id,
             id: r.id,
@@ -814,26 +817,35 @@ impl Peer {
     #[pyo3(signature = (urdf_path, device_model_id=None, root_convention=None, package_root=None))]
     fn register_urdf_package(
         &self,
+        py: Python<'_>,
         urdf_path: PathBuf,
         device_model_id: Option<&str>,
         root_convention: Option<String>,
         package_root: Option<PathBuf>,
     ) -> PyResult<registry_py::RegistryRef> {
-        // Blob without holding the Peer mutex (mesh hashing can take seconds).
-        let storage_root = self.inner.lock().storage_root();
-        let package = registry::put_urdf_package(
-            &storage_root,
-            &urdf_path,
-            root_convention,
-            package_root.as_deref(),
-        )
-        .map_err(|e| map_session_error(session::SessionError::Registry(e)))?;
-        let id = device_model_id.unwrap_or(package.device_model_id.as_str());
-        let r = self
-            .inner
-            .lock()
-            .register_device_model(id, package.body)
-            .map_err(map_session_error)?;
+        // Blob + rehash without holding the GIL (mesh hashing can take seconds).
+        // Drop the Peer mutex across put_urdf_package; register_device_model
+        // already drops the inner RwLock across write_device_model.
+        let device_model_id = device_model_id.map(|s| s.to_string());
+        let package_root = package_root;
+        let inner = self.inner.clone();
+        let r = py.allow_threads(|| {
+            let storage_root = inner.lock().storage_root();
+            let package = registry::put_urdf_package(
+                &storage_root,
+                &urdf_path,
+                root_convention,
+                package_root.as_deref(),
+            )
+            .map_err(|e| map_session_error(session::SessionError::Registry(e)))?;
+            let id = device_model_id
+                .as_deref()
+                .unwrap_or(package.device_model_id.as_str());
+            inner
+                .lock()
+                .register_device_model(id, package.body)
+                .map_err(map_session_error)
+        })?;
         Ok(registry_py::RegistryRef {
             peer_id: r.peer_id,
             id: r.id,

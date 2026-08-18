@@ -615,7 +615,8 @@ pub struct ClusterManager {
     session_handle: Arc<Mutex<Option<Arc<dyn SessionHandle>>>>,
     /// Producer-local app root containing `registries/{sensors,clocks,frames}`.
     /// `None` until the daemon calls [`Self::set_registry_app_root`];
-    /// inbound registry fetches return `entry: None` while unset.
+    /// inbound Get/List return [`RegistryResponse::Error`]
+    /// `"registry not configured"` while unset (not `{ entry: None }` / empty tip).
     registry_app_root: Arc<Mutex<Option<PathBuf>>>,
     /// Set to `true` by [`Self::shutdown`] before any teardown
     /// begins. Pub I/O methods (`admit_peer`,

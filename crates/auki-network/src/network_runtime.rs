@@ -3795,7 +3795,8 @@ async fn handle_inbound_registry_substream(
 /// Translates untagged Get into [`RegistryRequest::Get`], reuses the
 /// owner's registry handler, and writes an untagged response. List /
 /// Error owner replies close the substream without a v2 body.
-/// `device_model` Gets answer `{entry: null}` without dialing the owner.
+/// `device_model` is 0.3-only: close without a body (do not answer
+/// `{entry: null}`, which old clients cache as "no model").
 async fn handle_inbound_registry_v2_substream(
     peer: PeerId,
     mut substream: libp2p::Stream,
@@ -3810,11 +3811,6 @@ async fn handle_inbound_registry_v2_substream(
     };
 
     if matches!(request.kind, RegistryKind::DeviceModel) {
-        let _ = write_registry_response_v2(
-            &mut substream,
-            &RegistryResponseV2 { entry: None },
-        )
-        .await;
         return;
     }
 
@@ -3845,8 +3841,8 @@ async fn handle_inbound_registry_v2_substream(
 
 /// Whether an outbound registries request may fall back to 0.2 when the
 /// peer lacks 0.3. Only non-`device_model` Get is eligible — List and
-/// `device_model` Get require 0.3 (inbound v2 answers `device_model` with
-/// a lying `entry: None`).
+/// `device_model` Get require 0.3 (inbound v2 closes `device_model` with
+/// no body).
 fn registry_v2_fallback(request: &RegistryRequest) -> Option<(RegistryKind, String, String)> {
     match request {
         RegistryRequest::Get { kind, id, hash } if *kind != RegistryKind::DeviceModel => {

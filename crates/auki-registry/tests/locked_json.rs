@@ -124,6 +124,8 @@ fn detector_object_detection_locked() {
     assert_round_trip::<DetectorRegistryEntry>("detector_object_detection.json");
 }
 
+/// Locked fixture uses `device_model_id: "unitree/g1"` and `model_id: "unitree_g1"` —
+/// List/Get key vs URDF name; they are not required to match.
 #[test]
 fn device_model_urdf_locked() {
     assert_round_trip::<DeviceModelRegistryEntry>("device_model_urdf.json");

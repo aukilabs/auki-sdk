@@ -218,12 +218,52 @@ fn collect_urdf_mesh_filenames(urdf: &str) -> Result<Vec<(usize, usize, String)>
 }
 
 /// Locate the raw `filename` attribute value inside one serialized mesh element.
+///
+/// Matches the `filename` attribute only (not `name=` / `mesh_filename=`),
+/// allowing whitespace around `=`.
 fn filename_value_span(element: &str, raw_value: &str) -> Option<(usize, usize)> {
-    for quote in ['"', '\''] {
-        let needle = format!("{quote}{raw_value}{quote}");
-        if let Some(pos) = element.find(&needle) {
-            return Some((pos + 1, pos + 1 + raw_value.len()));
+    let bytes = element.as_bytes();
+    let needle = b"filename";
+    let mut i = 0;
+    while i + needle.len() <= bytes.len() {
+        if &bytes[i..i + needle.len()] != needle {
+            i += 1;
+            continue;
         }
+        let before_ok = i == 0 || {
+            let b = bytes[i - 1];
+            !(b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b':')
+        };
+        if !before_ok {
+            i += 1;
+            continue;
+        }
+        let mut j = i + needle.len();
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        if j >= bytes.len() || bytes[j] != b'=' {
+            i += 1;
+            continue;
+        }
+        j += 1;
+        while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        if j >= bytes.len() || (bytes[j] != b'"' && bytes[j] != b'\'') {
+            i += 1;
+            continue;
+        }
+        let quote = bytes[j];
+        let value_start = j + 1;
+        let value_end = value_start + raw_value.len();
+        if value_end < bytes.len()
+            && element.get(value_start..value_end) == Some(raw_value)
+            && bytes[value_end] == quote
+        {
+            return Some((value_start, value_end));
+        }
+        i += 1;
     }
     None
 }
@@ -248,16 +288,20 @@ pub fn normalize_mesh_rel_path(path: &str) -> String {
 }
 
 /// Reject empty, absolute, or `..`-containing mesh relative paths.
+///
+/// Part of the device-model registry contract (not URDF-ingest-only): every
+/// `MeshBlobRef.path` must be package-relative so consumers can safely
+/// `cache.join(path)`.
 pub fn validate_mesh_rel_path(rel: &str) -> Result<()> {
     if rel.is_empty() {
         return Err(Error::InvalidDeviceModel(
-            "URDF mesh filename resolved to an empty path".into(),
+            "mesh path must not be empty".into(),
         ));
     }
     let path = Path::new(rel);
     if path.is_absolute() {
         return Err(Error::InvalidDeviceModel(format!(
-            "URDF mesh path must be relative, got {rel:?}"
+            "mesh path must be relative, got {rel:?}"
         )));
     }
     for component in path.components() {
@@ -266,12 +310,12 @@ pub fn validate_mesh_rel_path(rel: &str) -> Result<()> {
             Component::CurDir => {}
             Component::ParentDir => {
                 return Err(Error::InvalidDeviceModel(format!(
-                    "URDF mesh path must not contain '..': {rel:?}"
+                    "mesh path must not contain '..': {rel:?}"
                 )));
             }
             Component::RootDir | Component::Prefix(_) => {
                 return Err(Error::InvalidDeviceModel(format!(
-                    "URDF mesh path must be relative, got {rel:?}"
+                    "mesh path must be relative, got {rel:?}"
                 )));
             }
         }
@@ -397,6 +441,47 @@ mod tests {
         assert!(list_device_models(app.path(), "unused").unwrap().is_empty());
         let blobs = app.path().join("blobs");
         assert!(!blobs.exists() || fs::read_dir(&blobs).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn collect_urdf_mesh_filenames_does_not_confuse_name_with_filename() {
+        let urdf = r#"<robot name="K1">
+            <link name="base">
+              <visual><geometry><mesh name="meshes/body.stl" filename="meshes/body.stl"/></geometry></visual>
+            </link>
+        </robot>"#;
+        let refs = collect_urdf_mesh_filenames(urdf).unwrap();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].2, "meshes/body.stl");
+        let (start, end, _) = &refs[0];
+        assert_eq!(&urdf[*start..*end], "meshes/body.stl");
+        // Span must be the filename= value, not the earlier name= value.
+        assert!(urdf[..*start].contains(r#"name="meshes/body.stl""#));
+    }
+
+    #[test]
+    fn put_urdf_package_rewrites_filename_not_name_attr() {
+        let pkg = tempfile::tempdir().unwrap();
+        let meshes = pkg.path().join("meshes");
+        fs::create_dir_all(&meshes).unwrap();
+        fs::write(meshes.join("body.stl"), b"mesh").unwrap();
+        let urdf_path = pkg.path().join("robot.urdf");
+        fs::write(
+            &urdf_path,
+            r#"<robot name="K1">
+                <link name="base">
+                  <visual><geometry><mesh name="meshes/body.stl" filename="package://K1_URDF_Serial/meshes/body.stl"/></geometry></visual>
+                </link>
+            </robot>"#,
+        )
+        .unwrap();
+        let app = tempfile::tempdir().unwrap();
+        let package = put_urdf_package(app.path(), &urdf_path, None, None).unwrap();
+        let (urdf_sha, _) = package.body.as_urdf().unwrap();
+        let text = String::from_utf8(get_blob(app.path(), urdf_sha).unwrap().unwrap()).unwrap();
+        assert!(text.contains(r#"name="meshes/body.stl""#));
+        assert!(text.contains(r#"filename="meshes/body.stl""#));
+        assert!(!text.contains("package://"));
     }
 
     #[test]

@@ -1334,11 +1334,10 @@ impl PyClusterTarget {
 
 #[pyclass(name = "ClusterManager")]
 pub struct PyClusterManager {
-    // Wrapped in Option<Mutex<...>> so `shutdown()` can take the
-    // inner ClusterManager out by value (it consumes self). The
-    // pyclass itself remains usable but every method on it returns
-    // `RuntimeError("ClusterManager has been shut down")` after.
-    inner: Arc<Mutex<Option<RustClusterManager>>>,
+    // `Option` so `shutdown()` can take the handle out; `Arc` so async
+    // methods can clone the manager and drop the mutex before awaiting
+    // (blob fetch can take up to BLOBS_FETCH_TIMEOUT).
+    inner: Arc<Mutex<Option<Arc<RustClusterManager>>>>,
 }
 
 #[pymethods]
@@ -1423,7 +1422,7 @@ impl PyClusterManager {
                 .map_err(map_bootstrap_error)?;
 
                 Ok::<_, PyErr>(Self {
-                    inner: Arc::new(Mutex::new(Some(manager))),
+                    inner: Arc::new(Mutex::new(Some(Arc::new(manager)))),
                 })
             })
         })
@@ -1492,7 +1491,7 @@ impl PyClusterManager {
                 .map_err(map_create_cluster_error)?;
 
                 Ok::<_, PyErr>(Self {
-                    inner: Arc::new(Mutex::new(Some(manager))),
+                    inner: Arc::new(Mutex::new(Some(Arc::new(manager)))),
                 })
             })
         })
@@ -1565,7 +1564,7 @@ impl PyClusterManager {
                 .map_err(map_create_cluster_error)?;
 
                 Ok::<_, PyErr>(Self {
-                    inner: Arc::new(Mutex::new(Some(manager))),
+                    inner: Arc::new(Mutex::new(Some(Arc::new(manager)))),
                 })
             })
         })
@@ -1657,7 +1656,7 @@ impl PyClusterManager {
                 .map_err(map_create_cluster_error)?;
 
                 Ok::<_, PyErr>(Self {
-                    inner: Arc::new(Mutex::new(Some(manager))),
+                    inner: Arc::new(Mutex::new(Some(Arc::new(manager)))),
                 })
             })
         })
@@ -1726,7 +1725,7 @@ impl PyClusterManager {
                 .map_err(map_join_cluster_error)?;
 
                 Ok::<_, PyErr>(Self {
-                    inner: Arc::new(Mutex::new(Some(manager))),
+                    inner: Arc::new(Mutex::new(Some(Arc::new(manager)))),
                 })
             })
         })
@@ -1778,10 +1777,7 @@ impl PyClusterManager {
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let manager = lock_manager(&inner)?;
                 let member = manager
                     .admit_peer(peer_id_parsed, multiaddrs)
                     .await
@@ -1907,10 +1903,7 @@ impl PyClusterManager {
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let manager = lock_manager(&inner)?;
                 let subscription = manager
                     .open_stream::<RustMapUpdate>(target, request)
                     .await
@@ -2083,10 +2076,7 @@ impl PyClusterManager {
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let manager = lock_manager(&inner)?;
                 let info = manager
                     .fetch_participant_info(peer_id_parsed)
                     .await
@@ -2171,10 +2161,7 @@ impl PyClusterManager {
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let manager = lock_manager(&inner)?;
                 let response = manager
                     .fetch_resources_catalog_v3_with(
                         peer_id,
@@ -2209,10 +2196,7 @@ impl PyClusterManager {
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let manager = lock_manager(&inner)?;
                 let sender = manager
                     .open_message_channel(
                         resource.owner_peer_id,
@@ -2247,10 +2231,7 @@ impl PyClusterManager {
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let manager = lock_manager(&inner)?;
                 let resp = manager
                     .fetch_resources_catalog_with(
                         peer_id_parsed,
@@ -2275,10 +2256,7 @@ impl PyClusterManager {
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let manager = lock_manager(&inner)?;
                 let response = manager
                     .fetch_map_catalog(peer_id)
                     .await
@@ -2307,10 +2285,7 @@ impl PyClusterManager {
         let inner = self.inner.clone();
         let entries = py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let manager = lock_manager(&inner)?;
                 manager
                     .list_registry_entries(peer_id, kind)
                     .await
@@ -2337,10 +2312,7 @@ impl PyClusterManager {
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let manager = lock_manager(&inner)?;
                 let entry = manager
                     .fetch_sensor_entry(peer_id_parsed, sensor_id, sensor_hash)
                     .await
@@ -2362,10 +2334,7 @@ impl PyClusterManager {
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let manager = lock_manager(&inner)?;
                 let entry = manager
                     .fetch_device_model_entry(peer_id_parsed, device_model_id, device_model_hash)
                     .await
@@ -2381,10 +2350,7 @@ impl PyClusterManager {
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let manager = lock_manager(&inner)?;
                 manager
                     .fetch_blob(peer_id, sha256)
                     .await
@@ -2405,10 +2371,7 @@ impl PyClusterManager {
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let manager = lock_manager(&inner)?;
                 let entry = manager
                     .fetch_detector_entry(peer_id_parsed, detector_id, detector_hash)
                     .await
@@ -2430,10 +2393,7 @@ impl PyClusterManager {
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let manager = lock_manager(&inner)?;
                 let entry = manager
                     .fetch_clock_entry(peer_id_parsed, clock_id, clock_hash)
                     .await
@@ -2455,10 +2415,7 @@ impl PyClusterManager {
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let manager = lock_manager(&inner)?;
                 let entry = manager
                     .fetch_frame_entry(peer_id_parsed, frame_id, frame_hash)
                     .await
@@ -2491,11 +2448,8 @@ impl PyClusterManager {
 
 impl PyClusterManager {
     fn with_inner<R>(&self, f: impl FnOnce(&RustClusterManager) -> PyResult<R>) -> PyResult<R> {
-        let guard = self.inner.lock().expect("ClusterManager lock");
-        let manager = guard
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
-        f(manager)
+        let manager = lock_manager(&self.inner)?;
+        f(&manager)
     }
 
     /// Internal helper for typed stream opening. Builds a post-#216
@@ -2546,10 +2500,7 @@ impl PyClusterManager {
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let manager = lock_manager(&inner)?;
                 let rust_sub = manager
                     .open_stream::<T>(peer_id_parsed, request)
                     .await
@@ -2572,10 +2523,7 @@ impl PyClusterManager {
         let inner = self.inner.clone();
         py.allow_threads(|| {
             shared_runtime().block_on(async move {
-                let guard = inner.lock().expect("ClusterManager lock");
-                let manager = guard
-                    .as_ref()
-                    .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))?;
+                let manager = lock_manager(&inner)?;
                 let resp = manager
                     .fetch_resources_catalog_with(
                         peer_id_parsed,
@@ -2603,6 +2551,18 @@ impl PyClusterManager {
 
 fn parse_peer_id(s: &str) -> PyResult<PeerId> {
     PeerId::from_str(s).map_err(|e| PyValueError::new_err(format!("invalid peer_id {s:?}: {e}")))
+}
+
+/// Clone the live ClusterManager Arc and drop the mutex before awaiting.
+fn lock_manager(
+    inner: &Arc<Mutex<Option<Arc<RustClusterManager>>>>,
+) -> PyResult<Arc<RustClusterManager>> {
+    inner
+        .lock()
+        .expect("ClusterManager lock")
+        .as_ref()
+        .ok_or_else(|| PyRuntimeError::new_err("ClusterManager has been shut down"))
+        .cloned()
 }
 
 fn parse_multiaddrs(ss: &[String]) -> PyResult<Vec<Multiaddr>> {

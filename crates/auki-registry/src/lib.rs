@@ -1597,14 +1597,10 @@ pub fn get_blob(app_root: &Path, sha256: &str) -> Result<Option<Vec<u8>>> {
     if !is_sha256_hex(sha256) {
         return Err(Error::InvalidBlob("sha256 must be 64 lowercase hex characters".into()));
     }
-    let Some(bytes) = read_at(&auki_layout::blob_path(app_root, sha256))? else {
+    let Some(bytes) = read_at_capped(&auki_layout::blob_path(app_root, sha256), MAX_BLOB_BYTES)?
+    else {
         return Ok(None);
     };
-    if bytes.len() as u64 > MAX_BLOB_BYTES {
-        return Err(Error::InvalidBlob(format!(
-            "on-disk blob exceeds MAX_BLOB_BYTES ({MAX_BLOB_BYTES})"
-        )));
-    }
     if sha256_hex(&bytes) != sha256 {
         return Err(Error::BlobHashMismatch);
     }
@@ -1670,7 +1666,12 @@ pub fn put_urdf_package(
     root_convention: Option<String>,
     package_root: Option<&Path>,
 ) -> Result<PutUrdfPackage> {
-    let urdf_bytes = fs::read(urdf_path).map_err(Error::Io)?;
+    let urdf_bytes = read_at_capped(urdf_path, MAX_BLOB_BYTES)?.ok_or_else(|| {
+        Error::Io(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("URDF not found: {}", urdf_path.display()),
+        ))
+    })?;
     let urdf_text = String::from_utf8(urdf_bytes).map_err(|error| {
         Error::InvalidDeviceModel(format!("URDF is not UTF-8: {error}"))
     })?;
@@ -1715,7 +1716,12 @@ pub fn put_urdf_package(
                 package_dir.display()
             )));
         };
-        let mesh_bytes = fs::read(&resolved).map_err(Error::Io)?;
+        let mesh_bytes = read_at_capped(&resolved, MAX_BLOB_BYTES)?.ok_or_else(|| {
+            Error::Io(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("mesh not found: {}", resolved.display()),
+            ))
+        })?;
         let sha256 = put_blob(app_root, &mesh_bytes)?;
         meshes.push(MeshBlobRef {
             path: rel,
@@ -2063,6 +2069,22 @@ fn read_at(path: &Path) -> Result<Option<Vec<u8>>> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(Error::Io(e)),
     }
+}
+
+/// Stat first, refuse files larger than `max`, then read. Avoids OOM on a
+/// planted oversized blob / URDF / mesh before hash verification.
+fn read_at_capped(path: &Path, max: u64) -> Result<Option<Vec<u8>>> {
+    let meta = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(Error::Io(e)),
+    };
+    if meta.len() > max {
+        return Err(Error::InvalidBlob(format!(
+            "on-disk blob exceeds MAX_BLOB_BYTES ({MAX_BLOB_BYTES})"
+        )));
+    }
+    read_at(path)
 }
 
 pub fn is_sha256_hex(value: &str) -> bool {
@@ -3449,6 +3471,64 @@ mod id_charset_tests {
         let bytes = vec![0u8; (MAX_BLOB_BYTES as usize) + 1];
         assert!(matches!(
             put_blob(tmp.path(), &bytes),
+            Err(Error::InvalidBlob(_))
+        ));
+    }
+
+    #[test]
+    fn get_blob_rejects_oversized_on_disk_without_reading() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sha = "f".repeat(64);
+        let path = auki_layout::blob_path(tmp.path(), &sha);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Sparse file: size exceeds MAX_BLOB_BYTES without allocating the payload.
+        {
+            let f = fs::File::create(&path).unwrap();
+            f.set_len(MAX_BLOB_BYTES + 1).unwrap();
+        }
+        assert!(matches!(
+            get_blob(tmp.path(), &sha),
+            Err(Error::InvalidBlob(_))
+        ));
+    }
+
+    #[test]
+    fn put_urdf_package_rejects_oversized_urdf() {
+        let pkg = tempfile::tempdir().unwrap();
+        let urdf_path = pkg.path().join("robot.urdf");
+        {
+            let f = fs::File::create(&urdf_path).unwrap();
+            f.set_len(MAX_BLOB_BYTES + 1).unwrap();
+        }
+        let app = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            put_urdf_package(app.path(), &urdf_path, None, None),
+            Err(Error::InvalidBlob(_))
+        ));
+    }
+
+    #[test]
+    fn put_urdf_package_rejects_oversized_mesh() {
+        let pkg = tempfile::tempdir().unwrap();
+        let meshes = pkg.path().join("meshes");
+        fs::create_dir_all(&meshes).unwrap();
+        {
+            let f = fs::File::create(meshes.join("body.stl")).unwrap();
+            f.set_len(MAX_BLOB_BYTES + 1).unwrap();
+        }
+        let urdf_path = pkg.path().join("robot.urdf");
+        fs::write(
+            &urdf_path,
+            r#"<robot name="K1">
+                <link name="base">
+                  <visual><geometry><mesh filename="meshes/body.stl"/></geometry></visual>
+                </link>
+            </robot>"#,
+        )
+        .unwrap();
+        let app = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            put_urdf_package(app.path(), &urdf_path, None, None),
             Err(Error::InvalidBlob(_))
         ));
     }

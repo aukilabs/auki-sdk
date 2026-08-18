@@ -1926,11 +1926,9 @@ impl ClusterManager {
                 .expect("registry_app_root lock")
                 .clone();
             let Some(root) = root else {
-                return Err(FetchRegistryEntryError::NotFound {
-                    kind,
-                    id,
-                    hash,
-                });
+                return Err(FetchRegistryEntryError::InvalidEnvelope(
+                    "registry not configured".into(),
+                ));
             };
             let entry = read_registry_envelope(
                 &root,
@@ -4020,7 +4018,9 @@ fn fetch_local_blob(
     sha256: &str,
 ) -> Result<Vec<u8>, auki_network::RequestBlobError> {
     let Some(root) = app_root else {
-        return Err(auki_network::RequestBlobError::NotFound);
+        return Err(auki_network::RequestBlobError::InvalidResponse(
+            "blobs not configured".into(),
+        ));
     };
     match auki_registry::get_blob(root, sha256) {
         Ok(Some(bytes)) => Ok(bytes),
@@ -5866,6 +5866,17 @@ mod tests {
     }
 
     #[test]
+    fn fetch_local_blob_unconfigured_is_invalid_not_not_found() {
+        // Local Get uses InvalidEnvelope("registry not configured"); local blob
+        // must not look like a missing sha when the app root was never set.
+        assert!(matches!(
+            fetch_local_blob(None, &"a".repeat(64)),
+            Err(auki_network::RequestBlobError::InvalidResponse(ref reason))
+                if reason == "blobs not configured"
+        ));
+    }
+
+    #[test]
     fn registry_response_list_missing_peer_dir_is_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let response = registry_response_for(
@@ -5913,7 +5924,8 @@ mod tests {
         assert_eq!(bytes, b"local-blob");
         assert!(matches!(
             fetch_local_blob(None, &sha),
-            Err(auki_network::RequestBlobError::NotFound)
+            Err(auki_network::RequestBlobError::InvalidResponse(ref reason))
+                if reason == "blobs not configured"
         ));
         assert!(matches!(
             fetch_local_blob(Some(tmp.path()), &"0".repeat(64)),

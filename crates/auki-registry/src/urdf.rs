@@ -305,6 +305,9 @@ pub fn normalize_mesh_rel_path(path: &str) -> String {
 /// `MeshBlobRef.path` must be package-relative so consumers can safely
 /// `cache.join(path)`. Paths are also spliced into URDF `filename="…"` spans
 /// at publish time, so quote / amp / angle / control bytes are rejected.
+///
+/// Validation is OS-independent: `\` is rejected (Unix `Path` would treat it
+/// as a normal character), and segments are split on `/` only.
 pub fn validate_mesh_rel_path(rel: &str) -> Result<()> {
     if rel.is_empty() {
         return Err(Error::InvalidDeviceModel(
@@ -312,12 +315,31 @@ pub fn validate_mesh_rel_path(rel: &str) -> Result<()> {
         ));
     }
     if rel.bytes().any(|b| {
-        b == b'"' || b == b'\'' || b == b'<' || b == b'>' || b == b'&' || b < 0x20
+        b == b'"'
+            || b == b'\''
+            || b == b'<'
+            || b == b'>'
+            || b == b'&'
+            || b == b'\\'
+            || b < 0x20
     }) {
         return Err(Error::InvalidDeviceModel(format!(
             "mesh path contains XML-unsafe characters: {rel:?}"
         )));
     }
+    if rel.starts_with('/') {
+        return Err(Error::InvalidDeviceModel(format!(
+            "mesh path must be relative, got {rel:?}"
+        )));
+    }
+    for segment in rel.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return Err(Error::InvalidDeviceModel(format!(
+                "mesh path must not contain empty, '.', or '..' segments: {rel:?}"
+            )));
+        }
+    }
+    // Second belt: catch platform-specific absolute / prefix forms Path sees.
     let path = Path::new(rel);
     if path.is_absolute() {
         return Err(Error::InvalidDeviceModel(format!(
@@ -433,6 +455,19 @@ mod tests {
         let app = tempfile::tempdir().unwrap();
         assert!(matches!(
             put_urdf_package(app.path(), &urdf_path, None, None),
+            Err(Error::InvalidDeviceModel(_))
+        ));
+    }
+
+    #[test]
+    fn validate_mesh_rel_path_rejects_backslash_traversal() {
+        // Unix Path::components would treat '\' as a normal char; we must not.
+        assert!(matches!(
+            validate_mesh_rel_path(r"meshes\..\evil.stl"),
+            Err(Error::InvalidDeviceModel(_))
+        ));
+        assert!(matches!(
+            validate_mesh_rel_path("meshes/../x.stl"),
             Err(Error::InvalidDeviceModel(_))
         ));
     }

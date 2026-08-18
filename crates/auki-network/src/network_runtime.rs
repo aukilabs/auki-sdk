@@ -3662,7 +3662,12 @@ where
 
 fn serve_blob_request(app_root: Option<&std::path::Path>, request: &BlobRequest) -> (BlobResponse, Vec<u8>) {
     let Some(app_root) = app_root else {
-        return (BlobResponse::NotFound, Vec::new());
+        return (
+            BlobResponse::Error {
+                reason: "blobs not configured".into(),
+            },
+            Vec::new(),
+        );
     };
     match auki_registry::read_blob_range(app_root, &request.sha256, request.offset, request.max_len)
     {
@@ -3771,6 +3776,11 @@ async fn handle_inbound_registry_substream(
         }
     };
 
+    let oversized_reason = match &request {
+        RegistryRequest::List { .. } => "list too large",
+        RegistryRequest::Get { .. } => "entry too large",
+    };
+
     let (ack_tx, ack_rx) = oneshot::channel();
     if registry_events_tx
         .send(RegistryRequestEvent {
@@ -3804,7 +3814,7 @@ async fn handle_inbound_registry_substream(
         Err(RegistriesProtocolError::FrameTooLarge { .. }) => {
             // Oversized List/Get would otherwise look like EOF to the client.
             let fallback = RegistryResponse::Error {
-                reason: "list too large".into(),
+                reason: oversized_reason.into(),
             };
             if let Err(e) = write_registry_response(&mut substream, &fallback).await {
                 eprintln!(

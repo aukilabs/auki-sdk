@@ -280,15 +280,20 @@ impl Peer {
 
     pub fn register_device_model(&self, id: &str, body: DeviceModelBody) -> Result<RegistryRef> {
         DeviceModelRegistryEntry::validate_id(id)?;
-        let mut inner = self.inner.write();
+        // Blob rehash in write_device_model can take seconds — don't hold the
+        // peer write lock across it (same pattern as register_urdf_package).
+        let (peer_id, storage_root) = {
+            let inner = self.inner.read();
+            (inner.peer_id.clone(), inner.storage_root.clone())
+        };
         let entry = DeviceModelRegistryEntry {
-            peer_id: inner.peer_id.clone(),
+            peer_id,
             device_model_id: id.to_string(),
             body,
         };
         let registry_ref = entry.registry_ref();
-        auki_registry::write_device_model(&inner.storage_root, &entry)?;
-        inner.device_models.insert(id, entry);
+        auki_registry::write_device_model(&storage_root, &entry)?;
+        self.inner.write().device_models.insert(id, entry);
         Ok(registry_ref)
     }
 

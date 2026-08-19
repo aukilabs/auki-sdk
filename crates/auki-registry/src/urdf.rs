@@ -1,5 +1,6 @@
 //! URDF advertise helpers: parse with `quick-xml`, rewrite mesh paths, blob package.
 
+use std::collections::HashMap;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
@@ -19,6 +20,19 @@ pub struct PutUrdfPackage {
     pub body: DeviceModelBody,
 }
 
+/// Optional remap for one `<mesh filename>` at advertise time.
+///
+/// Callers that have a manufacturer sidecar (e.g. STL→Draco GLB) build this
+/// outside the registry crate; Rust never parses that JSON.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeshSubstitution {
+    /// Spliced into `filename=` and stored as [`MeshBlobRef::path`].
+    /// Must pass [`validate_mesh_rel_path`].
+    pub advertised_path: String,
+    /// Bytes for [`put_blob`]. Need not live under `package_root`.
+    pub source_path: PathBuf,
+}
+
 /// Rewrite mesh `filename`s to package-relative paths, `put_blob` the URDF
 /// and every referenced mesh, and return a [`DeviceModelBody`].
 ///
@@ -30,19 +44,27 @@ pub struct PutUrdfPackage {
 /// `pkg/urdf/` and meshes under `pkg/meshes/` — mesh resolution is fail-closed
 /// under that root (no walk-up).
 ///
+/// # Mesh substitutions
+///
+/// Optional map keyed by the raw URDF `filename=` string (or its normalized
+/// package-relative form). On hit, the advertised path is spliced and
+/// `source_path` is blobbed — the STL need not exist on disk. Unused keys
+/// are ignored. `None` / empty map preserves resolve-under-package behavior.
+///
 /// # Mesh attribute parsing
 ///
 /// Uses `quick-xml` to collect `<mesh … filename="…">` / `'…'` (including
 /// whitespace around `=`). Ignores comments and `mesh_filename=`.
 ///
 /// Fails if the URDF references any mesh that cannot be resolved under the
-/// package directory. Rewrite happens once at publish time so consumers do
-/// not need a second path rewrite after dig.
+/// package directory (and has no substitution). Rewrite happens once at
+/// publish time so consumers do not need a second path rewrite after dig.
 pub fn put_urdf_package(
     app_root: &Path,
     urdf_path: &Path,
     root_convention: Option<String>,
     package_root: Option<&Path>,
+    mesh_substitutions: Option<&HashMap<String, MeshSubstitution>>,
 ) -> Result<PutUrdfPackage> {
     let urdf_bytes = read_at_capped(urdf_path, MAX_BLOB_BYTES)?.ok_or_else(|| {
         Error::Io(io::Error::new(
@@ -82,19 +104,28 @@ pub fn put_urdf_package(
     // Replace from the end so earlier offsets stay valid.
     for (start, end, original) in mesh_refs.into_iter().rev() {
         let rel = normalize_mesh_rel_path(&original);
-        validate_mesh_rel_path(&rel)?;
-        rewritten.replace_range(start..end, &rel);
-        let resolved = resolve_urdf_mesh(&package_dir, &original, &rel);
-        let Some(resolved) = resolved else {
-            return Err(Error::InvalidDeviceModel(format!(
-                "URDF references mesh {original:?} but none resolved beside {}",
-                package_dir.display()
-            )));
+        let substitution = mesh_substitutions.and_then(|map| {
+            map.get(original.as_str())
+                .or_else(|| map.get(rel.as_str()))
+        });
+        let (advertised, resolved) = if let Some(sub) = substitution {
+            validate_mesh_rel_path(&sub.advertised_path)?;
+            (sub.advertised_path.clone(), sub.source_path.clone())
+        } else {
+            validate_mesh_rel_path(&rel)?;
+            let resolved = resolve_urdf_mesh(&package_dir, &original, &rel).ok_or_else(|| {
+                Error::InvalidDeviceModel(format!(
+                    "URDF references mesh {original:?} but none resolved beside {}",
+                    package_dir.display()
+                ))
+            })?;
+            (rel, resolved)
         };
-        if let Some(prev) = seen_paths.get(&rel) {
+        rewritten.replace_range(start..end, &advertised);
+        if let Some(prev) = seen_paths.get(&advertised) {
             if prev != &resolved {
                 return Err(Error::InvalidDeviceModel(format!(
-                    "mesh paths normalize to {rel:?} but resolve to different files"
+                    "mesh paths normalize to {advertised:?} but resolve to different files"
                 )));
             }
             continue;
@@ -106,9 +137,9 @@ pub fn put_urdf_package(
             ))
         })?;
         let sha256 = put_blob(app_root, &mesh_bytes)?;
-        seen_paths.insert(rel.clone(), resolved);
+        seen_paths.insert(advertised.clone(), resolved);
         meshes.push(MeshBlobRef {
-            path: rel,
+            path: advertised,
             sha256,
         });
     }
@@ -408,7 +439,7 @@ mod tests {
         }
         let app = tempfile::tempdir().unwrap();
         assert!(matches!(
-            put_urdf_package(app.path(), &urdf_path, None, None),
+            put_urdf_package(app.path(), &urdf_path, None, None, None),
             Err(Error::InvalidBlob(_))
         ));
     }
@@ -434,7 +465,7 @@ mod tests {
         .unwrap();
         let app = tempfile::tempdir().unwrap();
         assert!(matches!(
-            put_urdf_package(app.path(), &urdf_path, None, None),
+            put_urdf_package(app.path(), &urdf_path, None, None, None),
             Err(Error::InvalidBlob(_))
         ));
     }
@@ -454,7 +485,7 @@ mod tests {
         .unwrap();
         let app = tempfile::tempdir().unwrap();
         assert!(matches!(
-            put_urdf_package(app.path(), &urdf_path, None, None),
+            put_urdf_package(app.path(), &urdf_path, None, None, None),
             Err(Error::InvalidDeviceModel(_))
         ));
     }
@@ -485,7 +516,7 @@ mod tests {
         .unwrap();
         let app = tempfile::tempdir().unwrap();
         assert!(matches!(
-            put_urdf_package(app.path(), &urdf_path, None, None),
+            put_urdf_package(app.path(), &urdf_path, None, None, None),
             Err(Error::InvalidDeviceModel(_))
         ));
     }
@@ -510,7 +541,7 @@ mod tests {
         .unwrap();
         let app = tempfile::tempdir().unwrap();
         assert!(matches!(
-            put_urdf_package(app.path(), &urdf_path, None, None),
+            put_urdf_package(app.path(), &urdf_path, None, None, None),
             Err(Error::InvalidDeviceModel(_))
         ));
     }
@@ -530,7 +561,7 @@ mod tests {
         .unwrap();
         let app = tempfile::tempdir().unwrap();
         assert!(matches!(
-            put_urdf_package(app.path(), &urdf_path, None, None),
+            put_urdf_package(app.path(), &urdf_path, None, None, None),
             Err(Error::InvalidDeviceModel(_))
         ));
     }
@@ -558,7 +589,7 @@ mod tests {
         )
         .unwrap();
         let app = tempfile::tempdir().unwrap();
-        let err = put_urdf_package(app.path(), &urdf_path, None, None).unwrap_err();
+        let err = put_urdf_package(app.path(), &urdf_path, None, None, None).unwrap_err();
         assert!(
             matches!(err, Error::InvalidDeviceModel(ref msg) if msg.contains("different files")),
             "expected different-files error, got {err:?}"
@@ -583,7 +614,7 @@ mod tests {
         .unwrap();
         let app = tempfile::tempdir().unwrap();
         assert!(matches!(
-            put_urdf_package(app.path(), &urdf_path, None, None),
+            put_urdf_package(app.path(), &urdf_path, None, None, None),
             Err(Error::InvalidDeviceModel(_))
         ));
         assert!(list_device_models(app.path(), "unused").unwrap().is_empty());
@@ -624,7 +655,7 @@ mod tests {
         )
         .unwrap();
         let app = tempfile::tempdir().unwrap();
-        let package = put_urdf_package(app.path(), &urdf_path, None, None).unwrap();
+        let package = put_urdf_package(app.path(), &urdf_path, None, None, None).unwrap();
         let (urdf_sha, _) = package.body.as_urdf().unwrap();
         let text = String::from_utf8(get_blob(app.path(), urdf_sha).unwrap().unwrap()).unwrap();
         assert!(text.contains(r#"name="meshes/body.stl""#));
@@ -677,7 +708,7 @@ mod tests {
         )
         .unwrap();
         let app = tempfile::tempdir().unwrap();
-        let package = put_urdf_package(app.path(), &urdf_path, None, None).unwrap();
+        let package = put_urdf_package(app.path(), &urdf_path, None, None, None).unwrap();
         let (_, mesh_refs) = package.body.as_urdf().unwrap();
         assert_eq!(mesh_refs.len(), 1);
         assert_eq!(mesh_refs[0].path, "meshes/body.stl");
@@ -735,7 +766,7 @@ mod tests {
         )
         .unwrap();
         let app = tempfile::tempdir().unwrap();
-        let package = put_urdf_package(app.path(), &urdf_path, None, None).unwrap();
+        let package = put_urdf_package(app.path(), &urdf_path, None, None, None).unwrap();
         assert_eq!(package.device_model_id, "k1");
     }
 
@@ -757,7 +788,7 @@ mod tests {
         .unwrap();
         let app = tempfile::tempdir().unwrap();
         let package =
-            put_urdf_package(app.path(), &urdf_path, Some("ros_body".into()), None).unwrap();
+            put_urdf_package(app.path(), &urdf_path, Some("ros_body".into()), None, None).unwrap();
         assert_eq!(package.device_model_id, "k1");
         let (urdf_sha, meshes) = package.body.as_urdf().unwrap();
         assert_eq!(meshes.len(), 1);
@@ -785,7 +816,7 @@ mod tests {
         )
         .unwrap();
         let app = tempfile::tempdir().unwrap();
-        let package = put_urdf_package(app.path(), &urdf_path, None, None).unwrap();
+        let package = put_urdf_package(app.path(), &urdf_path, None, None, None).unwrap();
         let (urdf_sha, _) = package.body.as_urdf().unwrap();
         let text = String::from_utf8(get_blob(app.path(), urdf_sha).unwrap().unwrap()).unwrap();
         assert!(text.contains(r#"filename = "meshes/body.stl""#));
@@ -812,12 +843,56 @@ mod tests {
         .unwrap();
         let app = tempfile::tempdir().unwrap();
         assert!(matches!(
-            put_urdf_package(app.path(), &urdf_path, None, None),
+            put_urdf_package(app.path(), &urdf_path, None, None, None),
             Err(Error::InvalidDeviceModel(_))
         ));
         let package =
-            put_urdf_package(app.path(), &urdf_path, None, Some(pkg.path())).unwrap();
+            put_urdf_package(app.path(), &urdf_path, None, Some(pkg.path()), None).unwrap();
         let (_, meshes) = package.body.as_urdf().unwrap();
         assert_eq!(meshes[0].path, "meshes/body.stl");
+    }
+
+    #[test]
+    fn put_urdf_package_substitutions_blob_glb_without_stl() {
+        let pkg = tempfile::tempdir().unwrap();
+        let draco = pkg.path().join("draco");
+        fs::create_dir_all(&draco).unwrap();
+        fs::write(draco.join("body.glb"), b"glb-bytes").unwrap();
+        let urdf_path = pkg.path().join("robot.urdf");
+        let original = "package://chopped_urdf_v1/meshes/body.stl";
+        fs::write(
+            &urdf_path,
+            format!(
+                r#"<robot name="bracketbot">
+                <link name="base">
+                  <visual><geometry><mesh filename="{original}"/></geometry></visual>
+                </link>
+            </robot>"#
+            ),
+        )
+        .unwrap();
+        let mut subs = HashMap::new();
+        subs.insert(
+            original.to_string(),
+            MeshSubstitution {
+                advertised_path: "draco/body.glb".into(),
+                source_path: draco.join("body.glb"),
+            },
+        );
+        let app = tempfile::tempdir().unwrap();
+        let package =
+            put_urdf_package(app.path(), &urdf_path, Some("ros_body".into()), None, Some(&subs))
+                .unwrap();
+        let (urdf_sha, meshes) = package.body.as_urdf().unwrap();
+        assert_eq!(meshes.len(), 1);
+        assert_eq!(meshes[0].path, "draco/body.glb");
+        assert_eq!(
+            get_blob(app.path(), &meshes[0].sha256).unwrap().unwrap(),
+            b"glb-bytes"
+        );
+        let text = String::from_utf8(get_blob(app.path(), urdf_sha).unwrap().unwrap()).unwrap();
+        assert!(text.contains(r#"filename="draco/body.glb""#));
+        assert!(!text.contains("package://"));
+        assert!(!text.contains(".stl"));
     }
 }

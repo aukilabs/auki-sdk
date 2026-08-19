@@ -313,6 +313,9 @@ impl Peer {
         urdf_path: &std::path::Path,
         root_convention: Option<String>,
         package_root: Option<&std::path::Path>,
+        mesh_substitutions: Option<
+            &std::collections::HashMap<String, auki_registry::MeshSubstitution>,
+        >,
     ) -> Result<RegistryRef> {
         // Blob URDF + meshes without holding the peer lock (can take seconds).
         let storage_root = self.storage_root();
@@ -321,6 +324,7 @@ impl Peer {
             urdf_path,
             root_convention,
             package_root,
+            mesh_substitutions,
         )?;
         let device_model_id = id.unwrap_or(package.device_model_id.as_str());
         self.register_device_model(device_model_id, package.body)

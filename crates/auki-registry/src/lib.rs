@@ -36,7 +36,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 mod urdf;
-pub use urdf::{PutUrdfPackage, normalize_mesh_rel_path, put_urdf_package, validate_mesh_rel_path};
+pub use urdf::{
+    MeshSubstitution, PutUrdfPackage, normalize_mesh_rel_path, put_urdf_package,
+    validate_mesh_rel_path,
+};
 
 // ─── Registry ID Validation ──────────────────────────────────────────────────
 

@@ -14,6 +14,8 @@ Mirrors the Rust API: dict-style constructors for entries, canonical-JSON + hash
 - `LogRef` pyclass — `{ source_peer_id, resource_id }`. Used in manifest construction and catalog rows.
 - `canonical_json(entry) -> bytes`, `content_hash(entry) -> str`.
 - `write_sensor(app_root, entry)` / `read_sensor(app_root, peer_id, sensor_id, sensor_hash)` (and `_clock` / `_frame` / `_detector` variants). Both read and write functions take `peer_id` as a parameter; disk paths include the `peer_id` segment.
+- `put_urdf_package(app_root, urdf_path, root_convention=None, package_root=None, mesh_substitutions=None)` — rewrite + blob a URDF package; optional `mesh_substitutions` dict maps raw `filename=` → `{advertised_path, source_path}`.
+- `write_device_model` / `list_device_models` — device-model registry IO.
 
 ## Depends on
 

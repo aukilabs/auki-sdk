@@ -40,7 +40,7 @@ use std::time::Duration;
 
 use pyo3::exceptions::{PyNotImplementedError, PyOSError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyModule};
+use pyo3::types::{PyAny, PyDict, PyModule};
 use serde_json::Value as JsonValue;
 
 // Bring auki-registry-py's lib (named `auki_registry`) into scope under a
@@ -68,6 +68,51 @@ fn parse_py<T: serde::de::DeserializeOwned>(
 ) -> PyResult<T> {
     let json = pyobject_to_json(py, value, name)?;
     serde_json::from_value(json).map_err(|e| PyValueError::new_err(format!("{name}: {e}")))
+}
+
+fn parse_mesh_substitutions(
+    mesh_substitutions: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<std::collections::HashMap<String, registry::MeshSubstitution>>> {
+    let Some(raw) = mesh_substitutions else {
+        return Ok(None);
+    };
+    if raw.is_none() {
+        return Ok(None);
+    }
+    let map = raw.downcast::<PyDict>().map_err(|_| {
+        PyValueError::new_err("mesh_substitutions must be a dict[str, dict]")
+    })?;
+    let mut out = std::collections::HashMap::new();
+    for (key, value) in map.iter() {
+        let key: String = key.extract()?;
+        let entry = value.downcast::<PyDict>().map_err(|_| {
+            PyValueError::new_err(format!(
+                "mesh_substitutions[{key:?}] must be a dict with advertised_path and source_path"
+            ))
+        })?;
+        let advertised_path: String = entry
+            .get_item("advertised_path")?
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "mesh_substitutions[{key:?}] missing advertised_path"
+                ))
+            })?
+            .extract()?;
+        let source_path: PathBuf = entry
+            .get_item("source_path")?
+            .ok_or_else(|| {
+                PyValueError::new_err(format!("mesh_substitutions[{key:?}] missing source_path"))
+            })?
+            .extract()?;
+        out.insert(
+            key,
+            registry::MeshSubstitution {
+                advertised_path,
+                source_path,
+            },
+        );
+    }
+    Ok(Some(out))
 }
 
 /// Parse a `registry::RegistryRef` from a Python object via duck-typing.
@@ -814,7 +859,11 @@ impl Peer {
     }
 
     /// Rewrite + blob a URDF package and register the device-model entry.
-    #[pyo3(signature = (urdf_path, device_model_id=None, root_convention=None, package_root=None))]
+    ///
+    /// ``mesh_substitutions`` is an optional dict keyed by the raw URDF
+    /// ``filename=`` string. Values are
+    /// ``{"advertised_path": "draco/Foo.glb", "source_path": "/abs/Foo.glb"}``.
+    #[pyo3(signature = (urdf_path, device_model_id=None, root_convention=None, package_root=None, mesh_substitutions=None))]
     fn register_urdf_package(
         &self,
         py: Python<'_>,
@@ -822,12 +871,14 @@ impl Peer {
         device_model_id: Option<&str>,
         root_convention: Option<String>,
         package_root: Option<PathBuf>,
+        mesh_substitutions: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<registry_py::RegistryRef> {
         // Blob + rehash without holding the GIL (mesh hashing can take seconds).
         // Drop the Peer mutex across put_urdf_package; register_device_model
         // already drops the inner RwLock across write_device_model.
         let device_model_id = device_model_id.map(|s| s.to_string());
         let package_root = package_root;
+        let substitutions = parse_mesh_substitutions(mesh_substitutions)?;
         let inner = self.inner.clone();
         let r = py.allow_threads(|| {
             let storage_root = inner.lock().storage_root();
@@ -836,6 +887,7 @@ impl Peer {
                 &urdf_path,
                 root_convention,
                 package_root.as_deref(),
+                substitutions.as_ref(),
             )
             .map_err(|e| map_session_error(session::SessionError::Registry(e)))?;
             let id = device_model_id

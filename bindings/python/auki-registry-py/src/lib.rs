@@ -662,26 +662,78 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 /// Rewrite + blob a URDF. Default package dir is the URDF's parent; pass
 /// ``package_root`` for stock ROS ``pkg/urdf`` + ``pkg/meshes`` trees.
+///
+/// ``mesh_substitutions`` is an optional dict keyed by the raw URDF
+/// ``filename=`` string (or its normalized package-relative form). Values
+/// are ``{"advertised_path": "draco/Foo.glb", "source_path": "/abs/Foo.glb"}``.
 #[pyfunction]
-#[pyo3(signature = (app_root, urdf_path, root_convention=None, package_root=None))]
+#[pyo3(signature = (app_root, urdf_path, root_convention=None, package_root=None, mesh_substitutions=None))]
 fn put_urdf_package(
     py: Python<'_>,
     app_root: PathBuf,
     urdf_path: PathBuf,
     root_convention: Option<String>,
     package_root: Option<PathBuf>,
+    mesh_substitutions: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PyObject> {
+    let substitutions = parse_mesh_substitutions(mesh_substitutions)?;
     let package = registry::put_urdf_package(
         &app_root,
         &urdf_path,
         root_convention,
         package_root.as_deref(),
+        substitutions.as_ref(),
     )
     .map_err(map_registry_error)?;
     let dict = PyDict::new_bound(py);
     dict.set_item("device_model_id", package.device_model_id)?;
     dict.set_item("body", struct_to_pyobject(py, &package.body)?)?;
     Ok(dict.into_any().unbind())
+}
+
+fn parse_mesh_substitutions(
+    mesh_substitutions: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<std::collections::HashMap<String, registry::MeshSubstitution>>> {
+    let Some(raw) = mesh_substitutions else {
+        return Ok(None);
+    };
+    if raw.is_none() {
+        return Ok(None);
+    }
+    let map = raw.downcast::<PyDict>().map_err(|_| {
+        PyValueError::new_err("mesh_substitutions must be a dict[str, dict]")
+    })?;
+    let mut out = std::collections::HashMap::new();
+    for (key, value) in map.iter() {
+        let key: String = key.extract()?;
+        let entry = value.downcast::<PyDict>().map_err(|_| {
+            PyValueError::new_err(format!(
+                "mesh_substitutions[{key:?}] must be a dict with advertised_path and source_path"
+            ))
+        })?;
+        let advertised_path: String = entry
+            .get_item("advertised_path")?
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "mesh_substitutions[{key:?}] missing advertised_path"
+                ))
+            })?
+            .extract()?;
+        let source_path: PathBuf = entry
+            .get_item("source_path")?
+            .ok_or_else(|| {
+                PyValueError::new_err(format!("mesh_substitutions[{key:?}] missing source_path"))
+            })?
+            .extract()?;
+        out.insert(
+            key,
+            registry::MeshSubstitution {
+                advertised_path,
+                source_path,
+            },
+        );
+    }
+    Ok(Some(out))
 }
 
 #[pyfunction]

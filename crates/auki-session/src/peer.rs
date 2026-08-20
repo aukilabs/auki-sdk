@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use auki_registry::{
     AxisConvention, DetectorBody, DetectorRegistryEntry, FrameRegistryEntry, Handedness,
-    LengthUnit, MapBody, MapRegistryEntry, RegistryRef, SensorBody, SensorRegistryEntry,
+    LengthUnit, MapBody, MapRegistryEntry, RegistryRef, DeviceModelBody, DeviceModelRegistryEntry,
+    SensorBody, SensorRegistryEntry,
 };
 use parking_lot::RwLock;
 
@@ -130,6 +131,7 @@ pub(crate) struct PeerInner {
     pub(crate) frames: RegistryStore<FrameRegistryEntry>,
     pub(crate) detectors: RegistryStore<DetectorRegistryEntry>,
     pub(crate) maps: RegistryStore<MapRegistryEntry>,
+    pub(crate) device_models: RegistryStore<DeviceModelRegistryEntry>,
 }
 
 impl Peer {
@@ -143,6 +145,7 @@ impl Peer {
                 frames: RegistryStore::default(),
                 detectors: RegistryStore::default(),
                 maps: RegistryStore::default(),
+                device_models: RegistryStore::default(),
             })),
         }
     }
@@ -275,6 +278,58 @@ impl Peer {
         Ok(registry_ref)
     }
 
+    pub fn register_device_model(&self, id: &str, body: DeviceModelBody) -> Result<RegistryRef> {
+        DeviceModelRegistryEntry::validate_id(id)?;
+        // Blob rehash in write_device_model can take seconds — don't hold the
+        // peer write lock across it (same pattern as register_urdf_package).
+        let (peer_id, storage_root) = {
+            let inner = self.inner.read();
+            (inner.peer_id.clone(), inner.storage_root.clone())
+        };
+        let entry = DeviceModelRegistryEntry {
+            peer_id,
+            device_model_id: id.to_string(),
+            body,
+        };
+        let registry_ref = entry.registry_ref();
+        auki_registry::write_device_model(&storage_root, &entry)?;
+        self.inner.write().device_models.insert(id, entry);
+        Ok(registry_ref)
+    }
+
+    /// Rewrite + blob a URDF package, then register the device-model entry.
+    ///
+    /// `id` overrides the List/Get key (`device_model_id`) when `Some`;
+    /// otherwise the id from [`auki_registry::put_urdf_package`] is used.
+    /// `body.model_id` stays the URDF robot name even when `id` overrides
+    /// the registry key — consumers must key List/Get on `device_model_id`.
+    ///
+    /// `package_root` defaults to the URDF's parent when `None`. Pass the ROS
+    /// package directory when the URDF lives under `pkg/urdf/` and meshes under
+    /// `pkg/meshes/`.
+    pub fn register_urdf_package(
+        &self,
+        id: Option<&str>,
+        urdf_path: &std::path::Path,
+        root_convention: Option<String>,
+        package_root: Option<&std::path::Path>,
+        mesh_substitutions: Option<
+            &std::collections::HashMap<String, auki_registry::MeshSubstitution>,
+        >,
+    ) -> Result<RegistryRef> {
+        // Blob URDF + meshes without holding the peer lock (can take seconds).
+        let storage_root = self.storage_root();
+        let package = auki_registry::put_urdf_package(
+            &storage_root,
+            urdf_path,
+            root_convention,
+            package_root,
+            mesh_substitutions,
+        )?;
+        let device_model_id = id.unwrap_or(package.device_model_id.as_str());
+        self.register_device_model(device_model_id, package.body)
+    }
+
     /// Start a new session on this peer: mints a fresh `session_id` and
     /// registers the session's monotonic + UTC clocks in the corrected shape
     /// (`epoch: null` for monotonic, `unit: "ns"`, UTC `device-local`,
@@ -320,6 +375,12 @@ impl PeerRegistries {
     }
     pub fn map(&self, map_id: &str) -> Option<MapRegistryEntry> {
         self.inner.read().maps.get(map_id).cloned()
+    }
+    pub fn device_model(&self, id: &str) -> Option<DeviceModelRegistryEntry> {
+        self.inner.read().device_models.get(id).cloned()
+    }
+    pub fn device_models(&self) -> Vec<DeviceModelRegistryEntry> {
+        self.inner.read().device_models.iter().map(|(_, entry)| entry.clone()).collect()
     }
 }
 

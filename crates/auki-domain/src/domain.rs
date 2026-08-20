@@ -500,6 +500,37 @@ impl Domain {
         self.manager.fetch_map_catalog(peer_id).await
     }
 
+    /// List `(id, hash)` pairs for one registry kind on a peer.
+    pub async fn list_registry_entries(
+        &self,
+        peer_id: PeerId,
+        kind: auki_network::registries_protocol::RegistryKind,
+    ) -> Result<
+        Vec<auki_network::registries_protocol::RegistryListEntry>,
+        crate::cluster_manager::FetchRegistryEntryError,
+    > {
+        self.manager.list_registry_entries(peer_id, kind).await
+    }
+
+    /// Fetch and verify a device-model registry entry by its content hash.
+    pub async fn fetch_device_model_entry(
+        &self,
+        peer_id: PeerId,
+        id: impl Into<String>,
+        hash: impl Into<String>,
+    ) -> Result<auki_registry::DeviceModelRegistryEntry, crate::cluster_manager::FetchRegistryEntryError> {
+        self.manager.fetch_device_model_entry(peer_id, id, hash).await
+    }
+
+    /// Fetch an addressable model blob and verify its SHA-256.
+    pub async fn fetch_blob(
+        &self,
+        peer_id: PeerId,
+        sha256: impl Into<String>,
+    ) -> Result<Vec<u8>, auki_network::RequestBlobError> {
+        self.manager.fetch_blob(peer_id, sha256).await
+    }
+
     /// Open an exact discovered Map Log and receive replay plus live
     /// [`auki_datatypes::map::MapUpdate`] entries through the SDK stream.
     pub async fn open_map_stream(

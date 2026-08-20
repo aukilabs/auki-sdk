@@ -9,8 +9,9 @@
 
 use auki_registry::{
     Audio, Camera, ClockBody, ClockMeta, ClockRegistryEntry, DetectorBody, DetectorRegistryEntry,
-    FrameRegistryEntry, JointEncoders, ObjectDetection, PointField, PointFieldDataType,
-    Rangefinder, RegistryRef, Rf, Scalar, Scope, SensorBody, SensorRegistryEntry,
+    DeviceModelBody, DeviceModelFormat, DeviceModelRegistryEntry, FrameRegistryEntry,
+    JointEncoders, MeshBlobRef, ObjectDetection, PointField, PointFieldDataType, Rangefinder,
+    RegistryRef, Rf, Scalar, Scope, SensorBody, SensorRegistryEntry,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -71,6 +72,10 @@ fn main() {
             "detector_object_detection.json",
             canonical_detector(&make_detector_object_detection()),
         ),
+        (
+            "device_model_urdf.json",
+            canonical_device_model(&make_device_model_urdf()),
+        ),
     ];
 
     for (name, json) in cases {
@@ -98,6 +103,11 @@ fn canonical_frame(v: &FrameRegistryEntry) -> String {
 }
 
 fn canonical_detector(v: &DetectorRegistryEntry) -> String {
+    let val = serde_json::to_value(v).expect("serialize");
+    String::from_utf8(auki_jcs::canonicalize(&val)).unwrap()
+}
+
+fn canonical_device_model(v: &DeviceModelRegistryEntry) -> String {
     let val = serde_json::to_value(v).expect("serialize");
     String::from_utf8(auki_jcs::canonicalize(&val)).unwrap()
 }
@@ -359,5 +369,28 @@ fn make_detector_object_detection() -> DetectorRegistryEntry {
         }),
         input_types: vec![],
         output_types: vec!["object_detection".into()],
+    }
+}
+
+// ─── Device model fixtures ────────────────────────────────────────────────────
+
+fn make_device_model_urdf() -> DeviceModelRegistryEntry {
+    DeviceModelRegistryEntry {
+        peer_id: "galbot".into(),
+        device_model_id: "unitree/g1".into(),
+        body: DeviceModelBody {
+            model_id: "unitree_g1".into(),
+            format: DeviceModelFormat::Urdf {
+                // Fixed addresses — fixture pins schema, not live blob contents.
+                urdf_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .into(),
+                meshes: vec![MeshBlobRef {
+                    path: "meshes/body.stl".into(),
+                    sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        .into(),
+                }],
+            },
+            root_convention: Some("ros_body".into()),
+        },
     }
 }

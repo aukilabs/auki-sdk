@@ -125,6 +125,9 @@ pub mod resources_v4_protocol;
 #[cfg(feature = "swarm")]
 pub mod registries_protocol;
 
+#[cfg(feature = "swarm")]
+pub mod blobs_protocol;
+
 // ─── SessionHandle ────────────────────────────────────────────────────────────
 
 /// Source of resource catalog rows that `auki-domain`'s resources protocol
@@ -148,7 +151,7 @@ pub use network_runtime::{
     HeartbeatNtpSampleObservation, HeartbeatTimestampSource, HeartbeatTimingObservation,
     InfoRequestEvent, JoinEvent, MapCatalogProvider, MembershipEvent, NetworkRuntime,
     NetworkRuntimeHandle, PeerLivenessEvent, RegistryRequestEvent, RequestInfoError,
-    RequestRegistryError, RequestResourcesError, RequestResourcesV3Error, RequestResourcesV4Error,
+    RequestBlobError, RequestRegistryError, RequestResourcesError, RequestResourcesV3Error, RequestResourcesV4Error,
     ResourcesRequestEvent, SendJoinRequestError, SpawnError, UpdateError, UpdateReport,
 };
 
@@ -175,6 +178,12 @@ pub use resources_v4_protocol::{
     MapLogResource, RESOURCES_PROTOCOL as RESOURCES_V4_PROTOCOL,
     ResourcesProtocolError as ResourcesProtocolErrorV4, ResourcesRequest as ResourcesRequestV4,
     ResourcesResponse as ResourcesResponseV4,
+};
+
+#[cfg(feature = "swarm")]
+pub use blobs_protocol::{
+    BlobChunkMeta, BlobRequest, BlobResponse, BLOBS_PROTOCOL, MAX_BLOB_BYTES, MAX_BLOB_CHUNK_BYTES,
+    MAX_BLOB_ROUNDS,
 };
 
 #[cfg(all(feature = "swarm", feature = "swift-bindings"))]
@@ -573,14 +582,15 @@ mod swift_bindings_tests {
 
 #[cfg(all(test, feature = "swarm"))]
 mod protocol_id_tests {
-    use crate::registries_protocol::REGISTRIES_PROTOCOL;
+    use crate::registries_protocol::{REGISTRIES_PROTOCOL, REGISTRIES_PROTOCOL_V2};
     use crate::resources_protocol::RESOURCES_PROTOCOL;
     use crate::stream_protocol::STREAM_PROTOCOL;
 
     #[test]
     fn protocols_bumped_to_v0_2_0() {
         assert_eq!(RESOURCES_PROTOCOL.to_string(), "/auki/resources/0.2.0");
-        assert_eq!(REGISTRIES_PROTOCOL.to_string(), "/auki/registries/0.2.0");
+        assert_eq!(REGISTRIES_PROTOCOL.to_string(), "/auki/registries/0.3.0");
+        assert_eq!(REGISTRIES_PROTOCOL_V2.to_string(), "/auki/registries/0.2.0");
         assert_eq!(STREAM_PROTOCOL, "/auki/stream/0.2.0");
     }
 }

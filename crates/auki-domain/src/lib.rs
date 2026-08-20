@@ -28,7 +28,7 @@ pub mod stream_manifest;
 #[cfg(feature = "native_runtime")]
 pub use auki_network::SessionHandle;
 #[cfg(feature = "native_runtime")]
-pub use auki_network::registries_protocol::RegistryKind;
+pub use auki_network::registries_protocol::{RegistryKind, RegistryListEntry};
 #[cfg(feature = "native_runtime")]
 pub use auki_network::resources_protocol::{ResourceEntry, ResourcesRequest, ResourcesResponse};
 #[cfg(feature = "native_runtime")]
@@ -40,7 +40,7 @@ pub use auki_network::{
 };
 #[cfg(feature = "native_runtime")]
 pub use auki_registry::{
-    ClockRegistryEntry, FrameRegistryEntry, MapRegistryEntry, SensorRegistryEntry,
+    ClockRegistryEntry, FrameRegistryEntry, MapRegistryEntry, DeviceModelRegistryEntry, SensorRegistryEntry,
 };
 #[cfg(feature = "native_runtime")]
 pub use auki_time::{ClockTransformEstimate, DomainClockEstimate};

@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use auki_registry_rs as registry;
 use pyo3::exceptions::{PyOSError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyModule};
+use pyo3::types::{PyAny, PyDict, PyModule};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -637,6 +637,113 @@ fn write_map(py: Python<'_>, app_root: PathBuf, entry: &Bound<'_, PyAny>) -> PyR
 }
 
 #[pyfunction]
+fn write_device_model(py: Python<'_>, app_root: PathBuf, entry: &Bound<'_, PyAny>) -> PyResult<String> {
+    let entry: registry::DeviceModelRegistryEntry = parse_py(py, entry, "device model")?;
+    registry::write_device_model(&app_root, &entry).map(write_outcome_hash).map_err(map_registry_error)
+}
+
+#[pyfunction]
+fn put_blob(app_root: PathBuf, bytes: &[u8]) -> PyResult<String> {
+    registry::put_blob(&app_root, bytes).map_err(map_registry_error)
+}
+
+#[pyfunction]
+fn get_blob(py: Python<'_>, app_root: PathBuf, sha256: &str) -> PyResult<PyObject> {
+    match registry::get_blob(&app_root, sha256).map_err(map_registry_error)? {
+        Some(bytes) => Ok(pyo3::types::PyBytes::new_bound(py, &bytes).into_any().unbind()),
+        None => Ok(py.None()),
+    }
+}
+
+#[pyfunction]
+fn sha256_hex(bytes: &[u8]) -> String {
+    registry::sha256_hex(bytes)
+}
+
+/// Rewrite + blob a URDF. Default package dir is the URDF's parent; pass
+/// ``package_root`` for stock ROS ``pkg/urdf`` + ``pkg/meshes`` trees.
+///
+/// ``mesh_substitutions`` is an optional dict keyed by the raw URDF
+/// ``filename=`` string (or its normalized package-relative form). Values
+/// are ``{"advertised_path": "draco/Foo.glb", "source_path": "/abs/Foo.glb"}``.
+#[pyfunction]
+#[pyo3(signature = (app_root, urdf_path, root_convention=None, package_root=None, mesh_substitutions=None))]
+fn put_urdf_package(
+    py: Python<'_>,
+    app_root: PathBuf,
+    urdf_path: PathBuf,
+    root_convention: Option<String>,
+    package_root: Option<PathBuf>,
+    mesh_substitutions: Option<&Bound<'_, PyAny>>,
+) -> PyResult<PyObject> {
+    let substitutions = parse_mesh_substitutions(mesh_substitutions)?;
+    let package = registry::put_urdf_package(
+        &app_root,
+        &urdf_path,
+        root_convention,
+        package_root.as_deref(),
+        substitutions.as_ref(),
+    )
+    .map_err(map_registry_error)?;
+    let dict = PyDict::new_bound(py);
+    dict.set_item("device_model_id", package.device_model_id)?;
+    dict.set_item("body", struct_to_pyobject(py, &package.body)?)?;
+    Ok(dict.into_any().unbind())
+}
+
+fn parse_mesh_substitutions(
+    mesh_substitutions: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Option<std::collections::HashMap<String, registry::MeshSubstitution>>> {
+    let Some(raw) = mesh_substitutions else {
+        return Ok(None);
+    };
+    if raw.is_none() {
+        return Ok(None);
+    }
+    let map = raw.downcast::<PyDict>().map_err(|_| {
+        PyValueError::new_err("mesh_substitutions must be a dict[str, dict]")
+    })?;
+    let mut out = std::collections::HashMap::new();
+    for (key, value) in map.iter() {
+        let key: String = key.extract()?;
+        let entry = value.downcast::<PyDict>().map_err(|_| {
+            PyValueError::new_err(format!(
+                "mesh_substitutions[{key:?}] must be a dict with advertised_path and source_path"
+            ))
+        })?;
+        let advertised_path: String = entry
+            .get_item("advertised_path")?
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "mesh_substitutions[{key:?}] missing advertised_path"
+                ))
+            })?
+            .extract()?;
+        let source_path: PathBuf = entry
+            .get_item("source_path")?
+            .ok_or_else(|| {
+                PyValueError::new_err(format!("mesh_substitutions[{key:?}] missing source_path"))
+            })?
+            .extract()?;
+        out.insert(
+            key,
+            registry::MeshSubstitution {
+                advertised_path,
+                source_path,
+            },
+        );
+    }
+    Ok(Some(out))
+}
+
+#[pyfunction]
+fn list_device_models(py: Python<'_>, app_root: PathBuf, peer_id: &str) -> PyResult<PyObject> {
+    let entries =
+        registry::list_device_models(&app_root, peer_id).map_err(map_registry_error)?;
+    struct_to_pyobject(py, &entries)
+}
+
+#[pyfunction]
 fn read_frame(
     py: Python<'_>,
     app_root: PathBuf,
@@ -729,6 +836,12 @@ fn auki_registry(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(write_sensor, m)?)?;
     m.add_function(wrap_pyfunction!(write_clock, m)?)?;
     m.add_function(wrap_pyfunction!(write_map, m)?)?;
+    m.add_function(wrap_pyfunction!(write_device_model, m)?)?;
+    m.add_function(wrap_pyfunction!(put_blob, m)?)?;
+    m.add_function(wrap_pyfunction!(get_blob, m)?)?;
+    m.add_function(wrap_pyfunction!(sha256_hex, m)?)?;
+    m.add_function(wrap_pyfunction!(put_urdf_package, m)?)?;
+    m.add_function(wrap_pyfunction!(list_device_models, m)?)?;
     m.add_function(wrap_pyfunction!(read_frame, m)?)?;
     m.add_function(wrap_pyfunction!(read_sensor, m)?)?;
     m.add_function(wrap_pyfunction!(read_clock, m)?)?;

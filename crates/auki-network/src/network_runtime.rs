@@ -55,8 +55,15 @@ use crate::message_protocol::{
     handle_inbound_substream as handle_inbound_message, open_message_channel,
 };
 use crate::registries_protocol::{
-    REGISTRIES_PROTOCOL, RegistriesProtocolError, RegistryRequest, RegistryResponse,
-    read_registry_request, read_registry_response, write_registry_request, write_registry_response,
+    REGISTRIES_PROTOCOL, REGISTRIES_PROTOCOL_V2, RegistriesProtocolError, RegistryKind,
+    RegistryRequest, RegistryRequestV2, RegistryResponse, RegistryResponseV2,
+    read_registry_request, read_registry_request_v2, read_registry_response,
+    read_registry_response_v2, write_registry_request, write_registry_request_v2,
+    write_registry_response, write_registry_response_v2,
+};
+use crate::blobs_protocol::{
+    BLOBS_PROTOCOL, BlobChunkMeta, BlobRequest, BlobResponse, BlobsProtocolError, read_blob_request,
+    read_blob_response, write_blob_request, write_blob_response,
 };
 use crate::resources_protocol::{
     RESOURCES_PROTOCOL, ResourcesProtocolError, ResourcesRequest, ResourcesResponse,
@@ -96,6 +103,7 @@ use libp2p::{Multiaddr, PeerId, StreamProtocol, Swarm, swarm::SwarmEvent};
 use libp2p_stream::Control;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -399,12 +407,23 @@ const RESOURCES_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 /// error.
 pub const RESOURCES_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long a single `/auki/blobs/0.1.0` open or request/response round
+/// waits before returning a timeout error. Larger than catalog timeouts
+/// because blob chunks can be up to 1 MiB.
+pub const BLOBS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long [`NetworkRuntime::request_blob`] may spend assembling after
+/// the substream is open (covers multi-chunk fetch of up to MAX_BLOB_BYTES).
+pub const BLOBS_FETCH_TIMEOUT: Duration = Duration::from_secs(180);
+
 /// Live source for `/auki/resources/0.4.0` Map Log rows.
 pub trait MapCatalogProvider: Send + Sync {
     fn map_catalog(&self) -> ResourcesResponseV4;
 }
 
 type SharedMapCatalogProvider = Arc<Mutex<Option<Arc<dyn MapCatalogProvider>>>>;
+
+pub type SharedBlobAppRoot = Arc<Mutex<Option<PathBuf>>>;
 
 /// Errors from [`NetworkRuntime::request_resources_catalog`].
 #[derive(Debug, thiserror::Error)]
@@ -456,6 +475,32 @@ pub enum RequestResourcesV4Error {
     Timeout(Duration),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum RequestBlobError {
+    #[error("remote peer does not support blob transfer")]
+    UnsupportedProtocol,
+    #[error("open_stream: {0}")]
+    OpenStream(#[source] libp2p_stream::OpenStreamError),
+    #[error("protocol: {0}")]
+    Protocol(#[source] BlobsProtocolError),
+    #[error("blob request timed out after {0:?}")]
+    Timeout(Duration),
+    #[error("blob not found")]
+    NotFound,
+    #[error("remote blob error: {0}")]
+    RemoteError(String),
+    #[error("assembled bytes fail SHA-256 verification")]
+    HashMismatch,
+    #[error("remote total_size changed mid-fetch: was {expected}, got {actual}")]
+    SizeMismatch { expected: u64, actual: u64 },
+    #[error("invalid remote blob response: {0}")]
+    InvalidResponse(String),
+    #[error("blob transfer exceeded MAX_BLOB_ROUNDS")]
+    TooManyRounds,
+    #[error("ClusterManager has been shut down")]
+    Stopped,
+}
+
 fn map_resources_v4_open_error(error: libp2p_stream::OpenStreamError) -> RequestResourcesV4Error {
     match error {
         libp2p_stream::OpenStreamError::UnsupportedProtocol(_) => {
@@ -465,7 +510,7 @@ fn map_resources_v4_open_error(error: libp2p_stream::OpenStreamError) -> Request
     }
 }
 
-/// Inbound `/auki/registries/0.0.1` event surfaced by the runtime to
+/// Inbound `/auki/registries/0.3.0` event surfaced by the runtime to
 /// its owner via the channel returned from [`NetworkRuntime::spawn`].
 ///
 /// The owner (typically `auki-domain`'s `ClusterManager`) resolves the
@@ -478,11 +523,10 @@ pub struct RegistryRequestEvent {
     /// The peer-id of the requester. Authenticated by libp2p's noise
     /// handshake at connection-establishment time.
     pub peer: PeerId,
-    /// Requested registry kind + id + hash.
+    /// List or Get request body.
     pub request: RegistryRequest,
-    /// One-shot channel to reply on. Send a [`RegistryResponse`]
-    /// containing either the canonical JSON entry or `None` when this
-    /// peer does not have the exact `(kind, id, hash)` entry.
+    /// One-shot channel to reply on. Send a matching [`RegistryResponse`]
+    /// (`Get` with entry or `None`, or `List` with entries).
     /// Dropping the sender without sending closes the substream
     /// silently — the requester sees a
     /// [`RegistriesProtocolError::Io`] with `UnexpectedEof`.
@@ -501,6 +545,10 @@ pub const REGISTRIES_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// Errors from [`NetworkRuntime::request_registry_entry`].
 #[derive(Debug, thiserror::Error)]
 pub enum RequestRegistryError {
+    /// Remote peer does not speak `/auki/registries/0.3.0` (and Get
+    /// fallback to 0.2 was not applicable, e.g. List).
+    #[error("remote peer does not support registries 0.3")]
+    UnsupportedProtocol,
     /// `libp2p_stream::Control::open_stream` failed (peer not
     /// reachable, not on the allow-list, etc.).
     #[error("open_stream: {0}")]
@@ -803,6 +851,7 @@ pub struct NetworkRuntime {
     /// Receiver-owned live message channels registered on this peer.
     message_router: MessageChannelRouter,
     map_catalog_provider: SharedMapCatalogProvider,
+    blob_app_root: SharedBlobAppRoot,
 }
 
 /// Cloneable handle to a [`NetworkRuntime`] for command-style
@@ -946,7 +995,7 @@ impl NetworkRuntime {
     /// gossip events + a receiver for inbound `/auki/info/0.0.1`
     /// participant-info requests + a receiver for inbound
     /// `/auki/resources/0.2.0` resource-catalog requests + a receiver for
-    /// inbound `/auki/registries/0.0.1` registry-entry requests.
+    /// inbound `/auki/registries/0.3.0` registry-entry requests.
     /// Owners that don't care about any of them (e.g. tests) can drop
     /// the receivers; the runtime drops events with no receiver.
     #[allow(clippy::type_complexity)]
@@ -987,6 +1036,7 @@ impl NetworkRuntime {
         let (diagnostic_events_tx, diagnostic_events_rx) = mpsc::channel::<DiagnosticEvent>(64);
         let message_router = MessageChannelRouter::new(local_peer_id);
         let map_catalog_provider: SharedMapCatalogProvider = Arc::new(Mutex::new(None));
+        let blob_app_root: SharedBlobAppRoot = Arc::new(Mutex::new(None));
         let task = handle.spawn(run_task(
             swarm,
             allowed_peers,
@@ -1007,6 +1057,7 @@ impl NetworkRuntime {
             diagnostic_events_tx,
             message_router.clone(),
             map_catalog_provider.clone(),
+            blob_app_root.clone(),
         ));
         Ok((
             Self {
@@ -1020,6 +1071,7 @@ impl NetworkRuntime {
                 command_tx,
                 message_router,
                 map_catalog_provider,
+                blob_app_root,
             },
             join_events_rx,
             liveness_rx,
@@ -1173,6 +1225,29 @@ impl NetworkRuntime {
             .expect("map_catalog_provider lock") = Some(provider);
     }
 
+    /// Snapshot the local Map Log catalog without dialing (empty if unset).
+    pub fn local_map_catalog(&self) -> ResourcesResponseV4 {
+        let provider = self
+            .map_catalog_provider
+            .lock()
+            .expect("map_catalog_provider lock")
+            .clone();
+        provider
+            .map(|provider| provider.map_catalog())
+            .unwrap_or_else(|| ResourcesResponseV4 {
+                resources: Vec::new(),
+            })
+    }
+
+    /// Snapshot locally registered `/auki/message/0.1.0` channel rows.
+    pub fn message_channel_catalog(&self) -> Vec<crate::resources_v3_protocol::MessageChannelResource> {
+        self.message_router.catalog()
+    }
+
+    pub fn set_blob_app_root(&self, app_root: impl Into<PathBuf>) {
+        *self.blob_app_root.lock().expect("blob_app_root lock") = Some(app_root.into());
+    }
+
     /// Fetch a cluster peer's current Map Log catalog over
     /// `/auki/resources/0.4.0`.
     pub async fn request_map_catalog(
@@ -1198,6 +1273,120 @@ impl NetworkRuntime {
         .await
         .map_err(|_| RequestResourcesV4Error::Timeout(RESOURCES_REQUEST_TIMEOUT))?
         .map_err(RequestResourcesV4Error::Protocol)
+    }
+
+    /// Fetch one chunk on a fresh substream. Prefer [`Self::request_blob`]
+    /// for full assemblies — that reuses one substream across rounds.
+    pub async fn request_blob_chunk(
+        &self,
+        peer_id: PeerId,
+        request: BlobRequest,
+    ) -> Result<(BlobChunkMeta, Vec<u8>), RequestBlobError> {
+        let mut control = self.stream_control.clone();
+        let mut substream = match tokio::time::timeout(
+            BLOBS_REQUEST_TIMEOUT,
+            control.open_stream(peer_id, BLOBS_PROTOCOL.clone()),
+        )
+        .await
+        {
+            Err(_) => return Err(RequestBlobError::Timeout(BLOBS_REQUEST_TIMEOUT)),
+            Ok(Err(libp2p_stream::OpenStreamError::UnsupportedProtocol(_))) => {
+                return Err(RequestBlobError::UnsupportedProtocol)
+            }
+            Ok(Err(error)) => return Err(RequestBlobError::OpenStream(error)),
+            Ok(Ok(stream)) => stream,
+        };
+        blob_round_trip(&mut substream, &request).await
+    }
+
+    /// Fetch and SHA-256 verify a full blob over one `/auki/blobs/0.1.0`
+    /// substream (multi-round request/response until complete).
+    pub async fn request_blob(
+        &self,
+        peer_id: PeerId,
+        sha256: String,
+    ) -> Result<Vec<u8>, RequestBlobError> {
+        let mut control = self.stream_control.clone();
+        let mut substream = match tokio::time::timeout(
+            BLOBS_REQUEST_TIMEOUT,
+            control.open_stream(peer_id, BLOBS_PROTOCOL.clone()),
+        )
+        .await
+        {
+            Err(_) => return Err(RequestBlobError::Timeout(BLOBS_REQUEST_TIMEOUT)),
+            Ok(Err(libp2p_stream::OpenStreamError::UnsupportedProtocol(_))) => {
+                return Err(RequestBlobError::UnsupportedProtocol)
+            }
+            Ok(Err(error)) => return Err(RequestBlobError::OpenStream(error)),
+            Ok(Ok(stream)) => stream,
+        };
+
+        let assemble = async {
+            let mut bytes = Vec::new();
+            let mut offset = 0u64;
+            let mut expected_total: Option<u64> = None;
+            let mut rounds = 0u32;
+            loop {
+                if rounds >= crate::blobs_protocol::MAX_BLOB_ROUNDS {
+                    return Err(RequestBlobError::TooManyRounds);
+                }
+                let request = BlobRequest {
+                    sha256: sha256.clone(),
+                    offset,
+                    max_len: crate::blobs_protocol::MAX_BLOB_CHUNK_BYTES,
+                };
+                let (meta, chunk) = blob_round_trip(&mut substream, &request).await?;
+                rounds += 1;
+                if meta.total_size > crate::blobs_protocol::MAX_BLOB_BYTES {
+                    return Err(RequestBlobError::InvalidResponse(
+                        "total_size exceeds MAX_BLOB_BYTES".into(),
+                    ));
+                }
+                match expected_total {
+                    None => {
+                        expected_total = Some(meta.total_size);
+                        bytes.reserve(meta.total_size as usize);
+                    }
+                    Some(expected) if expected != meta.total_size => {
+                        return Err(RequestBlobError::SizeMismatch {
+                            expected,
+                            actual: meta.total_size,
+                        });
+                    }
+                    Some(_) => {}
+                }
+                if meta.total_size == 0 {
+                    break;
+                }
+                if chunk.is_empty() {
+                    if offset == meta.total_size {
+                        break;
+                    }
+                    return Err(RequestBlobError::InvalidResponse(
+                        "empty chunk before end of blob".into(),
+                    ));
+                }
+                bytes.extend_from_slice(&chunk);
+                offset += chunk.len() as u64;
+                if offset == meta.total_size {
+                    break;
+                }
+                if offset > meta.total_size {
+                    return Err(RequestBlobError::InvalidResponse(
+                        "chunk exceeds advertised size".into(),
+                    ));
+                }
+            }
+            if auki_registry::sha256_hex(&bytes) != sha256 {
+                return Err(RequestBlobError::HashMismatch);
+            }
+            Ok(bytes)
+        };
+
+        match tokio::time::timeout(BLOBS_FETCH_TIMEOUT, assemble).await {
+            Err(_) => Err(RequestBlobError::Timeout(BLOBS_FETCH_TIMEOUT)),
+            Ok(result) => result,
+        }
     }
 
     /// Atomically register a receiver-owned live message channel and its
@@ -1229,11 +1418,13 @@ impl NetworkRuntime {
         .await
     }
 
-    /// Fetch one registry entry from a cluster peer over the
-    /// `/auki/registries/0.0.1` libp2p protocol. The request names
-    /// the registry `kind + id + hash`; the response is either the
-    /// canonical JSON entry envelope or `None` when the peer does not
-    /// have that exact entry.
+    /// Fetch or list registry entries from a cluster peer over
+    /// `/auki/registries/0.3.0`. Pass [`RegistryRequest::Get`] for one
+    /// exact entry or [`RegistryRequest::List`] to enumerate `(id, hash)`.
+    ///
+    /// Non-`device_model` Get falls back to `/auki/registries/0.2.0` when
+    /// the peer does not speak 0.3. List and `device_model` Get do not
+    /// fall back — they return [`RequestRegistryError::UnsupportedProtocol`].
     ///
     /// `peer_id` must be on the local allow-list — libp2p refuses
     /// the substream otherwise. Higher layers are responsible for
@@ -1245,11 +1436,17 @@ impl NetworkRuntime {
         request: RegistryRequest,
     ) -> Result<RegistryResponse, RequestRegistryError> {
         let mut control = self.stream_control.clone();
-        let proto = REGISTRIES_PROTOCOL.clone();
-
-        let open_fut = control.open_stream(peer_id, proto);
+        let open_fut = control.open_stream(peer_id, REGISTRIES_PROTOCOL.clone());
         let mut substream = match tokio::time::timeout(REGISTRIES_REQUEST_TIMEOUT, open_fut).await {
             Err(_) => return Err(RequestRegistryError::Timeout(REGISTRIES_REQUEST_TIMEOUT)),
+            Ok(Err(libp2p_stream::OpenStreamError::UnsupportedProtocol(_))) => {
+                return match registry_v2_fallback(&request) {
+                    Some((kind, id, hash)) => {
+                        request_registry_entry_v2(self, peer_id, kind, id, hash).await
+                    }
+                    None => Err(RequestRegistryError::UnsupportedProtocol),
+                };
+            }
             Ok(Err(e)) => return Err(RequestRegistryError::OpenStream(e)),
             Ok(Ok(s)) => s,
         };
@@ -2063,6 +2260,7 @@ async fn run_task(
     diagnostic_events_tx: mpsc::Sender<DiagnosticEvent>,
     message_router: MessageChannelRouter,
     map_catalog_provider: SharedMapCatalogProvider,
+    blob_app_root: SharedBlobAppRoot,
 ) {
     let mut swarm = swarm;
     let local_peer_id = *swarm.local_peer_id();
@@ -2177,11 +2375,26 @@ async fn run_task(
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
 
-    // Register inbound `/auki/registries/0.0.1` substream acceptance.
+    let mut incoming_blobs: std::pin::Pin<
+        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
+    > = match inbound_control.accept(BLOBS_PROTOCOL.clone()) {
+        Ok(s) => s.boxed(),
+        Err(_already_registered) => futures::stream::pending().boxed(),
+    };
+
+    // Register inbound `/auki/registries/0.3.0` substream acceptance.
     let registries_proto = REGISTRIES_PROTOCOL.clone();
     let mut incoming_registries: std::pin::Pin<
         Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
     > = match inbound_control.accept(registries_proto) {
+        Ok(s) => s.boxed(),
+        Err(_already_registered) => futures::stream::pending().boxed(),
+    };
+
+    // Legacy Get-only `/auki/registries/0.2.0` for mixed-cluster peers.
+    let mut incoming_registries_v2: std::pin::Pin<
+        Box<dyn futures::Stream<Item = (PeerId, libp2p::Stream)> + Send>,
+    > = match inbound_control.accept(REGISTRIES_PROTOCOL_V2.clone()) {
         Ok(s) => s.boxed(),
         Err(_already_registered) => futures::stream::pending().boxed(),
     };
@@ -2423,6 +2636,15 @@ async fn run_task(
                 ));
             }
 
+            blob = incoming_blobs.next() => {
+                let Some((peer, substream)) = blob else { return; };
+                if !known_peers.contains_key(&peer) {
+                    drop(substream);
+                    continue;
+                }
+                tokio::spawn(handle_inbound_blob_substream(substream, blob_app_root.clone()));
+            }
+
             registry = incoming_registries.next() => {
                 let Some((peer, substream)) = registry else { return; };
                 // Same cluster-trust gate. Non-cluster peers can't
@@ -2434,6 +2656,16 @@ async fn run_task(
                 }
                 let tx = registry_events_tx.clone();
                 tokio::spawn(handle_inbound_registry_substream(peer, substream, tx));
+            }
+
+            registry = incoming_registries_v2.next() => {
+                let Some((peer, substream)) = registry else { return; };
+                if !known_peers.contains_key(&peer) {
+                    drop(substream);
+                    continue;
+                }
+                let tx = registry_events_tx.clone();
+                tokio::spawn(handle_inbound_registry_v2_substream(peer, substream, tx));
             }
 
             diagnostic = incoming_diagnostics.next() => {
@@ -3399,7 +3631,120 @@ async fn handle_inbound_resources_v4_substream(
     let _ = write_resources_response_v4(&mut substream, &response).await;
 }
 
-/// Per-substream task for an inbound `/auki/registries/0.0.1`
+async fn blob_round_trip<S>(
+    stream: &mut S,
+    request: &BlobRequest,
+) -> Result<(BlobChunkMeta, Vec<u8>), RequestBlobError>
+where
+    S: futures::AsyncRead + futures::AsyncWrite + Unpin,
+{
+    tokio::time::timeout(BLOBS_REQUEST_TIMEOUT, write_blob_request(stream, request))
+        .await
+        .map_err(|_| RequestBlobError::Timeout(BLOBS_REQUEST_TIMEOUT))?
+        .map_err(RequestBlobError::Protocol)?;
+    let (response, chunk) = tokio::time::timeout(BLOBS_REQUEST_TIMEOUT, read_blob_response(stream))
+        .await
+        .map_err(|_| RequestBlobError::Timeout(BLOBS_REQUEST_TIMEOUT))?
+        .map_err(RequestBlobError::Protocol)?;
+    match response {
+        BlobResponse::NotFound => Err(RequestBlobError::NotFound),
+        BlobResponse::Error { reason } => Err(RequestBlobError::RemoteError(reason)),
+        BlobResponse::Ok(meta) => {
+            if meta.sha256 != request.sha256 || meta.offset != request.offset {
+                return Err(RequestBlobError::InvalidResponse(
+                    "response address or offset differs from request".into(),
+                ));
+            }
+            Ok((meta, chunk))
+        }
+    }
+}
+
+fn serve_blob_request(app_root: Option<&std::path::Path>, request: &BlobRequest) -> (BlobResponse, Vec<u8>) {
+    let Some(app_root) = app_root else {
+        return (
+            BlobResponse::Error {
+                reason: "blobs not configured".into(),
+            },
+            Vec::new(),
+        );
+    };
+    match auki_registry::read_blob_range(app_root, &request.sha256, request.offset, request.max_len)
+    {
+        Ok(None) => (BlobResponse::NotFound, Vec::new()),
+        Ok(Some(range)) => (
+            BlobResponse::Ok(BlobChunkMeta {
+                sha256: request.sha256.clone(),
+                offset: request.offset,
+                total_size: range.total_size,
+                chunk_len: range.chunk.len() as u32,
+            }),
+            range.chunk,
+        ),
+        Err(auki_registry::Error::BlobOffsetPastEnd) => (
+            BlobResponse::Error {
+                reason: "offset past end of blob".into(),
+            },
+            Vec::new(),
+        ),
+        Err(auki_registry::Error::Io(_)) => (
+            BlobResponse::Error {
+                reason: "io".into(),
+            },
+            Vec::new(),
+        ),
+        Err(auki_registry::Error::InvalidBlob(_))
+        | Err(auki_registry::Error::BlobHashMismatch) => (
+            BlobResponse::Error {
+                reason: "invalid blob".into(),
+            },
+            Vec::new(),
+        ),
+        Err(_) => (
+            BlobResponse::Error {
+                reason: "invalid blob".into(),
+            },
+            Vec::new(),
+        ),
+    }
+}
+
+/// Drain inbound `/auki/blobs/0.1.0` requests on one substream until EOF.
+async fn handle_inbound_blob_substream(
+    mut substream: libp2p::Stream,
+    blob_app_root: SharedBlobAppRoot,
+) {
+    let mut rounds = 0u32;
+    loop {
+        if rounds >= crate::blobs_protocol::MAX_BLOB_ROUNDS {
+            eprintln!("auki-network: inbound blob substream exceeded MAX_BLOB_ROUNDS; closing");
+            return;
+        }
+        let request = match tokio::time::timeout(
+            BLOBS_REQUEST_TIMEOUT,
+            read_blob_request(&mut substream),
+        )
+        .await
+        {
+            Ok(Ok(request)) => request,
+            Ok(Err(_)) | Err(_) => return,
+        };
+        let app_root = blob_app_root.lock().expect("blob_app_root lock").clone();
+        let (response, chunk) = serve_blob_request(app_root.as_deref(), &request);
+        match tokio::time::timeout(
+            BLOBS_REQUEST_TIMEOUT,
+            write_blob_response(&mut substream, &response, &chunk),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) | Err(_) => return,
+        }
+        rounds += 1;
+    }
+}
+
+/// Per-substream task for an inbound `/auki/registries/0.3.0`
 /// request. Reads the framed [`RegistryRequest`], forwards it to the
 /// runtime's owner via a [`RegistryRequestEvent`], awaits the owner's
 /// reply (up to [`REGISTRIES_RESPONSE_TIMEOUT`]), writes the framed
@@ -3412,12 +3757,28 @@ async fn handle_inbound_registry_substream(
     mut substream: libp2p::Stream,
     registry_events_tx: mpsc::Sender<RegistryRequestEvent>,
 ) {
-    let request = match read_registry_request(&mut substream).await {
-        Ok(r) => r,
-        Err(e) => {
+    let request = match tokio::time::timeout(
+        REGISTRIES_REQUEST_TIMEOUT,
+        read_registry_request(&mut substream),
+    )
+    .await
+    {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
             eprintln!("auki-network: registry substream from {peer}: read failed: {e}");
             return;
         }
+        Err(_) => {
+            eprintln!(
+                "auki-network: registry substream from {peer}: read timed out after {REGISTRIES_REQUEST_TIMEOUT:?}"
+            );
+            return;
+        }
+    };
+
+    let oversized_reason = match &request {
+        RegistryRequest::List { .. } => "list too large",
+        RegistryRequest::Get { .. } => "entry too large",
     };
 
     let (ack_tx, ack_rx) = oneshot::channel();
@@ -3448,9 +3809,134 @@ async fn handle_inbound_registry_substream(
         }
     };
 
-    if let Err(e) = write_registry_response(&mut substream, &response).await {
-        eprintln!("auki-network: registry substream to {peer}: write response failed: {e}");
+    match write_registry_response(&mut substream, &response).await {
+        Ok(()) => {}
+        Err(RegistriesProtocolError::FrameTooLarge { .. }) => {
+            // Oversized List/Get would otherwise look like EOF to the client.
+            let fallback = RegistryResponse::Error {
+                reason: oversized_reason.into(),
+            };
+            if let Err(e) = write_registry_response(&mut substream, &fallback).await {
+                eprintln!(
+                    "auki-network: registry substream to {peer}: write FrameTooLarge fallback failed: {e}"
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("auki-network: registry substream to {peer}: write response failed: {e}");
+        }
     }
+}
+
+/// Legacy `/auki/registries/0.2.0` Get-only inbound path.
+///
+/// Translates untagged Get into [`RegistryRequest::Get`], reuses the
+/// owner's registry handler, and writes an untagged response. List /
+/// Error owner replies close the substream without a v2 body.
+/// `device_model` is 0.3-only: close without a body (do not answer
+/// `{entry: null}`, which old clients cache as "no model").
+async fn handle_inbound_registry_v2_substream(
+    peer: PeerId,
+    mut substream: libp2p::Stream,
+    registry_events_tx: mpsc::Sender<RegistryRequestEvent>,
+) {
+    let request = match tokio::time::timeout(
+        REGISTRIES_REQUEST_TIMEOUT,
+        read_registry_request_v2(&mut substream),
+    )
+    .await
+    {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
+            eprintln!("auki-network: registry v2 substream from {peer}: read failed: {e}");
+            return;
+        }
+        Err(_) => {
+            eprintln!(
+                "auki-network: registry v2 substream from {peer}: read timed out after {REGISTRIES_REQUEST_TIMEOUT:?}"
+            );
+            return;
+        }
+    };
+
+    if matches!(request.kind, RegistryKind::DeviceModel) {
+        return;
+    }
+
+    let (ack_tx, ack_rx) = oneshot::channel();
+    if registry_events_tx
+        .send(RegistryRequestEvent {
+            peer,
+            request: RegistryRequest::get(request.kind, request.id, request.hash),
+            ack: ack_tx,
+        })
+        .await
+        .is_err()
+    {
+        return;
+    }
+
+    let response = match tokio::time::timeout(REGISTRIES_RESPONSE_TIMEOUT, ack_rx).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(_)) | Err(_) => return,
+    };
+
+    let entry = match response {
+        RegistryResponse::Get { entry } => entry,
+        RegistryResponse::List { .. } | RegistryResponse::Error { .. } => return,
+    };
+    let _ = write_registry_response_v2(&mut substream, &RegistryResponseV2 { entry }).await;
+}
+
+/// Whether an outbound registries request may fall back to 0.2 when the
+/// peer lacks 0.3. Only non-`device_model` Get is eligible — List and
+/// `device_model` Get require 0.3 (inbound v2 closes `device_model` with
+/// no body).
+fn registry_v2_fallback(request: &RegistryRequest) -> Option<(RegistryKind, String, String)> {
+    match request {
+        RegistryRequest::Get { kind, id, hash } if *kind != RegistryKind::DeviceModel => {
+            Some((*kind, id.clone(), hash.clone()))
+        }
+        _ => None,
+    }
+}
+
+async fn request_registry_entry_v2(
+    runtime: &NetworkRuntime,
+    peer_id: PeerId,
+    kind: RegistryKind,
+    id: String,
+    hash: String,
+) -> Result<RegistryResponse, RequestRegistryError> {
+    let mut control = runtime.stream_control.clone();
+    let open_fut = control.open_stream(peer_id, REGISTRIES_PROTOCOL_V2.clone());
+    let mut substream = match tokio::time::timeout(REGISTRIES_REQUEST_TIMEOUT, open_fut).await {
+        Err(_) => return Err(RequestRegistryError::Timeout(REGISTRIES_REQUEST_TIMEOUT)),
+        Ok(Err(libp2p_stream::OpenStreamError::UnsupportedProtocol(_))) => {
+            return Err(RequestRegistryError::UnsupportedProtocol);
+        }
+        Ok(Err(e)) => return Err(RequestRegistryError::OpenStream(e)),
+        Ok(Ok(s)) => s,
+    };
+
+    let request = RegistryRequestV2 { kind, id, hash };
+    write_registry_request_v2(&mut substream, &request)
+        .await
+        .map_err(RequestRegistryError::Protocol)?;
+
+    let response = match tokio::time::timeout(
+        REGISTRIES_REQUEST_TIMEOUT,
+        read_registry_response_v2(&mut substream),
+    )
+    .await
+    {
+        Err(_) => return Err(RequestRegistryError::Timeout(REGISTRIES_REQUEST_TIMEOUT)),
+        Ok(Err(e)) => return Err(RequestRegistryError::Protocol(e)),
+        Ok(Ok(r)) => r,
+    };
+    Ok(RegistryResponse::Get {
+        entry: response.entry,
+    })
 }
 
 /// Reads exactly one diagnostic message and forwards it to the owner.
@@ -4826,5 +5312,381 @@ mod tests {
 
         receiver_runtime.shutdown();
         sender_runtime.shutdown();
+    }
+
+    #[test]
+    fn serve_blob_request_not_found_and_chunking() {
+        let tmp = tempfile::tempdir().unwrap();
+        let payload = b"abcdefghij"; // 10 bytes
+        let sha = auki_registry::put_blob(tmp.path(), payload).unwrap();
+
+        assert!(matches!(
+            serve_blob_request(None, &BlobRequest {
+                sha256: sha.clone(),
+                offset: 0,
+                max_len: 4,
+            }).0,
+            BlobResponse::NotFound
+        ));
+        assert!(matches!(
+            serve_blob_request(Some(tmp.path()), &BlobRequest {
+                sha256: "0".repeat(64),
+                offset: 0,
+                max_len: 4,
+            }).0,
+            BlobResponse::NotFound
+        ));
+
+        let (resp, chunk) = serve_blob_request(
+            Some(tmp.path()),
+            &BlobRequest {
+                sha256: sha.clone(),
+                offset: 0,
+                max_len: 4,
+            },
+        );
+        match resp {
+            BlobResponse::Ok(meta) => {
+                assert_eq!(meta.total_size, 10);
+                assert_eq!(meta.chunk_len, 4);
+                assert_eq!(chunk, b"abcd");
+            }
+            other => panic!("expected Ok, got {other:?}"),
+        }
+
+        let (resp, chunk) = serve_blob_request(
+            Some(tmp.path()),
+            &BlobRequest {
+                sha256: sha.clone(),
+                offset: 10,
+                max_len: 4,
+            },
+        );
+        match resp {
+            BlobResponse::Ok(meta) => {
+                assert_eq!(meta.offset, 10);
+                assert_eq!(meta.chunk_len, 0);
+                assert!(chunk.is_empty());
+            }
+            other => panic!("expected empty Ok at EOF, got {other:?}"),
+        }
+
+        let (resp, _) = serve_blob_request(
+            Some(tmp.path()),
+            &BlobRequest {
+                sha256: sha,
+                offset: 11,
+                max_len: 4,
+            },
+        );
+        assert!(matches!(
+            resp,
+            BlobResponse::Error { reason } if reason == "offset past end of blob"
+        ));
+    }
+
+    #[test]
+    fn serve_blob_request_oversized_on_disk_is_error_not_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sha = "f".repeat(64);
+        let path = tmp.path().join("blobs").join(&sha);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Write a file larger than MAX_BLOB_BYTES under a plausible address.
+        // Serve must map this to Error (not NotFound).
+        let oversized = vec![0u8; (auki_registry::MAX_BLOB_BYTES as usize) + 1];
+        std::fs::write(&path, &oversized).unwrap();
+        let (resp, _) = serve_blob_request(
+            Some(tmp.path()),
+            &BlobRequest {
+                sha256: sha,
+                offset: 0,
+                max_len: 4,
+            },
+        );
+        assert!(
+            matches!(resp, BlobResponse::Error { .. }),
+            "expected Error for oversized on-disk blob, got {resp:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn blob_round_trip_maps_typed_status_errors() {
+        let hash = "e".repeat(64);
+        // Stream that ignores writes and serves a scripted response body.
+        struct Scripted {
+            reads: futures::io::Cursor<Vec<u8>>,
+        }
+        impl futures::AsyncRead for Scripted {
+            fn poll_read(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+                buf: &mut [u8],
+            ) -> std::task::Poll<std::io::Result<usize>> {
+                std::pin::Pin::new(&mut self.reads).poll_read(cx, buf)
+            }
+        }
+        impl futures::AsyncWrite for Scripted {
+            fn poll_write(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+                buf: &[u8],
+            ) -> std::task::Poll<std::io::Result<usize>> {
+                std::task::Poll::Ready(Ok(buf.len()))
+            }
+            fn poll_flush(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Ready(Ok(()))
+            }
+            fn poll_close(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Ready(Ok(()))
+            }
+        }
+
+        let mut scripted = Vec::new();
+        write_blob_response(&mut scripted, &BlobResponse::NotFound, &[])
+            .await
+            .unwrap();
+        let mut stream = Scripted {
+            reads: futures::io::Cursor::new(scripted),
+        };
+        let err = blob_round_trip(
+            &mut stream,
+            &BlobRequest {
+                sha256: hash.clone(),
+                offset: 0,
+                max_len: 8,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, RequestBlobError::NotFound));
+
+        let mut scripted = Vec::new();
+        write_blob_response(
+            &mut scripted,
+            &BlobResponse::Error {
+                reason: "boom".into(),
+            },
+            &[],
+        )
+        .await
+        .unwrap();
+        let mut stream = Scripted {
+            reads: futures::io::Cursor::new(scripted),
+        };
+        let err = blob_round_trip(
+            &mut stream,
+            &BlobRequest {
+                sha256: hash,
+                offset: 0,
+                max_len: 8,
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, RequestBlobError::RemoteError(reason) if reason == "boom"));
+    }
+
+    #[test]
+    fn request_blob_error_variants_cover_hash_and_size() {
+        // Document the typed variants the assembler uses (no swarm needed).
+        let hash_err = RequestBlobError::HashMismatch;
+        assert_eq!(
+            hash_err.to_string(),
+            "assembled bytes fail SHA-256 verification"
+        );
+        let size_err = RequestBlobError::SizeMismatch {
+            expected: 10,
+            actual: 12,
+        };
+        assert!(size_err.to_string().contains("total_size changed mid-fetch"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn request_blob_fetches_and_verifies_across_two_runtimes() {
+        let producer_identity = PeerIdentity::from_seed(&[91; 32]);
+        let consumer_identity = PeerIdentity::from_seed(&[92; 32]);
+        let producer_peer = producer_identity.peer_id();
+        let consumer_peer = consumer_identity.peer_id();
+
+        let mut producer_swarm = build_swarm(
+            &producer_identity,
+            SwarmConfig {
+                listen_addresses: vec!["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+        let producer_addr = wait_for_test_listen_addr(&mut producer_swarm).await;
+        let consumer_swarm = build_swarm(
+            &consumer_identity,
+            SwarmConfig {
+                listen_addresses: vec![],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+
+        let (
+            producer_runtime,
+            _producer_joins,
+            _producer_liveness,
+            _producer_memberships,
+            _producer_info,
+            _producer_resources,
+            _producer_registries,
+            _producer_diagnostics,
+        ) = NetworkRuntime::spawn(
+            producer_swarm,
+            vec![AllowedPeer {
+                peer_id: consumer_peer,
+                multiaddrs: vec![],
+            }],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+        let (
+            consumer_runtime,
+            _consumer_joins,
+            _consumer_liveness,
+            _consumer_memberships,
+            _consumer_info,
+            _consumer_resources,
+            _consumer_registries,
+            _consumer_diagnostics,
+        ) = NetworkRuntime::spawn(
+            consumer_swarm,
+            vec![AllowedPeer {
+                peer_id: producer_peer,
+                multiaddrs: vec![producer_addr],
+            }],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        let payload = b"swarm-blob-bytes-0123456789";
+        let sha = auki_registry::put_blob(tmp.path(), payload).unwrap();
+        producer_runtime.set_blob_app_root(tmp.path());
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !consumer_runtime.connected_peers().contains(&producer_peer) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("peers connect");
+
+        let bytes = consumer_runtime
+            .request_blob(producer_peer, sha.clone())
+            .await
+            .unwrap();
+        assert_eq!(bytes, payload);
+
+        let missing = consumer_runtime
+            .request_blob(producer_peer, "0".repeat(64))
+            .await
+            .unwrap_err();
+        assert!(matches!(missing, RequestBlobError::NotFound));
+
+        producer_runtime.shutdown();
+        consumer_runtime.shutdown();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn local_map_catalog_empty_without_provider() {
+        let identity = PeerIdentity::from_seed(&[93; 32]);
+        let swarm = build_swarm(
+            &identity,
+            SwarmConfig {
+                listen_addresses: vec![],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+        let (runtime, _j, _l, _m, _i, _r, _reg, _d) = NetworkRuntime::spawn(
+            swarm,
+            vec![],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+        let catalog = runtime.local_map_catalog();
+        assert!(catalog.resources.is_empty());
+        runtime.shutdown();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn message_channel_catalog_lists_local_registration() {
+        use crate::resources_v3_protocol::MessageChannelResource;
+        use auki_registry::RegistryRef;
+
+        let identity = PeerIdentity::from_seed(&[94; 32]);
+        let peer_id = identity.peer_id();
+        let swarm = build_swarm(
+            &identity,
+            SwarmConfig {
+                listen_addresses: vec![],
+                ..SwarmConfig::default()
+            },
+        )
+        .unwrap();
+        let (runtime, _j, _l, _m, _i, _r, _reg, _d) = NetworkRuntime::spawn(
+            swarm,
+            vec![],
+            decline_all_streams(),
+            test_heartbeat_timestamps(),
+        )
+        .unwrap();
+        let resource = MessageChannelResource {
+            owner_peer_id: peer_id,
+            resource_id: "local-events".into(),
+            clock: RegistryRef {
+                peer_id: peer_id.to_string(),
+                id: "session/monotonic".into(),
+                hash: "clock-hash".into(),
+            },
+        };
+        let _reg = runtime.register_message_channel(resource.clone(), 4).unwrap();
+        let catalog = runtime.message_channel_catalog();
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].resource_id, "local-events");
+        runtime.shutdown();
+    }
+
+    #[test]
+    fn registry_v2_fallback_allows_sensor_get() {
+        let request = RegistryRequest::get(RegistryKind::Sensor, "cam", "abc");
+        let Some((kind, id, hash)) = registry_v2_fallback(&request) else {
+            panic!("sensor Get must fall back to 0.2");
+        };
+        assert_eq!(kind, RegistryKind::Sensor);
+        assert_eq!(id, "cam");
+        assert_eq!(hash, "abc");
+    }
+
+    #[test]
+    fn registry_v2_fallback_rejects_device_model_get() {
+        let request = RegistryRequest::get(RegistryKind::DeviceModel, "k1", "deadbeef");
+        assert!(
+            registry_v2_fallback(&request).is_none(),
+            "device_model Get must not fall back to 0.2"
+        );
+    }
+
+    #[test]
+    fn registry_v2_fallback_rejects_list() {
+        let request = RegistryRequest::list(RegistryKind::DeviceModel);
+        assert!(
+            registry_v2_fallback(&request).is_none(),
+            "List must not fall back to 0.2"
+        );
     }
 }

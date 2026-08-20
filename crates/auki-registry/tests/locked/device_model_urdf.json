@@ -1,0 +1,1 @@
+{"device_model_id":"unitree/g1","meshes":[{"path":"meshes/body.stl","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}],"model_id":"unitree_g1","peer_id":"galbot","root_convention":"ros_body","type":"urdf","urdf_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}

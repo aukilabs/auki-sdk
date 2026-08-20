@@ -18,6 +18,7 @@ Shipped in SDK #216 (2026-05-27) as a `Session`-centric API; split into `Peer` /
 - `Peer::register_frame(frame_id, FrameDef)` — `FrameDef` presets: `ros_body()`, `ros_optical()`, `opengl()`, `unity()`.
 - `Peer::register_detector(detector_id, DetectorBody, output_types)`.
 - `Peer::register_map(map_id, MapBody)` — writes the immutable Map contract and returns its content-addressed `RegistryRef`.
+- `Peer::register_device_model(device_model_id, DeviceModelBody)` / `Peer::register_urdf_package(id, urdf_path, root_convention, package_root, mesh_substitutions)` — blob + register a URDF device model; optional substitutions remap mesh filenames at advertise (e.g. STL→Draco GLB) without parsing manufacturer JSON in Rust.
 - `Peer::start_session()` → `Session` — mints a fresh ULID `session_id` and auto-registers the session's clock pair (below).
 - `Peer::registries()` → `PeerRegistries` — read handle (`sensor(id)`, `frame(id)`, `detector(id)`, `map(id)`); consumed by `auki-domain` to resolve entries at catalog-build time.
 

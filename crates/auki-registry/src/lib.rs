@@ -14,11 +14,32 @@
 //! across all sessions of the same app. Hash-keyed writes are idempotent, so
 //! the same sensor entry produces the same `<hash>.json` regardless of session.
 
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Cap on a single content-addressed blob's total size (put + serve).
+pub const MAX_BLOB_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Cap on a device-model `TIP` pointer file (32 hex hash + optional newline).
+pub const MAX_DEVICE_MODEL_TIP_BYTES: u64 = 64;
+
+/// Cap on a device-model registry entry JSON file (List/Get).
+pub const MAX_DEVICE_MODEL_ENTRY_BYTES: u64 = 1024 * 1024;
+
+/// Filename under a device-model id directory that points at the List tip hash.
+const DEVICE_MODEL_TIP_FILE: &str = "TIP";
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+mod urdf;
+pub use urdf::{
+    MeshSubstitution, PutUrdfPackage, normalize_mesh_rel_path, put_urdf_package,
+    validate_mesh_rel_path,
+};
 
 // ─── Registry ID Validation ──────────────────────────────────────────────────
 
@@ -28,14 +49,20 @@ pub enum RegistryIdError {
     Empty,
     #[error("registry id contains disallowed character {0:?}")]
     DisallowedChar(char),
+    /// `.` / `..` / empty path segments — `id_to_segment` only rewrites `/`,
+    /// so these would escape the peer/id directory on disk.
+    #[error("registry id contains reserved path segment {0:?}")]
+    ReservedPathSegment(String),
 }
 
 /// Validate that a registry id is suitable for use as a `(peer_id, id)` key.
 ///
 /// Rejects: empty strings, `>` (collides with the `->` separator in
 /// pose/time-transform resource_ids), `@` (collides with the detection
-/// separator), and whitespace. Forward slashes are allowed and treated
-/// as path separators downstream.
+/// separator), whitespace, and path segments that are empty / `.` / `..`
+/// (would escape the on-disk registry tree). Forward slashes are allowed
+/// and treated as path separators downstream (`a.b.c` and `foo/bar` stay
+/// legal).
 pub fn validate_registry_id(id: &str) -> std::result::Result<(), RegistryIdError> {
     if id.is_empty() {
         return Err(RegistryIdError::Empty);
@@ -43,6 +70,11 @@ pub fn validate_registry_id(id: &str) -> std::result::Result<(), RegistryIdError
     for c in id.chars() {
         if c == '>' || c == '@' || c.is_whitespace() {
             return Err(RegistryIdError::DisallowedChar(c));
+        }
+    }
+    for segment in id.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return Err(RegistryIdError::ReservedPathSegment(segment.to_owned()));
         }
     }
     Ok(())
@@ -68,6 +100,122 @@ pub struct RegistryRef {
 pub struct LogRef {
     pub source_peer_id: String,
     pub resource_id: String,
+}
+
+// ─── Device Model Registry ──────────────────────────────────────────────────
+
+/// One mesh file referenced by a Device Model Registry entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeshBlobRef {
+    pub path: String,
+    pub sha256: String,
+}
+
+/// On-wire `type` for a device model. URDF now; glTF/GLB later for phones/glasses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DeviceModelFormat {
+    Urdf {
+        urdf_sha256: String,
+        #[serde(default)]
+        meshes: Vec<MeshBlobRef>,
+    },
+}
+
+/// Immutable model metadata. Payload blobs are addressed independently so
+/// meshes can be shared across otherwise distinct model revisions.
+///
+/// `model_id` is the URDF `<robot name>` (or publisher-chosen label inside
+/// the body). List/Get keying uses the entry's `device_model_id`, which may
+/// differ when `register_urdf_package(id=Some(...))` overrides the registry
+/// key — consumers must key on `device_model_id`, not `model_id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceModelBody {
+    pub model_id: String,
+    #[serde(flatten)]
+    pub format: DeviceModelFormat,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_convention: Option<String>,
+}
+
+impl DeviceModelBody {
+    pub fn as_urdf(&self) -> Option<(&str, &[MeshBlobRef])> {
+        match &self.format {
+            DeviceModelFormat::Urdf { urdf_sha256, meshes } => {
+                Some((urdf_sha256.as_str(), meshes.as_slice()))
+            }
+        }
+    }
+}
+
+/// Content-addressed Device Model Registry entry.
+///
+/// `device_model_id` is the List/Get identity (on-disk dir + wire List `id`).
+/// `body.model_id` is metadata (typically the URDF robot name) and is not
+/// required to equal `device_model_id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceModelRegistryEntry {
+    pub peer_id: String,
+    pub device_model_id: String,
+    #[serde(flatten)]
+    pub body: DeviceModelBody,
+}
+
+impl DeviceModelRegistryEntry {
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        canonicalize(self)
+    }
+
+    pub fn hash(&self) -> String {
+        auki_hash::hash_jcs_bytes(&self.canonical_bytes())
+    }
+
+    pub fn registry_ref(&self) -> RegistryRef {
+        RegistryRef {
+            peer_id: self.peer_id.clone(),
+            id: self.device_model_id.clone(),
+            hash: self.hash(),
+        }
+    }
+
+    pub fn validate_id(id: &str) -> std::result::Result<(), RegistryIdError> {
+        validate_registry_id(id)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.peer_id.is_empty() {
+            return Err(Error::InvalidDeviceModel("peer_id must not be empty".into()));
+        }
+        validate_registry_id(&self.device_model_id)
+            .map_err(|error| Error::InvalidDeviceModel(format!("invalid device_model_id: {error}")))?;
+        if self.body.model_id.is_empty() {
+            return Err(Error::InvalidDeviceModel("model_id must not be empty".into()));
+        }
+        match &self.body.format {
+            DeviceModelFormat::Urdf { urdf_sha256, meshes } => {
+                if !is_sha256_hex(urdf_sha256) {
+                    return Err(Error::InvalidDeviceModel(
+                        "urdf_sha256 must be 64 lowercase hex characters".into(),
+                    ));
+                }
+                let mut paths = std::collections::BTreeSet::new();
+                for mesh in meshes {
+                    validate_mesh_rel_path(&mesh.path)?;
+                    if !paths.insert(&mesh.path) {
+                        return Err(Error::InvalidDeviceModel(
+                            "mesh paths must be unique".into(),
+                        ));
+                    }
+                    if !is_sha256_hex(&mesh.sha256) {
+                        return Err(Error::InvalidDeviceModel(
+                            "mesh sha256 must be 64 lowercase hex characters".into(),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 // ─── Map Registry ───────────────────────────────────────────────────────────
@@ -964,6 +1112,14 @@ pub enum Error {
     },
     /// A map registry entry declares an invalid voxel-grid contract.
     InvalidMap(String),
+    /// A device model entry has invalid metadata or blob references.
+    InvalidDeviceModel(String),
+    /// A blob SHA-256 is invalid or its on-disk size is out of bounds.
+    InvalidBlob(String),
+    /// Requested byte offset is past the end of the on-disk blob.
+    BlobOffsetPastEnd,
+    /// On-disk blob bytes do not match the requested SHA-256 address.
+    BlobHashMismatch,
 }
 
 impl std::fmt::Display for Error {
@@ -989,6 +1145,12 @@ impl std::fmt::Display for Error {
                 "sensor {sensor_id:?} references missing frame ({frame_id:?}, {frame_hash:?})"
             ),
             Error::InvalidMap(msg) => write!(f, "invalid map: {msg}"),
+            Error::InvalidDeviceModel(msg) => write!(f, "invalid device model: {msg}"),
+            Error::InvalidBlob(msg) => write!(f, "invalid blob: {msg}"),
+            Error::BlobOffsetPastEnd => write!(f, "offset past end of blob"),
+            Error::BlobHashMismatch => {
+                write!(f, "on-disk bytes do not match SHA-256 address")
+            }
         }
     }
 }
@@ -1180,6 +1342,403 @@ pub fn read_map(
     Ok(Some(entry))
 }
 
+/// Write a Device Model Registry entry under
+/// `<app_root>/registries/device_models/...`.
+///
+/// Requires every referenced blob (`urdf_sha256` / mesh shas) to already
+/// exist under `app_root`. On success, updates the model directory's
+/// [`DEVICE_MODEL_TIP_FILE`] so List returns this hash as the tip.
+pub fn write_device_model(
+    app_root: &Path,
+    entry: &DeviceModelRegistryEntry,
+) -> Result<WriteOutcome> {
+    entry.validate()?;
+    ensure_device_model_blobs(app_root, entry)?;
+    let bytes = entry.canonical_bytes();
+    let hash = auki_hash::hash_jcs_bytes(&bytes);
+    let path = auki_layout::device_model_entry_path(
+        app_root,
+        &entry.peer_id,
+        &entry.device_model_id,
+        &hash,
+    );
+    let outcome = write_entry_at(&path, hash.clone(), &bytes)?;
+    let tip_path = path
+        .parent()
+        .expect("device model entry path has parent")
+        .join(DEVICE_MODEL_TIP_FILE);
+    atomic_write(&tip_path, hash.as_bytes())?;
+    Ok(outcome)
+}
+
+fn ensure_device_model_blobs(app_root: &Path, entry: &DeviceModelRegistryEntry) -> Result<()> {
+    match &entry.body.format {
+        DeviceModelFormat::Urdf { urdf_sha256, meshes } => {
+            ensure_blob_verified(app_root, urdf_sha256)?;
+            for mesh in meshes {
+                ensure_blob_verified(app_root, &mesh.sha256)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ensure_blob_verified(app_root: &Path, sha256: &str) -> Result<()> {
+    match get_blob(app_root, sha256)? {
+        Some(_) => Ok(()),
+        None => Err(Error::InvalidDeviceModel(format!(
+            "referenced blob {sha256} not found"
+        ))),
+    }
+}
+
+/// Read a Device Model Registry entry by `(peer_id, device_model_id, hash)`.
+pub fn read_device_model(
+    app_root: &Path,
+    peer_id: &str,
+    device_model_id: &str,
+    hash: &str,
+) -> Result<Option<DeviceModelRegistryEntry>> {
+    if !is_registry_entry_hash(hash) {
+        return Err(Error::InvalidDeviceModel(
+            "hash must be 32 lowercase hex characters".into(),
+        ));
+    }
+    let path = auki_layout::device_model_entry_path(app_root, peer_id, device_model_id, hash);
+    let Some(bytes) = read_at_capped(&path, MAX_DEVICE_MODEL_ENTRY_BYTES)? else {
+        return Ok(None);
+    };
+    let entry: DeviceModelRegistryEntry =
+        serde_json::from_slice(&bytes).map_err(|e| Error::Json(e.to_string()))?;
+    if entry.peer_id != peer_id {
+        return Err(Error::IdMismatch {
+            expected: peer_id.to_owned(),
+            found: entry.peer_id,
+        });
+    }
+    if entry.device_model_id != device_model_id {
+        return Err(Error::IdMismatch {
+            expected: device_model_id.to_owned(),
+            found: entry.device_model_id,
+        });
+    }
+    entry.validate()?;
+    let content_hash = entry.hash();
+    if content_hash != hash {
+        return Err(Error::IdMismatch {
+            expected: hash.to_owned(),
+            found: content_hash,
+        });
+    }
+    Ok(Some(entry))
+}
+
+/// One `(id, hash)` row from [`list_device_models`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceModelListEntry {
+    /// `device_model_id` from the registry entry.
+    pub id: String,
+    /// XXH3-128 of the entry's canonical JSON bytes.
+    pub hash: String,
+}
+
+/// How a List tip was chosen for one `device_model_id`.
+enum DeviceModelTipSource {
+    /// On-disk `TIP` pointer — never displaced by mtime.
+    Tip,
+    /// Newest JSON mtime (hash tie-break) for pre-TIP trees.
+    Mtime(SystemTime),
+}
+
+/// Enumerate device-model registry tips for `peer_id` under `app_root`.
+///
+/// Walks `<app_root>/registries/device_models/<peer>/…` and returns **one**
+/// `(device_model_id, hash)` per id. Prefers the on-disk `TIP` pointer from
+/// the last successful [`write_device_model`]; falls back to newest file
+/// mtime (hash tie-break) for trees that predate TIP. TIP-sourced rows are
+/// never overwritten by mtime. Candidates whose parent directory name does
+/// not match [`auki_layout::id_to_segment`] of `device_model_id` are skipped
+/// (so a sibling dir cannot steal another id's tip). Older content-addressed
+/// siblings stay on disk but are omitted from List. Missing peer dirs yield
+/// an empty list; other peer-dir IO errors propagate. TIP/entry reads are
+/// size-capped; oversized, malformed, or tip entries whose referenced blobs
+/// are missing are skipped with no error.
+pub fn list_device_models(app_root: &Path, peer_id: &str) -> Result<Vec<DeviceModelListEntry>> {
+    let peer_dir = auki_layout::device_models_peer_dir(app_root, peer_id);
+    let model_dirs = match fs::read_dir(&peer_dir) {
+        Ok(dirs) => dirs,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(Error::Io(e)),
+    };
+    let mut tips: HashMap<String, (DeviceModelTipSource, DeviceModelListEntry)> = HashMap::new();
+    for model_dir in model_dirs {
+        let model_dir = model_dir?;
+        if !model_dir.file_type()?.is_dir() {
+            continue;
+        }
+        let model_path = model_dir.path();
+        if let Some(tip) = read_device_model_tip(app_root, &model_path, peer_id)? {
+            tips.insert(tip.id.clone(), (DeviceModelTipSource::Tip, tip));
+            continue;
+        }
+        let Ok(files) = fs::read_dir(&model_path) else {
+            continue;
+        };
+        for file in files {
+            let file = file?;
+            let path = file.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(candidate) = load_device_model_list_candidate(app_root, &path, peer_id)? else {
+                continue;
+            };
+            let mtime = file
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .unwrap_or(UNIX_EPOCH);
+            let id = candidate.id.clone();
+            match tips.get(&id) {
+                Some((DeviceModelTipSource::Tip, _)) => {}
+                Some((DeviceModelTipSource::Mtime(existing_mtime), existing))
+                    if *existing_mtime > mtime
+                        || (*existing_mtime == mtime && existing.hash >= candidate.hash) => {}
+                _ => {
+                    tips.insert(id, (DeviceModelTipSource::Mtime(mtime), candidate));
+                }
+            }
+        }
+    }
+    let mut entries: Vec<DeviceModelListEntry> =
+        tips.into_values().map(|(_, entry)| entry).collect();
+    entries.sort_by(|a, b| (&a.id, &a.hash).cmp(&(&b.id, &b.hash)));
+    Ok(entries)
+}
+
+fn read_device_model_tip(
+    app_root: &Path,
+    model_dir: &Path,
+    peer_id: &str,
+) -> Result<Option<DeviceModelListEntry>> {
+    let tip_path = model_dir.join(DEVICE_MODEL_TIP_FILE);
+    let raw = match read_at_capped(&tip_path, MAX_DEVICE_MODEL_TIP_BYTES) {
+        Ok(raw) => raw,
+        Err(Error::InvalidBlob(_)) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let Ok(hash) = String::from_utf8(raw) else {
+        return Ok(None);
+    };
+    let hash = hash.trim();
+    // TIP must look like an auki-hash XXH3-128 identity (32 lowercase hex).
+    if !is_registry_entry_hash(hash) {
+        return Ok(None);
+    }
+    let entry_path = model_dir.join(format!("{hash}.json"));
+    Ok(load_device_model_list_candidate(app_root, &entry_path, peer_id)?)
+}
+
+fn load_device_model_list_candidate(
+    app_root: &Path,
+    path: &Path,
+    peer_id: &str,
+) -> Result<Option<DeviceModelListEntry>> {
+    let bytes = match read_at_capped(path, MAX_DEVICE_MODEL_ENTRY_BYTES) {
+        Ok(bytes) => bytes,
+        Err(Error::InvalidBlob(_)) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let Some(bytes) = bytes else {
+        return Ok(None);
+    };
+    let Ok(entry) = serde_json::from_slice::<DeviceModelRegistryEntry>(&bytes) else {
+        return Ok(None);
+    };
+    if entry.peer_id != peer_id {
+        return Ok(None);
+    }
+    if entry.validate().is_err() {
+        return Ok(None);
+    }
+    let dir_name = path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if dir_name != auki_layout::id_to_segment(&entry.device_model_id) {
+        return Ok(None);
+    }
+    let hash = entry.hash();
+    let file_stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default();
+    if file_stem != hash {
+        return Ok(None);
+    }
+    if !device_model_blobs_present(app_root, &entry)? {
+        return Ok(None);
+    }
+    Ok(Some(DeviceModelListEntry {
+        id: entry.device_model_id,
+        hash,
+    }))
+}
+
+/// Presence-only check for every blob referenced by a device-model entry.
+/// Missing or oversized-on-disk blobs skip the List candidate; other IO errors
+/// propagate so List does not look like an empty tip set.
+fn device_model_blobs_present(
+    app_root: &Path,
+    entry: &DeviceModelRegistryEntry,
+) -> Result<bool> {
+    match &entry.body.format {
+        DeviceModelFormat::Urdf { urdf_sha256, meshes } => {
+            match blob_exists(app_root, urdf_sha256) {
+                Ok(true) => {}
+                Ok(false) | Err(Error::InvalidBlob(_)) => return Ok(false),
+                Err(e) => return Err(e),
+            }
+            for mesh in meshes {
+                match blob_exists(app_root, &mesh.sha256) {
+                    Ok(true) => {}
+                    Ok(false) | Err(Error::InvalidBlob(_)) => return Ok(false),
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// SHA-256, encoded as lowercase hexadecimal.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+/// Persist a content-addressed blob and return its SHA-256 address.
+///
+/// If the address already exists on disk, verifies the stored bytes match
+/// `sha256` and returns without overwriting. A corrupt/mismatched file at
+/// that path surfaces as [`Error::BlobHashMismatch`].
+pub fn put_blob(app_root: &Path, bytes: &[u8]) -> Result<String> {
+    if bytes.len() as u64 > MAX_BLOB_BYTES {
+        return Err(Error::InvalidBlob(format!(
+            "blob exceeds MAX_BLOB_BYTES ({MAX_BLOB_BYTES})"
+        )));
+    }
+    let sha256 = sha256_hex(bytes);
+    let path = auki_layout::blob_path(app_root, &sha256);
+    if path.exists() {
+        match get_blob(app_root, &sha256)? {
+            Some(_) => return Ok(sha256),
+            // exists() raced with a delete (or non-file) — fall through and write.
+            None => {}
+        }
+    }
+    let dir = path.parent().expect("blob path has parent");
+    fs::create_dir_all(dir)?;
+    atomic_write(&path, bytes)?;
+    Ok(sha256)
+}
+
+/// One range read from a content-addressed blob (no full-file SHA verify).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobRange {
+    /// Full on-disk blob size in bytes.
+    pub total_size: u64,
+    /// Raw bytes starting at the requested offset (length ≤ `max_len`).
+    pub chunk: Vec<u8>,
+}
+
+/// Seek + read at most `max_len` bytes from a blob without loading the whole
+/// file. Returns `Ok(None)` when the address is absent. Errors on invalid
+/// sha, oversized on-disk size, offset past end, or IO.
+pub fn read_blob_range(
+    app_root: &Path,
+    sha256: &str,
+    offset: u64,
+    max_len: u32,
+) -> Result<Option<BlobRange>> {
+    if !is_sha256_hex(sha256) {
+        return Err(Error::InvalidBlob(
+            "sha256 must be 64 lowercase hex characters".into(),
+        ));
+    }
+    if max_len == 0 {
+        return Err(Error::InvalidBlob("max_len must be at least 1".into()));
+    }
+    let path = auki_layout::blob_path(app_root, sha256);
+    let meta = match fs::metadata(&path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(Error::Io(e)),
+    };
+    let total_size = meta.len();
+    if total_size > MAX_BLOB_BYTES {
+        return Err(Error::InvalidBlob(format!(
+            "on-disk blob exceeds MAX_BLOB_BYTES ({MAX_BLOB_BYTES})"
+        )));
+    }
+    if offset > total_size {
+        return Err(Error::BlobOffsetPastEnd);
+    }
+    if offset == total_size {
+        return Ok(Some(BlobRange {
+            total_size,
+            chunk: Vec::new(),
+        }));
+    }
+    let mut file = File::open(&path)?;
+    file.seek(SeekFrom::Start(offset))?;
+    let remaining = (total_size - offset) as usize;
+    let to_read = remaining.min(max_len as usize);
+    let mut chunk = vec![0u8; to_read];
+    file.read_exact(&mut chunk)?;
+    Ok(Some(BlobRange { total_size, chunk }))
+}
+
+/// Fetch a blob only when the requested address is a valid lowercase SHA-256.
+pub fn get_blob(app_root: &Path, sha256: &str) -> Result<Option<Vec<u8>>> {
+    if !is_sha256_hex(sha256) {
+        return Err(Error::InvalidBlob("sha256 must be 64 lowercase hex characters".into()));
+    }
+    let Some(bytes) = read_at_capped(&auki_layout::blob_path(app_root, sha256), MAX_BLOB_BYTES)?
+    else {
+        return Ok(None);
+    };
+    if sha256_hex(&bytes) != sha256 {
+        return Err(Error::BlobHashMismatch);
+    }
+    Ok(Some(bytes))
+}
+
+/// Whether an addressable blob exists locally (presence only; does not
+/// re-hash the full file — use [`get_blob`] when verification is required).
+pub fn blob_exists(app_root: &Path, sha256: &str) -> Result<bool> {
+    if !is_sha256_hex(sha256) {
+        return Err(Error::InvalidBlob(
+            "sha256 must be 64 lowercase hex characters".into(),
+        ));
+    }
+    let path = auki_layout::blob_path(app_root, sha256);
+    match fs::metadata(&path) {
+        Ok(meta) => {
+            if meta.len() > MAX_BLOB_BYTES {
+                return Err(Error::InvalidBlob(format!(
+                    "on-disk blob exceeds MAX_BLOB_BYTES ({MAX_BLOB_BYTES})"
+                )));
+            }
+            Ok(true)
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(Error::Io(e)),
+    }
+}
+
 // `build_sensor_log_manifest` moved to [`auki-manifests`] in Step 0 of the
 // auki-datatypes migration.
 
@@ -1194,6 +1753,40 @@ fn canonicalize<T: Serialize>(value: &T) -> Vec<u8> {
 
 fn write_entry_at(path: &Path, hash: String, bytes: &[u8]) -> Result<WriteOutcome> {
     if path.exists() {
+        let meta = match fs::metadata(path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                // exists() raced with a delete — fall through and write.
+                let dir = path.parent().expect("entry path has a parent");
+                fs::create_dir_all(dir)?;
+                atomic_write(path, bytes)?;
+                return Ok(WriteOutcome::Created(hash));
+            }
+            Err(e) => return Err(Error::Io(e)),
+        };
+        if meta.len() != bytes.len() as u64 {
+            return Err(Error::InvalidBlob(format!(
+                "existing registry entry at {} size {} does not match canonical bytes ({}) for hash {hash}",
+                path.display(),
+                meta.len(),
+                bytes.len()
+            )));
+        }
+        let on_disk = match read_at(path)? {
+            Some(b) => b,
+            None => {
+                let dir = path.parent().expect("entry path has a parent");
+                fs::create_dir_all(dir)?;
+                atomic_write(path, bytes)?;
+                return Ok(WriteOutcome::Created(hash));
+            }
+        };
+        if on_disk.as_slice() != bytes {
+            return Err(Error::InvalidBlob(format!(
+                "existing registry entry at {} does not match canonical bytes for hash {hash}",
+                path.display()
+            )));
+        }
         return Ok(WriteOutcome::AlreadyExists(hash));
     }
     let dir = path.parent().expect("entry path has a parent");
@@ -1238,6 +1831,42 @@ fn read_at(path: &Path) -> Result<Option<Vec<u8>>> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(Error::Io(e)),
     }
+}
+
+/// Open the path, refuse files larger than `max` via fstat on the fd, then
+/// read at most `max + 1` bytes. Avoids OOM on planted oversized files and
+/// closes the stat-then-`fs::read` TOCTOU where the file can grow between
+/// the size check and the unbounded read.
+pub(crate) fn read_at_capped(path: &Path, max: u64) -> Result<Option<Vec<u8>>> {
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(Error::Io(e)),
+    };
+    let meta = file.metadata().map_err(Error::Io)?;
+    if meta.len() > max {
+        return Err(Error::InvalidBlob(format!(
+            "on-disk file exceeds size cap ({max} bytes)"
+        )));
+    }
+    let mut limited = file.take(max.saturating_add(1));
+    let mut bytes = Vec::new();
+    limited.read_to_end(&mut bytes).map_err(Error::Io)?;
+    if bytes.len() as u64 > max {
+        return Err(Error::InvalidBlob(format!(
+            "on-disk file exceeds size cap ({max} bytes)"
+        )));
+    }
+    Ok(Some(bytes))
+}
+
+pub fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Whether `value` is a 32-character lowercase hex XXH3-128 registry entry hash.
+pub fn is_registry_entry_hash(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn atomic_write(target: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -2443,6 +3072,17 @@ mod id_charset_tests {
     }
 
     #[test]
+    fn rejects_reserved_path_segments() {
+        for bad in ["..", ".", "foo/../bar", "foo//bar", "./bar", "foo/."] {
+            let result = validate_registry_id(bad);
+            assert!(
+                matches!(result, Err(RegistryIdError::ReservedPathSegment(_))),
+                "id {bad:?} should be rejected as reserved path segment, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
     fn allows_slash_underscore_dash_dot() {
         for good in [
             "foo/bar",
@@ -2520,6 +3160,618 @@ mod id_charset_tests {
             write_map(tmp.path(), &invalid),
             Err(Error::InvalidMap(_))
         ));
+    }
+
+    #[test]
+    fn device_model_and_blobs_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let urdf = put_blob(tmp.path(), b"<robot name='test'/>").unwrap();
+        let mesh = put_blob(tmp.path(), b"mesh bytes").unwrap();
+        // device_model_id (List/Get key) may differ from body.model_id (URDF name).
+        let entry = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "unitree/g1".into(),
+            body: DeviceModelBody {
+                model_id: "unitree_g1".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf.clone(),
+                    meshes: vec![MeshBlobRef {
+                        path: "meshes/body.glb".into(),
+                        sha256: mesh.clone(),
+                    }],
+                },
+                root_convention: Some("ros_rep_103".into()),
+            },
+        };
+        assert_ne!(entry.device_model_id, entry.body.model_id);
+        assert!(entry.validate().is_ok());
+        let bytes = entry.canonical_bytes();
+        let json = std::str::from_utf8(&bytes).unwrap();
+        assert!(json.contains(r#""type":"urdf""#));
+        let outcome = write_device_model(tmp.path(), &entry).unwrap();
+        assert_eq!(
+            read_device_model(tmp.path(), "galbot", "unitree/g1", outcome.hash()).unwrap(),
+            Some(entry)
+        );
+        assert_eq!(get_blob(tmp.path(), &mesh).unwrap(), Some(b"mesh bytes".to_vec()));
+        assert!(blob_exists(tmp.path(), &urdf).unwrap());
+        let listed = list_device_models(tmp.path(), "galbot").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "unitree/g1");
+        assert_eq!(listed[0].hash, outcome.hash());
+    }
+
+    #[test]
+    fn list_device_models_returns_tip_pointer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let urdf_a = put_blob(tmp.path(), b"<robot name='a'/>").unwrap();
+        let urdf_b = put_blob(tmp.path(), b"<robot name='b'/>").unwrap();
+        let mesh = put_blob(tmp.path(), b"mesh").unwrap();
+        let older = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "k1".into(),
+            body: DeviceModelBody {
+                model_id: "k1".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf_a,
+                    meshes: vec![MeshBlobRef {
+                        path: "meshes/body.stl".into(),
+                        sha256: mesh.clone(),
+                    }],
+                },
+                root_convention: Some("ros_body".into()),
+            },
+        };
+        let newer = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "k1".into(),
+            body: DeviceModelBody {
+                model_id: "k1".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf_b,
+                    meshes: vec![MeshBlobRef {
+                        path: "meshes/body.stl".into(),
+                        sha256: mesh,
+                    }],
+                },
+                root_convention: Some("ros_body".into()),
+            },
+        };
+        let older_hash = write_device_model(tmp.path(), &older).unwrap().hash().to_string();
+        let newer_hash = write_device_model(tmp.path(), &newer).unwrap().hash().to_string();
+        assert_ne!(older_hash, newer_hash);
+        let listed = list_device_models(tmp.path(), "galbot").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "k1");
+        assert_eq!(listed[0].hash, newer_hash);
+        // TIP pointer is what List prefers (last successful write).
+        let tip_path = auki_layout::device_model_entry_path(tmp.path(), "galbot", "k1", &newer_hash)
+            .parent()
+            .unwrap()
+            .join("TIP");
+        assert_eq!(std::fs::read_to_string(tip_path).unwrap().trim(), newer_hash);
+    }
+
+    fn plant_device_model_claiming_id(
+        app_root: &Path,
+        peer_id: &str,
+        plant_dir: &str,
+        claim_id: &str,
+        urdf_sha: &str,
+        mesh_sha: &str,
+        write_tip: bool,
+    ) {
+        let entry = DeviceModelRegistryEntry {
+            peer_id: peer_id.into(),
+            device_model_id: claim_id.into(),
+            body: DeviceModelBody {
+                model_id: claim_id.into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf_sha.into(),
+                    meshes: vec![MeshBlobRef {
+                        path: "meshes/body.stl".into(),
+                        sha256: mesh_sha.into(),
+                    }],
+                },
+                root_convention: None,
+            },
+        };
+        let hash = entry.hash();
+        let dir = auki_layout::device_models_peer_dir(app_root, peer_id).join(plant_dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(format!("{hash}.json")), entry.canonical_bytes()).unwrap();
+        if write_tip {
+            fs::write(dir.join("TIP"), hash.as_bytes()).unwrap();
+        }
+    }
+
+    #[test]
+    fn list_device_models_ignores_sibling_dir_claiming_same_id_via_tip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let urdf = put_blob(tmp.path(), b"<robot name='real'/>").unwrap();
+        let mesh = put_blob(tmp.path(), b"mesh").unwrap();
+        let real = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "k1".into(),
+            body: DeviceModelBody {
+                model_id: "k1".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf.clone(),
+                    meshes: vec![MeshBlobRef {
+                        path: "meshes/body.stl".into(),
+                        sha256: mesh.clone(),
+                    }],
+                },
+                root_convention: Some("ros_body".into()),
+            },
+        };
+        let real_hash = write_device_model(tmp.path(), &real).unwrap().hash().to_string();
+        let evil_urdf = put_blob(tmp.path(), b"<robot name='evil'/>").unwrap();
+        plant_device_model_claiming_id(
+            tmp.path(),
+            "galbot",
+            "evil",
+            "k1",
+            &evil_urdf,
+            &mesh,
+            true,
+        );
+        let listed = list_device_models(tmp.path(), "galbot").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "k1");
+        assert_eq!(listed[0].hash, real_hash);
+    }
+
+    #[test]
+    fn list_device_models_ignores_sibling_dir_claiming_same_id_via_mtime() {
+        let tmp = tempfile::tempdir().unwrap();
+        let urdf = put_blob(tmp.path(), b"<robot name='real'/>").unwrap();
+        let mesh = put_blob(tmp.path(), b"mesh").unwrap();
+        let real = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "k1".into(),
+            body: DeviceModelBody {
+                model_id: "k1".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf,
+                    meshes: vec![MeshBlobRef {
+                        path: "meshes/body.stl".into(),
+                        sha256: mesh.clone(),
+                    }],
+                },
+                root_convention: Some("ros_body".into()),
+            },
+        };
+        let real_hash = write_device_model(tmp.path(), &real).unwrap().hash().to_string();
+        let evil_urdf = put_blob(tmp.path(), b"<robot name='evil'/>").unwrap();
+        plant_device_model_claiming_id(
+            tmp.path(),
+            "galbot",
+            "evil",
+            "k1",
+            &evil_urdf,
+            &mesh,
+            false,
+        );
+        let listed = list_device_models(tmp.path(), "galbot").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "k1");
+        assert_eq!(listed[0].hash, real_hash);
+    }
+
+    #[test]
+    fn list_device_models_accepts_slash_id_under_segmented_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let urdf = put_blob(tmp.path(), b"<robot/>").unwrap();
+        let mesh = put_blob(tmp.path(), b"mesh").unwrap();
+        let entry = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "unitree/g1".into(),
+            body: DeviceModelBody {
+                model_id: "unitree_g1".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf,
+                    meshes: vec![MeshBlobRef {
+                        path: "meshes/body.stl".into(),
+                        sha256: mesh,
+                    }],
+                },
+                root_convention: None,
+            },
+        };
+        let hash = write_device_model(tmp.path(), &entry).unwrap().hash().to_string();
+        let listed = list_device_models(tmp.path(), "galbot").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "unitree/g1");
+        assert_eq!(listed[0].hash, hash);
+        assert!(auki_layout::device_model_entry_path(tmp.path(), "galbot", "unitree/g1", &hash)
+            .parent()
+            .unwrap()
+            .ends_with("unitree__g1"));
+    }
+
+    #[test]
+    fn list_device_models_skips_oversized_tip_and_keeps_real() {
+        let tmp = tempfile::tempdir().unwrap();
+        let urdf = put_blob(tmp.path(), b"<robot name='real'/>").unwrap();
+        let mesh = put_blob(tmp.path(), b"mesh").unwrap();
+        let real = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "k1".into(),
+            body: DeviceModelBody {
+                model_id: "k1".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf,
+                    meshes: vec![MeshBlobRef {
+                        path: "meshes/body.stl".into(),
+                        sha256: mesh,
+                    }],
+                },
+                root_convention: None,
+            },
+        };
+        let real_hash = write_device_model(tmp.path(), &real).unwrap().hash().to_string();
+        // Replace the honest TIP with a sparse oversized file; mtime fallback
+        // on the same dir should still recover the real entry.
+        let tip_path = auki_layout::device_model_entry_path(tmp.path(), "galbot", "k1", &real_hash)
+            .parent()
+            .unwrap()
+            .join("TIP");
+        {
+            let f = fs::File::create(&tip_path).unwrap();
+            f.set_len(MAX_DEVICE_MODEL_TIP_BYTES + 1).unwrap();
+        }
+        let listed = list_device_models(tmp.path(), "galbot").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "k1");
+        assert_eq!(listed[0].hash, real_hash);
+    }
+
+    #[test]
+    fn list_device_models_skips_oversized_json_candidate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let urdf = put_blob(tmp.path(), b"<robot name='real'/>").unwrap();
+        let mesh = put_blob(tmp.path(), b"mesh").unwrap();
+        let real = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "k1".into(),
+            body: DeviceModelBody {
+                model_id: "k1".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf,
+                    meshes: vec![MeshBlobRef {
+                        path: "meshes/body.stl".into(),
+                        sha256: mesh,
+                    }],
+                },
+                root_convention: None,
+            },
+        };
+        let real_hash = write_device_model(tmp.path(), &real).unwrap().hash().to_string();
+        let bomb_dir = auki_layout::device_models_peer_dir(tmp.path(), "galbot").join("bomb");
+        fs::create_dir_all(&bomb_dir).unwrap();
+        {
+            let f = fs::File::create(bomb_dir.join("deadbeefdeadbeefdeadbeefdeadbeef.json")).unwrap();
+            f.set_len(MAX_DEVICE_MODEL_ENTRY_BYTES + 1).unwrap();
+        }
+        let listed = list_device_models(tmp.path(), "galbot").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].hash, real_hash);
+    }
+
+    #[test]
+    fn list_device_models_peer_dir_as_file_is_io_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let peer_dir = auki_layout::device_models_peer_dir(tmp.path(), "galbot");
+        fs::create_dir_all(peer_dir.parent().unwrap()).unwrap();
+        fs::write(&peer_dir, b"not-a-directory").unwrap();
+        assert!(matches!(
+            list_device_models(tmp.path(), "galbot"),
+            Err(Error::Io(_))
+        ));
+    }
+
+    #[test]
+    fn read_device_model_rejects_oversized_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hash = "a".repeat(32);
+        let path = auki_layout::device_model_entry_path(tmp.path(), "galbot", "k1", &hash);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        {
+            let f = fs::File::create(&path).unwrap();
+            f.set_len(MAX_DEVICE_MODEL_ENTRY_BYTES + 1).unwrap();
+        }
+        assert!(matches!(
+            read_device_model(tmp.path(), "galbot", "k1", &hash),
+            Err(Error::InvalidBlob(_))
+        ));
+    }
+
+    #[test]
+    fn read_device_model_rejects_non_hex_hash() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            read_device_model(tmp.path(), "galbot", "k1", "../blobs/deadbeef"),
+            Err(Error::InvalidDeviceModel(_))
+        ));
+        assert!(matches!(
+            read_device_model(tmp.path(), "galbot", "k1", "not-a-hash"),
+            Err(Error::InvalidDeviceModel(_))
+        ));
+    }
+
+    #[test]
+    fn read_device_model_rejects_filename_hash_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let urdf = put_blob(tmp.path(), b"<robot name='test'/>").unwrap();
+        let entry = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "k1".into(),
+            body: DeviceModelBody {
+                model_id: "k1".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf,
+                    meshes: vec![],
+                },
+                root_convention: None,
+            },
+        };
+        let real_hash = entry.hash();
+        let wrong_hash = "b".repeat(32);
+        assert_ne!(real_hash, wrong_hash);
+        let path =
+            auki_layout::device_model_entry_path(tmp.path(), "galbot", "k1", &wrong_hash);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, entry.canonical_bytes()).unwrap();
+        assert!(matches!(
+            read_device_model(tmp.path(), "galbot", "k1", &wrong_hash),
+            Err(Error::IdMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn write_device_model_rejects_corrupt_existing_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let urdf = put_blob(tmp.path(), b"<robot name='test'/>").unwrap();
+        let entry = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "k1".into(),
+            body: DeviceModelBody {
+                model_id: "k1".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf,
+                    meshes: vec![],
+                },
+                root_convention: None,
+            },
+        };
+        let hash = entry.hash();
+        let path = auki_layout::device_model_entry_path(tmp.path(), "galbot", "k1", &hash);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"{\"not\":\"canonical\"}").unwrap();
+        assert!(matches!(
+            write_device_model(tmp.path(), &entry),
+            Err(Error::InvalidBlob(_))
+        ));
+        let tip = path.parent().unwrap().join("TIP");
+        assert!(!tip.exists());
+    }
+
+    #[test]
+    fn put_blob_rejects_oversized() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bytes = vec![0u8; (MAX_BLOB_BYTES as usize) + 1];
+        assert!(matches!(
+            put_blob(tmp.path(), &bytes),
+            Err(Error::InvalidBlob(_))
+        ));
+    }
+
+    #[test]
+    fn get_blob_rejects_oversized_on_disk_without_reading() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sha = "f".repeat(64);
+        let path = auki_layout::blob_path(tmp.path(), &sha);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Sparse file: size exceeds MAX_BLOB_BYTES without allocating the payload.
+        {
+            let f = fs::File::create(&path).unwrap();
+            f.set_len(MAX_BLOB_BYTES + 1).unwrap();
+        }
+        assert!(matches!(
+            get_blob(tmp.path(), &sha),
+            Err(Error::InvalidBlob(_))
+        ));
+    }
+
+
+
+    #[test]
+    fn read_blob_range_chunks_and_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let payload = b"abcdefghij";
+        let sha = put_blob(tmp.path(), payload).unwrap();
+        assert!(read_blob_range(tmp.path(), &"0".repeat(64), 0, 4)
+            .unwrap()
+            .is_none());
+        let range = read_blob_range(tmp.path(), &sha, 0, 4).unwrap().unwrap();
+        assert_eq!(range.total_size, 10);
+        assert_eq!(range.chunk, b"abcd");
+        let range = read_blob_range(tmp.path(), &sha, 8, 4).unwrap().unwrap();
+        assert_eq!(range.chunk, b"ij");
+        let eof = read_blob_range(tmp.path(), &sha, 10, 4).unwrap().unwrap();
+        assert!(eof.chunk.is_empty());
+        assert!(matches!(
+            read_blob_range(tmp.path(), &sha, 11, 4),
+            Err(Error::BlobOffsetPastEnd)
+        ));
+    }
+
+    #[test]
+    fn put_blob_rejects_existing_hash_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let payload = b"good-bytes";
+        let sha = sha256_hex(payload);
+        let path = auki_layout::blob_path(tmp.path(), &sha);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"garbage-at-this-sha").unwrap();
+        assert!(matches!(
+            put_blob(tmp.path(), payload),
+            Err(Error::BlobHashMismatch)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), b"garbage-at-this-sha");
+    }
+
+    #[test]
+    fn put_blob_is_idempotent_when_existing_matches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let payload = b"idempotent-bytes";
+        let sha = put_blob(tmp.path(), payload).unwrap();
+        assert_eq!(put_blob(tmp.path(), payload).unwrap(), sha);
+        assert_eq!(get_blob(tmp.path(), &sha).unwrap().unwrap(), payload);
+    }
+
+
+    #[test]
+    fn write_device_model_requires_blobs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let entry = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "missing".into(),
+            body: DeviceModelBody {
+                model_id: "missing".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: "a".repeat(64),
+                    meshes: vec![],
+                },
+                root_convention: None,
+            },
+        };
+        assert!(matches!(
+            write_device_model(tmp.path(), &entry),
+            Err(Error::InvalidDeviceModel(_))
+        ));
+    }
+
+    #[test]
+    fn write_device_model_rejects_hash_mismatched_blob() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fake_sha = "a".repeat(64);
+        let path = auki_layout::blob_path(tmp.path(), &fake_sha);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"garbage-not-matching-sha").unwrap();
+        let entry = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "bad".into(),
+            body: DeviceModelBody {
+                model_id: "bad".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: fake_sha,
+                    meshes: vec![],
+                },
+                root_convention: None,
+            },
+        };
+        assert!(matches!(
+            write_device_model(tmp.path(), &entry),
+            Err(Error::BlobHashMismatch)
+        ));
+        let tip = auki_layout::device_model_entry_path(tmp.path(), "galbot", "bad", "x")
+            .parent()
+            .unwrap()
+            .join("TIP");
+        assert!(!tip.exists());
+    }
+
+    fn evil_mesh_entry(path: &str, urdf_sha: String, mesh_sha: String) -> DeviceModelRegistryEntry {
+        DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "evil".into(),
+            body: DeviceModelBody {
+                model_id: "evil".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf_sha,
+                    meshes: vec![MeshBlobRef {
+                        path: path.into(),
+                        sha256: mesh_sha,
+                    }],
+                },
+                root_convention: None,
+            },
+        }
+    }
+
+    #[test]
+    fn device_model_validate_rejects_traversal_and_absolute_mesh_paths() {
+        let sha = "a".repeat(64);
+        for path in ["../etc/passwd", "meshes/../x.stl", "/etc/passwd", ""] {
+            let entry = evil_mesh_entry(path, sha.clone(), sha.clone());
+            assert!(
+                matches!(entry.validate(), Err(Error::InvalidDeviceModel(_))),
+                "expected reject for {path:?}"
+            );
+        }
+        let ok = evil_mesh_entry("meshes/body.stl", sha.clone(), sha);
+        assert!(ok.validate().is_ok());
+    }
+
+    #[test]
+    fn write_device_model_rejects_evil_mesh_path_without_writing_tip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let urdf = put_blob(tmp.path(), b"<robot/>").unwrap();
+        let mesh = put_blob(tmp.path(), b"mesh").unwrap();
+        let entry = evil_mesh_entry("../etc/passwd", urdf, mesh);
+        assert!(matches!(
+            write_device_model(tmp.path(), &entry),
+            Err(Error::InvalidDeviceModel(_))
+        ));
+        let tip = auki_layout::device_model_entry_path(tmp.path(), "galbot", "evil", "x")
+            .parent()
+            .unwrap()
+            .join("TIP");
+        assert!(!tip.exists());
+        assert!(list_device_models(tmp.path(), "galbot").unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_device_models_skips_planted_entry_with_evil_mesh_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let urdf = put_blob(tmp.path(), b"<robot/>").unwrap();
+        let mesh = put_blob(tmp.path(), b"mesh").unwrap();
+        // Bypass write_device_model: plant a JSON entry that would fail validate().
+        let entry = evil_mesh_entry("../etc/passwd", urdf, mesh);
+        let hash = entry.hash();
+        let path = auki_layout::device_model_entry_path(tmp.path(), "galbot", "evil", &hash);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, entry.canonical_bytes()).unwrap();
+        assert!(list_device_models(tmp.path(), "galbot").unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_device_models_skips_tip_when_referenced_blob_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let urdf = put_blob(tmp.path(), b"<robot name='gone'/>").unwrap();
+        let mesh = put_blob(tmp.path(), b"mesh").unwrap();
+        let entry = DeviceModelRegistryEntry {
+            peer_id: "galbot".into(),
+            device_model_id: "k1".into(),
+            body: DeviceModelBody {
+                model_id: "k1".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: urdf.clone(),
+                    meshes: vec![MeshBlobRef {
+                        path: "meshes/body.stl".into(),
+                        sha256: mesh,
+                    }],
+                },
+                root_convention: None,
+            },
+        };
+        write_device_model(tmp.path(), &entry).unwrap();
+        assert_eq!(list_device_models(tmp.path(), "galbot").unwrap().len(), 1);
+        fs::remove_file(auki_layout::blob_path(tmp.path(), &urdf)).unwrap();
+        // TIP and mtime fallback both go through the candidate loader.
+        assert!(list_device_models(tmp.path(), "galbot").unwrap().is_empty());
     }
 
     #[test]

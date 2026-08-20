@@ -13,6 +13,8 @@ auki-hash = { path = "../auki-hash" }
 auki-layout = { path = "../auki-layout" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
+quick-xml = "0.37"
 thiserror = "1"
 
 [dev-dependencies]

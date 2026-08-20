@@ -5,11 +5,14 @@
 //!
 //! ```text
 //! <app_root>/
+//! ├── blobs/<sha256>                                  ← shared binary blobs
 //! ├── registries/
 //! │   ├── sensors/<peer_id>/<sensor_id>/<hash>.json       ← shared across all sessions of this app
 //! │   ├── clocks/<peer_id>/<clock_id>/<hash>.json
 //! │   ├── frames/<peer_id>/<frame_id>/<hash>.json
-//! │   └── detectors/<peer_id>/<detector_id>/<hash>.json   ← Cuba T4
+//! │   ├── detectors/<peer_id>/<detector_id>/<hash>.json   ← Cuba T4
+//! │   ├── maps/<peer_id>/<map_id>/<hash>.json
+//! │   └── device_models/<peer_id>/<model_id>/<hash>.json  (+ TIP pointer)
 //! └── <session>/
 //!     ├── timetransform_logs/<from_id>__<to_id>/
 //!     │   ├── log_manifest.json
@@ -67,6 +70,8 @@ const CLOCKS_DIR: &str = "clocks";
 const FRAMES_DIR: &str = "frames";
 const DETECTORS_DIR: &str = "detectors"; // Cuba T4
 const MAPS_DIR: &str = "maps";
+const DEVICE_MODELS_DIR: &str = "device_models";
+const BLOBS_DIR: &str = "blobs";
 const TIMETRANSFORM_LOGS_DIR: &str = "timetransform_logs";
 const SENSORLOGS_DIR: &str = "sensorlogs";
 const POSELOGS_DIR: &str = "poselogs";
@@ -75,6 +80,17 @@ const DETECTION_LOGS_DIR: &str = "detection_logs";
 /// `<app_root>/registries`.
 pub fn registries_root(app_root: &Path) -> PathBuf {
     app_root.join(REGISTRIES_DIR)
+}
+
+/// `<app_root>/blobs`.
+pub fn blobs_root(app_root: &Path) -> PathBuf {
+    app_root.join(BLOBS_DIR)
+}
+
+/// `<app_root>/blobs/<sha256>`. Blob names are lowercase SHA-256 hex and are
+/// global to the application root, independent of the originating peer.
+pub fn blob_path(app_root: &Path, sha256: &str) -> PathBuf {
+    blobs_root(app_root).join(sha256)
 }
 
 /// `<app_root>/registries/sensors/<peer_id>/<sensor_id>/<hash>.json`.
@@ -138,6 +154,25 @@ pub fn map_entry_path(app_root: &Path, peer_id: &str, map_id: &str, hash: &str) 
         .join(MAPS_DIR)
         .join(id_to_segment(peer_id))
         .join(id_to_segment(map_id))
+        .join(format!("{hash}.json"))
+}
+
+/// `<app_root>/registries/device_models/<peer_id>`.
+pub fn device_models_peer_dir(app_root: &Path, peer_id: &str) -> PathBuf {
+    registries_root(app_root)
+        .join(DEVICE_MODELS_DIR)
+        .join(id_to_segment(peer_id))
+}
+
+/// `<app_root>/registries/device_models/<peer_id>/<model_id>/<hash>.json`.
+pub fn device_model_entry_path(
+    app_root: &Path,
+    peer_id: &str,
+    model_id: &str,
+    hash: &str,
+) -> PathBuf {
+    device_models_peer_dir(app_root, peer_id)
+        .join(id_to_segment(model_id))
         .join(format!("{hash}.json"))
 }
 
@@ -234,6 +269,28 @@ mod tests {
         assert_eq!(
             registries_root(&app()),
             PathBuf::from("/home/booster/auki/boosterapp/registries")
+        );
+    }
+
+    #[test]
+    fn blob_paths_are_global_to_app_root() {
+        assert_eq!(
+            blobs_root(&app()),
+            PathBuf::from("/home/booster/auki/boosterapp/blobs")
+        );
+        assert_eq!(
+            blob_path(&app(), "abc123"),
+            PathBuf::from("/home/booster/auki/boosterapp/blobs/abc123")
+        );
+    }
+
+    #[test]
+    fn device_model_entry_path_uses_device_models_namespace() {
+        assert_eq!(
+            device_model_entry_path(&app(), "galbot", "unitree/g1", "deadbeef"),
+            PathBuf::from(
+                "/home/booster/auki/boosterapp/registries/device_models/galbot/unitree__g1/deadbeef.json"
+            )
         );
     }
 

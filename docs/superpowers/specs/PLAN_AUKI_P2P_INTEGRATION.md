@@ -281,12 +281,13 @@ The accepted signed claim profile is also locked:
 | `domain_ids` | `1..=25` unique canonical DDS Domain UUIDs. |
 | `iat`, `exp` | Required numeric dates with the current exact 30-minute lifetime, subject to the bounded verifier skew fixed in the TODO. |
 
-`peer_type`, legacy `scopes`, application name/version, and other bounded
-signed metadata may be present for diagnostics and compatibility. They are not
-required authorization inputs and the base SDK does not reject an otherwise
-valid token merely because its principal is not Robot, Compute, or Domain
-Server. Unknown or unbounded token structures still fail the verifier's input
-bounds.
+`peer_type`, legacy `scopes`, and the optional typed
+`application: { name, version }` claim may be present for diagnostics and
+compatibility. They are not required authorization inputs and the base SDK does
+not reject an otherwise valid token merely because its principal is not Robot,
+Compute, or Domain Server. The TODO fixes explicit bounds for these known
+diagnostic fields; any other or unbounded token structure fails the verifier's
+input bounds.
 
 **Why it blocks the TODO:** Current `auki-p2p` knows only Robot, Compute, and
 Domain Server and hard-codes `domain-data:r`. The SDK includes native daemons,

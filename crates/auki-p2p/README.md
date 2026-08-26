@@ -27,7 +27,7 @@ messages and policy there. The protocol crate should:
 5. Export a narrow, cloneable service facade for its callers.
 
 The host application remains the composition root: it acquires and refreshes
-credentials, owns shutdown, constructs one `Node`/`P2pCredentialStore`/
+credentials, owns shutdown, constructs one `Node`/`DomainAuthority`/
 `RouteCatalog`, and gives those shared capabilities to each protocol crate.
 
 `auki-p2p-dataset` is the reference implementation of this pattern.

@@ -1011,6 +1011,7 @@ dependencies = [
  "jsonwebtoken",
  "libp2p",
  "libp2p-stream",
+ "p256",
  "parking_lot",
  "serde",
  "serde_json",

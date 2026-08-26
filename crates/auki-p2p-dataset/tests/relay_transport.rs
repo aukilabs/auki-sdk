@@ -16,10 +16,10 @@ use std::{
 };
 
 use auki_p2p::{
-    ApplicationProtocol, AuthenticatedStream, DdsTokenVerifier, ExpectedRelayLimits, Identity,
-    Multiaddr, Node, P2PAccessClaims, P2pCredentialStore, PeerId, PeerRole, Protocol,
-    RelayProvider, SessionRequirements, P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_SCOPE,
-    P2P_TOKEN_TTL, P2P_TOKEN_TYPE,
+    ApplicationProtocol, AuthenticatedStream, DdsTokenVerifier, DomainAuthority,
+    ExpectedRelayLimits, Identity, Multiaddr, Node, P2PAccessClaims, PeerId, PeerRole, Protocol,
+    RelayProvider, SessionRequirements, SignedP2pCredential, P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER,
+    P2P_TOKEN_SCOPE, P2P_TOKEN_TTL, P2P_TOKEN_TYPE,
 };
 use auki_p2p_dataset::{
     ConfirmedRelayRoute, DatasetRoutePolicy, P2pDatasetAdapter, P2pDatasetReference,
@@ -73,19 +73,24 @@ async fn direct_failure_then_relay_a_denial_then_relay_b_streams_the_full_datase
     let domain_id = Uuid::new_v4();
 
     let robot = node(&dns);
-    let robot_credentials = P2pCredentialStore::new(robot.clone());
+    let robot_credentials = robot.authority();
     install_current_token(&robot_credentials, &robot, PeerRole::Robot, domain_id).await;
 
     let compute = node(&dns);
-    let compute_credentials = P2pCredentialStore::new(compute.clone());
+    let compute_credentials = compute.authority();
     let compute_token =
         install_current_token(&compute_credentials, &compute, PeerRole::Compute, domain_id).await;
 
     // Copied authorization cannot authenticate a different Noise identity.
     let impostor = node(&dns);
     assert!(matches!(
-        impostor.install_token(compute_token.clone()).await,
-        Err(auki_p2p::Error::PeerIdMismatch { .. })
+        impostor
+            .authority()
+            .install_credential(SignedP2pCredential::new(compute_token.clone()).unwrap())
+            .await,
+        Err(auki_p2p::P2pCredentialError::InvalidAccessToken(
+            auki_p2p::Error::PeerIdMismatch { .. }
+        ))
     ));
     must_succeed(impostor.shutdown()).await;
 
@@ -146,7 +151,8 @@ async fn direct_failure_then_relay_a_denial_then_relay_b_streams_the_full_datase
         vec![route_a.to_string(), route_b.to_string()]
     );
 
-    let compute_adapter = P2pDatasetAdapter::new(compute.clone(), compute_credentials, Vec::new());
+    let compute_adapter =
+        P2pDatasetAdapter::new(compute.clone(), compute_credentials, Vec::new()).unwrap();
 
     // A reachable direct candidate must win without sending source-admission
     // or circuit requests to either captured relay.
@@ -244,20 +250,21 @@ async fn relay_a_midstream_failure_restarts_from_zero_on_relay_b() {
     let domain_id = Uuid::new_v4();
 
     let robot = node(&dns);
-    let robot_credentials = P2pCredentialStore::new(robot.clone());
+    let robot_credentials = robot.authority();
     install_current_token(&robot_credentials, &robot, PeerRole::Robot, domain_id).await;
     let mut incoming = robot
         .accept(
             ApplicationProtocol::new(DATASET_PROTOCOL).unwrap(),
-            SessionRequirements::new(domain_id.to_string(), PeerRole::Compute).unwrap(),
+            SessionRequirements::new(domain_id.to_string()).unwrap(),
         )
         .unwrap();
 
     let compute = node(&dns);
-    let compute_credentials = P2pCredentialStore::new(compute.clone());
+    let compute_credentials = compute.authority();
     let compute_token =
         install_current_token(&compute_credentials, &compute, PeerRole::Compute, domain_id).await;
-    let compute_adapter = P2pDatasetAdapter::new(compute.clone(), compute_credentials, Vec::new());
+    let compute_adapter =
+        P2pDatasetAdapter::new(compute.clone(), compute_credentials, Vec::new()).unwrap();
 
     let provider_a = relay_a.provider();
     let provider_b = relay_b.provider();
@@ -553,7 +560,7 @@ fn node(dns: &TestDns) -> Node {
 }
 
 async fn install_current_token(
-    credentials: &P2pCredentialStore,
+    credentials: &DomainAuthority,
     node: &Node,
     role: PeerRole,
     domain_id: Uuid,
@@ -565,11 +572,13 @@ async fn install_current_token(
         iss: P2P_TOKEN_ISSUER.into(),
         aud: vec![P2P_TOKEN_AUDIENCE.into()],
         sub: Uuid::new_v4().to_string(),
-        peer_type: role,
+        peer_type: Some(role.to_string()),
         peer_id: node.peer_id().to_string(),
         domain_ids: vec![domain_id.to_string()],
         scopes: vec![P2P_TOKEN_SCOPE.into()],
+        application: None,
         iat: issued_at,
+        nbf: None,
         exp: expires_at_unix,
     };
     let token = encode(
@@ -579,8 +588,8 @@ async fn install_current_token(
     )
     .unwrap();
     credentials
-        .install(
-            token.clone(),
+        .install_credential_checked(
+            SignedP2pCredential::new(token.clone()).unwrap(),
             DateTime::from_timestamp(expires_at_unix as i64, 0).unwrap(),
         )
         .await

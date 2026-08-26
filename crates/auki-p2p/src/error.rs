@@ -10,19 +10,45 @@ pub enum Error {
     IdentitySigning(String),
     #[error("invalid DDS verification key: {0}")]
     InvalidVerificationKey(#[from] jsonwebtoken::errors::Error),
+    #[error("invalid DDS verification-key set: {0}")]
+    InvalidVerificationKeySet(String),
+    #[error("DDS verification-key generation {proposed} is older than live generation {current}")]
+    StaleVerificationKeyGeneration { current: u64, proposed: u64 },
+    #[error("DDS verification-key generation {0} conflicts with the installed key material")]
+    VerificationKeyGenerationConflict(u64),
+    #[error("DDS verification-key rotation must retain the former current key as previous")]
+    VerificationKeyRotationMissingPrevious,
+    #[error("DDS previous verification key cannot be retired before its overlap expires")]
+    VerificationKeyOverlapActive,
+    #[error("DDS verification keys are stale; the host must refresh them")]
+    VerificationKeysStale,
     #[error("invalid DDS P2P token: {0}")]
     InvalidToken(String),
     #[error("DDS P2P token signature or registered claims are invalid: {0}")]
     TokenVerification(jsonwebtoken::errors::Error),
     #[error("no current DDS P2P token is installed")]
     MissingToken,
+    #[error(
+        "DDS P2P credential issued at {proposed_issued_at} is older than the current credential issued at {current_issued_at}"
+    )]
+    StaleCredential {
+        current_issued_at: u64,
+        proposed_issued_at: u64,
+    },
+    #[error("DDS P2P credentials issued at {0} carry conflicting signed claims")]
+    CredentialIssuedAtConflict(u64),
+    #[error(
+        "DDS P2P credential expiration {credential_expiration} does not match host response expiration {expected_expiration}"
+    )]
+    CredentialExpirationMismatch {
+        credential_expiration: u64,
+        expected_expiration: u64,
+    },
     #[error("token Peer ID {token_peer_id} does not match Noise Peer ID {noise_peer_id}")]
     PeerIdMismatch {
         token_peer_id: String,
         noise_peer_id: String,
     },
-    #[error("remote peer role {actual} is not allowed; expected {expected}")]
-    RemoteRoleMismatch { expected: String, actual: String },
     #[error("remote token is not authorized for required Domain {0}")]
     RemoteDomainMismatch(String),
     #[error("expected remote Peer ID {expected}, connected to {actual}")]

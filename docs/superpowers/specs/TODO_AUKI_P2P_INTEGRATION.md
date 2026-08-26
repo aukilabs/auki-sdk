@@ -70,6 +70,10 @@ choice.
 - Diagnostic `peer_type`, when present, is at most 64 visible ASCII bytes.
   Diagnostic scopes are at most 32 unique strings of at most 128 visible ASCII
   bytes each. They are never authorization.
+- Optional diagnostic application metadata has the exact signed JWT shape
+  `"application":{"name":"...","version":"..."}`. When present, both
+  `name` and `version` are required and each is `1..=64` visible ASCII bytes.
+  Unknown fields are rejected. Application metadata is never authorization.
 
 The public host boundary uses redacting owned wrappers with these meanings:
 

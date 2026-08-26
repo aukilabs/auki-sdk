@@ -1,7 +1,9 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     error::Error as StdError,
+    future::Future,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
     time::Duration,
 };
@@ -22,10 +24,11 @@ use libp2p::{
     tcp, yamux, Multiaddr, PeerId, Stream, StreamProtocol, Swarm, SwarmBuilder,
 };
 use libp2p_stream::{Behaviour as StreamBehaviour, IncomingStreams};
-use tokio::sync::{broadcast, mpsc, oneshot, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex as AsyncMutex};
 use uuid::Uuid;
 
 use crate::{
+    authority::DomainAuthority,
     relay::{
         canonicalize_provider_base, ObservedRelayLimits, RelayCancellation,
         RelayConfirmationRejection, RelayProvider, RelayReservationEvent, RelayReservationHandle,
@@ -33,14 +36,20 @@ use crate::{
     },
     relay_client, source_admission,
     targeted_stream::{TargetedStreamBehaviour, TargetedStreamControl},
-    token::{ensure_token_peer, DdsTokenVerifier, P2PAccessClaims, PeerRole, TokenStore},
+    token::{
+        ensure_literal_expiry, ensure_token_peer, unix_time_now, DdsTokenVerifier,
+        DdsVerificationKeys, P2PAccessClaims, SignedApplicationMetadata, SignedP2pCredential,
+        TokenStore, P2P_TOKEN_MAX_BYTES,
+    },
     Error, Identity, Result as P2PResult,
 };
 
-const MAX_TOKEN_BYTES: usize = 64 * 1024;
 const AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(10);
 const AUTH_ACCEPTED: u8 = 1;
 const AUTH_REJECTED: u8 = 0;
+const APPLICATION_PROTOCOL_MAX_BYTES: usize = 255;
+const APPLICATION_COMPONENT_MAX_BYTES: usize = 64;
+const VERSION_COMPONENT_MAX_BYTES: usize = 32;
 
 #[derive(NetworkBehaviour)]
 struct Behaviour {
@@ -55,19 +64,28 @@ pub struct ApplicationProtocol(StreamProtocol);
 impl ApplicationProtocol {
     pub fn new(value: impl Into<String>) -> P2PResult<Self> {
         let value = value.into();
+        if value.len() > APPLICATION_PROTOCOL_MAX_BYTES {
+            return Err(Error::InvalidProtocol(format!(
+                "protocol ID exceeds {APPLICATION_PROTOCOL_MAX_BYTES} bytes"
+            )));
+        }
         let components: Vec<_> = value.split('/').collect();
-        if components.len() < 4
-            || !components[0].is_empty()
-            || components[1] != "auki-p2p"
-            || components[2].is_empty()
-            || !components[3..].iter().any(|component| {
-                component
-                    .chars()
-                    .any(|character| character.is_ascii_digit())
-            })
-        {
+        let posemesh_application = components.len() == 4
+            && components[0].is_empty()
+            && components[1] == "auki-p2p"
+            && is_application_component(components[2])
+            && is_version_component(components.last().copied().unwrap_or_default());
+        let sdk_application = components.len() == 6
+            && components[0].is_empty()
+            && components[1] == "auki"
+            && components[2] == "auth"
+            && components[3] == "1"
+            && is_application_component(components[4])
+            && is_version_component(components[5]);
+        if !posemesh_application && !sdk_application {
             return Err(Error::InvalidProtocol(
-                "expected /auki-p2p/<application>/<version>".into(),
+                "expected /auki/auth/1/<application>/<version> or /auki-p2p/<application>/<version>"
+                    .into(),
             ));
         }
         let protocol = StreamProtocol::try_from_owned(value)
@@ -76,23 +94,63 @@ impl ApplicationProtocol {
     }
 }
 
+fn is_application_component(component: &str) -> bool {
+    if component.is_empty() || component.len() > APPLICATION_COMPONENT_MAX_BYTES {
+        return false;
+    }
+    let mut bytes = component.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    first.is_ascii_lowercase()
+        && bytes.all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
+        })
+}
+
+fn is_version_component(component: &str) -> bool {
+    if component.is_empty() || component.len() > VERSION_COMPONENT_MAX_BYTES {
+        return false;
+    }
+    let bytes = component.as_bytes();
+    bytes.first().is_some_and(u8::is_ascii_digit)
+        && bytes.last().is_some_and(u8::is_ascii_digit)
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'.' | b'-'))
+        && !bytes
+            .windows(2)
+            .any(|pair| !pair[0].is_ascii_digit() && !pair[1].is_ascii_digit())
+}
+
 #[derive(Clone, Debug)]
 pub struct SessionRequirements {
     domain_id: Uuid,
-    remote_role: PeerRole,
     expected_remote_peer_id: Option<PeerId>,
 }
 
 impl SessionRequirements {
-    pub fn new(domain_id: impl Into<String>, remote_role: PeerRole) -> P2PResult<Self> {
+    pub fn new(domain_id: impl Into<String>) -> P2PResult<Self> {
         let domain_id = domain_id.into();
-        let domain_id = Uuid::parse_str(&domain_id)
+        let parsed_domain_id = Uuid::parse_str(&domain_id)
             .map_err(|_| Error::InvalidToken("required Domain must be a UUID".into()))?;
+        if parsed_domain_id.to_string() != domain_id {
+            return Err(Error::InvalidToken(
+                "required Domain must be a canonical UUID".into(),
+            ));
+        }
         Ok(Self {
-            domain_id,
-            remote_role,
+            domain_id: parsed_domain_id,
             expected_remote_peer_id: None,
         })
+    }
+
+    pub fn domain_id(&self) -> Uuid {
+        self.domain_id
+    }
+
+    pub fn expected_remote_peer_id(&self) -> Option<PeerId> {
+        self.expected_remote_peer_id
     }
 
     pub fn with_expected_remote_peer_id(mut self, peer_id: PeerId) -> Self {
@@ -100,7 +158,7 @@ impl SessionRequirements {
         self
     }
 
-    fn validate(&self, claims: &P2PAccessClaims, noise_peer_id: PeerId) -> P2PResult<()> {
+    fn validate_remote(&self, claims: &P2PAccessClaims, noise_peer_id: PeerId) -> P2PResult<()> {
         if let Some(expected) = self.expected_remote_peer_id {
             if expected != noise_peer_id {
                 return Err(Error::UnexpectedRemotePeer {
@@ -109,12 +167,10 @@ impl SessionRequirements {
                 });
             }
         }
-        if claims.peer_type != self.remote_role {
-            return Err(Error::RemoteRoleMismatch {
-                expected: self.remote_role.to_string(),
-                actual: claims.peer_type.to_string(),
-            });
-        }
+        self.validate_domain(claims)
+    }
+
+    fn validate_domain(&self, claims: &P2PAccessClaims) -> P2PResult<()> {
         if !claims
             .domain_ids
             .iter()
@@ -127,12 +183,15 @@ impl SessionRequirements {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthenticatedPeer {
     pub peer_id: PeerId,
-    pub subject: String,
-    pub role: PeerRole,
-    pub domain_ids: Vec<String>,
+    pub subject: Uuid,
+    pub peer_type: Option<String>,
+    pub domain_ids: Vec<Uuid>,
+    pub scopes: Vec<String>,
+    pub application: Option<SignedApplicationMetadata>,
+    pub verified_until: chrono::DateTime<Utc>,
 }
 
 /// The public byte-stream boundary. The inner libp2p stream is deliberately not
@@ -266,6 +325,12 @@ impl IncomingAuthenticatedStreams {
     }
 }
 
+pub(crate) enum CurrentCredentialStatus {
+    Missing,
+    Expired,
+    Verified(Box<P2PAccessClaims>),
+}
+
 #[derive(Clone)]
 pub struct Node {
     node_instance_id: Uuid,
@@ -274,6 +339,7 @@ pub struct Node {
     targeted_control: TargetedStreamControl,
     tokens: TokenStore,
     verifier: DdsTokenVerifier,
+    authority_updates: Arc<AsyncMutex<()>>,
     command_sender: mpsc::Sender<Command>,
     listen_addresses: watch::Receiver<Vec<Multiaddr>>,
     relay_events: broadcast::Sender<RelayTransportEvent>,
@@ -376,28 +442,85 @@ impl Node {
             targeted_control,
             tokens: TokenStore::default(),
             verifier,
+            authority_updates: Arc::new(AsyncMutex::new(())),
             command_sender,
             listen_addresses: listen_receiver,
             relay_events,
         })
     }
 
-    pub fn identity(&self) -> &Identity {
-        &self.identity
-    }
-
     pub fn peer_id(&self) -> PeerId {
         self.identity.peer_id()
     }
 
-    pub async fn install_token(&self, token: impl Into<String>) -> P2PResult<P2PAccessClaims> {
+    pub fn authority(&self) -> DomainAuthority {
+        DomainAuthority::new(self.clone())
+    }
+
+    pub(crate) async fn install_verification_keys(
+        &self,
+        keys: DdsVerificationKeys,
+    ) -> P2PResult<()> {
+        let _authority_update = self.authority_updates.lock().await;
+        self.verifier.replace_keys(keys)
+    }
+
+    pub(crate) fn peer_public_key_protobuf(&self) -> Vec<u8> {
+        self.identity.public_key_protobuf()
+    }
+
+    pub(crate) fn sign_peer_challenge(&self, challenge: &[u8]) -> P2PResult<Vec<u8>> {
+        self.identity.sign_challenge(challenge)
+    }
+
+    pub(crate) async fn install_credential(
+        &self,
+        credential: SignedP2pCredential,
+    ) -> P2PResult<P2PAccessClaims> {
+        let _authority_update = self.authority_updates.lock().await;
         self.tokens
-            .install(token.into(), &self.verifier, self.peer_id())
+            .install(credential, &self.verifier, self.peer_id(), None)
             .await
     }
 
-    pub async fn clear_token(&self) {
+    pub(crate) async fn install_credential_checked(
+        &self,
+        credential: SignedP2pCredential,
+        expected_expiration: u64,
+    ) -> P2PResult<P2PAccessClaims> {
+        let _authority_update = self.authority_updates.lock().await;
+        self.tokens
+            .install(
+                credential,
+                &self.verifier,
+                self.peer_id(),
+                Some(expected_expiration),
+            )
+            .await
+    }
+
+    pub(crate) async fn clear_credential(&self) {
+        let _authority_update = self.authority_updates.lock().await;
         self.tokens.clear().await;
+    }
+
+    pub(crate) async fn current_credential_status(&self) -> P2PResult<CurrentCredentialStatus> {
+        let _authority_update = self.authority_updates.lock().await;
+        let Some((credential, installed_claims)) = self.tokens.snapshot_with_claims().await else {
+            return Ok(CurrentCredentialStatus::Missing);
+        };
+        let verified = self.verifier.verify(credential.as_str());
+        if installed_claims.exp <= unix_time_now() {
+            return Ok(CurrentCredentialStatus::Expired);
+        }
+        let claims = verified?;
+        ensure_token_peer(&claims, self.peer_id())?;
+        if claims != installed_claims {
+            return Err(Error::InvalidToken(
+                "installed credential claims changed during verification".into(),
+            ));
+        }
+        Ok(CurrentCredentialStatus::Verified(Box::new(claims)))
     }
 
     pub async fn first_listen_address(&self) -> P2PResult<Multiaddr> {
@@ -700,7 +823,7 @@ impl Node {
         domain_id: Uuid,
     ) -> P2PResult<chrono::DateTime<Utc>> {
         let token = self.tokens.snapshot().await.ok_or(Error::MissingToken)?;
-        let claims = self.verifier.verify(&token)?;
+        let claims = self.verifier.verify(token.as_str())?;
         ensure_token_peer(&claims, self.peer_id())?;
         if !claims
             .domain_ids
@@ -719,7 +842,7 @@ impl Node {
             source_admission::Request {
                 domain_id,
                 target_peer_id,
-                p2p_access_token: &token,
+                p2p_access_token: token.as_str(),
             },
             Utc::now,
         )
@@ -1980,19 +2103,15 @@ async fn authenticate(
     verifier: &DdsTokenVerifier,
     requirements: &SessionRequirements,
 ) -> P2PResult<AuthenticatedStream> {
-    tokio::time::timeout(
-        AUTHENTICATION_TIMEOUT,
-        authenticate_inner(
-            stream,
-            local_peer_id,
-            remote_peer_id,
-            tokens,
-            verifier,
-            requirements,
-        ),
+    authenticate_inner(
+        stream,
+        local_peer_id,
+        remote_peer_id,
+        tokens,
+        verifier,
+        requirements,
     )
     .await
-    .map_err(|_| Error::AuthenticationTimeout)?
 }
 
 async fn authenticate_inner(
@@ -2003,57 +2122,159 @@ async fn authenticate_inner(
     verifier: &DdsTokenVerifier,
     requirements: &SessionRequirements,
 ) -> P2PResult<AuthenticatedStream> {
-    let local_token = tokens.snapshot().await.unwrap_or_default();
-    write_token_frame(&mut stream, local_token.as_bytes()).await?;
-    let remote_token = read_token_frame(&mut stream).await;
+    let local_credential = tokens.snapshot().await;
+    let local_token = local_credential
+        .as_ref()
+        .map(SignedP2pCredential::as_str)
+        .unwrap_or_default();
+    authentication_phase(
+        AUTHENTICATION_TIMEOUT,
+        write_token_frame(&mut stream, local_token.as_bytes()),
+    )
+    .await?;
+    let remote_token =
+        authentication_phase(AUTHENTICATION_TIMEOUT, read_token_frame(&mut stream)).await;
 
     let local_result = if local_token.is_empty() {
         Err(Error::MissingToken)
     } else {
-        verifier
-            .verify(&local_token)
-            .and_then(|claims| ensure_token_peer(&claims, local_peer_id).map(|_| claims))
+        verifier.verify(local_token).and_then(|claims| {
+            ensure_token_peer(&claims, local_peer_id)?;
+            requirements.validate_domain(&claims)?;
+            Ok(claims)
+        })
     };
     let remote_result = remote_token.and_then(|token| {
         let token = String::from_utf8(token).map_err(|_| Error::InvalidTokenEncoding)?;
-        let claims = verifier.verify(&token)?;
+        let credential = SignedP2pCredential::new(token)?;
+        let claims = verifier.verify(credential.as_str())?;
         ensure_token_peer(&claims, remote_peer_id)?;
-        requirements.validate(&claims, remote_peer_id)?;
-        Ok(claims)
+        requirements.validate_remote(&claims, remote_peer_id)?;
+        Ok(credential)
     });
 
     let local_accepts = local_result.is_ok() && remote_result.is_ok();
-    stream
-        .write_all(&[if local_accepts {
-            AUTH_ACCEPTED
-        } else {
-            AUTH_REJECTED
-        }])
-        .await?;
-    stream.flush().await?;
+    authentication_phase(AUTHENTICATION_TIMEOUT, async {
+        stream
+            .write_all(&[if local_accepts {
+                AUTH_ACCEPTED
+            } else {
+                AUTH_REJECTED
+            }])
+            .await?;
+        stream.flush().await?;
+        Ok(())
+    })
+    .await?;
 
     let mut remote_status = [AUTH_REJECTED];
-    stream.read_exact(&mut remote_status).await?;
+    authentication_phase(AUTHENTICATION_TIMEOUT, async {
+        stream
+            .read_exact(&mut remote_status)
+            .await
+            .map(|_| ())
+            .map_err(Error::Io)
+    })
+    .await?;
     local_result?;
-    let remote_claims = remote_result?;
+    let remote_credential = remote_result?;
     if remote_status[0] != AUTH_ACCEPTED {
         return Err(Error::RemoteRejected);
     }
 
+    // Token verification happened before the mutual status exchange. Each
+    // bounded I/O phase may consume time, so literal `exp` must win once more
+    // at the exact boundary where an application stream would be exposed.
+    validate_current_local_authority(
+        tokens,
+        verifier,
+        local_peer_id,
+        requirements,
+        unix_time_now(),
+    )
+    .await?;
+    let remote = finalize_authenticated_peer(
+        &remote_credential,
+        verifier,
+        requirements,
+        remote_peer_id,
+        unix_time_now(),
+    )?;
     Ok(AuthenticatedStream {
         inner: stream,
-        remote: AuthenticatedPeer {
-            peer_id: remote_peer_id,
-            subject: remote_claims.sub,
-            role: remote_claims.peer_type,
-            domain_ids: remote_claims.domain_ids,
-        },
+        remote,
     })
 }
 
+async fn validate_current_local_authority(
+    tokens: &TokenStore,
+    verifier: &DdsTokenVerifier,
+    local_peer_id: PeerId,
+    requirements: &SessionRequirements,
+    now: u64,
+) -> P2PResult<()> {
+    let credential = tokens.snapshot().await.ok_or(Error::MissingToken)?;
+    let claims = verifier.verify(credential.as_str())?;
+    ensure_token_peer(&claims, local_peer_id)?;
+    requirements.validate_domain(&claims)?;
+    ensure_literal_expiry(&claims, now)
+}
+
+fn finalize_authenticated_peer(
+    remote_credential: &SignedP2pCredential,
+    verifier: &DdsTokenVerifier,
+    requirements: &SessionRequirements,
+    remote_peer_id: PeerId,
+    now: u64,
+) -> P2PResult<AuthenticatedPeer> {
+    let remote_claims = verifier.verify(remote_credential.as_str())?;
+    ensure_token_peer(&remote_claims, remote_peer_id)?;
+    requirements.validate_remote(&remote_claims, remote_peer_id)?;
+    ensure_literal_expiry(&remote_claims, now)?;
+    authenticated_peer_from_claims(remote_claims, remote_peer_id)
+}
+
+fn authenticated_peer_from_claims(
+    remote_claims: P2PAccessClaims,
+    remote_peer_id: PeerId,
+) -> P2PResult<AuthenticatedPeer> {
+    let subject = Uuid::parse_str(&remote_claims.sub)
+        .map_err(|_| Error::InvalidToken("subject must be a canonical UUID".into()))?;
+    let domain_ids = remote_claims
+        .domain_ids
+        .iter()
+        .map(|domain_id| {
+            Uuid::parse_str(domain_id)
+                .map_err(|_| Error::InvalidToken("domain_ids must contain canonical UUIDs".into()))
+        })
+        .collect::<P2PResult<Vec<_>>>()?;
+    let expiration = i64::try_from(remote_claims.exp)
+        .ok()
+        .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+        .ok_or_else(|| Error::InvalidToken("expiration is outside the supported range".into()))?;
+    Ok(AuthenticatedPeer {
+        peer_id: remote_peer_id,
+        subject,
+        peer_type: remote_claims.peer_type,
+        domain_ids,
+        scopes: remote_claims.scopes,
+        application: remote_claims.application,
+        verified_until: expiration,
+    })
+}
+
+async fn authentication_phase<T>(
+    timeout: Duration,
+    future: impl Future<Output = P2PResult<T>>,
+) -> P2PResult<T> {
+    tokio::time::timeout(timeout, future)
+        .await
+        .map_err(|_| Error::AuthenticationTimeout)?
+}
+
 async fn write_token_frame(stream: &mut Stream, token: &[u8]) -> P2PResult<()> {
-    if token.len() > MAX_TOKEN_BYTES {
-        return Err(Error::TokenFrameTooLarge(MAX_TOKEN_BYTES));
+    if token.len() > P2P_TOKEN_MAX_BYTES {
+        return Err(Error::TokenFrameTooLarge(P2P_TOKEN_MAX_BYTES));
     }
     stream
         .write_all(&(token.len() as u32).to_be_bytes())
@@ -2067,8 +2288,8 @@ async fn read_token_frame(stream: &mut Stream) -> P2PResult<Vec<u8>> {
     let mut length = [0_u8; 4];
     stream.read_exact(&mut length).await?;
     let length = u32::from_be_bytes(length) as usize;
-    if length > MAX_TOKEN_BYTES {
-        return Err(Error::TokenFrameTooLarge(MAX_TOKEN_BYTES));
+    if length > P2P_TOKEN_MAX_BYTES {
+        return Err(Error::TokenFrameTooLarge(P2P_TOKEN_MAX_BYTES));
     }
     let mut token = vec![0; length];
     stream.read_exact(&mut token).await?;
@@ -2077,11 +2298,177 @@ async fn read_token_frame(stream: &mut Stream) -> P2PResult<Vec<u8>> {
 
 #[cfg(test)]
 mod dial_error_tests {
-    use std::io;
+    use std::{future::pending, io};
 
     use hickory_resolver::{ResolveError, ResolveErrorKind};
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+
+    use crate::{P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_TTL, P2P_TOKEN_TYPE};
 
     use super::*;
+
+    #[tokio::test]
+    async fn each_authentication_phase_has_its_own_timeout() {
+        assert_eq!(
+            authentication_phase(Duration::from_secs(1), async { Ok::<_, Error>(7_u8) })
+                .await
+                .unwrap(),
+            7
+        );
+        assert!(matches!(
+            authentication_phase(Duration::from_millis(1), pending::<P2PResult<()>>()).await,
+            Err(Error::AuthenticationTimeout)
+        ));
+    }
+
+    #[tokio::test]
+    async fn final_local_authority_boundary_rejects_a_cleared_store() {
+        const PUBLIC_KEY: &[u8] = br#"-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
+8FKYQ5HDiJO0jg7CsFL0yIlK9dTW1wSZmwUX4REXM7LiuD1YWuXoNH1aqA==
+-----END PUBLIC KEY-----"#;
+        let identity = Identity::generate();
+        let tokens = TokenStore::default();
+        let verifier = DdsTokenVerifier::from_es256_pem(PUBLIC_KEY).unwrap();
+        let requirements = SessionRequirements::new(Uuid::nil().to_string()).unwrap();
+        assert!(matches!(
+            validate_current_local_authority(
+                &tokens,
+                &verifier,
+                identity.peer_id(),
+                &requirements,
+                1,
+            )
+            .await,
+            Err(Error::MissingToken)
+        ));
+    }
+
+    #[tokio::test]
+    async fn domain_authority_require_reverifies_against_the_live_key_ring() {
+        const PRIVATE_KEY: &[u8] = br#"-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQggm4twpf4y/yNNw/k
+fqecEEl4zBTwZdRDFUFp/fSxV8qhRANCAARUxrDWJ0AtEGTAYZ4412VPHqMCKoPw
+UphDkcOIk7SODsKwUvTIiUr11NbXBJmbBRfhERczsuK4PVha5eg0fVqo
+-----END PRIVATE KEY-----"#;
+        const PUBLIC_KEY: &[u8] = br#"-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
+8FKYQ5HDiJO0jg7CsFL0yIlK9dTW1wSZmwUX4REXM7LiuD1YWuXoNH1aqA==
+-----END PUBLIC KEY-----"#;
+        let identity = Identity::generate();
+        let peer_id = identity.peer_id();
+        let verifier = DdsTokenVerifier::from_es256_pem(PUBLIC_KEY).unwrap();
+        let node =
+            Node::start(identity, verifier.clone(), std::iter::empty::<Multiaddr>()).unwrap();
+        let authority = node.authority();
+        let domain_id = Uuid::new_v4();
+        let now = unix_time_now();
+        let claims = P2PAccessClaims {
+            token_type: P2P_TOKEN_TYPE.into(),
+            iss: P2P_TOKEN_ISSUER.into(),
+            aud: vec![P2P_TOKEN_AUDIENCE.into()],
+            sub: Uuid::new_v4().to_string(),
+            peer_type: None,
+            peer_id: peer_id.to_string(),
+            domain_ids: vec![domain_id.to_string()],
+            scopes: Vec::new(),
+            application: None,
+            iat: now,
+            nbf: None,
+            exp: now + P2P_TOKEN_TTL.as_secs(),
+        };
+        let signed = SignedP2pCredential::new(
+            encode(
+                &Header::new(Algorithm::ES256),
+                &claims,
+                &EncodingKey::from_ec_pem(PRIVATE_KEY).unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        authority.install_credential(signed).await.unwrap();
+        assert_eq!(authority.require(domain_id).await.unwrap(), claims);
+
+        verifier.make_stale_for_test();
+        assert!(matches!(
+            authority.require(domain_id).await,
+            Err(crate::P2pCredentialError::InvalidAccessToken(
+                Error::VerificationKeysStale
+            ))
+        ));
+        assert!(authority.current_claims().await.is_none());
+        node.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn final_mutual_handshake_boundary_reverifies_remote_authority_and_literal_expiry() {
+        const PRIVATE_KEY: &[u8] = br#"-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQggm4twpf4y/yNNw/k
+fqecEEl4zBTwZdRDFUFp/fSxV8qhRANCAARUxrDWJ0AtEGTAYZ4412VPHqMCKoPw
+UphDkcOIk7SODsKwUvTIiUr11NbXBJmbBRfhERczsuK4PVha5eg0fVqo
+-----END PRIVATE KEY-----"#;
+        const PUBLIC_KEY: &[u8] = br#"-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
+8FKYQ5HDiJO0jg7CsFL0yIlK9dTW1wSZmwUX4REXM7LiuD1YWuXoNH1aqA==
+-----END PUBLIC KEY-----"#;
+        const UNRELATED_PUBLIC_KEY: &[u8] = br#"-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAxcARQLozLIqu/CFm6ub89EElhHX
+O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
+-----END PUBLIC KEY-----"#;
+        let peer_id = Identity::generate().peer_id();
+        let domain_id = Uuid::new_v4();
+        let now = unix_time_now();
+        let claims = P2PAccessClaims {
+            token_type: P2P_TOKEN_TYPE.into(),
+            iss: P2P_TOKEN_ISSUER.into(),
+            aud: vec![P2P_TOKEN_AUDIENCE.into()],
+            sub: Uuid::nil().to_string(),
+            peer_type: None,
+            peer_id: peer_id.to_string(),
+            domain_ids: vec![domain_id.to_string()],
+            scopes: Vec::new(),
+            application: None,
+            iat: now,
+            nbf: None,
+            exp: now + P2P_TOKEN_TTL.as_secs(),
+        };
+        let signed = SignedP2pCredential::new(
+            encode(
+                &Header::new(Algorithm::ES256),
+                &claims,
+                &EncodingKey::from_ec_pem(PRIVATE_KEY).unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let requirements = SessionRequirements::new(domain_id.to_string()).unwrap();
+        let initial_verifier = DdsTokenVerifier::from_es256_pem(PUBLIC_KEY).unwrap();
+        assert_eq!(
+            finalize_authenticated_peer(&signed, &initial_verifier, &requirements, peer_id, now,)
+                .unwrap()
+                .verified_until
+                .timestamp(),
+            claims.exp as i64
+        );
+
+        // Simulates the key ring changing after the first verification but
+        // before the authenticated stream is exposed.
+        let changed_verifier = DdsTokenVerifier::from_es256_pem(UNRELATED_PUBLIC_KEY).unwrap();
+        assert!(matches!(
+            finalize_authenticated_peer(&signed, &changed_verifier, &requirements, peer_id, now,),
+            Err(Error::TokenVerification(_))
+        ));
+        assert!(matches!(
+            finalize_authenticated_peer(
+                &signed,
+                &initial_verifier,
+                &requirements,
+                peer_id,
+                claims.exp,
+            ),
+            Err(Error::InvalidToken(message)) if message.contains("literally expired")
+        ));
+    }
 
     #[test]
     fn dns_resolution_and_transport_dial_failures_remain_typed() {

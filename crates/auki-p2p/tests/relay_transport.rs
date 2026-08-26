@@ -12,8 +12,8 @@ use std::{
 
 use auki_p2p::{
     ApplicationProtocol, DdsTokenVerifier, ExpectedRelayLimits, Identity, Node, P2PAccessClaims,
-    PeerRole, RelayProvider, RelayReservationState, SessionRequirements, P2P_TOKEN_AUDIENCE,
-    P2P_TOKEN_ISSUER, P2P_TOKEN_SCOPE, P2P_TOKEN_TTL, P2P_TOKEN_TYPE,
+    PeerRole, RelayProvider, RelayReservationState, SessionRequirements, SignedP2pCredential,
+    P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_SCOPE, P2P_TOKEN_TTL, P2P_TOKEN_TYPE,
 };
 use chrono::{SecondsFormat, Utc};
 use futures::{
@@ -110,27 +110,20 @@ async fn three_real_relays_confirm_route_exactly_and_cancel_generation_safely() 
     let mut incoming = target
         .accept(
             protocol.clone(),
-            SessionRequirements::new(&domain_id, PeerRole::Compute).unwrap(),
+            SessionRequirements::new(&domain_id).unwrap(),
         )
         .unwrap();
     let target_peer_id = target.peer_id();
     let source_peer_id = source.peer_id();
     let application_server = tokio::spawn(async move {
-        let mut expected = [b'D', b'A', b'B', b'C', b'E'].into_iter();
-        let mut observed_role_denial = false;
-        while expected.len() != 0 || !observed_role_denial {
-            match incoming.accept().await.unwrap() {
-                Ok(mut stream) => {
-                    assert_eq!(stream.remote_peer().peer_id, source_peer_id);
-                    let mut request = [0; 1];
-                    stream.read_exact(&mut request).await.unwrap();
-                    let expected = expected.next().expect("unexpected application stream");
-                    assert_eq!(request[0], expected);
-                    stream.write_all(&request).await.unwrap();
-                    stream.flush().await.unwrap();
-                }
-                Err(_) => observed_role_denial = true,
-            }
+        for expected in [b'D', b'A', b'B', b'C', b'R', b'E'] {
+            let mut stream = incoming.accept().await.unwrap().unwrap();
+            assert_eq!(stream.remote_peer().peer_id, source_peer_id);
+            let mut request = [0; 1];
+            stream.read_exact(&mut request).await.unwrap();
+            assert_eq!(request[0], expected);
+            stream.write_all(&request).await.unwrap();
+            stream.flush().await.unwrap();
         }
     });
 
@@ -205,7 +198,7 @@ async fn three_real_relays_confirm_route_exactly_and_cancel_generation_safely() 
         target_peer_id,
     );
 
-    let requirements = SessionRequirements::new(&domain_id, PeerRole::Robot)
+    let requirements = SessionRequirements::new(&domain_id)
         .unwrap()
         .with_expected_remote_peer_id(target_peer_id);
     relay_c.set_admission_allowed(false);
@@ -224,7 +217,7 @@ async fn three_real_relays_confirm_route_exactly_and_cancel_generation_safely() 
     relay_c.set_admission_allowed(true);
 
     let wrong_domain = Uuid::new_v4().to_string();
-    let wrong_domain_requirements = SessionRequirements::new(&wrong_domain, PeerRole::Robot)
+    let wrong_domain_requirements = SessionRequirements::new(&wrong_domain)
         .unwrap()
         .with_expected_remote_peer_id(target_peer_id);
     assert!(matches!(
@@ -273,7 +266,7 @@ async fn three_real_relays_confirm_route_exactly_and_cancel_generation_safely() 
     let source_token =
         install_current_token(&source, PeerRole::Compute, vec![domain_id.clone()]).await;
 
-    let role_denied_route =
+    let role_neutral_route =
         must_succeed(source.connect_relayed(route_c.clone(), &requirements)).await;
     let observed = timeout(relay_c.admissions.recv()).await.unwrap();
     assert_admission(
@@ -283,14 +276,25 @@ async fn three_real_relays_confirm_route_exactly_and_cancel_generation_safely() 
         &domain_id,
         &source_token,
     );
-    let wrong_role = SessionRequirements::new(&domain_id, PeerRole::DomainServer)
+    let role_neutral_requirements = SessionRequirements::new(&domain_id)
         .unwrap()
         .with_expected_remote_peer_id(target_peer_id);
-    assert!(source
-        .open_relayed(&role_denied_route, protocol.clone(), wrong_role)
+    let mut role_neutral_stream = must_succeed(source.open_relayed(
+        &role_neutral_route,
+        protocol.clone(),
+        role_neutral_requirements,
+    ))
+    .await;
+    role_neutral_stream.write_all(b"R").await.unwrap();
+    role_neutral_stream.flush().await.unwrap();
+    let mut role_neutral_response = [0_u8; 1];
+    role_neutral_stream
+        .read_exact(&mut role_neutral_response)
         .await
-        .is_err());
-    must_succeed(source.close_relay_route(&role_denied_route)).await;
+        .unwrap();
+    assert_eq!(role_neutral_response, [b'R']);
+    drop(role_neutral_stream);
+    must_succeed(source.close_relay_route(&role_neutral_route)).await;
 
     must_succeed(target.cancel_relay_reservation(reservation_a)).await;
     assert_eq!(
@@ -342,7 +346,7 @@ async fn cancellation_barrier_closes_every_direct_relay_connection_before_recrea
     // serve this application protocol, so negotiation fails while each direct
     // transport connection remains alive until the reservation teardown.
     let protocol = ApplicationProtocol::new("/auki-p2p/cancel-probe/1").unwrap();
-    let requirements = SessionRequirements::new(&domain_id, PeerRole::Compute)
+    let requirements = SessionRequirements::new(&domain_id)
         .unwrap()
         .with_expected_remote_peer_id(relay.peer_id);
     for prefix in ["extra-one", "extra-two"] {
@@ -409,7 +413,7 @@ async fn cancellation_barrier_fences_a_direct_dial_that_establishes_late() {
     let late_peer_id = relay.peer_id;
     let late_address = relay.base("late").parse().unwrap();
     let late_protocol = ApplicationProtocol::new("/auki-p2p/cancel-late/1").unwrap();
-    let late_requirements = SessionRequirements::new(&domain_id, PeerRole::Compute)
+    let late_requirements = SessionRequirements::new(&domain_id)
         .unwrap()
         .with_expected_remote_peer_id(relay.peer_id);
     let late_open = tokio::spawn(async move {
@@ -513,7 +517,7 @@ async fn selected_relay_base_must_match_the_first_direct_connection() {
     install_current_token(&target, PeerRole::Robot, vec![domain_id.clone()]).await;
 
     let wrong_address = relay.base("z-relay").parse().unwrap();
-    let requirements = SessionRequirements::new(&domain_id, PeerRole::Compute)
+    let requirements = SessionRequirements::new(&domain_id)
         .unwrap()
         .with_expected_remote_peer_id(relay.peer_id);
     let protocol = ApplicationProtocol::new("/auki-p2p/wrong-base-probe/1").unwrap();
@@ -620,7 +624,7 @@ async fn an_established_circuit_may_open_after_its_connect_admission_expires() {
     let snapshot = must_succeed(target.wait_relay_reservation(reservation)).await;
     let route = snapshot.publishable_route().unwrap().clone();
     let target_peer_id = target.peer_id();
-    let requirements = SessionRequirements::new(&domain_id, PeerRole::Robot)
+    let requirements = SessionRequirements::new(&domain_id)
         .unwrap()
         .with_expected_remote_peer_id(target_peer_id);
     let route_handle = must_succeed(source.connect_relayed(route, &requirements)).await;
@@ -631,7 +635,7 @@ async fn an_established_circuit_may_open_after_its_connect_admission_expires() {
     let mut incoming = target
         .accept(
             protocol.clone(),
-            SessionRequirements::new(&domain_id, PeerRole::Compute).unwrap(),
+            SessionRequirements::new(&domain_id).unwrap(),
         )
         .unwrap();
     let server = tokio::spawn(async move {
@@ -672,7 +676,7 @@ async fn exchange_over_route(
     protocol: ApplicationProtocol,
     marker: u8,
 ) {
-    let requirements = SessionRequirements::new(domain_id, PeerRole::Robot)
+    let requirements = SessionRequirements::new(domain_id)
         .unwrap()
         .with_expected_remote_peer_id(target_peer_id);
     let route_handle = must_succeed(source.connect_relayed(route.clone(), &requirements)).await;
@@ -698,7 +702,7 @@ async fn exchange_direct(
 ) {
     let target_peer_id = target.peer_id();
     let target_address = must_succeed(target.first_listen_address()).await;
-    let requirements = SessionRequirements::new(domain_id, PeerRole::Robot)
+    let requirements = SessionRequirements::new(domain_id)
         .unwrap()
         .with_expected_remote_peer_id(target_peer_id);
     let mut stream =
@@ -1253,17 +1257,26 @@ fn node(dns: &TestDns) -> Node {
 }
 
 async fn install_current_token(node: &Node, role: PeerRole, domain_ids: Vec<String>) -> String {
+    let credentials = node.authority();
+    let issued_at = credentials
+        .current_claims()
+        .await
+        .map(|claims| claims.iat + 1)
+        .unwrap_or_else(unix_time)
+        .max(unix_time());
     let claims = P2PAccessClaims {
         token_type: P2P_TOKEN_TYPE.into(),
         iss: P2P_TOKEN_ISSUER.into(),
         aud: vec![P2P_TOKEN_AUDIENCE.into()],
         sub: Uuid::new_v4().to_string(),
-        peer_type: role,
+        peer_type: Some(role.to_string()),
         peer_id: node.peer_id().to_string(),
         domain_ids,
         scopes: vec![P2P_TOKEN_SCOPE.into()],
-        iat: unix_time(),
-        exp: unix_time() + P2P_TOKEN_TTL.as_secs(),
+        application: None,
+        iat: issued_at,
+        nbf: None,
+        exp: issued_at + P2P_TOKEN_TTL.as_secs(),
     };
     let token = encode(
         &Header::new(Algorithm::ES256),
@@ -1271,7 +1284,10 @@ async fn install_current_token(node: &Node, role: PeerRole, domain_ids: Vec<Stri
         &EncodingKey::from_ec_pem(TEST_DDS_PRIVATE_KEY).unwrap(),
     )
     .unwrap();
-    node.install_token(token.clone()).await.unwrap();
+    credentials
+        .install_credential(SignedP2pCredential::new(token.clone()).unwrap())
+        .await
+        .unwrap();
     token
 }
 

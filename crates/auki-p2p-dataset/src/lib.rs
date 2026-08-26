@@ -37,7 +37,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use uuid::Uuid;
 
-use auki_p2p::{P2pCredentialError, P2pCredentialStore};
+use auki_p2p::{DomainAuthority, P2pCredentialError};
 
 pub const DATASET_PROTOCOL: &str = "/auki-p2p/dataset/0";
 pub const P2P_DATASET_SCHEMA: &str = "auki-p2p-dataset/v0";
@@ -136,6 +136,16 @@ pub enum P2pDatasetError {
     Credential(#[source] P2pCredentialError),
     #[error("P2P dataset transport failed")]
     Transport(#[source] auki_p2p::Error),
+    #[error("P2P dataset local peer type must be {expected}; got {actual}")]
+    LocalPeerTypeMismatch {
+        expected: &'static str,
+        actual: String,
+    },
+    #[error("P2P dataset remote peer type must be {expected}; got {actual}")]
+    RemotePeerTypeMismatch {
+        expected: &'static str,
+        actual: String,
+    },
     #[error("P2P dataset file operation failed")]
     Io(#[source] std::io::Error),
     #[error("P2P dataset protocol payload is malformed")]
@@ -160,8 +170,8 @@ pub enum P2pDatasetError {
     ServingDomainMismatch,
     #[error("P2P dataset route catalog belongs to a different local Peer ID")]
     RouteCatalogPeerMismatch,
-    #[error("P2P dataset credential store belongs to a different local Peer ID")]
-    CredentialStorePeerMismatch,
+    #[error("P2P dataset authority belongs to a different local Peer ID")]
+    AuthorityPeerMismatch,
     #[error("P2P dataset service has no explicit advertised multiaddr")]
     MissingAdvertisedAddress,
     #[error("P2P dataset registrations are stopped")]
@@ -214,6 +224,37 @@ pub enum P2pDatasetError {
 
 pub type Result<T> = std::result::Result<T, P2pDatasetError>;
 
+async fn require_local_dataset_role(
+    authority: &DomainAuthority,
+    domain_id: Uuid,
+    expected: PeerRole,
+) -> Result<()> {
+    let claims = authority
+        .require(domain_id)
+        .await
+        .map_err(P2pDatasetError::Credential)?;
+    if claims.peer_type.as_deref() != Some(expected.as_str()) {
+        return Err(P2pDatasetError::LocalPeerTypeMismatch {
+            expected: expected.as_str(),
+            actual: claims.peer_type.unwrap_or_else(|| "<missing>".into()),
+        });
+    }
+    Ok(())
+}
+
+fn require_remote_dataset_role(
+    peer: &auki_p2p::AuthenticatedPeer,
+    expected: PeerRole,
+) -> Result<()> {
+    if peer.peer_type.as_deref() != Some(expected.as_str()) {
+        return Err(P2pDatasetError::RemotePeerTypeMismatch {
+            expected: expected.as_str(),
+            actual: peer.peer_type.clone().unwrap_or_else(|| "<missing>".into()),
+        });
+    }
+    Ok(())
+}
+
 /// Publication rule selected by the Robot host.
 ///
 /// `RelayRequired` deliberately covers both the `auto` and `always` booking
@@ -247,7 +288,7 @@ pub struct P2pDatasetAdapter {
 
 struct AdapterInner {
     node: Node,
-    credentials: P2pCredentialStore,
+    authority: DomainAuthority,
     routes: RouteCatalog,
     route_policy: DatasetRoutePolicy,
     state: parking_lot::Mutex<ServingState>,
@@ -367,15 +408,23 @@ impl P2pDatasetAdapter {
     /// Backwards-compatible direct-only constructor.
     pub fn new(
         node: Node,
-        credentials: P2pCredentialStore,
+        authority: DomainAuthority,
         advertised_multiaddrs: Vec<Multiaddr>,
-    ) -> Self {
+    ) -> Result<Self> {
+        if authority.peer_id() != node.peer_id() {
+            return Err(P2pDatasetError::AuthorityPeerMismatch);
+        }
         let routes = RouteCatalog::from_unvalidated_routes(
             node.peer_id(),
             advertised_multiaddrs,
             RouteCatalogLimits::new(MAX_PUBLISHED_ROUTES, MAX_CIRCUIT_ROUTES),
         );
-        Self::build(node, credentials, routes, DatasetRoutePolicy::DirectOnly)
+        Ok(Self::build(
+            node,
+            authority,
+            routes,
+            DatasetRoutePolicy::DirectOnly,
+        ))
     }
 
     /// Construct an adapter with an explicit publication policy.
@@ -386,12 +435,12 @@ impl P2pDatasetAdapter {
     /// circuit is installed.
     pub fn new_with_route_policy(
         node: Node,
-        credentials: P2pCredentialStore,
+        authority: DomainAuthority,
         direct_routes: Vec<Multiaddr>,
         route_policy: DatasetRoutePolicy,
     ) -> Result<Self> {
-        if credentials.peer_id() != node.peer_id() {
-            return Err(P2pDatasetError::CredentialStorePeerMismatch);
+        if authority.peer_id() != node.peer_id() {
+            return Err(P2pDatasetError::AuthorityPeerMismatch);
         }
         let routes = RouteCatalog::new(
             node.peer_id(),
@@ -399,28 +448,28 @@ impl P2pDatasetAdapter {
             RouteCatalogLimits::new(MAX_PUBLISHED_ROUTES, MAX_CIRCUIT_ROUTES),
         )
         .map_err(map_route_error)?;
-        Ok(Self::build(node, credentials, routes, route_policy))
+        Ok(Self::build(node, authority, routes, route_policy))
     }
 
     /// Construct a protocol adapter over a process-shared route catalog.
     pub fn with_route_catalog(
         node: Node,
-        credentials: P2pCredentialStore,
+        authority: DomainAuthority,
         routes: RouteCatalog,
         route_policy: DatasetRoutePolicy,
     ) -> Result<Self> {
-        if credentials.peer_id() != node.peer_id() {
-            return Err(P2pDatasetError::CredentialStorePeerMismatch);
+        if authority.peer_id() != node.peer_id() {
+            return Err(P2pDatasetError::AuthorityPeerMismatch);
         }
         if routes.local_peer_id() != node.peer_id() {
             return Err(P2pDatasetError::RouteCatalogPeerMismatch);
         }
-        Ok(Self::build(node, credentials, routes, route_policy))
+        Ok(Self::build(node, authority, routes, route_policy))
     }
 
     fn build(
         node: Node,
-        credentials: P2pCredentialStore,
+        authority: DomainAuthority,
         routes: RouteCatalog,
         route_policy: DatasetRoutePolicy,
     ) -> Self {
@@ -438,7 +487,7 @@ impl P2pDatasetAdapter {
         Self {
             inner: Arc::new(AdapterInner {
                 node,
-                credentials,
+                authority,
                 routes,
                 route_policy,
                 state: parking_lot::Mutex::new(state),
@@ -447,8 +496,8 @@ impl P2pDatasetAdapter {
         }
     }
 
-    pub fn credentials(&self) -> P2pCredentialStore {
-        self.inner.credentials.clone()
+    pub fn authority(&self) -> DomainAuthority {
+        self.inner.authority.clone()
     }
 
     pub fn route_catalog(&self) -> RouteCatalog {
@@ -605,16 +654,12 @@ impl P2pDatasetAdapter {
                 return Err(P2pDatasetError::ServingDomainMismatch);
             }
         }
-        self.inner
-            .credentials
-            .require(PeerRole::Robot, domain_id)
-            .await
-            .map_err(P2pDatasetError::Credential)?;
+        require_local_dataset_role(&self.inner.authority, domain_id, PeerRole::Robot).await?;
 
         let protocol =
             ApplicationProtocol::new(DATASET_PROTOCOL).map_err(P2pDatasetError::Transport)?;
-        let requirements = SessionRequirements::new(domain_id.to_string(), PeerRole::Compute)
-            .map_err(P2pDatasetError::Transport)?;
+        let requirements =
+            SessionRequirements::new(domain_id.to_string()).map_err(P2pDatasetError::Transport)?;
         {
             let mut state = self.inner.state.lock();
             if state.serving_domain.replace(domain_id).is_some() {
@@ -626,7 +671,7 @@ impl P2pDatasetAdapter {
         let server = self.inner.node.serve(spec, shutdown, move |stream| {
             let adapter = adapter.clone();
             async move {
-                if let Err(error) = adapter.serve_stream(stream).await {
+                if let Err(error) = adapter.serve_stream(stream, domain_id).await {
                     warn!(error = %error, "P2P dataset stream failed");
                 }
             }
@@ -689,11 +734,12 @@ impl P2pDatasetAdapter {
         if registration.available_until <= Utc::now() {
             return Err(P2pDatasetError::ExpiredDataset);
         }
-        self.inner
-            .credentials
-            .require(PeerRole::Robot, registration.domain_id)
-            .await
-            .map_err(P2pDatasetError::Credential)?;
+        require_local_dataset_role(
+            &self.inner.authority,
+            registration.domain_id,
+            PeerRole::Robot,
+        )
+        .await?;
 
         let path = fs::canonicalize(&registration.path)
             .await
@@ -725,11 +771,12 @@ impl P2pDatasetAdapter {
 
         // Endpoint authority is separate from relay authority. Revalidate it
         // immediately before the immutable reference commit.
-        self.inner
-            .credentials
-            .require(PeerRole::Robot, registration.domain_id)
-            .await
-            .map_err(P2pDatasetError::Credential)?;
+        require_local_dataset_role(
+            &self.inner.authority,
+            registration.domain_id,
+            PeerRole::Robot,
+        )
+        .await?;
 
         let mut registered = Some(registered);
         let mut dataset_id = Some(registration.dataset_id);
@@ -809,11 +856,12 @@ impl P2pDatasetAdapter {
         destination: &Path,
     ) -> Result<()> {
         let (peer_id, candidates) = validate_reference(reference)?;
-        self.inner
-            .credentials
-            .require(PeerRole::Compute, reference.domain_id)
-            .await
-            .map_err(P2pDatasetError::Credential)?;
+        require_local_dataset_role(
+            &self.inner.authority,
+            reference.domain_id,
+            PeerRole::Compute,
+        )
+        .await?;
 
         let parent = destination.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent)
@@ -822,10 +870,9 @@ impl P2pDatasetAdapter {
 
         let protocol =
             ApplicationProtocol::new(DATASET_PROTOCOL).map_err(P2pDatasetError::Transport)?;
-        let requirements =
-            SessionRequirements::new(reference.domain_id.to_string(), PeerRole::Robot)
-                .map_err(P2pDatasetError::Transport)?
-                .with_expected_remote_peer_id(peer_id);
+        let requirements = SessionRequirements::new(reference.domain_id.to_string())
+            .map_err(P2pDatasetError::Transport)?
+            .with_expected_remote_peer_id(peer_id);
 
         let mut last_error = None;
         let mut round_start = 0_usize;
@@ -860,6 +907,13 @@ impl P2pDatasetAdapter {
                     Err(P2pDatasetError::ExpiredDataset) => {
                         return Err(P2pDatasetError::ExpiredDataset);
                     }
+                    Err(error @ P2pDatasetError::RemotePeerTypeMismatch { .. }) => {
+                        return Err(error);
+                    }
+                    Err(error @ P2pDatasetError::LocalPeerTypeMismatch { .. })
+                    | Err(error @ P2pDatasetError::Credential(_)) => {
+                        return Err(error);
+                    }
                     Err(error) => {
                         warn!(
                             error = %error,
@@ -881,7 +935,12 @@ impl P2pDatasetAdapter {
             };
 
             let mut partial = PartialFileGuard::new(partial_path(destination));
-            let transfer = receive_dataset_stream(&mut opened, reference, partial.path());
+            let transfer = receive_dataset_stream(
+                &mut opened,
+                &self.inner.authority,
+                reference,
+                partial.path(),
+            );
             let result = match tokio::time::timeout_at(round_deadline, transfer).await {
                 Ok(Ok(())) if tokio::time::Instant::now() >= round_deadline => {
                     Err(P2pDatasetError::TransferTimeout)
@@ -960,6 +1019,26 @@ impl P2pDatasetAdapter {
                 candidate_timeout_error(availability_deadline, bounded_candidate_deadline)
             })?
             .map_err(P2pDatasetError::Transport)?;
+        if let Err(error) = require_remote_dataset_role(stream.remote_peer(), PeerRole::Robot) {
+            stream
+                .close()
+                .await
+                .map_err(P2pDatasetError::RelayRouteCleanup)?;
+            return Err(error);
+        }
+        if let Err(error) = require_local_dataset_role(
+            &self.inner.authority,
+            requirements.domain_id(),
+            PeerRole::Compute,
+        )
+        .await
+        {
+            stream
+                .close()
+                .await
+                .map_err(P2pDatasetError::RelayRouteCleanup)?;
+            return Err(error);
+        }
         if tokio::time::Instant::now() >= candidate_deadline {
             let timeout_error =
                 candidate_timeout_error(availability_deadline, bounded_candidate_deadline);
@@ -972,7 +1051,9 @@ impl P2pDatasetAdapter {
         Ok(stream)
     }
 
-    async fn serve_stream(&self, mut stream: AuthenticatedStream) -> Result<()> {
+    async fn serve_stream(&self, mut stream: AuthenticatedStream, domain_id: Uuid) -> Result<()> {
+        require_remote_dataset_role(stream.remote_peer(), PeerRole::Compute)?;
+        require_local_dataset_role(&self.inner.authority, domain_id, PeerRole::Robot).await?;
         let request: DatasetRequest = read_json_frame(&mut stream, MAX_REQUEST_BYTES).await?;
         if request.version != DATASET_REQUEST_VERSION {
             return Err(P2pDatasetError::UnsupportedRequestVersion);
@@ -981,11 +1062,8 @@ impl P2pDatasetAdapter {
         let (entry, _transfer_guard) = self.begin_transfer(&request.dataset_id)?;
 
         let transfer = async {
-            self.inner
-                .credentials
-                .require(PeerRole::Robot, entry.domain_id)
-                .await
-                .map_err(P2pDatasetError::Credential)?;
+            require_local_dataset_role(&self.inner.authority, entry.domain_id, PeerRole::Robot)
+                .await?;
             self.serve_registered_stream(stream, entry).await
         };
         match tokio::time::timeout(FETCH_ATTEMPT_TIMEOUT, transfer).await {
@@ -1069,19 +1147,18 @@ impl P2pDatasetAdapter {
 
 async fn receive_dataset_stream<S>(
     stream: &mut S,
+    authority: &DomainAuthority,
     reference: &P2pDatasetReference,
     temp_path: &Path,
 ) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    write_json_frame(
+    write_dataset_request(
         stream,
-        &DatasetRequest {
-            version: DATASET_REQUEST_VERSION,
-            dataset_id: reference.dataset_id.clone(),
-        },
-        MAX_REQUEST_BYTES,
+        authority,
+        reference.domain_id,
+        &reference.dataset_id,
     )
     .await?;
     stream.flush().await.map_err(P2pDatasetError::Io)?;
@@ -1133,6 +1210,31 @@ where
     file.sync_all().await.map_err(P2pDatasetError::Io)?;
     drop(file);
     Ok(())
+}
+
+async fn write_dataset_request<S>(
+    stream: &mut S,
+    authority: &DomainAuthority,
+    domain_id: Uuid,
+    dataset_id: &str,
+) -> Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
+    // Mutual authentication is intentionally role-neutral. Revalidate the
+    // current local Compute claim at the application-byte boundary so a
+    // credential rotation during dialing/authentication cannot authorize a
+    // dataset request under stale diagnostic metadata.
+    require_local_dataset_role(authority, domain_id, PeerRole::Compute).await?;
+    write_json_frame(
+        stream,
+        &DatasetRequest {
+            version: DATASET_REQUEST_VERSION,
+            dataset_id: dataset_id.to_owned(),
+        },
+        MAX_REQUEST_BYTES,
+    )
+    .await
 }
 
 fn utc_deadline_as_instant(deadline: DateTime<Utc>) -> tokio::time::Instant {
@@ -1585,8 +1687,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use auki_p2p::{
-        DdsTokenVerifier, ExpectedRelayLimits, Identity, P2PAccessClaims, P2P_TOKEN_AUDIENCE,
-        P2P_TOKEN_ISSUER, P2P_TOKEN_SCOPE, P2P_TOKEN_TTL, P2P_TOKEN_TYPE,
+        DdsTokenVerifier, ExpectedRelayLimits, Identity, P2PAccessClaims, SignedP2pCredential,
+        P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_SCOPE, P2P_TOKEN_TTL, P2P_TOKEN_TYPE,
     };
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
     use tempfile::TempDir;
@@ -1688,8 +1790,8 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
     async fn shared_runtime_components_must_belong_to_one_local_identity() {
         let first = unbound_node();
         let second = unbound_node();
-        let first_credentials = P2pCredentialStore::new(first.clone());
-        let second_credentials = P2pCredentialStore::new(second.clone());
+        let first_credentials = first.authority();
+        let second_credentials = second.authority();
         let first_routes = RouteCatalog::new(
             first.peer_id(),
             Vec::new(),
@@ -1704,13 +1806,17 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         .unwrap();
 
         assert!(matches!(
+            P2pDatasetAdapter::new(first.clone(), second_credentials.clone(), Vec::new()),
+            Err(P2pDatasetError::AuthorityPeerMismatch)
+        ));
+        assert!(matches!(
             P2pDatasetAdapter::with_route_catalog(
                 first.clone(),
                 second_credentials,
                 first_routes,
                 DatasetRoutePolicy::DirectOnly,
             ),
-            Err(P2pDatasetError::CredentialStorePeerMismatch)
+            Err(P2pDatasetError::AuthorityPeerMismatch)
         ));
         assert!(matches!(
             P2pDatasetAdapter::with_route_catalog(
@@ -1947,7 +2053,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
     #[tokio::test]
     async fn direct_and_circuit_routes_share_the_sixteen_route_bound() {
         let node = unbound_node();
-        let credentials = P2pCredentialStore::new(node.clone());
+        let credentials = node.authority();
         let adapter = P2pDatasetAdapter::new_with_route_policy(
             node.clone(),
             credentials,
@@ -1980,7 +2086,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
     #[tokio::test]
     async fn reading_serving_status_does_not_wake_its_own_drain_watcher() {
         let node = unbound_node();
-        let credentials = P2pCredentialStore::new(node.clone());
+        let credentials = node.authority();
         let adapter = P2pDatasetAdapter::new_with_route_policy(
             node.clone(),
             credentials,
@@ -2205,7 +2311,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         let domain_id = Uuid::new_v4();
         let robot = listening_node();
         let robot_address = listen_address(&robot).await;
-        let robot_credentials = P2pCredentialStore::new(robot.clone());
+        let robot_credentials = robot.authority();
         install_current_token(
             &robot_credentials,
             &robot,
@@ -2215,7 +2321,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         )
         .await;
         let robot_adapter =
-            P2pDatasetAdapter::new(robot.clone(), robot_credentials, vec![robot_address]);
+            P2pDatasetAdapter::new(robot.clone(), robot_credentials, vec![robot_address]).unwrap();
         let shutdown = CancellationToken::new();
         let server = robot_adapter
             .start_serving(domain_id, &shutdown)
@@ -2223,7 +2329,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             .unwrap();
 
         let compute = unbound_node();
-        let compute_credentials = P2pCredentialStore::new(compute.clone());
+        let compute_credentials = compute.authority();
         install_current_token(
             &compute_credentials,
             &compute,
@@ -2232,7 +2338,8 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             unix_time(),
         )
         .await;
-        let compute_adapter = P2pDatasetAdapter::new(compute.clone(), compute_credentials, vec![]);
+        let compute_adapter =
+            P2pDatasetAdapter::new(compute.clone(), compute_credentials, vec![]).unwrap();
 
         let temp = TempDir::new().unwrap();
         let first_bytes = zip_like_bytes(3 * TRANSFER_BUFFER_BYTES + 17);
@@ -2267,11 +2374,270 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn serving_peer_rejects_wrong_dataset_role_before_request_bytes() {
+        let domain_id = Uuid::new_v4();
+        let robot = listening_node();
+        let robot_address = listen_address(&robot).await;
+        let robot_credentials = robot.authority();
+        install_current_token(
+            &robot_credentials,
+            &robot,
+            PeerRole::Robot,
+            domain_id,
+            unix_time(),
+        )
+        .await;
+        let robot_authority = robot_credentials.clone();
+        let robot_adapter = P2pDatasetAdapter::new(
+            robot.clone(),
+            robot_credentials,
+            vec![robot_address.clone()],
+        )
+        .unwrap();
+        let shutdown = CancellationToken::new();
+        let server = robot_adapter
+            .start_serving(domain_id, &shutdown)
+            .await
+            .unwrap();
+
+        // A second Robot has valid base Domain authority, so mutual auth
+        // succeeds. The dataset policy must then close the stream before it
+        // attempts to read a DatasetRequest.
+        let wrong_source = unbound_node();
+        let wrong_credentials = wrong_source.authority();
+        install_current_token(
+            &wrong_credentials,
+            &wrong_source,
+            PeerRole::Robot,
+            domain_id,
+            unix_time(),
+        )
+        .await;
+        let mut stream = wrong_source
+            .open(
+                robot.peer_id(),
+                vec![robot_address.clone()],
+                ApplicationProtocol::new(DATASET_PROTOCOL).unwrap(),
+                SessionRequirements::new(domain_id.to_string())
+                    .unwrap()
+                    .with_expected_remote_peer_id(robot.peer_id()),
+            )
+            .await
+            .unwrap();
+        let mut application_byte = [0_u8; 1];
+        let read = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut application_byte))
+            .await
+            .expect("dataset server waited for request bytes from a disallowed peer")
+            .unwrap();
+        assert_eq!(read, 0);
+
+        // Rotation can change diagnostic metadata without changing valid base
+        // Domain authority. The dataset server re-checks its local Robot rule
+        // for each stream, before consuming a request.
+        let next_issued_at = robot_authority.current_claims().await.unwrap().iat + 1;
+        install_current_token(
+            &robot_authority,
+            &robot,
+            PeerRole::Compute,
+            domain_id,
+            next_issued_at,
+        )
+        .await;
+        let correct_source = unbound_node();
+        let correct_credentials = correct_source.authority();
+        install_current_token(
+            &correct_credentials,
+            &correct_source,
+            PeerRole::Compute,
+            domain_id,
+            unix_time(),
+        )
+        .await;
+        let mut stream = correct_source
+            .open(
+                robot.peer_id(),
+                vec![robot_address],
+                ApplicationProtocol::new(DATASET_PROTOCOL).unwrap(),
+                SessionRequirements::new(domain_id.to_string())
+                    .unwrap()
+                    .with_expected_remote_peer_id(robot.peer_id()),
+            )
+            .await
+            .unwrap();
+        let read = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut application_byte))
+            .await
+            .expect("dataset server waited for bytes after losing local Robot authority")
+            .unwrap();
+        assert_eq!(read, 0);
+
+        server.shutdown().await.unwrap();
+        robot.shutdown().await.unwrap();
+        wrong_source.shutdown().await.unwrap();
+        correct_source.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fetching_peer_rejects_wrong_dataset_role_before_sending_request_bytes() {
+        let domain_id = Uuid::new_v4();
+        let wrong_target = listening_node();
+        let wrong_target_address = listen_address(&wrong_target).await;
+        let wrong_target_credentials = wrong_target.authority();
+        install_current_token(
+            &wrong_target_credentials,
+            &wrong_target,
+            PeerRole::Compute,
+            domain_id,
+            unix_time(),
+        )
+        .await;
+        let mut incoming = wrong_target
+            .accept(
+                ApplicationProtocol::new(DATASET_PROTOCOL).unwrap(),
+                SessionRequirements::new(domain_id.to_string()).unwrap(),
+            )
+            .unwrap();
+        let target = tokio::spawn(async move {
+            let mut stream = incoming.accept().await.unwrap().unwrap();
+            let mut application_byte = [0_u8; 1];
+            stream.read(&mut application_byte).await.unwrap()
+        });
+
+        let compute = unbound_node();
+        let compute_credentials = compute.authority();
+        install_current_token(
+            &compute_credentials,
+            &compute,
+            PeerRole::Compute,
+            domain_id,
+            unix_time(),
+        )
+        .await;
+        let compute_adapter =
+            P2pDatasetAdapter::new(compute.clone(), compute_credentials, vec![]).unwrap();
+        let temp = TempDir::new().unwrap();
+        let result = compute_adapter
+            .fetch_dataset(
+                &P2pDatasetReference {
+                    schema: P2P_DATASET_SCHEMA.into(),
+                    dataset_id: "wrong-target-role".into(),
+                    domain_id,
+                    name: "wrong-target-role.zip".into(),
+                    peer_id: wrong_target.peer_id().to_string(),
+                    multiaddrs: vec![wrong_target_address.to_string()],
+                    size_bytes: 1,
+                    sha256: hex::encode(Sha256::digest(b"x")),
+                    available_until: Utc::now() + chrono::Duration::minutes(5),
+                },
+                &temp.path().join("should-not-exist.zip"),
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(P2pDatasetError::RemotePeerTypeMismatch { .. })
+        ));
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), target)
+                .await
+                .expect("dataset client did not close the disallowed stream")
+                .unwrap(),
+            0,
+            "dataset request bytes reached a disallowed peer"
+        );
+
+        wrong_target.shutdown().await.unwrap();
+        compute.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn local_role_rotation_after_auth_is_rejected_before_request_bytes() {
+        let domain_id = Uuid::new_v4();
+        let robot = listening_node();
+        let robot_address = listen_address(&robot).await;
+        let robot_authority = robot.authority();
+        install_current_token(
+            &robot_authority,
+            &robot,
+            PeerRole::Robot,
+            domain_id,
+            unix_time(),
+        )
+        .await;
+        let mut incoming = robot
+            .accept(
+                ApplicationProtocol::new(DATASET_PROTOCOL).unwrap(),
+                SessionRequirements::new(domain_id.to_string()).unwrap(),
+            )
+            .unwrap();
+        let target = tokio::spawn(async move {
+            let mut stream = incoming.accept().await.unwrap().unwrap();
+            let mut application_byte = [0_u8; 1];
+            stream.read(&mut application_byte).await.unwrap()
+        });
+
+        let compute = unbound_node();
+        let compute_authority = compute.authority();
+        install_current_token(
+            &compute_authority,
+            &compute,
+            PeerRole::Compute,
+            domain_id,
+            unix_time(),
+        )
+        .await;
+        let mut stream = compute
+            .open(
+                robot.peer_id(),
+                vec![robot_address],
+                ApplicationProtocol::new(DATASET_PROTOCOL).unwrap(),
+                SessionRequirements::new(domain_id.to_string())
+                    .unwrap()
+                    .with_expected_remote_peer_id(robot.peer_id()),
+            )
+            .await
+            .unwrap();
+
+        // Mutual authentication completed while this peer was Compute. Rotate
+        // its live credential before the application request boundary and
+        // prove that not even the length prefix reaches the Robot.
+        let next_issued_at = compute_authority.current_claims().await.unwrap().iat + 1;
+        install_current_token(
+            &compute_authority,
+            &compute,
+            PeerRole::Robot,
+            domain_id,
+            next_issued_at,
+        )
+        .await;
+        assert!(matches!(
+            write_dataset_request(
+                &mut stream,
+                &compute_authority,
+                domain_id,
+                "rotated-after-auth",
+            )
+            .await,
+            Err(P2pDatasetError::LocalPeerTypeMismatch { .. })
+        ));
+        stream.close().await.unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), target)
+                .await
+                .expect("dataset client left the rejected stream open")
+                .unwrap(),
+            0,
+            "dataset request bytes escaped after local role rotation"
+        );
+
+        robot.shutdown().await.unwrap();
+        compute.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn unknown_expired_and_mismatched_references_fail_without_partial_files() {
         let domain_id = Uuid::new_v4();
         let robot = listening_node();
         let robot_address = listen_address(&robot).await;
-        let robot_credentials = P2pCredentialStore::new(robot.clone());
+        let robot_credentials = robot.authority();
         install_current_token(
             &robot_credentials,
             &robot,
@@ -2281,7 +2647,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         )
         .await;
         let robot_adapter =
-            P2pDatasetAdapter::new(robot.clone(), robot_credentials, vec![robot_address]);
+            P2pDatasetAdapter::new(robot.clone(), robot_credentials, vec![robot_address]).unwrap();
         let shutdown = CancellationToken::new();
         let server = robot_adapter
             .start_serving(domain_id, &shutdown)
@@ -2289,7 +2655,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             .unwrap();
 
         let compute = unbound_node();
-        let compute_credentials = P2pCredentialStore::new(compute.clone());
+        let compute_credentials = compute.authority();
         install_current_token(
             &compute_credentials,
             &compute,
@@ -2298,7 +2664,8 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             unix_time(),
         )
         .await;
-        let compute_adapter = P2pDatasetAdapter::new(compute.clone(), compute_credentials, vec![]);
+        let compute_adapter =
+            P2pDatasetAdapter::new(compute.clone(), compute_credentials, vec![]).unwrap();
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("source.zip");
         fs::write(&source, zip_like_bytes(4096)).await.unwrap();
@@ -2355,7 +2722,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
 
         let robot = listening_node();
         let robot_address = listen_address(&robot).await;
-        let robot_credentials = P2pCredentialStore::new(robot.clone());
+        let robot_credentials = robot.authority();
         install_current_token(
             &robot_credentials,
             &robot,
@@ -2367,12 +2734,12 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         let mut incoming = robot
             .accept(
                 ApplicationProtocol::new(DATASET_PROTOCOL).unwrap(),
-                SessionRequirements::new(domain_id.to_string(), PeerRole::Compute).unwrap(),
+                SessionRequirements::new(domain_id.to_string()).unwrap(),
             )
             .unwrap();
 
         let compute = unbound_node();
-        let compute_credentials = P2pCredentialStore::new(compute.clone());
+        let compute_credentials = compute.authority();
         install_current_token(
             &compute_credentials,
             &compute,
@@ -2381,7 +2748,8 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             unix_time(),
         )
         .await;
-        let compute_adapter = P2pDatasetAdapter::new(compute.clone(), compute_credentials, vec![]);
+        let compute_adapter =
+            P2pDatasetAdapter::new(compute.clone(), compute_credentials, vec![]).unwrap();
         let reference = |dataset_id: &str| P2pDatasetReference {
             schema: P2P_DATASET_SCHEMA.into(),
             dataset_id: dataset_id.into(),
@@ -2472,7 +2840,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
 
         let robot = listening_node();
         let robot_address = listen_address(&robot).await;
-        let robot_credentials = P2pCredentialStore::new(robot.clone());
+        let robot_credentials = robot.authority();
         install_current_token(
             &robot_credentials,
             &robot,
@@ -2485,12 +2853,12 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         let mut incoming = robot
             .accept(
                 protocol,
-                SessionRequirements::new(domain_id.to_string(), PeerRole::Compute).unwrap(),
+                SessionRequirements::new(domain_id.to_string()).unwrap(),
             )
             .unwrap();
 
         let compute = unbound_node();
-        let compute_credentials = P2pCredentialStore::new(compute.clone());
+        let compute_credentials = compute.authority();
         install_current_token(
             &compute_credentials,
             &compute,
@@ -2499,7 +2867,8 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             unix_time(),
         )
         .await;
-        let compute_adapter = P2pDatasetAdapter::new(compute.clone(), compute_credentials, vec![]);
+        let compute_adapter =
+            P2pDatasetAdapter::new(compute.clone(), compute_credentials, vec![]).unwrap();
         let reference = P2pDatasetReference {
             schema: P2P_DATASET_SCHEMA.into(),
             dataset_id: "retry-dataset".into(),
@@ -2562,8 +2931,8 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
     async fn missing_and_expired_compute_credentials_fail_before_dial() {
         let domain_id = Uuid::new_v4();
         let compute = unbound_node();
-        let credentials = P2pCredentialStore::new(compute.clone());
-        let adapter = P2pDatasetAdapter::new(compute.clone(), credentials.clone(), vec![]);
+        let credentials = compute.authority();
+        let adapter = P2pDatasetAdapter::new(compute.clone(), credentials.clone(), vec![]).unwrap();
         let reference = unreachable_reference(domain_id);
         let temp = TempDir::new().unwrap();
 
@@ -2600,7 +2969,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
 
     async fn relay_serving_adapter(domain_id: Uuid) -> (Node, P2pDatasetAdapter, P2pDatasetServer) {
         let node = unbound_node();
-        let credentials = P2pCredentialStore::new(node.clone());
+        let credentials = node.authority();
         install_current_token(&credentials, &node, PeerRole::Robot, domain_id, unix_time()).await;
         let adapter = P2pDatasetAdapter::new_with_route_policy(
             node.clone(),
@@ -2693,7 +3062,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
     }
 
     async fn install_current_token(
-        credentials: &P2pCredentialStore,
+        credentials: &DomainAuthority,
         node: &Node,
         role: PeerRole,
         domain_id: Uuid,
@@ -2705,11 +3074,13 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             iss: P2P_TOKEN_ISSUER.into(),
             aud: vec![P2P_TOKEN_AUDIENCE.into()],
             sub: Uuid::new_v4().to_string(),
-            peer_type: role,
+            peer_type: Some(role.to_string()),
             peer_id: node.peer_id().to_string(),
             domain_ids: vec![domain_id.to_string()],
             scopes: vec![P2P_TOKEN_SCOPE.into()],
+            application: None,
             iat: issued_at,
+            nbf: None,
             exp: expires_at_unix,
         };
         let token = encode(
@@ -2719,8 +3090,8 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         )
         .unwrap();
         credentials
-            .install(
-                token,
+            .install_credential_checked(
+                SignedP2pCredential::new(token).unwrap(),
                 DateTime::from_timestamp(expires_at_unix as i64, 0).unwrap(),
             )
             .await

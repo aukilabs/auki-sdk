@@ -10,7 +10,7 @@ The crate exports two layers:
 - `DatasetService`, a narrow cloneable facade that dataset-aware runners take
   explicitly in their constructors.
 
-The host constructs the adapter with its shared `Node`, `P2pCredentialStore`,
+The host constructs the adapter with its shared `Node`, `DomainAuthority`,
 and `RouteCatalog`. A DMS relay-booking coordinator publishes and tombstones
 generic confirmed routes in that catalog; it never calls into dataset internals.
 The dataset protocol selects eligible routes at reference commit and revalidates

@@ -17,7 +17,7 @@ mod targeted_stream;
 mod token;
 mod transport;
 
-pub use authority::{P2pCredentialError, P2pCredentialResult, P2pCredentialStore};
+pub use authority::{DomainAuthority, P2pCredentialError, P2pCredentialResult};
 pub use error::{Error, Result};
 pub use identity::Identity;
 pub use libp2p::{multiaddr::Protocol, Multiaddr, PeerId};
@@ -33,8 +33,13 @@ pub use routing::{
 pub use runtime::{AuthenticatedRouteStream, ExactRoute, ProtocolServer, ProtocolSpec};
 pub use targeted_stream::TargetedStreamError;
 pub use token::{
-    DdsTokenVerifier, P2PAccessClaims, PeerRole, DOMAIN_SERVER_MAX_DOMAINS, P2P_TOKEN_AUDIENCE,
-    P2P_TOKEN_ISSUER, P2P_TOKEN_SCOPE, P2P_TOKEN_TTL, P2P_TOKEN_TYPE,
+    DdsTokenVerifier, DdsVerificationKeys, P2PAccessClaims, PeerRole, SignedApplicationMetadata,
+    SignedP2pCredential, DDS_PREVIOUS_KEY_MIN_OVERLAP, DDS_VERIFICATION_KEYS_MAX_STALENESS,
+    DDS_VERIFICATION_KEY_MAX_BYTES, DOMAIN_SERVER_MAX_DOMAINS, P2P_TOKEN_AUDIENCE,
+    P2P_TOKEN_CLOCK_SKEW, P2P_TOKEN_ISSUER, P2P_TOKEN_MAX_APPLICATION_NAME_BYTES,
+    P2P_TOKEN_MAX_APPLICATION_VERSION_BYTES, P2P_TOKEN_MAX_BYTES, P2P_TOKEN_MAX_PEER_TYPE_BYTES,
+    P2P_TOKEN_MAX_SCOPES, P2P_TOKEN_MAX_SCOPE_BYTES, P2P_TOKEN_SCOPE, P2P_TOKEN_TTL,
+    P2P_TOKEN_TYPE,
 };
 pub use transport::{
     ApplicationProtocol, AuthenticatedPeer, AuthenticatedStream, IncomingAuthenticatedStreams,

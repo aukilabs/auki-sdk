@@ -89,7 +89,7 @@ impl Identity {
 
     /// Signs the exact challenge bytes supplied by DDS without hashing,
     /// prefixing, or otherwise transforming them first.
-    pub fn sign_challenge(&self, challenge: &[u8]) -> Result<Vec<u8>> {
+    pub(crate) fn sign_challenge(&self, challenge: &[u8]) -> Result<Vec<u8>> {
         self.keypair
             .sign(challenge)
             .map_err(|error| Error::IdentitySigning(error.to_string()))

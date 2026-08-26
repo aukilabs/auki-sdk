@@ -80,5 +80,6 @@ tempfile = "3"
 # `ClusterManager::create_cluster`). Matches `auki-network`'s libp2p
 # feature set.
 libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "macros"] }
+libp2p-stream = "=0.4.0-alpha"
 futures = "0.3"
 jsonwebtoken = "9"

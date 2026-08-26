@@ -6,6 +6,7 @@
 pub(crate) mod authority;
 pub(crate) mod peers;
 pub(crate) mod protocols;
+pub(crate) mod resources_v2;
 pub(crate) mod routes;
 pub(crate) mod status;
 
@@ -28,6 +29,7 @@ use uuid::Uuid;
 use authority::{DomainAuthority, DomainAuthorityError};
 use peers::DomainPeers;
 use protocols::{DomainProtocolError, DomainProtocols};
+use resources_v2::{ResourcesV2, ResourcesV2Error};
 use routes::{DomainRoutes, DomainRoutesError};
 use status::{DomainFailure, DomainStatus};
 
@@ -143,6 +145,8 @@ pub(crate) struct AuthenticatedDomain {
     routes: DomainRoutes,
     peers: DomainPeers,
     protocols: DomainProtocols,
+    resources_v2: ResourcesV2,
+    resources_v2_registration: Option<protocols::DomainProtocolRegistration>,
     listen_addresses: Vec<Multiaddr>,
     supervisor: Option<JoinHandle<()>>,
     authority_expiry: Option<JoinHandle<()>>,
@@ -209,6 +213,17 @@ impl AuthenticatedDomain {
         let peers = DomainPeers::new(config.domain_id, observations.clone(), lifecycle.clone());
         let (fatal_sender, fatal_receiver) = mpsc::unbounded_channel();
         let protocols = DomainProtocols::new(Arc::clone(&access), routes.clone(), fatal_sender);
+        let resources_v2 = ResourcesV2::new(protocols.clone(), lifecycle.clone());
+        let resources_v2_registration = match resources_v2.register() {
+            Ok(registration) => registration,
+            Err(error) => {
+                return Err(rollback_join_error(
+                    &access,
+                    AuthenticatedDomainError::ResourcesV2(error),
+                )
+                .await);
+            }
+        };
 
         let supervisor_access = Arc::clone(&access);
         let supervisor = tokio::spawn(async move {
@@ -246,6 +261,8 @@ impl AuthenticatedDomain {
             routes,
             peers,
             protocols,
+            resources_v2,
+            resources_v2_registration: Some(resources_v2_registration),
             listen_addresses,
             supervisor: Some(supervisor),
             authority_expiry: Some(authority_expiry),
@@ -279,6 +296,10 @@ impl AuthenticatedDomain {
 
     pub(crate) fn protocols(&self) -> DomainProtocols {
         self.protocols.clone()
+    }
+
+    pub(crate) fn resources_v2(&self) -> ResourcesV2 {
+        self.resources_v2.clone()
     }
 
     pub(crate) fn status(&self) -> DomainStatus {
@@ -592,6 +613,8 @@ pub(crate) enum AuthenticatedDomainError {
     Routes(#[from] DomainRoutesError),
     #[error("Domain protocol runtime failed: {0}")]
     Protocol(#[from] DomainProtocolError),
+    #[error("Domain resource catalog runtime failed: {0}")]
+    ResourcesV2(#[from] ResourcesV2Error),
     #[error("authenticated P2P runtime failed: {0}")]
     P2p(#[source] auki_p2p::Error),
     #[error("Domain-owned task failed: {0}")]
@@ -621,7 +644,7 @@ mod tests {
         str::FromStr,
         sync::{
             Arc,
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         },
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -637,6 +660,15 @@ mod tests {
 
     use super::*;
     use crate::authenticated_runtime::protocols::{DomainProtocolError, DomainProtocolSpec};
+    use crate::cluster_manager::ResourceCatalogProvider;
+    use auki_network::{
+        protocol_ids::RESOURCES_V0_2_0,
+        resources_protocol::{
+            Available, Head, ResourceEntry, ResourcesRequest, SensorBlock, SensorKind,
+            SensorManifestPointer, VariantContent,
+        },
+    };
+    use auki_registry::RegistryRef;
 
     const TEST_DDS_PRIVATE_KEY: &[u8] = br#"-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQggm4twpf4y/yNNw/k
@@ -714,6 +746,69 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
             &EncodingKey::from_ec_pem(private_key).unwrap(),
         )
         .unwrap()
+    }
+
+    struct CountingResourceProvider {
+        resources: Vec<ResourceEntry>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ResourceCatalogProvider for CountingResourceProvider {
+        fn snapshot(&self) -> Vec<ResourceEntry> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.resources.clone()
+        }
+    }
+
+    fn resource(
+        source_peer_id: impl Into<String>,
+        writer_peer_id: impl Into<String>,
+        resource_id: impl Into<String>,
+    ) -> ResourceEntry {
+        let source_peer_id = source_peer_id.into();
+        let resource_id = resource_id.into();
+        ResourceEntry {
+            source_peer_id: source_peer_id.clone(),
+            writer_peer_id: writer_peer_id.into(),
+            resource_id: resource_id.clone(),
+            state: "live".into(),
+            head: Some(Head::Rolling {
+                retention_ns: 5_000_000_000,
+            }),
+            extent: None,
+            available: Available {
+                bytes: 1_024,
+                entries: 10,
+                duration_ns: 5_000_000_000,
+            },
+            sensor: Some(SensorBlock {
+                kind: SensorKind::Camera,
+                r#type: "rgb".into(),
+                sensor_id: resource_id,
+                sensor_hash: "sensor-hash".into(),
+            }),
+            pose: None,
+            variant_content: VariantContent::SensorLog {
+                manifest: SensorManifestPointer {
+                    clock: RegistryRef {
+                        peer_id: source_peer_id,
+                        id: "clock".into(),
+                        hash: "clock-hash".into(),
+                    },
+                    frame: None,
+                },
+            },
+        }
+    }
+
+    fn tcp_port(address: &Multiaddr) -> u16 {
+        address
+            .iter()
+            .find_map(|protocol| match protocol {
+                auki_p2p::Protocol::Tcp(port) => Some(port),
+                _ => None,
+            })
+            .expect("test listener must contain a TCP port")
     }
 
     async fn join_domain(config: AuthenticatedDomainConfig, issued_at: u64) -> AuthenticatedDomain {
@@ -879,6 +974,317 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
         drop(registration);
         drop(stream);
         client.leave().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resources_v2_bidirectional_same_domain_observes_and_leaves_cleanly() {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            let domain_id = Uuid::new_v4();
+            let issued_at = unix_time();
+            let a_identity = identity(21);
+            let a_peer = a_identity.peer_id();
+            let a = join_domain(
+                AuthenticatedDomainConfig::new(domain_id, a_identity)
+                    .with_listen_addresses([Multiaddr::from_str("/ip4/127.0.0.1/tcp/0").unwrap()])
+                    .unwrap(),
+                issued_at,
+            )
+            .await;
+            assert_eq!(a.status(), DomainStatus::Ready);
+            assert!(a.routes().snapshot().unwrap().peers.is_empty());
+            let a_address = a.listen_addresses()[0].clone();
+            let a_port = tcp_port(&a_address);
+
+            let b_identity = identity(22);
+            let b_peer = b_identity.peer_id();
+            let b = join_domain(
+                AuthenticatedDomainConfig::new(domain_id, b_identity)
+                    .with_listen_addresses([Multiaddr::from_str("/ip4/127.0.0.1/tcp/0").unwrap()])
+                    .unwrap(),
+                issued_at,
+            )
+            .await;
+            let b_address = b.listen_addresses()[0].clone();
+            let b_port = tcp_port(&b_address);
+            a.routes().replace(b_peer, [b_address]).unwrap();
+            b.routes().replace(a_peer, [a_address]).unwrap();
+
+            let a_calls = Arc::new(AtomicUsize::new(0));
+            let b_calls = Arc::new(AtomicUsize::new(0));
+            let a_row = resource("materialized-source", a_peer.to_string(), "a-camera");
+            let b_row = resource(b_peer.to_string(), b_peer.to_string(), "b-camera");
+            let a_resources = a.resources_v2();
+            let b_resources = b.resources_v2();
+            a_resources
+                .set_provider(Arc::new(CountingResourceProvider {
+                    resources: vec![a_row.clone()],
+                    calls: Arc::clone(&a_calls),
+                }))
+                .unwrap();
+            b_resources
+                .set_provider(Arc::new(CountingResourceProvider {
+                    resources: vec![b_row.clone()],
+                    calls: Arc::clone(&b_calls),
+                }))
+                .unwrap();
+
+            let mut a_events = a.peers().subscribe();
+            let mut b_events = b.peers().subscribe();
+            let from_b = a_resources
+                .fetch(b_peer, ResourcesRequest::all())
+                .await
+                .unwrap();
+            assert_eq!(from_b.resources, vec![b_row]);
+            assert!(matches!(
+                a_events.recv().await.unwrap(),
+                peers::KnownPeerEvent::Appeared(ref peer) if peer.peer_id() == b_peer
+            ));
+            assert!(matches!(
+                b_events.recv().await.unwrap(),
+                peers::KnownPeerEvent::Appeared(ref peer) if peer.peer_id() == a_peer
+            ));
+
+            let from_a = b_resources
+                .fetch(a_peer, ResourcesRequest::all())
+                .await
+                .unwrap();
+            assert_eq!(from_a.resources, vec![a_row]);
+            assert_ne!(
+                from_a.resources[0].source_peer_id, from_a.resources[0].writer_peer_id,
+                "materialized resource ownership must remain byte-for-byte unchanged"
+            );
+            assert_eq!(a_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(b_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(a.peers().snapshot().peers()[0].peer_id(), b_peer);
+            assert_eq!(b.peers().snapshot().peers()[0].peer_id(), a_peer);
+
+            let a_routes = a.routes();
+            let b_routes = b.routes();
+            b.leave().await.unwrap();
+            a.leave().await.unwrap();
+            assert!(matches!(
+                a_resources.set_provider(Arc::new(CountingResourceProvider {
+                    resources: Vec::new(),
+                    calls: Arc::new(AtomicUsize::new(0)),
+                })),
+                Err(resources_v2::ResourcesV2Error::Stopped)
+            ));
+            assert!(matches!(
+                a_routes.snapshot(),
+                Err(DomainRoutesError::Stopped)
+            ));
+            assert!(matches!(
+                b_routes.snapshot(),
+                Err(DomainRoutesError::Stopped)
+            ));
+            std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, a_port)).unwrap();
+            std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, b_port)).unwrap();
+        })
+        .await
+        .expect("bidirectional authenticated resource exchange must remain bounded");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn resources_v2_authority_matrix_exposes_zero_catalog() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let domain_id = Uuid::new_v4();
+            let issued_at = unix_time();
+            let server_identity = identity(31);
+            let server_peer = server_identity.peer_id();
+            let server = join_domain(
+                AuthenticatedDomainConfig::new(domain_id, server_identity)
+                    .with_listen_addresses([Multiaddr::from_str("/ip4/127.0.0.1/tcp/0").unwrap()])
+                    .unwrap(),
+                issued_at,
+            )
+            .await;
+            let server_address = server.listen_addresses()[0].clone();
+            let calls = Arc::new(AtomicUsize::new(0));
+            server
+                .resources_v2()
+                .set_provider(Arc::new(CountingResourceProvider {
+                    resources: vec![resource(
+                        server_peer.to_string(),
+                        server_peer.to_string(),
+                        "server-camera",
+                    )],
+                    calls: Arc::clone(&calls),
+                }))
+                .unwrap();
+
+            let client = join_domain(
+                AuthenticatedDomainConfig::new(domain_id, identity(32)),
+                issued_at,
+            )
+            .await;
+            let wrong_peer = identity(33).peer_id();
+            client
+                .routes()
+                .replace(wrong_peer, [server_address.clone()])
+                .unwrap();
+            assert!(
+                client
+                    .resources_v2()
+                    .fetch(wrong_peer, ResourcesRequest::all())
+                    .await
+                    .is_err()
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+            let wrong_domain = join_domain(
+                AuthenticatedDomainConfig::new(Uuid::new_v4(), identity(34))
+                    .with_peer_routes(server_peer, [server_address.clone()])
+                    .unwrap(),
+                issued_at,
+            )
+            .await;
+            assert!(
+                wrong_domain
+                    .resources_v2()
+                    .fetch(server_peer, ResourcesRequest::all())
+                    .await
+                    .is_err()
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+            let expiring_identity = identity(35);
+            let expiring = join_domain(
+                AuthenticatedDomainConfig::new(domain_id, expiring_identity)
+                    .with_peer_routes(server_peer, [server_address.clone()])
+                    .unwrap(),
+                issued_at - P2P_TOKEN_TTL.as_secs() + 2,
+            )
+            .await;
+            let mut expiring_status = expiring.subscribe_status();
+            while *expiring_status.borrow_and_update() != DomainStatus::CredentialUnavailable {
+                expiring_status.changed().await.unwrap();
+            }
+            assert!(
+                expiring
+                    .resources_v2()
+                    .fetch(server_peer, ResourcesRequest::all())
+                    .await
+                    .is_err()
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+            let anonymous = Node::start(
+                identity(36),
+                DdsTokenVerifier::from_keys(keys()).unwrap(),
+                [],
+            )
+            .unwrap();
+            let anonymous_result = anonymous
+                .open(
+                    server_peer,
+                    vec![server_address.clone()],
+                    auki_p2p::ApplicationProtocol::new(RESOURCES_V0_2_0).unwrap(),
+                    auki_p2p::SessionRequirements::new(domain_id.to_string())
+                        .unwrap()
+                        .with_expected_remote_peer_id(server_peer),
+                )
+                .await;
+            assert!(anonymous_result.is_err());
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+            assert_eq!(server.peers().peer_count(), 0);
+
+            client
+                .routes()
+                .replace(server_peer, [server_address])
+                .unwrap();
+            let valid = client
+                .resources_v2()
+                .fetch(server_peer, ResourcesRequest::all())
+                .await
+                .unwrap();
+            assert_eq!(valid.resources.len(), 1);
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+            anonymous.shutdown().await.unwrap();
+            expiring.leave().await.unwrap();
+            wrong_domain.leave().await.unwrap();
+            client.leave().await.unwrap();
+            server.leave().await.unwrap();
+        })
+        .await
+        .expect("resource authorization matrix must remain bounded");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn legacy_resources_id_never_reaches_catalog() {
+        use futures::StreamExt;
+        use libp2p::{StreamProtocol, SwarmBuilder, noise, swarm::SwarmEvent, tcp, yamux};
+        use libp2p_stream::{Behaviour as StreamBehaviour, OpenStreamError};
+
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let domain_id = Uuid::new_v4();
+            let server_identity = identity(37);
+            let server_peer = server_identity.peer_id();
+            let server = join_domain(
+                AuthenticatedDomainConfig::new(domain_id, server_identity)
+                    .with_listen_addresses([Multiaddr::from_str("/ip4/127.0.0.1/tcp/0").unwrap()])
+                    .unwrap(),
+                unix_time(),
+            )
+            .await;
+            let calls = Arc::new(AtomicUsize::new(0));
+            server
+                .resources_v2()
+                .set_provider(Arc::new(CountingResourceProvider {
+                    resources: Vec::new(),
+                    calls: Arc::clone(&calls),
+                }))
+                .unwrap();
+
+            let streams = StreamBehaviour::new();
+            let mut control = streams.new_control();
+            let mut attacker = SwarmBuilder::with_new_identity()
+                .with_tokio()
+                .with_tcp(
+                    tcp::Config::default(),
+                    noise::Config::new,
+                    yamux::Config::default,
+                )
+                .unwrap()
+                .with_behaviour(|_| streams)
+                .unwrap()
+                .build();
+            let address = server.listen_addresses()[0]
+                .clone()
+                .with(auki_p2p::Protocol::P2p(server_peer));
+            attacker.dial(address).unwrap();
+            let (connected_tx, connected_rx) = oneshot::channel();
+            let driver = tokio::spawn(async move {
+                let mut connected_tx = Some(connected_tx);
+                while let Some(event) = attacker.next().await {
+                    if matches!(
+                        event,
+                        SwarmEvent::ConnectionEstablished { peer_id, .. } if peer_id == server_peer
+                    ) && let Some(connected_tx) = connected_tx.take()
+                    {
+                        let _ = connected_tx.send(());
+                    }
+                }
+            });
+            connected_rx.await.unwrap();
+
+            let legacy = "/auki/resources/0.2.0";
+            let error = control
+                .open_stream(server_peer, StreamProtocol::new(legacy))
+                .await
+                .expect_err("the authenticated Domain must not negotiate the legacy resource ID");
+            assert!(
+                matches!(error, OpenStreamError::UnsupportedProtocol(ref protocol) if protocol.as_ref() == legacy)
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+            assert_eq!(server.peers().peer_count(), 0);
+
+            driver.abort();
+            let _ = driver.await;
+            server.leave().await.unwrap();
+        })
+        .await
+        .expect("legacy resource negotiation proof must remain bounded");
     }
 
     #[tokio::test(flavor = "multi_thread")]

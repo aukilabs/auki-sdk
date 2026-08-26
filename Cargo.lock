@@ -698,6 +698,7 @@ dependencies = [
  "jsonwebtoken",
  "libp2p",
  "libp2p-identity",
+ "libp2p-stream",
  "multiaddr",
  "parking_lot",
  "prost",

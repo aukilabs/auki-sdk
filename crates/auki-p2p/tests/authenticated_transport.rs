@@ -2,17 +2,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use auki_p2p::{
     ApplicationProtocol, DdsTokenVerifier, DdsVerificationKeys, DomainAuthority, Error, ExactRoute,
-    Identity, Node, P2PAccessClaims, P2pCredentialError, PeerRole, ProtocolSpec,
-    SessionRequirements, SignedApplicationMetadata, SignedP2pCredential, DOMAIN_SERVER_MAX_DOMAINS,
-    P2P_TOKEN_AUDIENCE, P2P_TOKEN_CLOCK_SKEW, P2P_TOKEN_ISSUER,
-    P2P_TOKEN_MAX_APPLICATION_NAME_BYTES, P2P_TOKEN_MAX_APPLICATION_VERSION_BYTES,
-    P2P_TOKEN_MAX_PEER_TYPE_BYTES, P2P_TOKEN_MAX_SCOPES, P2P_TOKEN_MAX_SCOPE_BYTES,
-    P2P_TOKEN_SCOPE, P2P_TOKEN_TTL, P2P_TOKEN_TYPE,
+    Identity, Node, NodeObservationEvent, NodeObservationStatus, P2PAccessClaims,
+    P2pCredentialError, PeerDisappearanceReason, PeerRole, ProtocolSpec, SessionRequirements,
+    SignedApplicationMetadata, SignedP2pCredential, DOMAIN_SERVER_MAX_DOMAINS, P2P_TOKEN_AUDIENCE,
+    P2P_TOKEN_CLOCK_SKEW, P2P_TOKEN_ISSUER, P2P_TOKEN_MAX_APPLICATION_NAME_BYTES,
+    P2P_TOKEN_MAX_APPLICATION_VERSION_BYTES, P2P_TOKEN_MAX_PEER_TYPE_BYTES, P2P_TOKEN_MAX_SCOPES,
+    P2P_TOKEN_MAX_SCOPE_BYTES, P2P_TOKEN_SCOPE, P2P_TOKEN_TTL, P2P_TOKEN_TYPE,
 };
 use futures::io::{AsyncReadExt, AsyncWriteExt};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use libp2p::{identity::PublicKey, Multiaddr};
 use serde::Serialize;
+use tokio::sync::broadcast::error::TryRecvError;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -511,8 +512,13 @@ fn application_protocol_accepts_sdk_and_posemesh_namespaces_only() {
 #[tokio::test(flavor = "multi_thread")]
 async fn peers_exchange_bytes_only_after_mutual_authentication() {
     let domain_id = Uuid::new_v4().to_string();
+    let domain_uuid = Uuid::parse_str(&domain_id).unwrap();
     let robot = listening_node();
     let compute = listening_node();
+    let robot_observations = robot.observations();
+    let compute_observations = compute.observations();
+    let mut robot_events = robot_observations.subscribe();
+    let mut compute_events = compute_observations.subscribe();
     install_current_token(&robot, PeerRole::Robot, vec![domain_id.clone()]).await;
     let mut compute_claims = claims(
         compute.peer_id(),
@@ -577,6 +583,132 @@ async fn peers_exchange_bytes_only_after_mutual_authentication() {
     stream.read_exact(&mut response).await.unwrap();
     assert_eq!(&response, b"pong");
     server.await.unwrap();
+
+    let robot_snapshot = robot_observations.snapshot();
+    assert_eq!(robot_snapshot.status(), NodeObservationStatus::Running);
+    assert_eq!(robot_snapshot.peers().len(), 1);
+    let observed_compute = &robot_snapshot.peers()[0];
+    assert_eq!(observed_compute.domain_id(), domain_uuid);
+    assert_eq!(observed_compute.peer().peer_id, compute.peer_id());
+    assert_eq!(
+        observed_compute.peer().peer_type.as_deref(),
+        Some("native_app")
+    );
+    assert_eq!(
+        observed_compute.peer().application,
+        Some(SignedApplicationMetadata {
+            name: "diagnostic-client".into(),
+            version: "1.0.0".into(),
+        })
+    );
+    assert!(!observed_compute.connection_ids().is_empty());
+
+    let compute_snapshot = compute_observations.snapshot();
+    assert_eq!(compute_snapshot.status(), NodeObservationStatus::Running);
+    assert_eq!(compute_snapshot.peers().len(), 1);
+    let observed_robot = &compute_snapshot.peers()[0];
+    assert_eq!(observed_robot.domain_id(), domain_uuid);
+    assert_eq!(observed_robot.peer().peer_id, robot_peer_id);
+    assert_eq!(
+        observed_robot.peer().peer_type.as_deref(),
+        Some(PeerRole::Robot.as_str())
+    );
+    assert!(!observed_robot.connection_ids().is_empty());
+
+    assert!(matches!(
+        robot_events.try_recv(),
+        Ok(NodeObservationEvent::Appeared(observation))
+            if observation.peer().peer_id == compute.peer_id()
+                && observation.domain_id() == domain_uuid
+    ));
+    assert!(matches!(
+        compute_events.try_recv(),
+        Ok(NodeObservationEvent::Appeared(observation))
+            if observation.peer().peer_id == robot_peer_id
+                && observation.domain_id() == domain_uuid
+    ));
+
+    robot.shutdown().await.unwrap();
+    assert_eq!(
+        robot_observations.snapshot().status(),
+        NodeObservationStatus::Stopped,
+        "shutdown ACK returned before observations reached terminal state"
+    );
+    assert!(matches!(
+        robot_events.try_recv(),
+        Ok(NodeObservationEvent::Disappeared {
+            reason: PeerDisappearanceReason::NodeStopped,
+            ..
+        })
+    ));
+    assert_eq!(
+        robot_events.try_recv(),
+        Ok(NodeObservationEvent::StatusChanged(
+            NodeObservationStatus::Stopped
+        ))
+    );
+    compute.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn final_real_connection_close_removes_both_authenticated_observations() {
+    let domain_id = Uuid::new_v4().to_string();
+    let robot = listening_node();
+    let compute = listening_node();
+    install_current_token(&robot, PeerRole::Robot, vec![domain_id.clone()]).await;
+    install_current_token(&compute, PeerRole::Compute, vec![domain_id.clone()]).await;
+    let robot_observations = robot.observations();
+    let compute_observations = compute.observations();
+    let mut robot_events = robot_observations.subscribe();
+    let mut compute_events = compute_observations.subscribe();
+    let protocol = ApplicationProtocol::new(TEST_PROTOCOL).unwrap();
+    let mut incoming = robot
+        .accept(
+            protocol.clone(),
+            SessionRequirements::new(&domain_id).unwrap(),
+        )
+        .unwrap();
+    let robot_peer_id = robot.peer_id();
+    let robot_address = listen_address(&robot).await;
+    let server = tokio::spawn(async move { incoming.accept().await.unwrap().unwrap() });
+    let client_stream = compute
+        .open(
+            robot_peer_id,
+            vec![robot_address],
+            protocol,
+            SessionRequirements::new(&domain_id)
+                .unwrap()
+                .with_expected_remote_peer_id(robot_peer_id),
+        )
+        .await
+        .unwrap();
+    let server_stream = server.await.unwrap();
+
+    assert!(matches!(
+        robot_events.recv().await,
+        Ok(NodeObservationEvent::Appeared(_))
+    ));
+    assert!(matches!(
+        compute_events.recv().await,
+        Ok(NodeObservationEvent::Appeared(_))
+    ));
+    drop(client_stream);
+    drop(server_stream);
+    compute.disconnect(robot_peer_id).await.unwrap();
+
+    for events in [&mut compute_events, &mut robot_events] {
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), events.recv())
+                .await
+                .expect("final connection close was not observed"),
+            Ok(NodeObservationEvent::Disappeared {
+                reason: PeerDisappearanceReason::FinalConnectionClosed,
+                ..
+            })
+        ));
+    }
+    assert!(robot_observations.snapshot().peers().is_empty());
+    assert!(compute_observations.snapshot().peers().is_empty());
 
     robot.shutdown().await.unwrap();
     compute.shutdown().await.unwrap();
@@ -1039,6 +1171,10 @@ async fn rejected_session(
 ) -> (Error, Error) {
     let robot = listening_node();
     let compute = listening_node();
+    let robot_observations = robot.observations();
+    let compute_observations = compute.observations();
+    let mut robot_events = robot_observations.subscribe();
+    let mut compute_events = compute_observations.subscribe();
     install_current_token(&robot, PeerRole::Robot, vec![robot_domain]).await;
     install_current_token(&compute, PeerRole::Compute, vec![compute_domain]).await;
 
@@ -1062,6 +1198,11 @@ async fn rejected_session(
         .await
         .unwrap_err();
     let server_error = server.await.unwrap();
+
+    assert!(robot_observations.snapshot().peers().is_empty());
+    assert!(compute_observations.snapshot().peers().is_empty());
+    assert_eq!(robot_events.try_recv(), Err(TryRecvError::Empty));
+    assert_eq!(compute_events.try_recv(), Err(TryRecvError::Empty));
 
     robot.shutdown().await.unwrap();
     compute.shutdown().await.unwrap();

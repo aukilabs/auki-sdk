@@ -8,6 +8,7 @@
 mod authority;
 mod error;
 mod identity;
+mod observation;
 mod relay;
 mod relay_client;
 mod routing;
@@ -20,7 +21,12 @@ mod transport;
 pub use authority::{DomainAuthority, P2pCredentialError, P2pCredentialResult};
 pub use error::{Error, Result};
 pub use identity::Identity;
-pub use libp2p::{multiaddr::Protocol, Multiaddr, PeerId};
+pub use libp2p::{multiaddr::Protocol, swarm::ConnectionId, Multiaddr, PeerId};
+pub use observation::{
+    AuthenticatedPeerObservation, NodeFailure, NodeObservationEvent, NodeObservationSnapshot,
+    NodeObservationStatus, NodeObservations, PeerDisappearanceReason,
+    PEER_OBSERVATION_CHANNEL_CAPACITY,
+};
 pub use relay::{
     ExpectedRelayLimits, RelayConfirmationRejection, RelayProvider, RelayReservationError,
     RelayReservationHandle, RelayReservationSnapshot, RelayReservationState, ReservationGeneration,

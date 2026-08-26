@@ -330,8 +330,11 @@ authority into the Domain facade.
   successful mutual authentication, connection establishment/closure, and
   fatal node termination.
 - Authentication observations contain the exact Peer ID, Domain UUID,
-  verified-until time, connection identity, and bounded diagnostic participant
-  metadata. They never contain the signed token.
+  verified-until time, the exact aggregate set of currently live connection
+  identities, and bounded diagnostic participant metadata. They never contain
+  the signed token. The pinned generic inbound-stream API exposes Peer ID but
+  not the causal `ConnectionId`, so the surface must not claim that one listed
+  connection carried a particular inbound authentication.
 - Ensure parallel connections can be distinguished so a Domain can remove a
   peer only after its final connection closes.
 - Make subscriber lag explicit. The authoritative local snapshot must be

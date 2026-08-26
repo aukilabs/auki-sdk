@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     error::Error as StdError,
     future::Future,
+    panic::AssertUnwindSafe,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
@@ -11,7 +12,7 @@ use std::{
 use chrono::Utc;
 use futures::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    StreamExt,
+    FutureExt, StreamExt,
 };
 use libp2p::{
     core::transport::{ListenerId, TransportError},
@@ -29,6 +30,7 @@ use uuid::Uuid;
 
 use crate::{
     authority::DomainAuthority,
+    observation::{NodeFailure, NodeObservations},
     relay::{
         canonicalize_provider_base, ObservedRelayLimits, RelayCancellation,
         RelayConfirmationRejection, RelayProvider, RelayReservationEvent, RelayReservationHandle,
@@ -306,22 +308,26 @@ pub struct IncomingAuthenticatedStreams {
     tokens: TokenStore,
     verifier: DdsTokenVerifier,
     requirements: SessionRequirements,
+    observations: NodeObservations,
 }
 
 impl IncomingAuthenticatedStreams {
     pub async fn accept(&mut self) -> Option<P2PResult<AuthenticatedStream>> {
         let (remote_peer_id, stream) = self.inner.next().await?;
-        Some(
-            authenticate(
-                stream,
-                self.local_peer_id,
-                remote_peer_id,
-                &self.tokens,
-                &self.verifier,
-                &self.requirements,
-            )
-            .await,
+        let result = authenticate(
+            stream,
+            self.local_peer_id,
+            remote_peer_id,
+            &self.tokens,
+            &self.verifier,
+            &self.requirements,
         )
+        .await;
+        if let Ok(stream) = &result {
+            self.observations
+                .authenticated(self.requirements.domain_id(), stream.remote_peer().clone());
+        }
+        Some(result)
     }
 }
 
@@ -343,6 +349,7 @@ pub struct Node {
     command_sender: mpsc::Sender<Command>,
     listen_addresses: watch::Receiver<Vec<Multiaddr>>,
     relay_events: broadcast::Sender<RelayTransportEvent>,
+    observations: NodeObservations,
 }
 
 impl Node {
@@ -425,14 +432,30 @@ impl Node {
         let (command_sender, command_receiver) = mpsc::channel(16);
         let (listen_sender, listen_receiver) = watch::channel(Vec::new());
         let (relay_events, _) = broadcast::channel(128);
+        let observations = NodeObservations::new();
         let runtime =
             tokio::runtime::Handle::try_current().map_err(|_| Error::RuntimeUnavailable)?;
-        runtime.spawn(run_swarm(
-            swarm,
-            command_receiver,
-            listen_sender,
-            direct_listener_ids,
-            relay_events.clone(),
+        let run_observations = observations.clone();
+        let expiry_observations = observations.clone();
+        let run_relay_events = relay_events.clone();
+        let node_task = async move {
+            tokio::select! {
+                exit = run_swarm(
+                    swarm,
+                    command_receiver,
+                    listen_sender,
+                    direct_listener_ids,
+                    run_relay_events,
+                    run_observations,
+                ) => exit,
+                _ = expiry_observations.drive_expiry() => SwarmExit::ExpiryDriverEnded,
+            }
+        };
+        let task_guard = NodeTaskGuard::new(observations.clone());
+        runtime.spawn(supervise_node_task(
+            node_task,
+            observations.clone(),
+            task_guard,
         ));
 
         Ok(Self {
@@ -446,6 +469,7 @@ impl Node {
             command_sender,
             listen_addresses: listen_receiver,
             relay_events,
+            observations,
         })
     }
 
@@ -455,6 +479,10 @@ impl Node {
 
     pub fn authority(&self) -> DomainAuthority {
         DomainAuthority::new(self.clone())
+    }
+
+    pub fn observations(&self) -> NodeObservations {
+        self.observations.clone()
     }
 
     pub(crate) async fn install_verification_keys(
@@ -552,6 +580,7 @@ impl Node {
             tokens: self.tokens.clone(),
             verifier: self.verifier.clone(),
             requirements,
+            observations: self.observations.clone(),
         })
     }
 
@@ -584,7 +613,7 @@ impl Node {
             .open_stream(remote_peer_id, connection_id, protocol.0)
             .await
             .map_err(Error::from)?;
-        authenticate(
+        let stream = authenticate(
             stream,
             self.peer_id(),
             remote_peer_id,
@@ -592,7 +621,10 @@ impl Node {
             &self.verifier,
             &requirements,
         )
-        .await
+        .await?;
+        self.observations
+            .authenticated(requirements.domain_id(), stream.remote_peer().clone());
+        Ok(stream)
     }
 
     /// Start one relay reservation generation after DMS has supplied a ready
@@ -737,7 +769,7 @@ impl Node {
             .targeted_control
             .open_stream(route.target_peer_id, route.connection_id, protocol.0)
             .await?;
-        authenticate(
+        let stream = authenticate(
             stream,
             self.peer_id(),
             route.target_peer_id,
@@ -745,7 +777,10 @@ impl Node {
             &self.verifier,
             &requirements,
         )
-        .await
+        .await?;
+        self.observations
+            .authenticated(requirements.domain_id(), stream.remote_peer().clone());
+        Ok(stream)
     }
 
     /// Close only the circuit represented by this handle. The possibly shared
@@ -1418,13 +1453,80 @@ fn error_chain_contains_dns_failure(error: &(dyn StdError + 'static)) -> bool {
     error.source().is_some_and(error_chain_contains_dns_failure)
 }
 
+enum SwarmExit {
+    Shutdown(oneshot::Sender<P2PResult<()>>),
+    OwnersDropped,
+    SwarmEnded,
+    ExpiryDriverEnded,
+}
+
+struct NodeTaskGuard {
+    observations: NodeObservations,
+    armed: bool,
+}
+
+impl NodeTaskGuard {
+    fn new(observations: NodeObservations) -> Self {
+        Self {
+            observations,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for NodeTaskGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.observations.failed(NodeFailure::TaskCancelled);
+        }
+    }
+}
+
+async fn supervise_node_task<F>(task: F, observations: NodeObservations, mut guard: NodeTaskGuard)
+where
+    F: Future<Output = SwarmExit>,
+{
+    let outcome = AssertUnwindSafe(task).catch_unwind().await;
+    let shutdown_response = match outcome {
+        Ok(SwarmExit::Shutdown(response)) => {
+            observations.stopped();
+            Some(response)
+        }
+        Ok(SwarmExit::OwnersDropped) => {
+            observations.stopped();
+            None
+        }
+        Ok(SwarmExit::SwarmEnded) => {
+            observations.failed(NodeFailure::SwarmEnded);
+            None
+        }
+        Ok(SwarmExit::ExpiryDriverEnded) => {
+            observations.failed(NodeFailure::ExpiryDriverEnded);
+            None
+        }
+        Err(_) => {
+            observations.failed(NodeFailure::Panicked);
+            None
+        }
+    };
+    guard.disarm();
+    if let Some(response) = shutdown_response {
+        let _ = response.send(Ok(()));
+    }
+}
+
 async fn run_swarm(
     mut swarm: Swarm<Behaviour>,
     mut commands: mpsc::Receiver<Command>,
     listen_addresses: watch::Sender<Vec<Multiaddr>>,
     direct_listener_ids: HashSet<ListenerId>,
     relay_events: broadcast::Sender<RelayTransportEvent>,
-) {
+    observations: NodeObservations,
+) -> SwarmExit {
     let local_peer_id = *swarm.local_peer_id();
     let mut reservations = ReservationRuntime::new(local_peer_id, relay_events);
     let mut pending_dials: HashMap<ConnectionId, PendingDial> = HashMap::new();
@@ -1433,7 +1535,7 @@ async fn run_swarm(
     loop {
         tokio::select! {
             event = swarm.next() => {
-                let Some(event) = event else { break };
+                let Some(event) = event else { return SwarmExit::SwarmEnded };
                 match event {
                     SwarmEvent::NewListenAddr { listener_id, address } => {
                         if direct_listener_ids.contains(&listener_id) {
@@ -1459,6 +1561,7 @@ async fn run_swarm(
                         endpoint,
                         ..
                     } => {
+                        observations.connection_established(peer_id, connection_id);
                         let requested_direct_address = pending_dials
                             .get(&connection_id)
                             .and_then(|pending| pending.requested_direct_address.clone());
@@ -1551,6 +1654,7 @@ async fn run_swarm(
                         num_established,
                         ..
                     } => {
+                        observations.connection_closed(peer_id, connection_id);
                         if !endpoint.is_relayed() {
                             reservations.record_connection_closed(
                                 &mut swarm,
@@ -1649,7 +1753,7 @@ async fn run_swarm(
                 }
             }
             command = commands.recv() => {
-                let Some(command) = command else { break };
+                let Some(command) = command else { return SwarmExit::OwnersDropped };
                 match command {
                     Command::Connect {
                         peer_id,
@@ -1995,8 +2099,7 @@ async fn run_swarm(
                         }
                     }
                     Command::Shutdown { response } => {
-                        let _ = response.send(Ok(()));
-                        break;
+                        return SwarmExit::Shutdown(response);
                     }
                 }
             }
@@ -2306,6 +2409,49 @@ mod dial_error_tests {
     use crate::{P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_TTL, P2P_TOKEN_TYPE};
 
     use super::*;
+
+    #[tokio::test]
+    async fn node_supervisor_reports_exit_panic_and_pre_poll_cancellation() {
+        let ended = NodeObservations::new();
+        supervise_node_task(
+            async { SwarmExit::SwarmEnded },
+            ended.clone(),
+            NodeTaskGuard::new(ended.clone()),
+        )
+        .await;
+        assert_eq!(
+            ended.snapshot().status(),
+            crate::NodeObservationStatus::Failed(NodeFailure::SwarmEnded)
+        );
+
+        let panicked = NodeObservations::new();
+        supervise_node_task(
+            async {
+                panic!("synthetic node task panic");
+                #[allow(unreachable_code)]
+                SwarmExit::SwarmEnded
+            },
+            panicked.clone(),
+            NodeTaskGuard::new(panicked.clone()),
+        )
+        .await;
+        assert_eq!(
+            panicked.snapshot().status(),
+            crate::NodeObservationStatus::Failed(NodeFailure::Panicked)
+        );
+
+        let cancelled = NodeObservations::new();
+        let never_polled = supervise_node_task(
+            pending::<SwarmExit>(),
+            cancelled.clone(),
+            NodeTaskGuard::new(cancelled.clone()),
+        );
+        drop(never_polled);
+        assert_eq!(
+            cancelled.snapshot().status(),
+            crate::NodeObservationStatus::Failed(NodeFailure::TaskCancelled)
+        );
+    }
 
     #[tokio::test]
     async fn each_authentication_phase_has_its_own_timeout() {

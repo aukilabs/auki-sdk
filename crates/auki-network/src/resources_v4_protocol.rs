@@ -7,10 +7,12 @@
 
 use auki_registry::RegistryRef;
 use futures::{AsyncReadExt, AsyncWriteExt};
+#[cfg(feature = "swarm")]
 use libp2p::StreamProtocol;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[cfg(feature = "swarm")]
 pub const RESOURCES_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/resources/0.4.0");
 pub const MAX_RESOURCES_FRAME_BYTES: u32 = 1024 * 1024;
 
@@ -168,6 +170,7 @@ mod tests {
             hash: "hash".into(),
         }
     }
+    #[cfg(feature = "swarm")]
     #[test]
     fn protocol_id_is_locked() {
         assert_eq!(RESOURCES_PROTOCOL.to_string(), "/auki/resources/0.4.0");
@@ -192,5 +195,27 @@ mod tests {
             read_resources_response(&mut cursor).await.unwrap(),
             response
         );
+    }
+
+    #[tokio::test]
+    async fn map_catalog_framed_bytes_are_locked() {
+        let response = ResourcesResponse {
+            resources: vec![MapLogResource {
+                source_peer_id: "galbot".into(),
+                writer_peer_id: "galbot".into(),
+                resource_id: "occupancy".into(),
+                map: r("occupancy"),
+                clock: r("clock"),
+            }],
+        };
+        let mut bytes = Vec::new();
+        write_resources_response(&mut bytes, &response)
+            .await
+            .unwrap();
+
+        const EXPECTED_JSON: &str = r#"{"resources":[{"source_peer_id":"galbot","writer_peer_id":"galbot","resource_id":"occupancy","map":{"peer_id":"galbot","id":"occupancy","hash":"hash"},"clock":{"peer_id":"galbot","id":"clock","hash":"hash"}}]}"#;
+        let mut expected = (EXPECTED_JSON.len() as u32).to_be_bytes().to_vec();
+        expected.extend_from_slice(EXPECTED_JSON.as_bytes());
+        assert_eq!(bytes, expected);
     }
 }

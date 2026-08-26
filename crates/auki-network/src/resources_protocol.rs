@@ -18,6 +18,7 @@
 //! same row instead of minting a replacement id.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
+#[cfg(feature = "swarm")]
 use libp2p::StreamProtocol;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -25,6 +26,7 @@ use thiserror::Error;
 /// libp2p protocol id for "what resources can this peer provide
 /// right now?". Stable; bump version only on an incompatible
 /// wire-shape change.
+#[cfg(feature = "swarm")]
 pub const RESOURCES_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/resources/0.2.0");
 
 /// Cap on a single framed message. 1 MiB leaves room for catalogs with

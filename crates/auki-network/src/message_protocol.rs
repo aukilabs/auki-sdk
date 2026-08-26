@@ -3,13 +3,18 @@
 //! Channels are bounded and ephemeral. This module exposes no filesystem,
 //! storage-path, replay, retry-queue, or materialization API.
 
+pub use crate::message_codec::{MAX_MESSAGE_FRAME_BYTES, MessageProtocolError};
+pub(crate) use crate::message_codec::{
+    decode_message_frame, decode_open_frame, read_ack_frame, read_frame_body, read_frame_length,
+    read_open_response, write_ack_frame, write_message_frame, write_open_frame,
+    write_open_response,
+};
 use crate::resources_v3_protocol::MessageChannelResource;
 use auki_datatypes::message::Message;
 use auki_registry::RegistryRef;
 use futures::{AsyncReadExt, AsyncWriteExt};
 use libp2p::{PeerId, StreamProtocol};
 use libp2p_stream::Control;
-use prost::Message as ProstMessage;
 use std::{
     collections::HashMap,
     sync::{
@@ -23,14 +28,8 @@ use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 
 /// Receiver-owned typed-message protocol identifier.
 pub const MESSAGE_PROTOCOL: &str = "/auki/message/0.1.0";
-/// Maximum encoded message frame size.
-pub const MAX_MESSAGE_FRAME_BYTES: u32 = 16 * 1024 * 1024;
 pub(crate) const MAX_INBOUND_MESSAGE_FRAME_MEMORY_BYTES: usize = 64 * 1024 * 1024;
 const CHANNEL_CAPACITY: usize = 16;
-const OPEN_FRAME: u8 = 1;
-const OPEN_RESPONSE_FRAME: u8 = 2;
-const MESSAGE_FRAME: u8 = 3;
-const ACK_FRAME: u8 = 4;
 const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
@@ -81,25 +80,6 @@ pub enum RegistrationError {
     },
     #[error("invalid message channel resource: {0}")]
     InvalidResource(#[source] crate::resources_v3_protocol::ResourcesProtocolError),
-}
-
-/// Message framing and protobuf errors.
-#[derive(Debug, Error)]
-pub enum MessageProtocolError {
-    #[error("io: {0}")]
-    Io(#[source] std::io::Error),
-    #[error("protobuf encode: {0}")]
-    Encode(#[source] prost::EncodeError),
-    #[error("protobuf decode: {0}")]
-    Decode(#[source] prost::DecodeError),
-    #[error("frame is empty")]
-    EmptyFrame,
-    #[error("frame too large: {actual} bytes (max {max})")]
-    FrameTooLarge { actual: u64, max: u64 },
-    #[error("unexpected frame kind {0:#04x}")]
-    UnexpectedFrameKind(u8),
-    #[error("malformed transport frame: {0}")]
-    MalformedFrame(&'static str),
 }
 
 /// Failure while opening an exact receiver-owned channel.
@@ -700,265 +680,16 @@ async fn handle_inbound_io<S>(
     }
 }
 
-pub(crate) async fn write_open_frame<S>(
-    stream: &mut S,
-    owner_peer_id: PeerId,
-    resource_id: &str,
-    expected_clock: &RegistryRef,
-) -> Result<(), MessageProtocolError>
-where
-    S: AsyncWriteExt + Unpin,
-{
-    let owner = owner_peer_id.to_string();
-    let mut frame = Vec::with_capacity(
-        21 + owner.len()
-            + resource_id.len()
-            + expected_clock.peer_id.len()
-            + expected_clock.id.len()
-            + expected_clock.hash.len(),
-    );
-    frame.push(OPEN_FRAME);
-    push_string(&mut frame, &owner);
-    push_string(&mut frame, resource_id);
-    push_string(&mut frame, &expected_clock.peer_id);
-    push_string(&mut frame, &expected_clock.id);
-    push_string(&mut frame, &expected_clock.hash);
-    write_frame(stream, &frame).await
-}
-
-fn decode_open_frame(frame: &[u8]) -> Result<(PeerId, String, RegistryRef), MessageProtocolError> {
-    let Some((&kind, mut rest)) = frame.split_first() else {
-        return Err(MessageProtocolError::EmptyFrame);
-    };
-    if kind != OPEN_FRAME {
-        return Err(MessageProtocolError::UnexpectedFrameKind(kind));
-    }
-    let owner = take_string(&mut rest)?;
-    let resource_id = take_string(&mut rest)?;
-    let clock_peer_id = take_string(&mut rest)?;
-    let clock_id = take_string(&mut rest)?;
-    let clock_hash = take_string(&mut rest)?;
-    if !rest.is_empty() {
-        return Err(MessageProtocolError::MalformedFrame(
-            "open frame has trailing bytes",
-        ));
-    }
-    let owner_peer_id = owner
-        .parse()
-        .map_err(|_| MessageProtocolError::MalformedFrame("invalid owner PeerId"))?;
-    Ok((
-        owner_peer_id,
-        resource_id,
-        RegistryRef {
-            peer_id: clock_peer_id,
-            id: clock_id,
-            hash: clock_hash,
-        },
-    ))
-}
-
-async fn write_open_response<S>(stream: &mut S, accepted: bool) -> Result<(), MessageProtocolError>
-where
-    S: AsyncWriteExt + Unpin,
-{
-    write_frame(stream, &[OPEN_RESPONSE_FRAME, u8::from(accepted)]).await
-}
-
-async fn read_open_response<S>(stream: &mut S) -> Result<bool, MessageProtocolError>
-where
-    S: AsyncReadExt + Unpin,
-{
-    let frame = read_frame(stream).await?;
-    match frame.as_slice() {
-        [OPEN_RESPONSE_FRAME, 0] => Ok(false),
-        [OPEN_RESPONSE_FRAME, 1] => Ok(true),
-        [kind, ..] if *kind != OPEN_RESPONSE_FRAME => {
-            Err(MessageProtocolError::UnexpectedFrameKind(*kind))
-        }
-        _ => Err(MessageProtocolError::MalformedFrame(
-            "invalid open response",
-        )),
-    }
-}
-
-fn take_string(bytes: &mut &[u8]) -> Result<String, MessageProtocolError> {
-    if bytes.len() < 4 {
-        return Err(MessageProtocolError::MalformedFrame(
-            "missing string length",
-        ));
-    }
-    let len = u32::from_be_bytes(bytes[..4].try_into().expect("checked length")) as usize;
-    *bytes = &bytes[4..];
-    if bytes.len() < len {
-        return Err(MessageProtocolError::MalformedFrame("truncated string"));
-    }
-    let value = std::str::from_utf8(&bytes[..len])
-        .map_err(|_| MessageProtocolError::MalformedFrame("string is not UTF-8"))?
-        .to_owned();
-    *bytes = &bytes[len..];
-    Ok(value)
-}
-
-fn push_string(bytes: &mut Vec<u8>, value: &str) {
-    bytes.extend_from_slice(&(value.len() as u32).to_be_bytes());
-    bytes.extend_from_slice(value.as_bytes());
-}
-
-pub(crate) async fn write_message_frame<S>(
-    stream: &mut S,
-    sequence: u64,
-    message: &Message,
-) -> Result<(), MessageProtocolError>
-where
-    S: AsyncWriteExt + Unpin,
-{
-    let mut payload = Vec::with_capacity(9 + message.encoded_len());
-    payload.push(MESSAGE_FRAME);
-    payload.extend_from_slice(&sequence.to_be_bytes());
-    message
-        .encode(&mut payload)
-        .map_err(MessageProtocolError::Encode)?;
-    write_frame(stream, &payload).await
-}
-
-#[cfg(test)]
-pub(crate) async fn read_message_frame<S>(
-    stream: &mut S,
-) -> Result<(u64, Message), MessageProtocolError>
-where
-    S: AsyncReadExt + Unpin,
-{
-    let frame_len = read_frame_length(stream).await?;
-    let payload = read_frame_body(stream, frame_len).await?;
-    decode_message_frame(&payload)
-}
-
-fn decode_message_frame(payload: &[u8]) -> Result<(u64, Message), MessageProtocolError> {
-    let Some((&kind, rest)) = payload.split_first() else {
-        return Err(MessageProtocolError::EmptyFrame);
-    };
-    if kind != MESSAGE_FRAME {
-        return Err(MessageProtocolError::UnexpectedFrameKind(kind));
-    }
-    if rest.len() < 8 {
-        return Err(MessageProtocolError::MalformedFrame(
-            "message frame is missing sequence",
-        ));
-    }
-    let sequence = u64::from_be_bytes(rest[..8].try_into().expect("checked length"));
-    let message = Message::decode(&rest[8..]).map_err(MessageProtocolError::Decode)?;
-    Ok((sequence, message))
-}
-
-pub(crate) async fn write_ack_frame<S>(
-    stream: &mut S,
-    sequence: u64,
-) -> Result<(), MessageProtocolError>
-where
-    S: AsyncWriteExt + Unpin,
-{
-    let mut payload = [0; 9];
-    payload[0] = ACK_FRAME;
-    payload[1..].copy_from_slice(&sequence.to_be_bytes());
-    write_frame(stream, &payload).await
-}
-
-pub(crate) async fn read_ack_frame<S>(stream: &mut S) -> Result<u64, MessageProtocolError>
-where
-    S: AsyncReadExt + Unpin,
-{
-    let payload = read_frame(stream).await?;
-    let Some((&kind, rest)) = payload.split_first() else {
-        return Err(MessageProtocolError::EmptyFrame);
-    };
-    if kind != ACK_FRAME {
-        return Err(MessageProtocolError::UnexpectedFrameKind(kind));
-    }
-    if rest.len() != 8 {
-        return Err(MessageProtocolError::MalformedFrame(
-            "ack frame must contain exactly one sequence",
-        ));
-    }
-    Ok(u64::from_be_bytes(rest.try_into().expect("checked length")))
-}
-
-async fn write_frame<S>(stream: &mut S, payload: &[u8]) -> Result<(), MessageProtocolError>
-where
-    S: AsyncWriteExt + Unpin,
-{
-    if payload.len() as u64 > MAX_MESSAGE_FRAME_BYTES as u64 {
-        return Err(MessageProtocolError::FrameTooLarge {
-            actual: payload.len() as u64,
-            max: MAX_MESSAGE_FRAME_BYTES as u64,
-        });
-    }
-    stream
-        .write_all(&(payload.len() as u32).to_be_bytes())
-        .await
-        .map_err(MessageProtocolError::Io)?;
-    stream
-        .write_all(payload)
-        .await
-        .map_err(MessageProtocolError::Io)?;
-    stream.flush().await.map_err(MessageProtocolError::Io)
-}
-
-async fn read_frame<S>(stream: &mut S) -> Result<Vec<u8>, MessageProtocolError>
-where
-    S: AsyncReadExt + Unpin,
-{
-    let len = read_frame_length(stream).await?;
-    read_frame_body(stream, len).await
-}
-
-async fn read_frame_length<S>(stream: &mut S) -> Result<u32, MessageProtocolError>
-where
-    S: AsyncReadExt + Unpin,
-{
-    let mut len = [0; 4];
-    stream
-        .read_exact(&mut len)
-        .await
-        .map_err(MessageProtocolError::Io)?;
-    let len = u32::from_be_bytes(len);
-    if len == 0 {
-        return Err(MessageProtocolError::EmptyFrame);
-    }
-    if len > MAX_MESSAGE_FRAME_BYTES {
-        return Err(MessageProtocolError::FrameTooLarge {
-            actual: len as u64,
-            max: MAX_MESSAGE_FRAME_BYTES as u64,
-        });
-    }
-    Ok(len)
-}
-
-async fn read_frame_body<S>(
-    stream: &mut S,
-    validated_len: u32,
-) -> Result<Vec<u8>, MessageProtocolError>
-where
-    S: AsyncReadExt + Unpin,
-{
-    debug_assert!(validated_len > 0 && validated_len <= MAX_MESSAGE_FRAME_BYTES);
-    let len = validated_len;
-    let mut payload = vec![0; len as usize];
-    stream
-        .read_exact(&mut payload)
-        .await
-        .map_err(MessageProtocolError::Io)?;
-    Ok(payload)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         CHANNEL_CAPACITY, InboundMessage, MESSAGE_PROTOCOL, MessageChannelRouter,
         MessageChannelSender, MessageChannelSenderInner, MessageFrameMemoryBudget,
         MessageProtocolError, SendMessageError, decode_open_frame, handle_inbound_io,
-        read_ack_frame, read_message_frame, read_open_response, run_outbound_io, write_ack_frame,
-        write_message_frame, write_open_frame,
+        read_ack_frame, read_open_response, run_outbound_io, write_ack_frame, write_message_frame,
+        write_open_frame,
     };
+    use crate::message_codec::read_message_frame;
     use crate::resources_v3_protocol::MessageChannelResource;
     use auki_datatypes::message::Message;
     use auki_registry::RegistryRef;

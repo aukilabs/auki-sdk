@@ -5,13 +5,16 @@ use crate::resources_protocol::{
 };
 use auki_registry::RegistryRef;
 use futures::{AsyncReadExt, AsyncWriteExt};
-use libp2p::{PeerId, StreamProtocol};
+#[cfg(feature = "swarm")]
+use libp2p::StreamProtocol;
+use libp2p_identity::PeerId;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashSet;
 use thiserror::Error;
 
 /// Additive Resource Catalog protocol that preserves v0.2 rows and adds
 /// receiver-owned message channels.
+#[cfg(feature = "swarm")]
 pub const RESOURCES_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/resources/0.3.0");
 /// Maximum encoded request or response frame size.
 pub const MAX_RESOURCES_FRAME_BYTES: u32 = 1024 * 1024;
@@ -334,9 +337,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "swarm")]
+    use super::RESOURCES_PROTOCOL;
     use super::{
-        MessageChannelResource, RESOURCES_PROTOCOL, ResourceEntry, ResourceVariant,
-        ResourcesRequest, ResourcesResponse, read_resources_request, read_resources_response,
+        MessageChannelResource, ResourceEntry, ResourceVariant, ResourcesRequest,
+        ResourcesResponse, read_resources_request, read_resources_response,
         write_resources_request, write_resources_response,
     };
     use crate::resources_protocol::{
@@ -346,7 +351,7 @@ mod tests {
     };
     use auki_registry::RegistryRef;
     use futures::io::Cursor;
-    use libp2p::PeerId;
+    use libp2p_identity::PeerId;
 
     fn peer() -> PeerId {
         crate::PeerIdentity::from_seed(&[91; 32]).peer_id()
@@ -401,6 +406,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "swarm")]
     #[test]
     fn protocol_id_is_locked() {
         assert_eq!(RESOURCES_PROTOCOL.to_string(), "/auki/resources/0.3.0");

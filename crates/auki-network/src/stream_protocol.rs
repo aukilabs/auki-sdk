@@ -47,11 +47,11 @@
 //! `Vec<u8>` rendered as JSON arrays-of-integers (~4× overhead), so
 //! point-cloud payloads had to carry a `base64_bytes` adapter; (2) the
 //! cross-language schema lived in two places (Rust hand-rolled structs
-//! + Python's hand-rolled mirror in `auki-network-py`). Protobuf
-//! addresses both: native binary fields drop the adapter, and the
+//! + Python's hand-rolled mirror in `auki-network-py`).
+//!
+//! Protobuf addresses both: native binary fields drop the adapter, and the
 //! `.proto` file in [`auki-datatypes`](../../auki-datatypes/proto/stream.proto)
-//! is the single source of truth that consumers in any language
-//! generate from.
+//! is the single source of truth that consumers in any language generate from.
 //!
 //! ## Message order on a healthy stream
 //!
@@ -70,20 +70,9 @@
 //! from peers not present in `cluster.json` at the Noise layer. Stream
 //! protocol does not introduce a new admission decision.
 
-use crate::PEER_DERIVATION_LABEL;
-use auki_identity::Wallet;
 use futures::{AsyncReadExt, AsyncWriteExt};
 use prost::Message;
 use serde::{Deserialize, Serialize};
-
-#[allow(dead_code)]
-fn _phantom() -> Option<Wallet> {
-    Some(
-        Wallet::from_seed(vec![0u8; 32])
-            .expect("32-byte seed")
-            .derive_child(PEER_DERIVATION_LABEL),
-    )
-}
 
 // Wire-type re-exports — single source of truth lives in
 // `auki-datatypes`. The opaque-bytes / structured-vector payloads
@@ -107,22 +96,17 @@ pub use auki_datatypes::{audio, joint_encoders, map, point_cloud, pose};
 /// `FromStart` — replay from the beginning of the log.
 /// `FromTimestamp(i64)` — start from the first entry at or after the
 /// given nanosecond timestamp on the log's own clock.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadFrom {
     /// Tail from the current live end — no historical replay.
+    #[default]
     Latest,
     /// Replay from the very first entry in the log.
     FromStart,
     /// Start at the first entry whose timestamp is ≥ this nanosecond
     /// value on the log's clock.
     FromTimestamp(i64),
-}
-
-impl Default for ReadFrom {
-    fn default() -> Self {
-        ReadFrom::Latest
-    }
 }
 
 /// Consumer → Producer handshake: identifies the log the consumer wants
@@ -158,7 +142,7 @@ pub struct StreamRequest {
 
 /// Convert the Rust `StreamRequest` to the prost wire type so it can
 /// be wrapped in a `StreamMessage::request(…)`.
-pub(crate) fn stream_request_to_wire(req: StreamRequest) -> auki_datatypes::stream::StreamRequest {
+pub fn stream_request_to_wire(req: StreamRequest) -> auki_datatypes::stream::StreamRequest {
     use auki_datatypes::stream::{
         ReadFromLatest, ReadFromStart, ReadFromTimestamp, stream_request,
     };
@@ -180,9 +164,7 @@ pub(crate) fn stream_request_to_wire(req: StreamRequest) -> auki_datatypes::stre
 }
 
 /// Convert the prost wire type back to the Rust `StreamRequest`.
-pub(crate) fn stream_request_from_wire(
-    wire: auki_datatypes::stream::StreamRequest,
-) -> StreamRequest {
+pub fn stream_request_from_wire(wire: auki_datatypes::stream::StreamRequest) -> StreamRequest {
     use auki_datatypes::stream::stream_request;
     let from = match wire.read_from {
         Some(stream_request::ReadFrom::Latest(_)) => ReadFrom::Latest,
@@ -632,6 +614,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn joint_encoders_data_round_trips() {
         let frame = joint_encoders::Data {
             angles_rad: vec![0.0, 0.5, -1.5, 3.14159],
@@ -744,14 +727,14 @@ mod tests {
     #[test]
     fn read_from_enum_serializes_snake_case() {
         assert_eq!(
-            serde_json::to_value(&ReadFrom::Latest).unwrap(),
+            serde_json::to_value(ReadFrom::Latest).unwrap(),
             serde_json::json!("latest")
         );
         assert_eq!(
-            serde_json::to_value(&ReadFrom::FromStart).unwrap(),
+            serde_json::to_value(ReadFrom::FromStart).unwrap(),
             serde_json::json!("from_start")
         );
-        let v = serde_json::to_value(&ReadFrom::FromTimestamp(42)).unwrap();
+        let v = serde_json::to_value(ReadFrom::FromTimestamp(42)).unwrap();
         assert!(v.is_object()); // tagged enum variant with value
     }
 

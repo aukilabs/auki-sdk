@@ -52,16 +52,19 @@
 //! JSON string — the bytes whose XXH3-128 hash is named by `hash`.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
+#[cfg(feature = "swarm")]
 use libp2p::StreamProtocol;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// libp2p protocol id for content-addressed registry list + get.
 /// Stable; bump version only on an incompatible wire-shape change.
+#[cfg(feature = "swarm")]
 pub const REGISTRIES_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/registries/0.3.0");
 
 /// Legacy Get-only protocol. Still accepted inbound; outbound Get may
 /// fall back here when the peer does not speak 0.3.
+#[cfg(feature = "swarm")]
 pub const REGISTRIES_PROTOCOL_V2: StreamProtocol = StreamProtocol::new("/auki/registries/0.2.0");
 
 /// Cap on a single framed message. Registry entries are tiny today
@@ -469,9 +472,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn v2_and_v3_get_request_framed_bytes_are_locked() {
+        const V2_JSON: &str = r#"{"kind":"frame","id":"frame","hash":"hash"}"#;
+        let mut expected_v2 = (V2_JSON.len() as u32).to_be_bytes().to_vec();
+        expected_v2.extend_from_slice(V2_JSON.as_bytes());
+
+        let mut v2 = Vec::new();
+        write_registry_request_v2(
+            &mut v2,
+            &RegistryRequestV2 {
+                kind: RegistryKind::Frame,
+                id: "frame".into(),
+                hash: "hash".into(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(v2, expected_v2);
+
+        const V3_JSON: &str = r#"{"op":"get","kind":"frame","id":"frame","hash":"hash"}"#;
+        let mut expected_v3 = (V3_JSON.len() as u32).to_be_bytes().to_vec();
+        expected_v3.extend_from_slice(V3_JSON.as_bytes());
+
+        let mut v3 = Vec::new();
+        write_registry_request(
+            &mut v3,
+            &RegistryRequest::get(RegistryKind::Frame, "frame", "hash"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(v3, expected_v3);
+    }
+
+    #[tokio::test]
     async fn read_rejects_oversized_length_prefix() {
         let mut buf = (MAX_REGISTRIES_FRAME_BYTES + 1).to_be_bytes().to_vec();
-        buf.extend(std::iter::repeat(0u8).take(8));
+        buf.extend(std::iter::repeat_n(0u8, 8));
         let mut cursor = futures::io::Cursor::new(buf);
         let err = read_registry_response(&mut cursor).await.unwrap_err();
         assert!(matches!(err, RegistriesProtocolError::FrameTooLarge { .. }));
@@ -480,18 +516,16 @@ mod tests {
     /// Pins the envelope field names for cross-language consumers.
     #[test]
     fn wire_shape_locked_field_names() {
-        let json = serde_json::to_string(&RegistryRequest::get(
-            RegistryKind::Frame,
-            "frame",
-            "hash",
-        ))
-        .unwrap();
+        let json =
+            serde_json::to_string(&RegistryRequest::get(RegistryKind::Frame, "frame", "hash"))
+                .unwrap();
         assert!(json.contains(r#""op":"get""#), "{json}");
         assert!(json.contains(r#""kind":"frame""#), "{json}");
         assert!(json.contains(r#""id":"frame""#), "{json}");
         assert!(json.contains(r#""hash":"hash""#), "{json}");
 
-        let list = serde_json::to_string(&RegistryRequest::list(RegistryKind::DeviceModel)).unwrap();
+        let list =
+            serde_json::to_string(&RegistryRequest::list(RegistryKind::DeviceModel)).unwrap();
         assert!(list.contains(r#""op":"list""#), "{list}");
         assert!(list.contains(r#""kind":"device_model""#), "{list}");
 
@@ -500,7 +534,10 @@ mod tests {
         })
         .unwrap();
         assert!(err.contains(r#""op":"error""#), "{err}");
-        assert!(err.contains(r#""reason":"list is only implemented for device_model""#), "{err}");
+        assert!(
+            err.contains(r#""reason":"list is only implemented for device_model""#),
+            "{err}"
+        );
 
         let v2 = serde_json::to_string(&RegistryRequestV2 {
             kind: RegistryKind::Frame,

@@ -14,11 +14,13 @@
 //! `chunk_len` raw payload bytes follow the framed meta.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
+#[cfg(feature = "swarm")]
 use libp2p::StreamProtocol;
 use prost::Message;
 use thiserror::Error;
 
 /// libp2p protocol id for content-addressed blob transfer.
+#[cfg(feature = "swarm")]
 pub const BLOBS_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/blobs/0.1.0");
 
 /// Cap on a single raw chunk payload.
@@ -28,8 +30,7 @@ pub const MAX_BLOB_CHUNK_BYTES: u32 = 1024 * 1024;
 pub use auki_registry::MAX_BLOB_BYTES;
 
 /// Max request/response rounds on one blob substream (full fetch + slack).
-pub const MAX_BLOB_ROUNDS: u32 =
-    (MAX_BLOB_BYTES / MAX_BLOB_CHUNK_BYTES as u64) as u32 + 8;
+pub const MAX_BLOB_ROUNDS: u32 = (MAX_BLOB_BYTES / MAX_BLOB_CHUNK_BYTES as u64) as u32 + 8;
 
 /// Cap on a framed protobuf meta message.
 const MAX_META_BYTES: u32 = 16 * 1024;
@@ -184,27 +185,23 @@ pub async fn write_blob_response<S: AsyncWriteExt + Unpin>(
                     "chunk length does not match metadata".into(),
                 ));
             }
-            auki_datatypes::blob::BlobResponse::ok(
-                auki_datatypes::blob::blob_response::Chunk {
-                    sha256: meta.sha256.clone(),
-                    offset: meta.offset,
-                    total_size: meta.total_size,
-                    chunk_len: meta.chunk_len,
-                },
-            )
+            auki_datatypes::blob::BlobResponse::ok(auki_datatypes::blob::blob_response::Chunk {
+                sha256: meta.sha256.clone(),
+                offset: meta.offset,
+                total_size: meta.total_size,
+                chunk_len: meta.chunk_len,
+            })
         }
         BlobResponse::NotFound => auki_datatypes::blob::BlobResponse::not_found(),
         BlobResponse::Error { reason } => auki_datatypes::blob::BlobResponse::error(reason),
     };
     write_frame(stream, &proto).await?;
-    if let BlobResponse::Ok(_) = response {
-        if !chunk.is_empty() {
-            stream
-                .write_all(chunk)
-                .await
-                .map_err(BlobsProtocolError::Io)?;
-            stream.flush().await.map_err(BlobsProtocolError::Io)?;
-        }
+    if matches!(response, BlobResponse::Ok(_)) && !chunk.is_empty() {
+        stream
+            .write_all(chunk)
+            .await
+            .map_err(BlobsProtocolError::Io)?;
+        stream.flush().await.map_err(BlobsProtocolError::Io)?;
     }
     Ok(())
 }
@@ -295,7 +292,10 @@ where
 
 /// Whether `value` is 64 lowercase hex characters.
 pub fn is_sha256_hex(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 #[cfg(test)]
@@ -344,6 +344,42 @@ mod tests {
         write_blob_request(&mut bytes, &request).await.unwrap();
         let mut cursor = futures::io::Cursor::new(bytes);
         assert_eq!(read_blob_request(&mut cursor).await.unwrap(), request);
+    }
+
+    #[tokio::test]
+    async fn request_and_ok_response_framed_bytes_are_locked() {
+        let hash = "a".repeat(64);
+        let request = BlobRequest {
+            sha256: hash.clone(),
+            offset: 2,
+            max_len: 3,
+        };
+        let mut request_bytes = Vec::new();
+        write_blob_request(&mut request_bytes, &request)
+            .await
+            .unwrap();
+
+        let mut expected_request = vec![0x00, 0x00, 0x00, 0x46, 0x0a, 0x40];
+        expected_request.extend_from_slice(&[b'a'; 64]);
+        expected_request.extend_from_slice(&[0x10, 0x02, 0x18, 0x03]);
+        assert_eq!(request_bytes, expected_request);
+
+        let response = BlobResponse::Ok(BlobChunkMeta {
+            sha256: hash,
+            offset: 2,
+            total_size: 5,
+            chunk_len: 3,
+        });
+        let mut response_bytes = Vec::new();
+        write_blob_response(&mut response_bytes, &response, b"xyz")
+            .await
+            .unwrap();
+
+        let mut expected_response = vec![0x00, 0x00, 0x00, 0x4a, 0x0a, 0x48, 0x0a, 0x40];
+        expected_response.extend_from_slice(&[b'a'; 64]);
+        expected_response
+            .extend_from_slice(&[0x10, 0x02, 0x18, 0x05, 0x20, 0x03, b'x', b'y', b'z']);
+        assert_eq!(response_bytes, expected_response);
     }
 
     #[tokio::test]

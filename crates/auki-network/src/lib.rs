@@ -73,6 +73,8 @@ uniffi::custom_type!(Multiaddr, String, {
 pub mod participant;
 pub use participant::ParticipantInfo;
 
+pub mod protocol_ids;
+
 pub mod browser_probe_protocol;
 pub use browser_probe_protocol::{
     BROWSER_PROBE_PROTOCOL, BrowserProbeRequest, BrowserProbeResponse,
@@ -93,7 +95,7 @@ pub use libp2p::Swarm;
 #[cfg(feature = "swarm")]
 pub mod network_runtime;
 
-#[cfg(feature = "swarm")]
+#[cfg(feature = "protocol-codecs")]
 pub mod stream_protocol;
 
 #[cfg(feature = "swarm")]
@@ -114,25 +116,28 @@ pub mod membership_protocol;
 #[cfg(feature = "swarm")]
 pub mod message_protocol;
 
+#[cfg(feature = "protocol-codecs")]
+pub mod message_codec;
+
 #[cfg(feature = "swarm")]
 pub mod diagnostic_protocol;
 
-#[cfg(feature = "swarm")]
+#[cfg(feature = "protocol-codecs")]
 pub mod info_protocol;
 
-#[cfg(feature = "swarm")]
+#[cfg(feature = "protocol-codecs")]
 pub mod resources_protocol;
 
-#[cfg(feature = "swarm")]
+#[cfg(feature = "protocol-codecs")]
 pub mod resources_v3_protocol;
 
-#[cfg(feature = "swarm")]
+#[cfg(feature = "protocol-codecs")]
 pub mod resources_v4_protocol;
 
-#[cfg(feature = "swarm")]
+#[cfg(feature = "protocol-codecs")]
 pub mod registries_protocol;
 
-#[cfg(feature = "swarm")]
+#[cfg(feature = "protocol-codecs")]
 pub mod blobs_protocol;
 
 // ─── SessionHandle ────────────────────────────────────────────────────────────
@@ -144,7 +149,7 @@ pub mod blobs_protocol;
 /// `auki-session` can depend on it without a cycle:
 /// `auki-session` depends on `auki-network` and implements the trait;
 /// `auki-domain` depends on `auki-network` and consumes the trait.
-#[cfg(feature = "swarm")]
+#[cfg(feature = "protocol-codecs")]
 pub trait SessionHandle: Send + Sync {
     /// Returns all locally-known resource catalog rows: own logs plus
     /// materialized logs from other peers. Called whenever a remote peer
@@ -157,41 +162,51 @@ pub use network_runtime::{
     AllowedPeer, BroadcastDiagnosticError, BroadcastMembershipError, DiagnosticEvent,
     HeartbeatNtpSampleObservation, HeartbeatTimestampSource, HeartbeatTimingObservation,
     InfoRequestEvent, JoinEvent, MapCatalogProvider, MembershipEvent, NetworkRuntime,
-    NetworkRuntimeHandle, PeerLivenessEvent, RegistryRequestEvent, RequestInfoError,
-    RequestBlobError, RequestRegistryError, RequestResourcesError, RequestResourcesV3Error, RequestResourcesV4Error,
-    ResourcesRequestEvent, SendJoinRequestError, SpawnError, UpdateError, UpdateReport,
+    NetworkRuntimeHandle, PeerLivenessEvent, RegistryRequestEvent, RequestBlobError,
+    RequestInfoError, RequestRegistryError, RequestResourcesError, RequestResourcesV3Error,
+    RequestResourcesV4Error, ResourcesRequestEvent, SendJoinRequestError, SpawnError, UpdateError,
+    UpdateReport,
 };
 
-#[cfg(feature = "swarm")]
+#[cfg(feature = "protocol-codecs")]
 pub use auki_datatypes::message::Message;
 
 #[cfg(feature = "swarm")]
 pub use message_protocol::{
-    InboundMessage, MAX_MESSAGE_FRAME_BYTES, MESSAGE_PROTOCOL, MessageChannelRegistration,
-    MessageChannelSender, MessageProtocolError, OpenMessageChannelError, RegistrationError,
-    SendMessageError,
+    InboundMessage, MESSAGE_PROTOCOL, MessageChannelRegistration, MessageChannelSender,
+    OpenMessageChannelError, RegistrationError, SendMessageError,
 };
 
-#[cfg(feature = "swarm")]
+#[cfg(feature = "protocol-codecs")]
+pub use message_codec::{MAX_MESSAGE_FRAME_BYTES, MessageProtocolError};
+
+#[cfg(feature = "protocol-codecs")]
 pub use resources_v3_protocol::{
     MAX_RESOURCES_FRAME_BYTES as MAX_RESOURCES_V3_FRAME_BYTES, MessageChannelResource,
-    RESOURCES_PROTOCOL as RESOURCES_V3_PROTOCOL, ResourceEntry as ResourceEntryV3,
-    ResourceVariant as ResourceVariantV3, ResourcesProtocolError as ResourcesProtocolErrorV3,
-    ResourcesRequest as ResourcesRequestV3, ResourcesResponse as ResourcesResponseV3,
+    ResourceEntry as ResourceEntryV3, ResourceVariant as ResourceVariantV3,
+    ResourcesProtocolError as ResourcesProtocolErrorV3, ResourcesRequest as ResourcesRequestV3,
+    ResourcesResponse as ResourcesResponseV3,
 };
 
 #[cfg(feature = "swarm")]
+pub use resources_v3_protocol::RESOURCES_PROTOCOL as RESOURCES_V3_PROTOCOL;
+
+#[cfg(feature = "protocol-codecs")]
 pub use resources_v4_protocol::{
-    MapLogResource, RESOURCES_PROTOCOL as RESOURCES_V4_PROTOCOL,
-    ResourcesProtocolError as ResourcesProtocolErrorV4, ResourcesRequest as ResourcesRequestV4,
-    ResourcesResponse as ResourcesResponseV4,
+    MapLogResource, ResourcesProtocolError as ResourcesProtocolErrorV4,
+    ResourcesRequest as ResourcesRequestV4, ResourcesResponse as ResourcesResponseV4,
 };
 
 #[cfg(feature = "swarm")]
+pub use resources_v4_protocol::RESOURCES_PROTOCOL as RESOURCES_V4_PROTOCOL;
+
+#[cfg(feature = "protocol-codecs")]
 pub use blobs_protocol::{
-    BlobChunkMeta, BlobRequest, BlobResponse, BLOBS_PROTOCOL, MAX_BLOB_BYTES, MAX_BLOB_CHUNK_BYTES,
-    MAX_BLOB_ROUNDS,
+    BlobChunkMeta, BlobRequest, BlobResponse, MAX_BLOB_BYTES, MAX_BLOB_CHUNK_BYTES, MAX_BLOB_ROUNDS,
 };
+
+#[cfg(feature = "swarm")]
+pub use blobs_protocol::BLOBS_PROTOCOL;
 
 #[cfg(all(feature = "swarm", feature = "swift-bindings"))]
 pub use network_runtime::{

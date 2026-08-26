@@ -45,7 +45,9 @@
 //! against malformed senders.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
+use libp2p_identity::PeerId;
 use prost::Message;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub use auki_datatypes::info::{InfoRequest, InfoResponse};
@@ -61,6 +63,34 @@ pub const INFO_PROTOCOL: &str = "/auki/info/0.0.1";
 /// senders.
 pub const MAX_INFO_FRAME_BYTES: u32 = 64 * 1024;
 
+/// Participant metadata served by authenticated info protocol version 1.0.0.
+///
+/// Authentication supplies Domain membership and authority. This payload is
+/// diagnostic application/session metadata only, so it intentionally has no
+/// Manager, membership, authorization-role, or route fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthenticatedParticipantInfo {
+    /// Application identifier, such as `boosterapp` or `sentinel`.
+    pub app: String,
+    /// Application version reported by the participant.
+    pub app_version: String,
+    /// Operator-friendly participant label.
+    pub name: String,
+    /// Identifier minted for this application session.
+    pub session_id: String,
+    /// Identifier of the session's local clock descriptor.
+    pub session_clock_id: String,
+    /// Content hash pinning that clock descriptor.
+    pub session_clock_hash: String,
+    /// Current value of the session-local clock.
+    pub session_now_ns: u64,
+    /// Noise-authenticated libp2p identity repeated for diagnostics.
+    pub peer_id: PeerId,
+    /// Stable local application-instance label, when the host has one.
+    pub app_instance: String,
+}
+
 /// Failure modes for the framed read/write helpers below.
 #[derive(Debug, Error)]
 pub enum InfoProtocolError {
@@ -73,9 +103,38 @@ pub enum InfoProtocolError {
     /// Protobuf decode (read side) failed.
     #[error("decode: {0}")]
     Decode(#[source] prost::DecodeError),
+    /// The typed authenticated participant document is not valid JSON.
+    #[error("participant info json: {0}")]
+    Json(#[source] serde_json::Error),
     /// Length prefix exceeds [`MAX_INFO_FRAME_BYTES`].
     #[error("frame too large: {actual} bytes (max {max})")]
     FrameTooLarge { actual: u64, max: u64 },
+}
+
+/// Write an authenticated info 1.0.0 response using the existing bounded
+/// protobuf wrapper and the adapted typed JSON document.
+pub async fn write_authenticated_info_response<S>(
+    stream: &mut S,
+    info: &AuthenticatedParticipantInfo,
+) -> Result<(), InfoProtocolError>
+where
+    S: AsyncWriteExt + Unpin,
+{
+    let response = InfoResponse {
+        participant_info_json: serde_json::to_string(info).map_err(InfoProtocolError::Json)?,
+    };
+    write_info_response(stream, &response).await
+}
+
+/// Read and validate an authenticated info 1.0.0 response.
+pub async fn read_authenticated_info_response<S>(
+    stream: &mut S,
+) -> Result<AuthenticatedParticipantInfo, InfoProtocolError>
+where
+    S: AsyncReadExt + Unpin,
+{
+    let response = read_info_response(stream).await?;
+    serde_json::from_str(&response.participant_info_json).map_err(InfoProtocolError::Json)
 }
 
 /// Write an [`InfoRequest`] to `stream`, length-prefixed protobuf.
@@ -173,6 +232,22 @@ where
 mod tests {
     use super::*;
 
+    fn authenticated_fixture() -> AuthenticatedParticipantInfo {
+        AuthenticatedParticipantInfo {
+            app: "boosterapp".into(),
+            app_version: "1.2.3".into(),
+            name: "k1".into(),
+            session_id: "s1".into(),
+            session_clock_id: "clock".into(),
+            session_clock_hash: "hash".into(),
+            session_now_ns: 7,
+            peer_id: "12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw"
+                .parse()
+                .unwrap(),
+            app_instance: "device".into(),
+        }
+    }
+
     #[tokio::test]
     async fn request_round_trips() {
         let req = InfoRequest::default();
@@ -211,9 +286,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn authenticated_info_v1_framed_bytes_are_explicit_and_manager_free() {
+        const EXPECTED_JSON: &str = r#"{"app":"boosterapp","app_version":"1.2.3","name":"k1","session_id":"s1","session_clock_id":"clock","session_clock_hash":"hash","session_now_ns":7,"peer_id":"12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw","app_instance":"device"}"#;
+        let mut expected = vec![0x00, 0x00, 0x00, 0xee, 0x0a, 0xeb, 0x01];
+        expected.extend_from_slice(EXPECTED_JSON.as_bytes());
+
+        let mut bytes = Vec::new();
+        write_authenticated_info_response(&mut bytes, &authenticated_fixture())
+            .await
+            .unwrap();
+        assert_eq!(bytes, expected);
+
+        let decoded = read_authenticated_info_response(&mut futures::io::Cursor::new(bytes))
+            .await
+            .unwrap();
+        assert_eq!(decoded, authenticated_fixture());
+        assert!(!EXPECTED_JSON.contains("manager"));
+        assert!(!EXPECTED_JSON.contains("route"));
+        assert!(!EXPECTED_JSON.contains("role"));
+    }
+
+    #[test]
+    fn authenticated_info_v1_rejects_manager_era_fields() {
+        let mut value = serde_json::to_value(authenticated_fixture()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("is_manager".into(), serde_json::Value::Bool(false));
+        assert!(serde_json::from_value::<AuthenticatedParticipantInfo>(value).is_err());
+    }
+
+    #[tokio::test]
     async fn read_rejects_oversized_length_prefix() {
         let mut buf = (MAX_INFO_FRAME_BYTES + 1).to_be_bytes().to_vec();
-        buf.extend(std::iter::repeat(0u8).take(8));
+        buf.extend(std::iter::repeat_n(0u8, 8));
         let mut cursor = futures::io::Cursor::new(buf);
         let err = read_info_response(&mut cursor).await.unwrap_err();
         assert!(matches!(err, InfoProtocolError::FrameTooLarge { .. }));

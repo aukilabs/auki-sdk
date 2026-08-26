@@ -4,7 +4,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use libp2p::{swarm::ConnectionId, PeerId};
+use libp2p::{PeerId, swarm::ConnectionId};
 use parking_lot::Mutex;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
@@ -30,6 +30,7 @@ pub enum NodeObservationStatus {
 pub enum NodeFailure {
     SwarmEnded,
     ExpiryDriverEnded,
+    ListenerClosed,
     Panicked,
     TaskCancelled,
 }

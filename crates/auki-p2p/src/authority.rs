@@ -2,8 +2,8 @@ use chrono::{DateTime, Timelike, Utc};
 use uuid::Uuid;
 
 use crate::{
-    transport::CurrentCredentialStatus, DdsVerificationKeys, Error, Node, P2PAccessClaims, PeerId,
-    Result, SignedP2pCredential,
+    DdsVerificationKeys, Error, Node, P2PAccessClaims, PeerId, Result, SignedP2pCredential,
+    transport::CurrentCredentialStatus,
 };
 
 /// Fail-closed errors for the process-local authenticated P2P authority.
@@ -72,6 +72,24 @@ impl DomainAuthority {
             .install_credential(credential)
             .await
             .map_err(P2pCredentialError::InvalidAccessToken)
+    }
+
+    /// Verify and install a credential only when it authorizes one exact
+    /// Domain. The Domain check and monotonic credential replacement share the
+    /// Node's authority-update critical section, so a valid token for another
+    /// Domain cannot transiently replace the current credential.
+    pub async fn install_credential_for_domain(
+        &self,
+        credential: SignedP2pCredential,
+        domain_id: Uuid,
+    ) -> P2pCredentialResult<P2PAccessClaims> {
+        self.node
+            .install_credential_for_domain(credential, domain_id)
+            .await
+            .map_err(|error| match error {
+                Error::LocalDomainMismatch(_) => P2pCredentialError::CredentialDomainMismatch,
+                error => P2pCredentialError::InvalidAccessToken(error),
+            })
     }
 
     /// Install a credential only when its verified signed `exp` exactly

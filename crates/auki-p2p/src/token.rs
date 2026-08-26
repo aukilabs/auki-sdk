@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use libp2p::PeerId;
 use p256::pkcs8::DecodePublicKey;
 use parking_lot::RwLock;
@@ -516,6 +516,7 @@ impl TokenStore {
         verifier: &DdsTokenVerifier,
         local_peer_id: PeerId,
         expected_expiration: Option<u64>,
+        required_domain_id: Option<Uuid>,
     ) -> Result<P2PAccessClaims> {
         // Node's authority-update gate prevents verification keys from changing
         // between this verification and the write. The comparison and replacement
@@ -523,6 +524,9 @@ impl TokenStore {
         // credential verification can never overwrite newer authority.
         let claims = verifier.verify(signed.as_str())?;
         ensure_token_peer(&claims, local_peer_id)?;
+        if let Some(required_domain_id) = required_domain_id {
+            ensure_token_domain(&claims, required_domain_id)?;
+        }
         if let Some(expected_expiration) = expected_expiration {
             if claims.exp != expected_expiration {
                 return Err(Error::CredentialExpirationMismatch {
@@ -589,6 +593,22 @@ pub(crate) fn ensure_token_peer(claims: &P2PAccessClaims, noise_peer_id: PeerId)
     Ok(())
 }
 
+pub(crate) fn ensure_token_domain(
+    claims: &P2PAccessClaims,
+    required_domain_id: Uuid,
+) -> Result<()> {
+    if claims
+        .domain_ids
+        .iter()
+        .filter_map(|domain_id| Uuid::parse_str(domain_id).ok())
+        .any(|domain_id| domain_id == required_domain_id)
+    {
+        Ok(())
+    } else {
+        Err(Error::LocalDomainMismatch(required_domain_id.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -651,18 +671,22 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
 
     #[test]
     fn malformed_duplicate_and_oversized_key_sets_are_rejected() {
-        assert!(DdsTokenVerifier::from_keys(DdsVerificationKeys::new(
-            1,
-            FIRST_PUBLIC_KEY.to_vec(),
-            Some(FIRST_PUBLIC_KEY.to_vec()),
-        ))
-        .is_err());
-        assert!(DdsTokenVerifier::from_keys(DdsVerificationKeys::new(
-            1,
-            vec![b'x'; DDS_VERIFICATION_KEY_MAX_BYTES + 1],
-            None,
-        ))
-        .is_err());
+        assert!(
+            DdsTokenVerifier::from_keys(DdsVerificationKeys::new(
+                1,
+                FIRST_PUBLIC_KEY.to_vec(),
+                Some(FIRST_PUBLIC_KEY.to_vec()),
+            ))
+            .is_err()
+        );
+        assert!(
+            DdsTokenVerifier::from_keys(DdsVerificationKeys::new(
+                1,
+                vec![b'x'; DDS_VERIFICATION_KEY_MAX_BYTES + 1],
+                None,
+            ))
+            .is_err()
+        );
     }
 
     #[test]

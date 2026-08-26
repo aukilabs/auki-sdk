@@ -1,17 +1,18 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use auki_p2p::{
-    ApplicationProtocol, DdsTokenVerifier, DdsVerificationKeys, DomainAuthority, Error, ExactRoute,
-    Identity, Node, NodeObservationEvent, NodeObservationStatus, P2PAccessClaims,
-    P2pCredentialError, PeerDisappearanceReason, PeerRole, ProtocolSpec, SessionRequirements,
-    SignedApplicationMetadata, SignedP2pCredential, DOMAIN_SERVER_MAX_DOMAINS, P2P_TOKEN_AUDIENCE,
-    P2P_TOKEN_CLOCK_SKEW, P2P_TOKEN_ISSUER, P2P_TOKEN_MAX_APPLICATION_NAME_BYTES,
-    P2P_TOKEN_MAX_APPLICATION_VERSION_BYTES, P2P_TOKEN_MAX_PEER_TYPE_BYTES, P2P_TOKEN_MAX_SCOPES,
-    P2P_TOKEN_MAX_SCOPE_BYTES, P2P_TOKEN_SCOPE, P2P_TOKEN_TTL, P2P_TOKEN_TYPE,
+    ApplicationProtocol, DOMAIN_SERVER_MAX_DOMAINS, DdsTokenVerifier, DdsVerificationKeys,
+    DomainAuthority, Error, ExactRoute, Identity, Node, NodeObservationEvent,
+    NodeObservationStatus, P2P_TOKEN_AUDIENCE, P2P_TOKEN_CLOCK_SKEW, P2P_TOKEN_ISSUER,
+    P2P_TOKEN_MAX_APPLICATION_NAME_BYTES, P2P_TOKEN_MAX_APPLICATION_VERSION_BYTES,
+    P2P_TOKEN_MAX_PEER_TYPE_BYTES, P2P_TOKEN_MAX_SCOPE_BYTES, P2P_TOKEN_MAX_SCOPES,
+    P2P_TOKEN_SCOPE, P2P_TOKEN_TTL, P2P_TOKEN_TYPE, P2PAccessClaims, P2pCredentialError,
+    PeerDisappearanceReason, PeerRole, ProtocolSpec, SessionRequirements,
+    SignedApplicationMetadata, SignedP2pCredential,
 };
 use futures::io::{AsyncReadExt, AsyncWriteExt};
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-use libp2p::{identity::PublicKey, Multiaddr};
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+use libp2p::{Multiaddr, identity::PublicKey};
 use serde::Serialize;
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio_util::sync::CancellationToken;
@@ -117,6 +118,72 @@ async fn domain_authority_is_the_redacting_key_credential_and_challenge_boundary
     assert!(debug.contains("[redacted]"));
     assert!(!debug.contains(&compact));
     node.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn wait_for_listeners_is_immediately_ready_without_configured_listeners() {
+    let node = Node::start(
+        Identity::generate(),
+        verifier(),
+        std::iter::empty::<Multiaddr>(),
+    )
+    .unwrap();
+
+    let addresses = tokio::time::timeout(Duration::from_millis(100), node.wait_for_listeners())
+        .await
+        .expect("zero-listener readiness unexpectedly blocked")
+        .unwrap();
+
+    assert!(addresses.is_empty());
+    node.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn wait_for_listeners_waits_for_every_configured_listener() {
+    let node = Node::start(
+        Identity::generate(),
+        verifier(),
+        [
+            "/ip4/127.0.0.1/tcp/0".parse::<Multiaddr>().unwrap(),
+            "/ip4/127.0.0.1/tcp/0".parse::<Multiaddr>().unwrap(),
+        ],
+    )
+    .unwrap();
+
+    let addresses = tokio::time::timeout(Duration::from_secs(5), node.wait_for_listeners())
+        .await
+        .expect("configured listeners did not become ready")
+        .unwrap();
+
+    assert_eq!(addresses.len(), 2);
+    assert_ne!(addresses[0], addresses[1]);
+    assert!(
+        addresses
+            .iter()
+            .all(|address| address.to_string().starts_with("/ip4/127.0.0.1/tcp/"))
+    );
+    node.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn wait_for_listeners_reports_an_occupied_tcp_port() {
+    let occupied = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = occupied.local_addr().unwrap().port();
+    let requested = format!("/ip4/127.0.0.1/tcp/{port}")
+        .parse::<Multiaddr>()
+        .unwrap();
+    let error = match Node::start(Identity::generate(), verifier(), [requested.clone()]) {
+        Ok(node) => tokio::time::timeout(Duration::from_secs(5), node.wait_for_listeners())
+            .await
+            .expect("occupied listener did not resolve to a deterministic failure")
+            .unwrap_err(),
+        Err(error) => error,
+    };
+
+    assert!(matches!(
+        error,
+        Error::Listen { address, .. } if address == requested.to_string()
+    ));
 }
 
 #[test]
@@ -389,9 +456,11 @@ fn verifier_enforces_the_exact_dds_claim_profile() {
     let mut bad_signature = sign(&valid_claims).into_bytes();
     let last = bad_signature.last_mut().unwrap();
     *last = if *last == b'A' { b'B' } else { b'A' };
-    assert!(verifier
-        .verify(&String::from_utf8(bad_signature).unwrap())
-        .is_err());
+    assert!(
+        verifier
+            .verify(&String::from_utf8(bad_signature).unwrap())
+            .is_err()
+    );
 
     let wrong_algorithm = encode(
         &Header::new(Algorithm::HS256),
@@ -500,12 +569,14 @@ fn application_protocol_accepts_sdk_and_posemesh_namespaces_only() {
     }
     assert!(ApplicationProtocol::new(format!("/auki-p2p/{}/1", "a".repeat(65))).is_err());
     assert!(ApplicationProtocol::new(format!("/auki-p2p/dataset/{}", "1".repeat(33))).is_err());
-    assert!(ApplicationProtocol::new(format!(
-        "/auki/auth/1/{}/{}",
-        "a".repeat(64),
-        "1".repeat(32)
-    ))
-    .is_ok());
+    assert!(
+        ApplicationProtocol::new(format!(
+            "/auki/auth/1/{}/{}",
+            "a".repeat(64),
+            "1".repeat(32)
+        ))
+        .is_ok()
+    );
     assert!(SessionRequirements::new("550E8400-E29B-41D4-A716-446655440000").is_err());
 }
 
@@ -1042,6 +1113,53 @@ async fn failed_and_conflicting_credential_updates_preserve_current_authority() 
         P2pCredentialError::InvalidAccessToken(Error::PeerIdMismatch { .. })
     ));
     assert_eq!(credentials.current_claims().await.unwrap().iat, issued_at);
+    node.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn wrong_domain_credential_rejection_preserves_prior_authority_atomically() {
+    let node = listening_node();
+    let authority = node.authority();
+    let required_domain_id = Uuid::new_v4();
+    let wrong_domain_id = Uuid::new_v4();
+    let issued_at = unix_time();
+    let current = claims(
+        node.peer_id(),
+        PeerRole::Compute,
+        vec![required_domain_id.to_string()],
+        issued_at,
+    );
+    authority
+        .install_credential_for_domain(
+            SignedP2pCredential::new(sign(&current)).unwrap(),
+            required_domain_id,
+        )
+        .await
+        .unwrap();
+
+    let wrong_domain = claims(
+        node.peer_id(),
+        PeerRole::Compute,
+        vec![wrong_domain_id.to_string()],
+        issued_at + 1,
+    );
+    let error = authority
+        .install_credential_for_domain(
+            SignedP2pCredential::new(sign(&wrong_domain)).unwrap(),
+            required_domain_id,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        P2pCredentialError::CredentialDomainMismatch
+    ));
+    assert_eq!(authority.current_claims().await.unwrap(), current);
+    assert_eq!(
+        authority.require(required_domain_id).await.unwrap(),
+        current
+    );
     node.shutdown().await.unwrap();
 }
 

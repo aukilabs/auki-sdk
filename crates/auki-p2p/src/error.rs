@@ -51,6 +51,8 @@ pub enum Error {
     },
     #[error("remote token is not authorized for required Domain {0}")]
     RemoteDomainMismatch(String),
+    #[error("local token is not authorized for required Domain {0}")]
+    LocalDomainMismatch(String),
     #[error("expected remote Peer ID {expected}, connected to {actual}")]
     UnexpectedRemotePeer { expected: String, actual: String },
     #[error("remote peer rejected mutual authentication")]

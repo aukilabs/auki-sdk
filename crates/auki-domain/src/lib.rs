@@ -15,6 +15,8 @@
 
 #![warn(missing_docs)]
 
+#[cfg(feature = "native_runtime")]
+mod authenticated_runtime;
 #[cfg(feature = "browser_runtime")]
 pub mod browser_session;
 #[cfg(feature = "native_runtime")]

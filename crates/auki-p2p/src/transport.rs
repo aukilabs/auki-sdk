@@ -11,39 +11,40 @@ use std::{
 
 use chrono::Utc;
 use futures::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     FutureExt, StreamExt,
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
 };
 use libp2p::{
+    Multiaddr, PeerId, Stream, StreamProtocol, Swarm, SwarmBuilder,
     core::transport::{ListenerId, TransportError},
     multiaddr::Protocol,
     noise, relay,
     swarm::{
-        dial_opts::{DialOpts, PeerCondition},
         ConnectionId, DialError, NetworkBehaviour, SwarmEvent,
+        dial_opts::{DialOpts, PeerCondition},
     },
-    tcp, yamux, Multiaddr, PeerId, Stream, StreamProtocol, Swarm, SwarmBuilder,
+    tcp, yamux,
 };
 use libp2p_stream::{Behaviour as StreamBehaviour, IncomingStreams};
-use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex as AsyncMutex};
+use tokio::sync::{Mutex as AsyncMutex, broadcast, mpsc, oneshot, watch};
 use uuid::Uuid;
 
 use crate::{
+    Error, Identity, Result as P2PResult,
     authority::DomainAuthority,
     observation::{NodeFailure, NodeObservations},
     relay::{
-        canonicalize_provider_base, ObservedRelayLimits, RelayCancellation,
-        RelayConfirmationRejection, RelayProvider, RelayReservationEvent, RelayReservationHandle,
-        RelayReservationNode, RelayReservationSnapshot,
+        ObservedRelayLimits, RelayCancellation, RelayConfirmationRejection, RelayProvider,
+        RelayReservationEvent, RelayReservationHandle, RelayReservationNode,
+        RelayReservationSnapshot, canonicalize_provider_base,
     },
     relay_client, source_admission,
     targeted_stream::{TargetedStreamBehaviour, TargetedStreamControl},
     token::{
-        ensure_literal_expiry, ensure_token_peer, unix_time_now, DdsTokenVerifier,
-        DdsVerificationKeys, P2PAccessClaims, SignedApplicationMetadata, SignedP2pCredential,
-        TokenStore, P2P_TOKEN_MAX_BYTES,
+        DdsTokenVerifier, DdsVerificationKeys, P2P_TOKEN_MAX_BYTES, P2PAccessClaims,
+        SignedApplicationMetadata, SignedP2pCredential, TokenStore, ensure_literal_expiry,
+        ensure_token_peer, unix_time_now,
     },
-    Error, Identity, Result as P2PResult,
 };
 
 const AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -337,6 +338,20 @@ pub(crate) enum CurrentCredentialStatus {
     Verified(Box<P2PAccessClaims>),
 }
 
+#[derive(Clone, Debug)]
+struct DirectListenState {
+    expected: usize,
+    bound_listener_ids: HashSet<ListenerId>,
+    addresses: Vec<Multiaddr>,
+    failure: Option<DirectListenFailure>,
+}
+
+#[derive(Clone, Debug)]
+struct DirectListenFailure {
+    address: String,
+    reason: String,
+}
+
 #[derive(Clone)]
 pub struct Node {
     node_instance_id: Uuid,
@@ -347,9 +362,10 @@ pub struct Node {
     verifier: DdsTokenVerifier,
     authority_updates: Arc<AsyncMutex<()>>,
     command_sender: mpsc::Sender<Command>,
-    listen_addresses: watch::Receiver<Vec<Multiaddr>>,
+    direct_listeners: watch::Receiver<DirectListenState>,
     relay_events: broadcast::Sender<RelayTransportEvent>,
     observations: NodeObservations,
+    task: Arc<NodeTaskOwnership>,
 }
 
 impl Node {
@@ -418,7 +434,7 @@ impl Node {
         targeted_control: TargetedStreamControl,
         mut swarm: Swarm<Behaviour>,
     ) -> P2PResult<Self> {
-        let mut direct_listener_ids = HashSet::new();
+        let mut direct_listener_addresses = HashMap::new();
         for address in listen_addresses {
             let listener_id = swarm
                 .listen_on(address.clone())
@@ -426,11 +442,16 @@ impl Node {
                     address: address.to_string(),
                     reason: error.to_string(),
                 })?;
-            direct_listener_ids.insert(listener_id);
+            direct_listener_addresses.insert(listener_id, address);
         }
 
         let (command_sender, command_receiver) = mpsc::channel(16);
-        let (listen_sender, listen_receiver) = watch::channel(Vec::new());
+        let (listen_sender, listen_receiver) = watch::channel(DirectListenState {
+            expected: direct_listener_addresses.len(),
+            bound_listener_ids: HashSet::new(),
+            addresses: Vec::new(),
+            failure: None,
+        });
         let (relay_events, _) = broadcast::channel(128);
         let observations = NodeObservations::new();
         let runtime =
@@ -444,7 +465,7 @@ impl Node {
                     swarm,
                     command_receiver,
                     listen_sender,
-                    direct_listener_ids,
+                    direct_listener_addresses,
                     run_relay_events,
                     run_observations,
                 ) => exit,
@@ -452,11 +473,17 @@ impl Node {
             }
         };
         let task_guard = NodeTaskGuard::new(observations.clone());
-        runtime.spawn(supervise_node_task(
-            node_task,
-            observations.clone(),
-            task_guard,
-        ));
+        let (task_completed, _) = watch::channel(false);
+        let completion_guard = NodeTaskCompletionGuard(task_completed.clone());
+        let task_observations = observations.clone();
+        let task = runtime.spawn(async move {
+            let _completion_guard = completion_guard;
+            supervise_node_task(node_task, task_observations, task_guard).await;
+        });
+        let task = Arc::new(NodeTaskOwnership {
+            task: AsyncMutex::new(Some(task)),
+            completed: task_completed,
+        });
 
         Ok(Self {
             node_instance_id: Uuid::new_v4(),
@@ -467,9 +494,10 @@ impl Node {
             verifier,
             authority_updates: Arc::new(AsyncMutex::new(())),
             command_sender,
-            listen_addresses: listen_receiver,
+            direct_listeners: listen_receiver,
             relay_events,
             observations,
+            task,
         })
     }
 
@@ -507,7 +535,24 @@ impl Node {
     ) -> P2PResult<P2PAccessClaims> {
         let _authority_update = self.authority_updates.lock().await;
         self.tokens
-            .install(credential, &self.verifier, self.peer_id(), None)
+            .install(credential, &self.verifier, self.peer_id(), None, None)
+            .await
+    }
+
+    pub(crate) async fn install_credential_for_domain(
+        &self,
+        credential: SignedP2pCredential,
+        domain_id: Uuid,
+    ) -> P2PResult<P2PAccessClaims> {
+        let _authority_update = self.authority_updates.lock().await;
+        self.tokens
+            .install(
+                credential,
+                &self.verifier,
+                self.peer_id(),
+                None,
+                Some(domain_id),
+            )
             .await
     }
 
@@ -523,6 +568,7 @@ impl Node {
                 &self.verifier,
                 self.peer_id(),
                 Some(expected_expiration),
+                None,
             )
             .await
     }
@@ -552,10 +598,38 @@ impl Node {
     }
 
     pub async fn first_listen_address(&self) -> P2PResult<Multiaddr> {
-        let mut receiver = self.listen_addresses.clone();
+        let mut receiver = self.direct_listeners.clone();
         loop {
-            if let Some(address) = receiver.borrow().first().cloned() {
+            let state = receiver.borrow().clone();
+            if let Some(failure) = state.failure {
+                return Err(Error::Listen {
+                    address: failure.address,
+                    reason: failure.reason,
+                });
+            }
+            if let Some(address) = state.addresses.first().cloned() {
                 return Ok(address);
+            }
+            receiver.changed().await.map_err(|_| Error::SwarmStopped)?;
+        }
+    }
+
+    /// Wait until every configured direct listener has emitted at least one
+    /// bound address. A zero-listener node is ready immediately. Any listener
+    /// that closes before or after binding fails the node rather than leaving a
+    /// partially reachable runtime reported as ready.
+    pub async fn wait_for_listeners(&self) -> P2PResult<Vec<Multiaddr>> {
+        let mut receiver = self.direct_listeners.clone();
+        loop {
+            let state = receiver.borrow().clone();
+            if let Some(failure) = state.failure {
+                return Err(Error::Listen {
+                    address: failure.address,
+                    reason: failure.reason,
+                });
+            }
+            if state.bound_listener_ids.len() == state.expected {
+                return Ok(state.addresses);
             }
             receiver.changed().await.map_err(|_| Error::SwarmStopped)?;
         }
@@ -798,8 +872,38 @@ impl Node {
     }
 
     pub async fn shutdown(&self) -> P2PResult<()> {
-        self.send_unit_command(|response| Command::Shutdown { response })
-            .await
+        let result = self
+            .send_unit_command(|response| Command::Shutdown { response })
+            .await;
+        self.finish_node_task(false).await;
+        result
+    }
+
+    /// Abort the node task and wait until its swarm and listeners have been
+    /// dropped.
+    ///
+    /// Normal owners should call [`Node::shutdown`]. This forced barrier exists
+    /// for a bounded outer lifecycle that has already exhausted its graceful
+    /// cleanup deadline. Unlike dropping the command sender, it does not leave
+    /// the node task detached.
+    pub async fn shutdown_now(&self) {
+        self.finish_node_task(true).await;
+    }
+
+    async fn finish_node_task(&self, abort: bool) {
+        let mut owned = self.task.task.lock().await;
+        if let Some(task) = owned.as_mut() {
+            if abort {
+                task.abort();
+            }
+            let _ = task.await;
+            owned.take();
+            return;
+        }
+        drop(owned);
+
+        let mut completed = self.task.completed.subscribe();
+        while !*completed.borrow_and_update() && completed.changed().await.is_ok() {}
     }
 
     async fn connect_exact(
@@ -1458,6 +1562,20 @@ enum SwarmExit {
     OwnersDropped,
     SwarmEnded,
     ExpiryDriverEnded,
+    ListenerClosed,
+}
+
+struct NodeTaskOwnership {
+    task: AsyncMutex<Option<tokio::task::JoinHandle<()>>>,
+    completed: watch::Sender<bool>,
+}
+
+struct NodeTaskCompletionGuard(watch::Sender<bool>);
+
+impl Drop for NodeTaskCompletionGuard {
+    fn drop(&mut self) {
+        self.0.send_replace(true);
+    }
 }
 
 struct NodeTaskGuard {
@@ -1508,6 +1626,10 @@ where
             observations.failed(NodeFailure::ExpiryDriverEnded);
             None
         }
+        Ok(SwarmExit::ListenerClosed) => {
+            observations.failed(NodeFailure::ListenerClosed);
+            None
+        }
         Err(_) => {
             observations.failed(NodeFailure::Panicked);
             None
@@ -1522,8 +1644,8 @@ where
 async fn run_swarm(
     mut swarm: Swarm<Behaviour>,
     mut commands: mpsc::Receiver<Command>,
-    listen_addresses: watch::Sender<Vec<Multiaddr>>,
-    direct_listener_ids: HashSet<ListenerId>,
+    direct_listeners: watch::Sender<DirectListenState>,
+    direct_listener_addresses: HashMap<ListenerId, Multiaddr>,
     relay_events: broadcast::Sender<RelayTransportEvent>,
     observations: NodeObservations,
 ) -> SwarmExit {
@@ -1538,10 +1660,11 @@ async fn run_swarm(
                 let Some(event) = event else { return SwarmExit::SwarmEnded };
                 match event {
                     SwarmEvent::NewListenAddr { listener_id, address } => {
-                        if direct_listener_ids.contains(&listener_id) {
-                            listen_addresses.send_modify(|addresses| {
-                                if !addresses.contains(&address) {
-                                    addresses.push(address.clone());
+                        if direct_listener_addresses.contains_key(&listener_id) {
+                            direct_listeners.send_modify(|state| {
+                                state.bound_listener_ids.insert(listener_id);
+                                if !state.addresses.contains(&address) {
+                                    state.addresses.push(address.clone());
                                 }
                             });
                         }
@@ -1672,6 +1795,19 @@ async fn run_swarm(
                         }
                     }
                     SwarmEvent::ListenerClosed { listener_id, reason, .. } => {
+                        if let Some(requested_address) = direct_listener_addresses.get(&listener_id) {
+                            let reason = match reason {
+                                Ok(()) => "listener closed unexpectedly".to_string(),
+                                Err(error) => error.to_string(),
+                            };
+                            direct_listeners.send_modify(|state| {
+                                state.failure = Some(DirectListenFailure {
+                                    address: requested_address.to_string(),
+                                    reason: reason.clone(),
+                                });
+                            });
+                            return SwarmExit::ListenerClosed;
+                        }
                         if let Some(handle) = reservations.state.handle_for_listener(listener_id) {
                             match reason {
                                 Ok(()) => {
@@ -2168,7 +2304,7 @@ fn parse_relay_route(route: &Multiaddr) -> P2PResult<ParsedRelayRoute> {
             return Err(Error::InvalidRelayRoute {
                 address: route.to_string(),
                 reason: "expected exact dns4/tcp/p2p/p2p-circuit/p2p grammar".into(),
-            })
+            });
         }
     };
 
@@ -2404,7 +2540,7 @@ mod dial_error_tests {
     use std::{future::pending, io};
 
     use hickory_resolver::{ResolveError, ResolveErrorKind};
-    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+    use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 
     use crate::{P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_TTL, P2P_TOKEN_TYPE};
 
@@ -2449,6 +2585,34 @@ mod dial_error_tests {
         drop(never_polled);
         assert_eq!(
             cancelled.snapshot().status(),
+            crate::NodeObservationStatus::Failed(NodeFailure::TaskCancelled)
+        );
+    }
+
+    #[tokio::test]
+    async fn canceled_task_join_retains_ownership_for_forced_shutdown() {
+        const PUBLIC_KEY: &[u8] = br#"-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
+8FKYQ5HDiJO0jg7CsFL0yIlK9dTW1wSZmwUX4REXM7LiuD1YWuXoNH1aqA==
+-----END PUBLIC KEY-----"#;
+        let node = Node::start(
+            Identity::generate(),
+            DdsTokenVerifier::from_es256_pem(PUBLIC_KEY).unwrap(),
+            std::iter::empty::<Multiaddr>(),
+        )
+        .unwrap();
+
+        assert!(
+            tokio::time::timeout(Duration::ZERO, node.finish_node_task(false))
+                .await
+                .is_err(),
+            "canceling an in-progress join must leave the task owned"
+        );
+        tokio::time::timeout(Duration::from_secs(1), node.shutdown_now())
+            .await
+            .expect("forced shutdown must abort and join the retained task");
+        assert_eq!(
+            node.observations().snapshot().status(),
             crate::NodeObservationStatus::Failed(NodeFailure::TaskCancelled)
         );
     }

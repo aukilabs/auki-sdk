@@ -200,9 +200,11 @@ print("log_ref:", log.log_ref.source_peer_id, "/", log.log_ref.resource_id)
 
 ## Inspect the catalog
 
-`auki_domain::catalog_of(&peer, &session)` returns one `ResourceEntry` row per registered log, in the `/auki/resources/0.2.0` wire shape — pure and network-free. This is the same payload `Domain::join` serves over the network so others can discover what this peer owns.
+`auki_domain::catalog_of(&peer, &session)` returns one `ResourceEntry` row per
+registered log in the `/auki/auth/1/resources/0.2.0` payload shape — pure and
+network-free. A default `DomainBuilder` installs this snapshot provider.
 
-Over the network, `/auki/resources/0.2.0` is a live snapshot of resources that
+Over the network, `/auki/auth/1/resources/0.2.0` is a live snapshot of resources that
 are currently requestable. A peer may join before every producer is ready.
 Consumers should poll and reconcile rows that appear or disappear; producers
 should omit resources that cannot currently accept stream opens and re-add the
@@ -222,7 +224,9 @@ Prints:
 galbot-01 owns head_left_rgb (live)
 ```
 
-**Python** — catalog building moved to the domain layer with #282 and isn't exposed from `auki-session-py`; Python daemons see catalog rows through [`auki-domain-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-domain-py)'s `ClusterManager` resource fetches.
+**Python** — catalog building is not exposed from `auki-session-py`; the
+Manager-era Domain binding is being replaced with the authenticated Domain
+facade in the native Stage 1 cutover.
 
 ## Inspect the manifest on disk
 
@@ -244,7 +248,9 @@ $ cat /data/auki/galbot-01/logs/galbot-01/head_left_rgb/manifest.json
 The Peer / Session API doesn't yet expose, at this layer:
 
 - **Publishing frames into the log.** A `SensorLogHandle::append`-style surface is planned. The underlying `auki-logs::Log::append` exists; lifting it onto the session handle is the natural next step.
-- **Joining a domain so other peers see your catalog.** `auki_domain::Domain::join(&peer, &session, config)` works in Rust but requires building a libp2p swarm yourself; there is no Python binding for it yet — Python daemons drive `auki-domain-py`'s `ClusterManager` directly.
+- **Joining a Domain from Python.** Rust `DomainBuilder` already owns the
+  authenticated node; the Python binding over that same lifecycle is the next
+  Stage 1 migration slice.
 - **Materializing a remote peer's log.** `Session::materialize_remote_log` returns `NotImplementedError` — this is the Phase 5 deliverable in the #216 plan.
 
 This page will grow to cover each as it lands.

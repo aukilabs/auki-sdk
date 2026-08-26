@@ -11,40 +11,39 @@ use std::{
 
 use chrono::Utc;
 use futures::{
-    FutureExt, StreamExt,
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    FutureExt, StreamExt,
 };
 use libp2p::{
-    Multiaddr, PeerId, Stream, StreamProtocol, Swarm, SwarmBuilder,
     core::transport::{ListenerId, TransportError},
     multiaddr::Protocol,
     noise, relay,
     swarm::{
-        ConnectionId, DialError, NetworkBehaviour, SwarmEvent,
         dial_opts::{DialOpts, PeerCondition},
+        ConnectionId, DialError, NetworkBehaviour, SwarmEvent,
     },
-    tcp, yamux,
+    tcp, yamux, Multiaddr, PeerId, Stream, StreamProtocol, Swarm, SwarmBuilder,
 };
 use libp2p_stream::{Behaviour as StreamBehaviour, IncomingStreams};
-use tokio::sync::{Mutex as AsyncMutex, broadcast, mpsc, oneshot, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex as AsyncMutex};
 use uuid::Uuid;
 
 use crate::{
-    Error, Identity, Result as P2PResult,
     authority::DomainAuthority,
     observation::{NodeFailure, NodeObservations},
     relay::{
-        ObservedRelayLimits, RelayCancellation, RelayConfirmationRejection, RelayProvider,
-        RelayReservationEvent, RelayReservationHandle, RelayReservationNode,
-        RelayReservationSnapshot, canonicalize_provider_base,
+        canonicalize_provider_base, ObservedRelayLimits, RelayCancellation,
+        RelayConfirmationRejection, RelayProvider, RelayReservationEvent, RelayReservationHandle,
+        RelayReservationNode, RelayReservationSnapshot,
     },
     relay_client, source_admission,
     targeted_stream::{TargetedStreamBehaviour, TargetedStreamControl},
     token::{
-        DdsTokenVerifier, DdsVerificationKeys, P2P_TOKEN_MAX_BYTES, P2PAccessClaims,
-        SignedApplicationMetadata, SignedP2pCredential, TokenStore, ensure_literal_expiry,
-        ensure_token_peer, unix_time_now,
+        ensure_literal_expiry, ensure_token_peer, unix_time_now, DdsTokenVerifier,
+        DdsVerificationKeys, P2PAccessClaims, SignedApplicationMetadata, SignedP2pCredential,
+        TokenStore, P2P_TOKEN_MAX_BYTES,
     },
+    Error, Identity, Result as P2PResult,
 };
 
 const AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -2540,7 +2539,7 @@ mod dial_error_tests {
     use std::{future::pending, io};
 
     use hickory_resolver::{ResolveError, ResolveErrorKind};
-    use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 
     use crate::{P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_TTL, P2P_TOKEN_TYPE};
 

@@ -2,8 +2,8 @@ use chrono::{DateTime, Timelike, Utc};
 use uuid::Uuid;
 
 use crate::{
-    DdsVerificationKeys, Error, Node, P2PAccessClaims, PeerId, Result, SignedP2pCredential,
-    transport::CurrentCredentialStatus,
+    transport::CurrentCredentialStatus, DdsVerificationKeys, Error, Node, P2PAccessClaims, PeerId,
+    Result, SignedP2pCredential,
 };
 
 /// Fail-closed errors for the process-local authenticated P2P authority.

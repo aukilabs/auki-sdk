@@ -16,7 +16,7 @@ This section is for engineers building products on top of the Auki SDK. If you'r
 
 ## Pose log discovery and stream open
 
-Consumers such as Park should treat `/auki/resources/0.2.0` as the live
+Consumers such as Park should treat `/auki/auth/1/resources/0.2.0` as the live
 catalog of requestable resources. Poll it, reconcile additions/removals, and
 open streams by the row's stable `resource_id`.
 
@@ -24,14 +24,15 @@ For a live movable pose stream:
 
 1. Fetch a peer's resources with a `pose_log` variant filter.
 2. Select rows where `state == "live"` and `pose.writer_mode == "movable"`.
-3. Dial the row's `writer_peer_id` peer and open `/auki/stream/0.2.0` with
+3. Route to the row's `writer_peer_id` and open
+   `/auki/auth/1/stream/0.2.0` with
    `StreamRequest { source_peer_id: row.source_peer_id, resource_id:
    row.resource_id, from: ReadFrom::Latest }`.
 
 Rust shape:
 
 ```rust
-let response = cluster
+let response = domain
     .fetch_resources_catalog_with(
         writer_peer_id,
         ResourcesRequest {
@@ -55,31 +56,14 @@ for row in response.resources {
         resource_id: row.resource_id.clone(),
         from: ReadFrom::Latest,
     };
-    let subscription = cluster
+    let subscription = domain
         .open_stream::<auki_datatypes::pose::SpatialTransform>(writer_peer_id, request)
         .await?;
 }
 ```
 
-Python shape:
-
-```python
-from auki_domain import ReadFrom, StreamRequest
-
-for row in manager.fetch_resources_catalog(peer_id, variants=["pose_log"]):
-    pose = row.pose
-    if row.state != "live":
-        continue
-    if pose is None or pose.get("writer_mode") != "movable":
-        continue
-
-    request = StreamRequest(
-        resource_id=row.resource_id,
-        source_peer_id=row.source_peer_id,
-        from_=ReadFrom.latest(),
-    )
-    sub = manager.open_stream_with_request(row.writer_peer_id, request)
-```
+The authenticated Python `Domain` binding is the next Stage 1 migration slice;
+do not use the excluded Manager-era package as a substitute.
 
 `writer_peer_id` chooses which peer to dial. `StreamRequest` identifies the
 data by `source_peer_id` and `resource_id`; it does not carry `writer_peer_id`.

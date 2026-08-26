@@ -3,23 +3,18 @@
 // the item's deprecation warning.
 #![allow(deprecated)]
 
-//! Networking substrate for the Auki SDK.
+//! Application protocol codecs and plain networking types for the Auki SDK.
 //!
-//! Data types: the deprecated [`PeerIdentity`] adapter over the canonical
-//! [`auki_p2p::Identity`], [`ReachabilityRecord`] describing how to dial a
-//! peer, and [`Capability`] tagging what a peer offers. Wallet-backed hosts
-//! preserve their stable identity through [`identity_from_wallet`].
+//! The `protocol-codecs` feature exposes transport-neutral framing, payload,
+//! validation, provider, and subscription types for the authenticated Domain
+//! protocols. Transport ownership, peer authentication, dialing, relay
+//! booking, and protocol task lifecycles belong to `auki-p2p` and
+//! `auki-domain`.
 //!
-//! `swarm` feature: a libp2p `Swarm` with TCP + QUIC + Noise + Yamux,
-//! a [`libp2p-allow-block-list`] gate that enforces the cluster trust
-//! boundary at the handshake layer, and a [`NetworkRuntime`] that
-//! drives the swarm against a configurable allow-list. The runtime
-//! accepts inbound substreams on `/auki/stream/0.2.0` (delegating to
-//! the consumer's `stream_provider`) and exposes outbound
-//! [`open_stream`].
-//!
-//! `discovery_client` feature: an HTTP client for the Discovery
-//! bootstrap-rendezvous service.
+//! The default feature set retains lightweight identity compatibility types:
+//! the deprecated [`PeerIdentity`] adapter over [`auki_p2p::Identity`],
+//! [`ReachabilityRecord`], and [`Capability`]. Wallet-backed hosts derive their
+//! stable P2P identity through [`identity_from_wallet`].
 
 use auki_identity::Wallet;
 pub use auki_p2p::Identity;
@@ -70,57 +65,16 @@ uniffi::custom_type!(Multiaddr, String, {
     lower: |m: Multiaddr| m.to_string(),
 });
 
-pub mod participant;
-pub use participant::ParticipantInfo;
-
 pub mod protocol_ids;
-
-pub mod browser_probe_protocol;
-pub use browser_probe_protocol::{
-    BROWSER_PROBE_PROTOCOL, BrowserProbeRequest, BrowserProbeResponse,
-};
-
-#[cfg(feature = "browser_probe")]
-pub mod browser_probe;
-
-#[cfg(feature = "swarm")]
-pub mod swarm;
-
-/// Re-export of `libp2p::Swarm` so downstream crates can name
-/// `auki_network::Swarm<Behaviour>` without taking a direct `libp2p`
-/// dep.
-#[cfg(feature = "swarm")]
-pub use libp2p::Swarm;
-
-#[cfg(feature = "swarm")]
-pub mod network_runtime;
 
 #[cfg(feature = "protocol-codecs")]
 pub mod stream_protocol;
 
-#[cfg(feature = "swarm")]
+#[cfg(feature = "protocol-codecs")]
 pub mod stream_runtime;
-
-#[cfg(feature = "join_protocol")]
-pub mod join_protocol;
-
-#[cfg(feature = "join_protocol")]
-pub mod browser_session_protocol;
-
-#[cfg(feature = "swarm")]
-pub mod heartbeat_protocol;
-
-#[cfg(feature = "swarm")]
-pub mod membership_protocol;
-
-#[cfg(feature = "swarm")]
-pub mod message_protocol;
 
 #[cfg(feature = "protocol-codecs")]
 pub mod message_codec;
-
-#[cfg(feature = "swarm")]
-pub mod diagnostic_protocol;
 
 #[cfg(feature = "protocol-codecs")]
 pub mod info_protocol;
@@ -140,41 +94,8 @@ pub mod registries_protocol;
 #[cfg(feature = "protocol-codecs")]
 pub mod blobs_protocol;
 
-// ─── SessionHandle ────────────────────────────────────────────────────────────
-
-/// Source of resource catalog rows that `auki-domain`'s resources protocol
-/// handler reads from. Implemented by `auki_session::Session`.
-///
-/// The trait is defined here (in `auki-network`) so both `auki-domain` and
-/// `auki-session` can depend on it without a cycle:
-/// `auki-session` depends on `auki-network` and implements the trait;
-/// `auki-domain` depends on `auki-network` and consumes the trait.
-#[cfg(feature = "protocol-codecs")]
-pub trait SessionHandle: Send + Sync {
-    /// Returns all locally-known resource catalog rows: own logs plus
-    /// materialized logs from other peers. Called whenever a remote peer
-    /// asks this peer for its catalog over `/auki/resources/0.2.0`.
-    fn catalog(&self) -> Vec<resources_protocol::ResourceEntry>;
-}
-
-#[cfg(feature = "swarm")]
-pub use network_runtime::{
-    AllowedPeer, BroadcastDiagnosticError, BroadcastMembershipError, DiagnosticEvent,
-    HeartbeatNtpSampleObservation, HeartbeatTimestampSource, HeartbeatTimingObservation,
-    InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime, NetworkRuntimeHandle,
-    PeerLivenessEvent, RegistryRequestEvent, RequestBlobError, RequestInfoError,
-    RequestRegistryError, RequestResourcesError, RequestResourcesV3Error, RequestResourcesV4Error,
-    ResourcesRequestEvent, SendJoinRequestError, SpawnError, UpdateError, UpdateReport,
-};
-
 #[cfg(feature = "protocol-codecs")]
 pub use auki_datatypes::message::Message;
-
-#[cfg(feature = "swarm")]
-pub use message_protocol::{
-    InboundMessage, MESSAGE_PROTOCOL, MessageChannelRegistration, MessageChannelSender,
-    OpenMessageChannelError, RegistrationError, SendMessageError,
-};
 
 #[cfg(feature = "protocol-codecs")]
 pub use message_codec::{MAX_MESSAGE_FRAME_BYTES, MessageProtocolError};
@@ -187,37 +108,19 @@ pub use resources_v3_protocol::{
     ResourcesResponse as ResourcesResponseV3,
 };
 
-#[cfg(feature = "swarm")]
-pub use resources_v3_protocol::RESOURCES_PROTOCOL as RESOURCES_V3_PROTOCOL;
-
 #[cfg(feature = "protocol-codecs")]
 pub use resources_v4_protocol::{
     MapCatalogProvider, MapLogResource, ResourcesProtocolError as ResourcesProtocolErrorV4,
     ResourcesRequest as ResourcesRequestV4, ResourcesResponse as ResourcesResponseV4,
 };
 
-#[cfg(feature = "swarm")]
-pub use resources_v4_protocol::RESOURCES_PROTOCOL as RESOURCES_V4_PROTOCOL;
-
 #[cfg(feature = "protocol-codecs")]
 pub use blobs_protocol::{
     BlobChunkMeta, BlobRequest, BlobResponse, MAX_BLOB_BYTES, MAX_BLOB_CHUNK_BYTES, MAX_BLOB_ROUNDS,
 };
 
-#[cfg(feature = "swarm")]
-pub use blobs_protocol::BLOBS_PROTOCOL;
-
-#[cfg(all(feature = "swarm", feature = "swift-bindings"))]
-pub use network_runtime::{
-    OpenStreamError, StreamEntry, StreamError, StreamSubscriptionAudio, StreamSubscriptionCamera,
-    StreamSubscriptionDetection, StreamSubscriptionJointEncoders, StreamSubscriptionPointCloud,
-};
-
 #[cfg(feature = "app_instance")]
 pub mod app_instance;
-
-#[cfg(feature = "discovery_client")]
-pub mod discovery_client;
 
 /// Label used when deriving a wallet's peer key. Stable; do not change.
 ///
@@ -327,7 +230,7 @@ impl PeerIdentity {
         self.identity
     }
 
-    /// Reconstruct a temporary libp2p `Keypair` for the deprecated runtime.
+    /// Reconstruct a temporary libp2p `Keypair` for compatibility callers.
     ///
     /// The adapter stores only [`Identity`]; this compatibility method decodes
     /// its canonical protobuf representation instead of retaining another key
@@ -364,15 +267,12 @@ impl From<PeerIdentity> for Identity {
 
 // ─── ReachabilityRecord ──────────────────────────────────────────────────────
 
-/// What a peer advertises about how to reach it: the peer id, one or more
-/// dialable multiaddrs, the named capabilities it offers, and a last-seen
-/// timestamp for staleness pruning.
+/// Host-supplied observations about how a peer may be reached: the peer id,
+/// candidate multiaddrs, advertised capabilities, and a last-seen timestamp.
 ///
-/// This is the on-the-wire shape for peer discovery — published to
-/// whatever directory is in scope (LAN mDNS for M1's local case;
-/// Discovery Service for the cross-network case). The fields are
-/// intentionally minimal; richer metadata (load, geographic hints,
-/// operator-defined tags) can ride alongside as a future struct.
+/// This value is never proof of current Domain access, authorization, or
+/// reachability. Consumers must authenticate the peer through `auki-p2p` and
+/// treat failed or stale addresses as ordinary observations to reconcile.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReachabilityRecord {
     pub peer_id: PeerId,
@@ -408,10 +308,10 @@ mod multiaddr_vec_serde {
 
 // ─── Capability ──────────────────────────────────────────────────────────────
 
-/// A namespaced string identifying something a peer offers. Format is
-/// `"<namespace>:<name>"` — e.g. `"networking:message-forwarding"`,
-/// `"discovery:domain-membership"`, `"compute:cuda-12"`. Forward-extensible
-/// without crate changes; new capabilities are just new strings.
+/// A namespaced string describing something a peer advertises. Format is
+/// `"<namespace>:<name>"` — e.g. `"networking:message-forwarding"` or
+/// `"compute:cuda-12"`. Capabilities are observational routing metadata, never
+/// authorization claims. New values are forward-extensible strings.
 ///
 /// The four canonical networking capabilities are surfaced as `&str`
 /// constants on this type; build a `Capability` from them via
@@ -488,8 +388,8 @@ mod tests {
     /// (Python, Go, browser JS) is correct only if it produces this exact string
     /// from the same seed bytes. The chain that's locked: ed25519 keypair from
     /// seed → libp2p `PublicKey` (protobuf-encoded) → multihash → multibase-base58
-    /// `PeerId` text form. If anything in that chain drifts, every `cluster.json`
-    /// in the wild also drifts. Don't update this string without a coordinated
+    /// `PeerId` text form. If anything in that chain drifts, persisted peer
+    /// references also drift. Don't update this string without a coordinated
     /// version bump.
     #[test]
     fn locked_seed_to_peer_id_vector() {
@@ -648,20 +548,5 @@ mod swift_bindings_tests {
         let a = PeerIdentity::from_wallet(Wallet::from_seed(vec![1u8; 32]).expect("32-byte seed"));
         let b = PeerIdentity::from_wallet(Wallet::from_seed(vec![2u8; 32]).expect("32-byte seed"));
         assert_ne!(a.peer_id_string(), b.peer_id_string());
-    }
-}
-
-#[cfg(all(test, feature = "swarm"))]
-mod protocol_id_tests {
-    use crate::registries_protocol::{REGISTRIES_PROTOCOL, REGISTRIES_PROTOCOL_V2};
-    use crate::resources_protocol::RESOURCES_PROTOCOL;
-    use crate::stream_protocol::STREAM_PROTOCOL;
-
-    #[test]
-    fn protocols_bumped_to_v0_2_0() {
-        assert_eq!(RESOURCES_PROTOCOL.to_string(), "/auki/resources/0.2.0");
-        assert_eq!(REGISTRIES_PROTOCOL.to_string(), "/auki/registries/0.3.0");
-        assert_eq!(REGISTRIES_PROTOCOL_V2.to_string(), "/auki/registries/0.2.0");
-        assert_eq!(STREAM_PROTOCOL, "/auki/stream/0.2.0");
     }
 }

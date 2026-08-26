@@ -180,7 +180,7 @@ impl ResourcesV3 {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ResourcesV3Error {
+pub enum ResourcesV3Error {
     #[error("the Domain runtime is stopped")]
     Stopped,
     #[error("resource catalog v0.3 protocol failed: {0}")]

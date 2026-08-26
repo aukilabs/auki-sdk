@@ -10,7 +10,8 @@ If you're new, skim top-to-bottom — terms are ordered roughly from identity ou
 
 A device participating in the Auki network — addressed by a libp2p `PeerId` derived from a [Wallet](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-identity) via `Wallet::derive_child("peer/v1")`. Same wallet seed produces the same `PeerId` across reboots and reinstalls; a peer's identity is durable per device, not per process.
 
-**In code:** `auki_identity::Wallet`, `auki_network::PeerIdentity`, `peer_id: PeerId` fields on every registry entry, log manifest, and catalog row post-#216.
+**In code:** `auki_identity::Wallet`, canonical `auki_p2p::Identity`, and
+`peer_id: PeerId` fields on registry entries, manifests, and catalog rows.
 
 **Common confusions:**
 - *Peer vs session.* `peer_id` is **durable**; a peer reboots and keeps its peer_id. The `session_id` changes every boot.
@@ -27,7 +28,9 @@ One timeline of an app on a peer. A `Session` is born from a long-lived `Peer` (
 **In code:** `auki_session::Session`, constructed via `Peer::start_session()` — the SDK mints a fresh ULID `session_id` and auto-registers the session's monotonic + UTC clocks (#284). See `crates/auki-session/tests/end_to_end.rs` for a complete worked example.
 
 **Common confusions:**
-- *Session vs domain participation.* A session can register logs without ever joining a domain — `auki_domain::Domain::join(&peer, &session, config)` is opt-in. Domain membership is orthogonal to session lifetime.
+- *Session vs Domain participation.* A session can register logs without ever
+  joining a Domain. `DomainBuilder` participation is opt-in and its lifetime is
+  independent of the recording session.
 - *Session vs HTTP session.* Unrelated to web "sessions" — this is a process-boot scope.
 
 **See also:** [Quickstart](Quickstart), [Concept: Peer-Owned Logs](Concept-Peer-Owned-Logs).
@@ -50,14 +53,21 @@ The application a session belongs to. The `app_id` is a caller-supplied string (
 
 ## Domain
 
-A unique identifier — derived as `hash(domain_owner_pubkey)` — applied as a tag to data, asserting the data describes a specific physical space. Domains are how the Auki network groups data across data types: an RGB clip, a point-cloud capture, and a robot pose log all tagged with the same Domain ID are all *about the same place*.
+A canonical DDS UUID identifying one physical-space Domain. The same UUID is
+selected in `DomainConfig`, signed into each P2P access token, and required by
+both sides of every authenticated application stream.
 
 A domain is **not** a scenegraph (the structured map of a space; many possible per domain), and **not** a session (one process boot of a daemon). The three IDs are independent and not derivable from each other.
 
-**In code:** [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain) — `Domain::join(&peer, &session, config)` is the app-facing API; `ClusterManager` is the runtime layer underneath. The Domain ID itself surfaces in `DomainIdentity` / `ClusterTarget`. Discovery's cluster row is the tiebreak authority for the Manager role — local election nominates, a successful Discovery rotation commits.
+**In code:** [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain)
+— `DomainBuilder` creates one public `Domain` over one `auki-p2p` node.
+Authority, listeners, and explicit routes are host inputs; there is no Manager,
+membership roster, or election layer.
 
 **Common confusions:**
-- *Domain vs cluster.* The Domain is the *topic* (the conceptual identifier); the **cluster** is the runtime group of devices networking around that topic.
+- *Domain vs known peers.* A Domain is the authority scope. `known_peers()` is
+  only the current mutually authenticated and connected observation snapshot;
+  it is not a membership roster.
 - *Domain vs scenegraph.* One domain can have many scenegraphs (different structured maps of the same place); the Domain Owner picks one as the canonical **Map**.
 
 **See also:** [`crates/auki-domain/README.md`](https://github.com/aukilabs/auki-sdk/blob/develop/crates/auki-domain/README.md), [`GLOSSARY.md`](https://github.com/aukilabs/auki-sdk/blob/develop/GLOSSARY.md#domain-id) for the Domain ID / Scenegraph ID / Session ID table.
@@ -147,11 +157,14 @@ Four presets cover most cases: `FrameDef::ros_body()` (REP-103 body: x=forward, 
 
 A named time source — described by a `ClockRegistryEntry` with explicit `unit`, `monotonic`, `epoch`, and `scope` (`device-local`, `global`). The SDK refuses to canonicalize on any one clock; every timestamp ships with a named clock identity, and conversions between clocks are first-class data products called TimeTransform Logs.
 
-**In code:** `auki_registry::ClockBody::{MonotonicClock, UtcClock}` and related variants. Registered via `Session::register_clock(clock_id, ClockBody)`. Live cluster-wide estimates compose through `auki_time::estimate_domain_clock` (heartbeat-driven, in-memory).
+**In code:** `auki_registry::ClockBody::{MonotonicClock, UtcClock}` and related
+variants, plus explicit TimeTransform Logs and pure math in `auki-time`.
 
 **Common confusions:**
 - *"What time is it?" has no canonical answer.* There is no `current_time_ns()` global. Each timestamp is paired with the clock it was measured against; `convert_time` (planned) bridges them.
-- *Domain time vs wall clock.* The cluster-wide domain clock estimate (live, in-memory, heartbeat-driven) is a separate concept from the per-peer `local_clock_read` TimeTransform Log (1 Hz, persisted, monotonic ↔ realtime within one device).
+- *Domain time vs wall clock.* The authenticated Domain runtime has no hidden
+  synchronized clock. Applications use named clocks and explicit recorded or
+  supplied transforms.
 
 **See also:** [The Five Questions § Temporal](The-Five-Questions#temporal--when-did-this-happen), [`crates/auki-time/README.md`](https://github.com/aukilabs/auki-sdk/blob/develop/crates/auki-time/README.md).
 
@@ -159,11 +172,14 @@ A named time source — described by a `ClockRegistryEntry` with explicit `unit`
 
 ## Catalog row
 
-The wire-level advertisement of one peer-owned log. One catalog row per log; served by the peer over `/auki/resources/0.2.0` as a `ResourceEntry`.
+The wire-level advertisement of one peer-owned log. One catalog row per log;
+served after mutual authentication over `/auki/auth/1/resources/0.2.0`.
 
 Every row carries `source_peer_id`, `writer_peer_id`, `resource_id`, `state` (`"live"` / `"sealed"`), a `variant` discriminator (`sensor_log` / `pose_log` / `time_transform_log` / `detection_log`), and a variant-specific `manifest` block with the registry refs a consumer needs.
 
-**In code:** `auki_network::resources_protocol::ResourceEntry`. Produced by `Session::catalog()`; the full row shape is documented in [`dataproducts.md`](https://github.com/aukilabs/auki-sdk/blob/develop/dataproducts.md).
+**In code:** `auki_network::resources_protocol::ResourceEntry`. The default
+Domain provider is built from `Peer` + `Session`; the full row shape is
+documented in [`dataproducts.md`](https://github.com/aukilabs/auki-sdk/blob/develop/dataproducts.md).
 
 **Common confusions:**
 - *Catalog row vs manifest.* The catalog row is the **wire** shape of a log's advertisement; the manifest is the **on-disk** shape. They overlap heavily (both carry the canonical registry refs and identity fields) but the catalog row adds an `available` snapshot and omits the writer-local rollover params.
@@ -183,7 +199,10 @@ Materialization is **caching with attribution**, not authorship transfer. The ma
 
 **Common confusions:**
 - *Materialization vs ownership transfer.* `source_peer_id` is **never** rewritten. There is no scenario in which Park's materialized copy of Galbot's data shows Park as the source.
-- *Materialization vs a single byte fetch.* Materialization persists a full local replica with its own retention. Opening a one-off stream against Galbot via `/auki/stream/0.2.0` is a different operation — no local copy, no manifest.
+- *Materialization vs a single byte fetch.* Materialization persists a full
+  local replica with its own retention. Opening an authenticated
+  `/auki/auth/1/stream/0.2.0` stream is a different operation — no local copy
+  and no manifest.
 
 **See also:** [Concept: Peer-Owned Logs § Materialization preserves identity](Concept-Peer-Owned-Logs#materialization-preserves-identity-not-labels).
 

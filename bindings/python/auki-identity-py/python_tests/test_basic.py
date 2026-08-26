@@ -126,16 +126,17 @@ def test_wallet_seed_round_trips_for_root_wallet() -> None:
 
 
 def test_wallet_seed_round_trips_for_derived_child() -> None:
-    """The BoosterApp ansuz path: derive once, hand the bytes to
-    cluster.spawn, expect the swarm's PeerId to equal the derived child's
-    peer_id. Concretely: a wallet reconstructed from the derived seed must
-    have the same peer_id as the original derived wallet."""
+    """Derive once and preserve the canonical native P2P PeerId.
+
+    Concretely, a wallet reconstructed from the derived seed must have the
+    same peer_id as the original derived wallet.
+    """
     parent = Wallet.from_seed(b"\x07" * 32)
     derived = parent.derive_child("peer/v1")
     derived_seed = derived.seed()
     derived_peer_id = derived.peer_id()
 
-    # auki_network::PeerIdentity::from_seed(derived_seed) ↔
+    # auki_p2p::Identity::from_ed25519_seed(derived_seed) ↔
     # Wallet::from_seed(derived_seed).peer_id() must agree:
     reconstructed = Wallet.from_seed(derived_seed)
     assert reconstructed.peer_id() == derived_peer_id

@@ -1,7 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
 use auki_network::{
-    SessionHandle,
     protocol_ids::RESOURCES_V0_2_0,
     resources_protocol::{
         MAX_RESOURCES_FRAME_BYTES, ResourcesProtocolError, ResourcesRequest, ResourcesResponse,
@@ -27,7 +26,6 @@ const RESOURCES_V2_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Default)]
 struct CatalogSources {
     provider: Option<Arc<dyn ResourceCatalogProvider>>,
-    session: Option<Arc<dyn SessionHandle>>,
 }
 
 /// Private adapter for the retained Resource Catalog 0.2.0 payload.
@@ -80,32 +78,21 @@ impl ResourcesV2 {
         Ok(())
     }
 
-    pub(super) fn set_session(
-        &self,
-        session: Arc<dyn SessionHandle>,
-    ) -> Result<(), ResourcesV2Error> {
-        self.ensure_running()?;
-        let mut sources = self.sources.lock();
-        self.ensure_running()?;
-        sources.session = Some(session);
-        Ok(())
-    }
-
-    pub(super) fn local(
+    pub(crate) fn local(
         &self,
         request: &ResourcesRequest,
     ) -> Result<ResourcesResponse, ResourcesV2Error> {
         self.ensure_running()?;
-        let (provider, session) = {
+        let provider = {
             let sources = self.sources.lock();
             self.ensure_running()?;
-            (sources.provider.clone(), sources.session.clone())
+            sources.provider.clone()
         };
-        let resources = snapshot_catalog(provider, session, request);
+        let resources = snapshot_catalog(provider, request);
         Ok(ResourcesResponse { resources })
     }
 
-    pub(super) async fn fetch(
+    pub(crate) async fn fetch(
         &self,
         expected_peer: PeerId,
         request: ResourcesRequest,
@@ -142,44 +129,19 @@ impl ResourcesV2 {
     }
 }
 
-fn filter_resources(
-    resources: Vec<auki_network::resources_protocol::ResourceEntry>,
-    request: &ResourcesRequest,
-) -> Vec<auki_network::resources_protocol::ResourceEntry> {
-    if request.variants.is_empty() {
-        return resources;
-    }
-    use auki_network::resources_protocol::{Variant, VariantContent};
-    resources
-        .into_iter()
-        .filter(|resource| {
-            let variant = match &resource.variant_content {
-                VariantContent::SensorLog { .. } => Variant::SensorLog,
-                VariantContent::PoseLog { .. } => Variant::PoseLog,
-                VariantContent::TimeTransformLog { .. } => Variant::TimeTransformLog,
-                VariantContent::DetectionLog { .. } => Variant::DetectionLog,
-            };
-            request.variants.contains(&variant)
-        })
-        .collect()
-}
-
 fn snapshot_catalog(
     provider: Option<Arc<dyn ResourceCatalogProvider>>,
-    session: Option<Arc<dyn SessionHandle>>,
     request: &ResourcesRequest,
 ) -> Vec<auki_network::resources_protocol::ResourceEntry> {
     if let Some(provider) = provider {
         provider.snapshot_for_request(request, None)
-    } else if let Some(session) = session {
-        filter_resources(session.catalog(), request)
     } else {
         Vec::new()
     }
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ResourcesV2Error {
+pub enum ResourcesV2Error {
     #[error("the Domain runtime is stopped")]
     Stopped,
     #[error("resource catalog protocol failed: {0}")]
@@ -211,14 +173,6 @@ mod tests {
         fn snapshot(&self) -> Vec<ResourceEntry> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.resources.clone()
-        }
-    }
-
-    struct Session(Vec<ResourceEntry>);
-
-    impl SessionHandle for Session {
-        fn catalog(&self) -> Vec<ResourceEntry> {
-            self.0.clone()
         }
     }
 
@@ -256,30 +210,21 @@ mod tests {
     }
 
     #[test]
-    fn provider_precedes_session_and_is_sampled_for_each_filtered_request() {
+    fn provider_is_sampled_for_each_filtered_request_and_unset_is_empty() {
         let calls = Arc::new(AtomicUsize::new(0));
         let provider: Arc<dyn ResourceCatalogProvider> = Arc::new(Provider {
             resources: vec![sensor("provider")],
             calls: Arc::clone(&calls),
         });
-        let session: Arc<dyn SessionHandle> = Arc::new(Session(vec![sensor("session")]));
         let request = ResourcesRequest {
             variants: vec![Variant::SensorLog],
         };
 
         for _ in 0..2 {
-            let resources = snapshot_catalog(
-                Some(Arc::clone(&provider)),
-                Some(Arc::clone(&session)),
-                &request,
-            );
+            let resources = snapshot_catalog(Some(Arc::clone(&provider)), &request);
             assert_eq!(resources, vec![sensor("provider")]);
         }
         assert_eq!(calls.load(Ordering::SeqCst), 2);
-        assert_eq!(
-            snapshot_catalog(None, Some(session), &request),
-            vec![sensor("session")]
-        );
-        assert!(snapshot_catalog(None, None, &request).is_empty());
+        assert!(snapshot_catalog(None, &request).is_empty());
     }
 }

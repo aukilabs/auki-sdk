@@ -1,27 +1,14 @@
-//! Cluster lifecycle for the Auki SDK.
+//! Authenticated Domain lifecycle and retained Auki application protocols.
 //!
-//! Owns the cluster membership document ([`ClusterMembership`]),
-//! the join protocol, the Manager state machine, peer-side heartbeat,
-//! successor election, and Manager-handoff orchestration.
-//!
-//! Not the home for `convert_time` / `convert_pose` — those operate
-//! inside a cluster but live elsewhere. Not the home for log-writing
-//! session lifecycle either.
-//!
-//! ## Status
-//!
-//! Cluster membership document type lands first. Manager state
-//! machine, join protocol, heartbeat, election, and handoff follow.
+//! A [`Domain`] owns one stable P2P identity, one authenticated node, and one
+//! exact DDS Domain UUID. Hosts provide signed authority and explicit routes;
+//! the crate has no Manager, membership, election, Discovery, or Domain-time
+//! control plane.
 
 #![warn(missing_docs)]
 
 #[cfg(feature = "native_runtime")]
 mod authenticated_runtime;
-#[cfg(feature = "browser_runtime")]
-pub mod browser_session;
-#[cfg(feature = "native_runtime")]
-pub mod cluster_manager;
-pub mod cluster_membership;
 #[cfg(feature = "native_runtime")]
 pub mod domain;
 #[cfg(feature = "native_runtime")]
@@ -30,39 +17,57 @@ mod resource_catalog;
 pub mod stream_manifest;
 
 #[cfg(feature = "native_runtime")]
-pub use auki_network::SessionHandle;
-#[cfg(feature = "native_runtime")]
-pub use auki_network::registries_protocol::{RegistryKind, RegistryListEntry};
-#[cfg(feature = "native_runtime")]
-pub use auki_network::resources_protocol::{ResourceEntry, ResourcesRequest, ResourcesResponse};
-#[cfg(feature = "native_runtime")]
-pub use auki_network::stream_protocol::{ReadFrom, map::MapUpdate};
-#[cfg(feature = "native_runtime")]
 pub use auki_network::{
-    MapLogResource, MessageChannelResource, MessageChannelSender, ResourceEntryV3,
-    ResourceVariantV3, ResourcesRequestV3, ResourcesResponseV3, ResourcesResponseV4,
+    MapCatalogProvider, MapLogResource, MessageChannelResource, ResourceEntryV3, ResourceVariantV3,
+    ResourcesRequestV3, ResourcesResponseV3, ResourcesResponseV4,
+    info_protocol::AuthenticatedParticipantInfo,
+    registries_protocol::{RegistryKind, RegistryListEntry},
+    resources_protocol::{ResourceEntry, ResourcesRequest, ResourcesResponse},
+    stream_protocol::{ReadFrom, StreamRequest, map::MapUpdate},
+    stream_runtime::{
+        SourceStream, StreamDispatch, StreamEntry, StreamError, StreamItem, StreamProvider,
+        StreamSubscription, decline_all_streams,
+    },
 };
+#[cfg(feature = "native_runtime")]
+pub use auki_p2p::{DdsVerificationKeys, Identity, Multiaddr, PeerId, SignedP2pCredential};
 #[cfg(feature = "native_runtime")]
 pub use auki_registry::{
-    ClockRegistryEntry, FrameRegistryEntry, MapRegistryEntry, DeviceModelRegistryEntry, SensorRegistryEntry,
+    ClockRegistryEntry, DetectorRegistryEntry, DeviceModelRegistryEntry, FrameRegistryEntry,
+    MapRegistryEntry, SensorRegistryEntry,
 };
+
 #[cfg(feature = "native_runtime")]
-pub use auki_time::{ClockTransformEstimate, DomainClockEstimate};
-#[cfg(feature = "native_runtime")]
-pub use cluster_manager::{
-    AdmitError, BootstrapError, ClusterManager, ClusterTarget, CreateClusterError, DaemonInfo,
-    DiagnosticMessage, DiscoveryClientError, DiscoveryClusterEntry, DomainClockEstimateUnavailable,
-    DomainTimeNowError, FetchMapCatalogError, FetchParticipantInfoError, FetchRegistryEntryError,
-    FetchResourcesCatalogError, FetchResourcesCatalogV3Error, InboundDiagnosticMessage,
-    JoinClusterError, LIVENESS_CHECK_INTERVAL, ManagerLossAction, decide_manager_loss_action,
-    elect_successor,
+pub use authenticated_runtime::{
+    AuthenticatedDomainError, DomainRollbackError,
+    authority::{DomainAuthority, DomainAuthorityError},
+    blobs::BlobsV1Error,
+    info_v1::{InfoV1Error, ParticipantInfoProvider},
+    messages::{
+        MessageChannelRegistrationError, MessagesV1Error, OpenMessageChannelError, SendMessageError,
+    },
+    peers::{
+        DomainPeerInfoError, DomainPeers, KnownPeer, KnownPeerEvent, KnownPeerRecvError,
+        KnownPeerSnapshot, KnownPeerSubscription,
+    },
+    protocols::{
+        DomainProtocolError, DomainProtocolRegistration, DomainProtocolSpec, DomainProtocolStream,
+        DomainProtocols, DomainRouteAttempt,
+    },
+    registries::RegistriesError,
+    resources_v2::ResourcesV2Error,
+    resources_v3::ResourcesV3Error,
+    resources_v4::ResourcesV4Error,
+    routes::{DomainRouteSnapshot, DomainRoutes, DomainRoutesError, PeerRoutes},
+    status::{DomainFailure, DomainStatus},
+    storage::StorageError,
+    streams::StreamsError,
 };
-pub use cluster_membership::{ClusterMember, ClusterMembership};
 #[cfg(feature = "native_runtime")]
 pub use domain::{
     Domain, DomainBuilder, DomainBuilderError, DomainConfig, DomainError, DomainOpenMapStreamError,
-    DomainOpenMessageChannelError, DomainSendMessageError, MessageChannelReceiver, MessageEvent,
-    catalog_of, map_catalog_of,
+    DomainSendMessageError, MessageChannelReceiver, MessageChannelSender, MessageEvent, catalog_of,
+    map_catalog_of,
 };
 #[cfg(feature = "native_runtime")]
 pub use resource_catalog::ResourceCatalogProvider;

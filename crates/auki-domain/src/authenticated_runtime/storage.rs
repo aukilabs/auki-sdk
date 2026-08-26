@@ -72,7 +72,7 @@ impl RegistryBlobStorage {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum StorageError {
+pub enum StorageError {
     #[error("the Domain runtime is stopped")]
     Stopped,
 }

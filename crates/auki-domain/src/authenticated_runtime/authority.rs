@@ -8,7 +8,7 @@ use super::{RuntimeAccess, RuntimeAccessError};
 /// Domain-scoped host authority. It can install host-fetched trust material
 /// and sign DDS challenges, but cannot open streams or control the node.
 #[derive(Clone)]
-pub(crate) struct DomainAuthority {
+pub struct DomainAuthority {
     access: Arc<RuntimeAccess>,
 }
 
@@ -29,15 +29,15 @@ impl DomainAuthority {
         Self { access }
     }
 
-    pub(crate) fn peer_id(&self) -> auki_p2p::PeerId {
+    pub fn peer_id(&self) -> auki_p2p::PeerId {
         self.access.peer_id
     }
 
-    pub(crate) fn domain_id(&self) -> uuid::Uuid {
+    pub fn domain_id(&self) -> uuid::Uuid {
         self.access.domain_id
     }
 
-    pub(crate) async fn install_verification_keys(
+    pub async fn install_verification_keys(
         &self,
         keys: DdsVerificationKeys,
     ) -> Result<(), DomainAuthorityError> {
@@ -58,7 +58,7 @@ impl DomainAuthority {
         }
     }
 
-    pub(crate) async fn install_credential(
+    pub async fn install_credential(
         &self,
         credential: SignedP2pCredential,
     ) -> Result<(), DomainAuthorityError> {
@@ -77,15 +77,12 @@ impl DomainAuthority {
         Ok(())
     }
 
-    pub(crate) fn peer_public_key_protobuf(&self) -> Result<Vec<u8>, DomainAuthorityError> {
+    pub fn peer_public_key_protobuf(&self) -> Result<Vec<u8>, DomainAuthorityError> {
         let node = self.access.node()?;
         Ok(node.authority().peer_public_key_protobuf())
     }
 
-    pub(crate) fn sign_peer_challenge(
-        &self,
-        challenge: &[u8],
-    ) -> Result<Vec<u8>, DomainAuthorityError> {
+    pub fn sign_peer_challenge(&self, challenge: &[u8]) -> Result<Vec<u8>, DomainAuthorityError> {
         let node = self.access.node()?;
         node.authority()
             .sign_peer_challenge(challenge)
@@ -107,7 +104,7 @@ fn claims_deadline(expiration: u64) -> Result<DateTime<Utc>, DomainAuthorityErro
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum DomainAuthorityError {
+pub enum DomainAuthorityError {
     #[error("the Domain runtime is stopped")]
     Stopped,
     #[error("the signed credential has an invalid expiration")]

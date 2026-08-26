@@ -30,7 +30,10 @@ Two crates own the SDK's data shapes. They're parallel: `auki-datatypes` owns wi
 
 ### [`auki-datatypes`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-datatypes)
 
-`.proto` schemas + prost-generated Rust for every cross-language payload: `camera::CameraFrame`, `point_cloud::Data`, `audio::Data`, `joint_encoders::Data`, `detection::DetectionFrame`, `pose::SpatialTransform`, `time_transform::TimeTransformEntry`, plus the `/auki/stream/0.2.0` `StreamMessage` envelope. One `Data` message per modality used on both disk segment and wire substream — the dual `*_stream` packages were collapsed in #176.
+`.proto` schemas + prost-generated Rust for every cross-language payload:
+camera, point cloud, audio, joint encoders, detections, pose, time transforms,
+and the `/auki/auth/1/stream/0.2.0` envelope. One payload message per modality
+is reused on disk and on authenticated streams.
 
 ### [`auki-manifests`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-manifests)
 
@@ -56,7 +59,10 @@ The five registries: Sensor, Clock, Frame, Detector, and Map. Each entry post-#2
 
 ### [`auki-time`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-time)
 
-Clock primitives, TimeTransform math, NTP-style samplers. `SessionClock` for per-process monotonic time, `TimeTransform` math for the (planned) `convert_time` operation, `NtpExchange` / `NtpSample` / `compute_ntp_sample` for the heartbeat-driven domain-clock convergence, and the 1 Hz `local_clock_read` sampler that writes a `MonotonicClock ↔ UtcClock` TimeTransform Log on each device.
+Clock primitives, TimeTransform math, NTP-style sample calculations, and the
+1 Hz `local_clock_read` sampler that writes a local
+`MonotonicClock ↔ UtcClock` TimeTransform Log. No Domain runtime owns a hidden
+synchronized clock.
 
 ### [`auki-geometry`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-geometry)
 
@@ -66,19 +72,35 @@ Pure spatial math. Phase 1 ships convention conversion via `convert_pose_convent
 
 ## Network
 
-The libp2p substrate and the cluster lifecycle layer.
+Authenticated transport, bounded application codecs, and the public Domain
+lifecycle.
+
+### [`auki-p2p`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-p2p)
+
+Owns the stable libp2p identity and the single native node: TCP/Noise/Yamux,
+DDS-signed Domain credentials, mutual-authentication framing, explicit direct
+and relay routes, relay booking, and authenticated-peer observations. It does
+not fetch credentials or routes over HTTP.
 
 ### [`auki-network`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-network)
 
-libp2p substrate: TCP/QUIC, Noise, Yamux, Circuit Relay v2, identify, ping. On top of that, the peer protocols (`/auki/join`, `/auki/heartbeat`, `/auki/membership`, `/auki/info`, `/auki/resources/0.2.0`, `/auki/registries/0.2.0`, `/auki/registries/0.3.0`, `/auki/blobs/0.1.0`, `/auki/stream/0.2.0`), the typed stream payload registry, the Discovery HTTP client (with relay-address hints for browser-compatible reachability), and the `SessionHandle` trait that breaks the would-be `auki-domain ↔ auki-session` cycle.
+Retains transport-neutral bounded codecs and plain types for the authenticated
+`/auki/auth/1/...` info, resource-catalog, registry, blob, message, and typed
+stream protocols. It owns no swarm, Manager control plane, or Discovery client.
 
 ### [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain)
 
-`Domain::join(&peer, &session, config)` — the app-facing network-presence API (#282) — on top of `ClusterManager`: cluster bootstrap, Manager election, membership exchange, Discovery liveness checks, relay-hint preservation, resource catalog exchange, registry-entry fetch, stream serving, graceful shutdown. App code never constructs `ClusterManager` directly; `Domain::join` builds and owns one internally. Re-exports `ResourceEntry` from `auki-network` so consumers of either crate see the same type.
+The app-facing owner for one exact DDS Domain UUID. `DomainBuilder` binds one
+`Peer`/`Session` pair to one `auki-p2p` node with host-supplied credentials,
+listeners, and explicit routes. `Domain` exposes authenticated known peers,
+catalogs, registry/blob fetches, messages, typed streams, and ordered leave.
+There is no Manager, membership roster, election, or hidden discovery policy.
 
 ### [`auki-domain-relay`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain-relay)
 
-Domain Relay capability — runs a native- and browser-compatible Circuit Relay v2 server so Managers reachable only over TCP can advertise WebSocket-circuit addresses for browser peers to dial. WIP; domain-scoped reservation policy and grants are pending.
+Standalone native/WebSocket Circuit Relay v2 server. Hosts distribute relay
+routes and authority through their own control plane; the relay owns no Domain
+membership or topology policy.
 
 ---
 
@@ -119,14 +141,14 @@ Per-language wrappers. The pattern is **per-component naming** — no umbrella `
 - [`auki-manifests-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-manifests-py) — manifest builders
 - [`auki-layout-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-layout-py) — path helpers
 - [`auki-geometry-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-geometry-py) — convention conversion math
-- [`auki-network-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-network-py) — Discovery client value types + shared stream pyclasses
-- [`auki-domain-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-domain-py) — `ClusterManager` facade with typed stream openers including `open_pose_stream`; resurrected for the post-#216 schema in #231
+- [`auki-network-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-network-py) — prior Manager-era package line, outside the active Stage 1 workspace
+- [`auki-domain-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-domain-py) — being migrated to the authenticated Rust `Domain` owner
 - [`auki-session-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-session-py) — `Session` + register_* + log specs/handles + `catalog()`; re-exports `RegistryRef` / `LogRef` from `auki-registry-py` for type sharing
 
 ### Swift (UniFFI)
 
 - [`auki-identity-swift`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/swift/auki-identity-swift) — Wallet + `PeerIdentity`
-- [`auki-network-swift`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/swift/auki-network-swift) — Discovery client + `NetworkRuntime` + 5-payload streams
+- [`auki-network-swift`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/swift/auki-network-swift) — prior Manager-compatible line, outside the active workspace until the Swift stage
 
 ### Browser (TypeScript)
 
@@ -136,7 +158,7 @@ Per-language wrappers. The pattern is **per-component naming** — no umbrella `
 
 ## Examples
 
-- [`examples/diagnostic-app`](https://github.com/aukilabs/auki-sdk/tree/develop/examples/diagnostic-app) — end-to-end demo that opens a cluster, joins a domain, logs diagnostic flash timestamps. Useful as a worked reference for runtime wiring.
+- [`examples/diagnostic-app`](https://github.com/aukilabs/auki-sdk/tree/develop/examples/diagnostic-app) — temporarily outside the active workspace while it is replaced by the authenticated two-peer Domain demo.
 
 ---
 
@@ -147,12 +169,17 @@ If you're building a robot data-plane producer, you probably pull:
 - `auki-session` + `auki-registry` (Rust) — what the [Quickstart](Quickstart) uses.
 - `auki-session-py` + `auki-registry-py` (Python) — equivalent.
 
-You generally don't touch `auki-logs` / `auki-network` / `auki-domain` directly any more — `Session` owns the I/O and the cluster lifecycle. The lower-level crates remain available for unusual cases (running a peer without `Session`, integrating with a non-libp2p transport, processing logs offline).
+You generally don't touch `auki-logs` or `auki-network` directly: `Session`
+owns the recording timeline and `Domain` owns authenticated network I/O. The
+lower-level crates remain available for unusual cases such as processing logs
+offline or registering an additional authenticated application protocol.
 
 For visualizers consuming other peers' data (Park, browser dashboards), the path is:
 
-- Today: `auki-domain-py` or `auki-network-py` for stream consumption against a known peer (typed openers exist for camera / point-cloud / joint-encoders / audio / pose).
-- After Phase 5 of #216 lands: `Session::materialize_remote_log` for persistent local replicas with custom retention.
+- Rust today: `auki-domain::Domain` for authenticated catalog fetches and typed
+  stream opens against an expected peer.
+- Python and browser consumers remain on their last Manager-compatible release
+  until the corresponding authenticated binding stages land.
 
 ---
 

@@ -6,11 +6,20 @@ Definitions of key terms in the Auki SDK and the surrounding real-world-web prot
 
 ## Real World Web
 
-The protocol surface this SDK targets — peer-to-peer networks where devices in the same physical space share a coherent view of that space (transforms, sensor frames, detections, anchors) without a central authority. Each peer is a [Daemon](#daemon); peers organize into [clusters](#cluster) around shared [Domain IDs](#domain-id); identity, signing, and content-addressing are wallet-rooted. The SDK ships the primitives the protocol composes from — registries, logs, transforms — not the protocol itself.
+The protocol surface this SDK targets — peer-to-peer networks where devices in
+the same physical space share a coherent view of that space (transforms,
+sensor frames, detections, anchors) without a topology leader. Each peer is a
+[Daemon](#daemon); peers authenticate into an exact [Domain ID](#domain-id),
+and identity, signing, and content-addressing are cryptographically rooted.
 
 ## Daemon
 
-A long-running process that reads and writes the SDK's on-disk format and (optionally) participates in clusters as a libp2p peer. Concrete instances: BoosterApp (K1 sensor capture), Sentinel (extractor pipeline), Park (visualizer). A daemon owns a [Wallet](#wallet), reports an [App ID](#app-id) + [App Instance](#app-instance), runs zero or more [recording sessions](#session-id), and exposes a [Control API](docs/control-api.md). The SDK is the substrate; daemons are the consumers.
+A long-running process that reads and writes the SDK's on-disk format and
+(optionally) participates in an authenticated Domain as a libp2p peer.
+Concrete instances include BoosterApp, Sentinel, and Park. A daemon owns a
+[Wallet](#wallet), reports an [App ID](#app-id) + [App Instance](#app-instance),
+runs zero or more [recording sessions](#session-id), and may expose a
+[Control API](docs/control-api.md).
 
 ## Domain
 
@@ -18,37 +27,48 @@ A unique identifier applied as a tag to data, asserting that the data describes 
 
 A Domain is *not* a scenegraph and *not* a coordinate system. A Domain has zero or more **scenegraphs** tagged with it; the **Domain Owner** designates one as the canonical **Map**.
 
-When devices network on the real world web, they discover each other and form **clusters** around shared Domain IDs (a *domain-as-topic*). On disk, Domain membership rides on a data product as a `domain_membership` [TagClaim](#tagclaim), not as a path or filename — Domain is one kind of tag among many.
+When devices network on the real world web, each `Domain` runtime is configured
+with one exact DDS Domain UUID. A DDS-signed P2P access token is the baseline
+admission rule; explicit routes describe reachability but grant no authority.
 
 ## Domain Owner
 
-The entity that controls a Domain — concretely, the holder of the keypair whose pubkey hashes to the Domain ID. Has authority to designate a scenegraph as the Map and to issue `domain_membership` [TagClaim](#tagclaim)s under this Domain.
+The entity that controls Domain policy in DDS and can designate a scenegraph as
+the Map. Runtime access is represented by DDS-signed Domain credentials rather
+than an SDK-local Manager or membership roster.
 
 ## Domain ID
 
-The identifier for a Domain. Derived as `hash(domain_owner_pubkey)`. Used as the `tag_id` in `domain_membership` [TagClaim](#tagclaim)s.
+The canonical DDS Domain UUID. The same UUID is carried in local configuration,
+signed P2P credentials, mutual-authentication requirements, and peer
+observations.
 
 ## Domain Identity
 
-The canonical string a Domain is indexed by on the network — what peers register with on Discovery and cluster around. `{Domain ID}/{name}` for user-named Domains (e.g. `d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a/demo-2026-05`), letting one wallet own multiple distinguishable Domains. One exception: the reserved `"Vinland"` singleton (the default Domain headless daemons fall back to when no Domain exists yet) has the canonical identity `Vinland` with no wallet prefix; Discovery serializes its creation so the singleton property holds. See [`crates/auki-domain`](crates/auki-domain) for the construction primitive ([`DomainIdentity`](crates/auki-domain/src/lib.rs)).
+The network identity of a Domain is its canonical DDS UUID. Human-readable
+names and application indexing may exist outside the P2P runtime, but they do
+not replace or derive the authority identifier.
 
 **Domain ID, Scenegraph ID, and Session ID are three distinct identifiers** — they answer different questions, and none is derivable from another:
 
 | Identifier      | Question                              | Derivation                       |
 |-----------------|---------------------------------------|----------------------------------|
-| Domain ID       | which place?                          | `hash(domain_owner_pubkey)`      |
+| Domain ID       | which place?                          | DDS UUID                         |
 | Scenegraph ID   | which structured map of that place?   | many per Domain; Owner picks one as the Map |
 | Session ID      | which recording run?                  | per-daemon UUIDv4 minted at session start |
 
-## Cluster
+## Cluster (retired SDK model)
 
-The runtime group of devices networking around a shared Domain ID — a *domain-as-topic*. When devices come online and want to participate in a Domain, they discover each other (via DHT, mDNS, or a circuit relay) and form a cluster. The transport is libp2p (see [`auki-network`](crates/auki-network)); the Domain ID is what gives the cluster a reason to exist.
+The removed Manager-era runtime grouped peers into a mutable cluster roster.
+The authenticated SDK does not expose that product model: peers independently
+hold signed access to a DDS Domain and become known only after successful
+mutual authentication on a live connection.
 
-Cluster formation lives in higher layers; the SDK provides primitives, not the network protocol itself.
+## ClusterDoc (retired SDK model)
 
-## ClusterDoc
-
-The cluster's discovery doc — a JSON file (typically `cluster.json`) enumerating the peers participating in the cluster. Each entry pairs a [Peer ID](#peer-id) with its dialable multiaddrs and named capabilities. Distributed either statically (every peer reads `cluster.json` from disk at boot) or dynamically via [Discovery](#discovery). The ClusterDoc is the trust boundary — peers not in the doc cannot dial; libp2p's Noise layer refuses connections from unknown Peer IDs. See [`auki-network`](crates/auki-network).
+The removed runtime used a peer/address roster as both topology and authority.
+The replacement separates those concerns: `DomainRoutes` stores explicit dial
+hints, while signed Domain credentials plus the Noise Peer ID decide access.
 
 ## Scenegraph
 
@@ -86,7 +106,10 @@ The identity primitive — an ed25519 keypair plus deterministic child derivatio
 
 ## Peer ID
 
-The libp2p identifier used in [`cluster.json`](#clusterdoc), `/p2p/<peer-id>` multiaddrs, and the trust check at connection time. Derived from a [Wallet](#wallet) via `Wallet::derive_child("peer/v1")` then libp2p's standard `PublicKey → multihash → multibase-base58` chain. Same wallet seed → same Peer ID, deterministic across machines and reboots.
+The libp2p identifier used in `/p2p/<peer-id>` multiaddrs and bound by Noise
+during mutual authentication. Derived from a [Wallet](#wallet) via
+`Wallet::derive_child("peer/v1")` and the standard libp2p public-key chain.
+Same wallet seed means the same Peer ID across machines and reboots.
 
 ## Session ID
 
@@ -102,13 +125,20 @@ Orthogonal to Domain (which place?), Scenegraph (which structured map?), and Ses
 
 ## App Instance
 
-An identifier for the specific machine an application is running on — derived by the SDK from a stable platform-level value. The current implementation (`auki-network::app_instance::derive`) reads the first non-loopback IEEE-administered MAC, sorts lexicographically for determinism, and renders as 12 lowercase hex chars without separators (e.g. `"00163eabcdef"`). Carried in `ParticipantInfo` so peers in a cluster can tell two `boosterapp` daemons apart when both register against Discovery.
+An identifier for the specific machine an application is running on — derived
+by the SDK from a stable platform-level value. The current implementation
+(`auki-network::app_instance::derive`) reads the first non-loopback
+IEEE-administered MAC, sorts lexicographically for determinism, and renders 12
+lowercase hex characters. It is optional diagnostic metadata, never authority.
 
 Caveats: fragile in containers, VMs, and multi-NIC environments. A wallet-derived persistent stable-id alternative is parked.
 
 ## Sensor / Clock / Frame ID
 
-The id format used for sensors, clocks, and frames: `<platform-tag>-<machine-id>/<name>`. Examples: `K1-AABBCCDDEEFF/head_left_cam` (RGB camera on a K1 robot), `K1-AABBCCDDEEFF/utc` (clock), `K1-AABBCCDDEEFF/head_left_cam_optical` (frame). The platform-tag and machine-id together make the prefix locally unique to the producing daemon; the trailing name is producer-scoped. The full id is what consumers pass to discovery and stream protocols; the corresponding registry entry pins the configuration via its content-addressed hash.
+The id format used for sensors, clocks, and frames:
+`<platform-tag>-<machine-id>/<name>`. The platform tag and machine id make the
+prefix locally unique; the trailing name is producer-scoped. Resource,
+registry, and stream requests combine this id with a content-addressed hash.
 
 ## Frame
 
@@ -174,4 +204,8 @@ A signed assertion that some data product has a property — e.g. *"this Pose Lo
 
 ## Discovery
 
-The runtime registry [`aukilabs/discovery`](https://github.com/aukilabs/discovery) that lets daemons find each other on a LAN without hardcoding `cluster.json` on every device. A daemon using Discovery registers its `peer_id` + addresses via signed `POST /clusters/<name>/peers`, then fetches the full [ClusterDoc](#clusterdoc) to bootstrap its libp2p mesh. The SDK ships [`auki-network::discovery_client`](crates/auki-network/src/discovery_client.rs) (Rust) and [`auki_network.discovery.DiscoveryClient`](bindings/python/auki-network-py) (Python) for daemons; the registry server itself lives in a separate repo. Daemons either use Discovery or a static `cluster.json`, picked at startup — no fallback.
+Any host/application mechanism that supplies explicit peer routes. Static
+configuration, DDS/DMS adapters, mDNS, or another discovery service may all do
+this without changing authentication. Core `auki-p2p`, `auki-network`, and
+`auki-domain` perform no Discovery HTTP requests and never treat route
+knowledge as authorization.

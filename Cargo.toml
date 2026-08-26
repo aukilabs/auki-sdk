@@ -18,14 +18,10 @@ members = [
     "crates/auki-p2p-dataset",
     "crates/auki-network",
     "crates/auki-domain-relay",
-    "crates/auki-network-browser-wasm",
-    "bindings/python/auki-network-py",
-    "bindings/swift/auki-network-swift",
     "bindings/swift/auki-identity-swift",
     "crates/auki-datatypes",
     "crates/auki-domain",
     "crates/auki-qr-detector",
-    "bindings/python/auki-domain-py",
     "crates/auki-registry",
     "bindings/python/auki-registry-py",
     "crates/auki-ros-adapter",
@@ -34,7 +30,6 @@ members = [
     "crates/auki-session",
     "bindings/python/auki-session-py",
     "crates/auki-time",
-    "examples/diagnostic-app",
 ]
 
 [workspace.package]

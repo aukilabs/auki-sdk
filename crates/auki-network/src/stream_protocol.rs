@@ -1,5 +1,5 @@
-//! `/auki/stream/0.2.0` — libp2p substream protocol carrying typed
-//! [`Stream<T>`] data, encoded as protobuf via prost. Step 2 of the
+//! `/auki/auth/1/stream/0.2.0` typed-stream payload codec. `Stream<T>`
+//! data is encoded as protobuf via prost. Step 2 of the
 //! [`auki-datatypes` migration](../../auki-datatypes/src/sprint.md)
 //! moved the wire format off JSON-via-serde-json onto protobuf.
 //!
@@ -7,15 +7,12 @@
 //! RESOLVED 2026-05-05): the initiator opens the substream, writes a
 //! [`StreamRequest`] as the first framed message, the responder either
 //! declines-and-closes or starts pushing typed [`StreamEntry`] messages on
-//! the same substream until close. One protocol; full-duplex;
-//! `cluster.json` is the trust boundary (same as ansuz — peers not in
-//! the doc cannot dial).
+//! the same substream until close. Authentication and Domain access are
+//! enforced by `auki-p2p` before these payloads reach the handler.
 //!
-//! This module ships the **wire primitives**: protocol id, message
-//! envelope re-exports from [`auki_datatypes::stream`], framing
-//! helpers. The `Stream<T>` Rust API (consumer / producer handles) and
-//! the runtime integration (per-substream lifecycle, `stream_provider`
-//! invocation) live in [`crate::stream_runtime`].
+//! This module ships the wire envelope re-exports from
+//! [`auki_datatypes::stream`] and framing helpers. Transport-neutral
+//! consumer/producer types live in [`crate::stream_runtime`].
 //!
 //! ## Wire format
 //!
@@ -66,9 +63,9 @@
 //!
 //! ## Trust boundary
 //!
-//! Cluster doc gates membership; `auki-network`'s swarm refuses dials
-//! from peers not present in `cluster.json` at the Noise layer. Stream
-//! protocol does not introduce a new admission decision.
+//! This codec makes no admission decision. `auki-p2p` verifies the peer's
+//! Domain access token before `auki-domain` dispatches a stream request to an
+//! application provider.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
 use prost::Message;
@@ -123,8 +120,8 @@ pub enum ReadFrom {
 /// talking to; if the serving peer is a materializer, `source_peer_id`
 /// identifies the original writer.
 ///
-/// Wire format: encoded as a prost `auki.stream.StreamRequest` message
-/// on the `/auki/stream/0.2.0` substream.
+/// Wire format: encoded as a prost `auki.stream.StreamRequest` message on an
+/// authenticated v0.2 stream substream.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct StreamRequest {
     /// Peer-id string of the peer that originally wrote the log. Empty
@@ -178,19 +175,6 @@ pub fn stream_request_from_wire(wire: auki_datatypes::stream::StreamRequest) -> 
         from,
     }
 }
-
-/// libp2p protocol id for the typed-byte-stream protocol. Stable; do
-/// not change without coordinating with consumers (Boosterapp, Sentinel,
-/// Park) and any cross-language reimplementation.
-///
-/// Pre-1.0; sub-1.0 versioning per the workspace convention. Replaces
-/// the previous JSON-on-wire `/auki/stream/1.0.0` (retired in this
-/// PR) at Step 2 of the [`auki-datatypes`](../../auki-datatypes)
-/// migration. The new wire is prost-encoded `StreamMessage` from
-/// `auki-datatypes`'s `auki.stream` package; consumers update their
-/// decoders in lockstep. 1.0.0 is reserved for the SDK's first
-/// official release.
-pub const STREAM_PROTOCOL: &str = "/auki/stream/0.2.0";
 
 /// Maximum framed-message size on the wire, in bytes. Bounded so a peer
 /// cannot drive an OOM by sending an arbitrarily-large length prefix;
@@ -331,13 +315,6 @@ mod tests {
             seq,
             payload,
         })
-    }
-
-    #[test]
-    fn protocol_id_is_locked() {
-        // Wire format. Coordinate with Boosterapp, Sentinel, Park, and
-        // any cross-language reimplementation before touching it.
-        assert_eq!(STREAM_PROTOCOL, "/auki/stream/0.2.0");
     }
 
     #[test]

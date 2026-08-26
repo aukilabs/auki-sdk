@@ -694,7 +694,7 @@ enum RegistrySourceError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum RegistriesError {
+pub enum RegistriesError {
     #[error("the Domain runtime is stopped")]
     Stopped,
     #[error("authenticated Registry protocol failed: {0}")]

@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Cluster lifecycle for the Auki SDK — cluster membership document, join protocol, Manager state machine, peer-side heartbeat, successor election, Manager-handoff orchestration."
+description = "Authenticated Domain lifecycle and retained Auki application protocols."
 
 [features]
 default = ["native_runtime"]
@@ -13,12 +13,9 @@ native_runtime = [
     "dep:auki-p2p",
     "dep:auki-datatypes",
     "dep:auki-hash",
-    "dep:auki-jcs",
-    "auki-network/discovery_client",
-    "auki-network/swarm",
+    "auki-network/protocol-codecs",
     "dep:auki-registry",
     "dep:auki-session",
-    "dep:auki-time",
     "dep:prost",
     "dep:tokio",
     "dep:tokio-util",
@@ -28,33 +25,18 @@ native_runtime = [
     "dep:tracing",
     "dep:uuid",
 ]
-browser_runtime = ["dep:getrandom"]
 
 [dependencies]
 auki-p2p = { path = "../auki-p2p", optional = true }
 auki-datatypes = { path = "../auki-datatypes", optional = true }
-auki-identity = { path = "../auki-identity" }
 auki-hash = { path = "../auki-hash", optional = true }
-auki-jcs = { path = "../auki-jcs", optional = true }
 auki-network = { path = "../auki-network", default-features = false }
 auki-registry = { path = "../auki-registry", optional = true }
 # `Domain` composes a `&Peer` + `&Session` from auki-session and serves their
-# catalog; the dependency points domain → session (the #274 inversion).
+# retained application protocols; the dependency points domain → session.
 auki-session = { path = "../auki-session", optional = true }
-auki-time = { path = "../auki-time", optional = true }
-# `ClusterMembership` carries libp2p `PeerId`s on the wire; the
-# `serde` feature pins their canonical string form so the JSON
-# document is interoperable across languages.
-libp2p-identity = { version = "0.2", default-features = false, features = ["ed25519", "peerid", "serde"] }
-multiaddr = "0.18"
-serde = { version = "1", features = ["derive"] }
-# Cluster Manager's join handler serializes the membership document
-# into the wire response; cluster_manager's join_cluster parses the
-# Manager's gossiped membership_json. Promoted from dev-dep.
 serde_json = "1"
 thiserror = "2"
-# `tokio::spawn` + `tokio::time::interval` drive the Manager-side
-# Discovery heartbeat tick.
 tokio = { version = "1", features = ["rt", "time", "macros"], optional = true }
 futures = { version = "0.3", optional = true }
 chrono = { workspace = true, optional = true }
@@ -62,23 +44,17 @@ parking_lot = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 tokio-util = { workspace = true, features = ["rt"], optional = true }
 uuid = { workspace = true, optional = true }
-# `prost::Message` trait bound on `ClusterManager::open_stream<T>` —
-# the same bound `NetworkRuntime::open_stream` carries on `T`. Pulled
-# directly so the public method signature can name it without
-# requiring callers to dep on auki-network.
 prost = { version = "0.13", optional = true }
-getrandom = { version = "0.2", features = ["js"], optional = true }
 
 [dev-dependencies]
 auki-layout = { path = "../auki-layout" }
 auki-manifests = { path = "../auki-manifests" }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "test-util", "time"] }
 tempfile = "3"
-# Integration tests need to drive a Swarm + listen for events directly
-# (waiting for the OS-chosen TCP port to materialize before calling
-# `ClusterManager::create_cluster`). Matches `auki-network`'s libp2p
-# feature set.
+# Authentication boundary tests drive an intentionally unauthenticated raw
+# Swarm to prove application protocols cannot be reached before admission.
 libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "macros"] }
 libp2p-stream = "=0.4.0-alpha"
 futures = "0.3"

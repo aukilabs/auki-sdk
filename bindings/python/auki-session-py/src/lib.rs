@@ -16,8 +16,9 @@
 //!   raise `NotImplementedError` with a clear message (the Rust side
 //!   returns `NotImplemented` on these paths)
 //!
-//! Cluster lifecycle (resource catalogs, domain join) is not in this
-//! package — Python daemons use `auki-domain-py`'s `ClusterManager`.
+//! Network lifecycle (resource catalogs and Domain join) is not in this
+//! package. The Python binding over the authenticated Rust `Domain` owner is
+//! migrated separately.
 //!
 //! ## Type sharing
 //!
@@ -79,9 +80,9 @@ fn parse_mesh_substitutions(
     if raw.is_none() {
         return Ok(None);
     }
-    let map = raw.downcast::<PyDict>().map_err(|_| {
-        PyValueError::new_err("mesh_substitutions must be a dict[str, dict]")
-    })?;
+    let map = raw
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("mesh_substitutions must be a dict[str, dict]"))?;
     let mut out = std::collections::HashMap::new();
     for (key, value) in map.iter() {
         let key: String = key.extract()?;
@@ -965,8 +966,8 @@ impl Peer {
 /// handle = session.register_sensor_log(spec)
 /// ```
 ///
-/// Catalog serving and cluster lifecycle live in the domain layer (a `Domain`
-/// composes a `Peer` + `Session`), not on `Session`.
+/// Catalog serving and authenticated network lifecycle live in the domain
+/// layer (a `Domain` composes a `Peer` + `Session`), not on `Session`.
 #[pyclass]
 pub struct Session {
     inner: Arc<parking_lot::Mutex<session::Session>>,

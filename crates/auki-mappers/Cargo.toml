@@ -8,7 +8,7 @@ license.workspace = true
 auki-datatypes = { path = "../auki-datatypes" }
 auki-registry = { path = "../auki-registry" }
 auki-session = { path = "../auki-session" }
-auki-network = { path = "../auki-network", features = ["swarm"] }
+auki-network = { path = "../auki-network", features = ["protocol-codecs"] }
 thiserror = "2"
 futures = "0.3"
 tokio = { version = "1", features = ["macros", "rt", "sync"] }

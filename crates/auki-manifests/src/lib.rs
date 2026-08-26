@@ -495,7 +495,6 @@ pub enum TimeTransformSource {
     /// [`auki-time`](../../auki-time). The only
     /// producer that ships today.
     LocalClockRead,
-    // future: NtpSynced { server }, SyncedTo { peer_id }, ...
 }
 
 impl TimeTransformSource {

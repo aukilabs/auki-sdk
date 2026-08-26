@@ -637,9 +637,15 @@ fn write_map(py: Python<'_>, app_root: PathBuf, entry: &Bound<'_, PyAny>) -> PyR
 }
 
 #[pyfunction]
-fn write_device_model(py: Python<'_>, app_root: PathBuf, entry: &Bound<'_, PyAny>) -> PyResult<String> {
+fn write_device_model(
+    py: Python<'_>,
+    app_root: PathBuf,
+    entry: &Bound<'_, PyAny>,
+) -> PyResult<String> {
     let entry: registry::DeviceModelRegistryEntry = parse_py(py, entry, "device model")?;
-    registry::write_device_model(&app_root, &entry).map(write_outcome_hash).map_err(map_registry_error)
+    registry::write_device_model(&app_root, &entry)
+        .map(write_outcome_hash)
+        .map_err(map_registry_error)
 }
 
 #[pyfunction]
@@ -650,7 +656,9 @@ fn put_blob(app_root: PathBuf, bytes: &[u8]) -> PyResult<String> {
 #[pyfunction]
 fn get_blob(py: Python<'_>, app_root: PathBuf, sha256: &str) -> PyResult<PyObject> {
     match registry::get_blob(&app_root, sha256).map_err(map_registry_error)? {
-        Some(bytes) => Ok(pyo3::types::PyBytes::new_bound(py, &bytes).into_any().unbind()),
+        Some(bytes) => Ok(pyo3::types::PyBytes::new_bound(py, &bytes)
+            .into_any()
+            .unbind()),
         None => Ok(py.None()),
     }
 }
@@ -700,9 +708,9 @@ fn parse_mesh_substitutions(
     if raw.is_none() {
         return Ok(None);
     }
-    let map = raw.downcast::<PyDict>().map_err(|_| {
-        PyValueError::new_err("mesh_substitutions must be a dict[str, dict]")
-    })?;
+    let map = raw
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("mesh_substitutions must be a dict[str, dict]"))?;
     let mut out = std::collections::HashMap::new();
     for (key, value) in map.iter() {
         let key: String = key.extract()?;
@@ -738,8 +746,7 @@ fn parse_mesh_substitutions(
 
 #[pyfunction]
 fn list_device_models(py: Python<'_>, app_root: PathBuf, peer_id: &str) -> PyResult<PyObject> {
-    let entries =
-        registry::list_device_models(&app_root, peer_id).map_err(map_registry_error)?;
+    let entries = registry::list_device_models(&app_root, peer_id).map_err(map_registry_error)?;
     struct_to_pyobject(py, &entries)
 }
 

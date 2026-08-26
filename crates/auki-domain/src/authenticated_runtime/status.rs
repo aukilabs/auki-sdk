@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 /// Local state of the private authenticated Domain engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DomainStatus {
+pub enum DomainStatus {
     Ready,
     CredentialUnavailable,
     Failed(DomainFailure),
@@ -17,7 +17,7 @@ pub(crate) enum DomainStatus {
 
 /// Bounded terminal failures retained by the Domain status snapshot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DomainFailure {
+pub enum DomainFailure {
     Node(NodeFailure),
     NodeStoppedUnexpectedly,
     ProtocolHostStopped,

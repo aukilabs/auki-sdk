@@ -6,9 +6,9 @@
 //! identity and the sensor / frame / detector registries are read live through
 //! the shared [`PeerInner`] handle rather than copied.
 //!
-//! `Session` has no network dependencies. Cluster lifecycle and catalog
-//! serving live in `auki-domain`'s `Domain`, which composes a `&Peer` + a
-//! `&Session`. See #274 (D1, D2, D3, D7).
+//! `Session` has no network dependencies. Authenticated network lifecycle and
+//! catalog serving live in `auki-domain`'s `Domain`, which composes a `&Peer`
+//! + a `&Session`. See #274 (D1, D2, D3, D7).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -603,7 +603,7 @@ impl Session {
     /// connecting to the serving peer, and ingesting samples.
     ///
     /// Full implementation: fetch remote catalog row, extract canonical
-    /// fields, open `/auki/stream/0.2.0` against serving peer, write
+    /// fields, open `/auki/auth/1/stream/0.2.0` against the serving peer, write
     /// new local manifest, ingest samples. Deferred to a follow-up plan
     /// (Phase 5).
     pub async fn materialize_remote_log(
@@ -637,7 +637,7 @@ impl Session {
 /// A cheaply-cloneable read handle over a [`Session`]'s live logs.
 ///
 /// Obtained via [`Session::logs`]. `auki-domain` holds one to serve the
-/// resource catalog on inbound `/auki/resources/*` requests without owning
+/// resource catalog on inbound `/auki/auth/1/resources/*` requests without owning
 /// the `Session`. Each accessor takes a brief read lock and returns a
 /// snapshot of the current handles.
 #[derive(Clone)]

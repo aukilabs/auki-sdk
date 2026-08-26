@@ -2,7 +2,9 @@
 
 PyO3 bindings for [`auki-session`](../../../crates/auki-session) — Python surface for the SDK's declarative control-plane API. Shipped in #224; tracks the post-#282 `Peer` / `Session` split.
 
-**Status:** Shipped. Tested in `python_tests/`. Cluster lifecycle is **not** in this package — Python daemons drive [`auki-domain-py`](../auki-domain-py)'s `ClusterManager` directly (the Rust `Domain::join` path has no Python binding yet).
+**Status:** Shipped. Tested in `python_tests/`. Network lifecycle is **not** in
+this package. The Manager-era Python Domain binding is outside the active
+workspace while it is replaced with the authenticated Rust `Domain` lifecycle.
 
 ## Public surface
 
@@ -56,7 +58,10 @@ Each returns a typed handle with `resource_id`, `log_ref`, and canonical session
 
 ### Catalog and domain — not here
 
-`catalog()` and `join_domain` / `leave_domain` were removed with the #282 split (they no longer exist on the Rust `Session` either). Resource catalogs and cluster lifecycle live in [`auki-domain-py`](../auki-domain-py) (`ClusterManager`, `ResourceEntry`).
+`catalog()` and `join_domain` / `leave_domain` were removed with the #282 split
+(they no longer exist on the Rust `Session` either). Resource catalogs and
+network lifecycle belong to the separate `auki-domain` surface; the Python
+binding for that authenticated owner is being migrated independently.
 
 ## Type sharing
 

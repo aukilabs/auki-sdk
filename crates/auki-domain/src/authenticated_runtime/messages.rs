@@ -723,7 +723,7 @@ where
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum MessageChannelRegistrationError {
+pub enum MessageChannelRegistrationError {
     #[error("the Domain runtime is stopped")]
     Stopped,
     #[error("message channel receiver capacity must be greater than zero")]
@@ -743,7 +743,7 @@ pub(crate) enum MessageChannelRegistrationError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum OpenMessageChannelError {
+pub enum OpenMessageChannelError {
     #[error("the Domain runtime is stopped")]
     Stopped,
     #[error("message channel owner {resource_owner} does not match expected peer {expected_peer}")]
@@ -783,7 +783,7 @@ impl OpenMessageChannelError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum SendMessageError {
+pub enum SendMessageError {
     #[error("message channel is closed")]
     Closed,
     #[error("message codec failed: {0}")]
@@ -793,7 +793,7 @@ pub(crate) enum SendMessageError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum MessagesV1Error {
+pub enum MessagesV1Error {
     #[error("the Domain runtime is stopped")]
     Stopped,
     #[error("authenticated message protocol failed: {0}")]

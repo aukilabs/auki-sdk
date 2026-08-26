@@ -53,7 +53,7 @@ pub type MapperStream<T> =
 
 /// An SDK stream bound to its canonical log identity.
 pub struct MapperInput<T> {
-    /// Source peer and resource identity. It may name any cluster peer.
+    /// Source peer and resource identity. It may name any authenticated Domain peer.
     pub log_ref: LogRef,
     /// Clock in which every sample timestamp is expressed.
     pub clock: RegistryRef,

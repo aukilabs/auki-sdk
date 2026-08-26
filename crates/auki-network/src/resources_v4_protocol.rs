@@ -1,4 +1,4 @@
-//! `/auki/resources/0.4.0` Map Log catalog protocol.
+//! `/auki/auth/1/resources/0.4.0` Map Log catalog payload codec.
 //!
 //! This is deliberately separate from v0.2/v0.3: their resource variants are
 //! closed, so adding `map_log` in place would make older peers reject a whole
@@ -7,13 +7,9 @@
 
 use auki_registry::RegistryRef;
 use futures::{AsyncReadExt, AsyncWriteExt};
-#[cfg(feature = "swarm")]
-use libp2p::StreamProtocol;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[cfg(feature = "swarm")]
-pub const RESOURCES_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/resources/0.4.0");
 pub const MAX_RESOURCES_FRAME_BYTES: u32 = 1024 * 1024;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,7 +66,7 @@ impl ResourcesResponse {
     }
 }
 
-/// Live source for `/auki/resources/0.4.0` Map Log rows.
+/// Live source for authenticated v0.4 Map Log rows.
 pub trait MapCatalogProvider: Send + Sync {
     /// Return the currently available Map Log catalog.
     fn map_catalog(&self) -> ResourcesResponse;
@@ -175,11 +171,6 @@ mod tests {
             id: id.into(),
             hash: "hash".into(),
         }
-    }
-    #[cfg(feature = "swarm")]
-    #[test]
-    fn protocol_id_is_locked() {
-        assert_eq!(RESOURCES_PROTOCOL.to_string(), "/auki/resources/0.4.0");
     }
     #[tokio::test]
     async fn map_row_round_trips() {

@@ -5,16 +5,13 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Networking substrate for the Auki SDK — peer identity (derived from a wallet), reachability records, named capabilities, and (with the `swarm` feature) a libp2p Swarm builder for TCP/QUIC transport."
+description = "Retained Auki application protocol codecs and plain networking types."
 
 [features]
-# Default-off so M0 stays WASM-friendly (Console derives peer-id without
-# pulling in libp2p's transport stack). Daemons opt in.
+# Application codecs are opt-in so identity-only consumers keep a small API.
 default = []
-# Enables UniFFI proc-macros on a curated subset of auki-network's public
-# types (PeerIdentity in PR A; NetworkRuntime + the stream surface in
-# PR B). When off, the crate compiles exactly as today — no UniFFI dep
-# in the graph.
+# Enables UniFFI proc-macros on the retained PeerIdentity compatibility
+# surface. When off, the crate has no UniFFI dependency in its graph.
 #
 # Propagates to `auki-identity/swift-bindings` because PR A's
 # `PeerIdentity::from_wallet(wallet: Arc<Wallet>)` accepts a UniFFI
@@ -23,34 +20,14 @@ default = []
 # `uniffi::export` here fails to compile. `use_remote_type!` (in
 # `src/lib.rs`) reuses that upstream impl.
 swift-bindings = ["dep:uniffi", "dep:anyhow", "auki-identity/swift-bindings"]
-# Join protocol wire types/framing are shared by native and browser runtimes.
-# Keeping this separate from `swarm` lets wasm/browser packaging reuse the
-# canonical `/auki/join/0.0.1` shapes without pulling in native Tokio transport.
-join_protocol = ["dep:futures", "dep:thiserror", "dep:auki-datatypes", "dep:prost"]
 # Retained application payload codecs and business validation, independent of
-# the legacy `auki-network` swarm/runtime. The authenticated Domain runtime
-# calls these helpers over streams it already authenticated.
-protocol-codecs = ["dep:futures", "dep:thiserror", "dep:auki-datatypes", "dep:prost", "dep:auki-manifests", "dep:auki-registry"]
-# Stream protocol wire types live in `auki-datatypes` (Step 2 of the
-# migration); pulled in alongside libp2p so the substream protocol can
-# encode/decode prost messages directly. base64 is no longer needed
-# under swarm — protobuf handles binary natively.
-swarm = ["join_protocol", "protocol-codecs", "dep:libp2p", "dep:libp2p-stream", "dep:libp2p-allow-block-list", "dep:tokio", "dep:auki-time", "dep:auki-jcs"]
-# Native-only probe for proving browser peers can dial an SDK-owned WebRTC
-# Direct listener before the Domain adapter stops failing closed.
-browser_probe = ["swarm", "dep:libp2p-webrtc", "dep:rand"]
+# transport. The authenticated Domain runtime calls these helpers over streams
+# it already authenticated.
+protocol-codecs = ["dep:futures", "dep:thiserror", "dep:auki-datatypes", "dep:prost", "dep:auki-manifests", "dep:auki-registry", "dep:auki-jcs"]
 # Per-machine identifier derivation (ansuz #5). Non-WASM — pulls in the
 # `mac_address` crate, which uses platform-specific syscalls
 # (`getifaddrs` / `GetAdaptersAddresses`) to enumerate interfaces.
 app_instance = ["dep:mac_address"]
-# Vinland Batch 1 piece #2 — REST client for Discovery
-# (`aukilabs/discovery`). Pulls in `reqwest` (async HTTP), `base64`
-# (32-byte pubkey + 64-byte signature on the wire), `auki-jcs` (RFC
-# 8785 canonical bytes for the signed payload), and `thiserror`. Async
-# only — the caller drives a tokio runtime; the SDK does not own one.
-# Opt-in because it's a fairly heavy dep set that not every consumer
-# needs.
-discovery_client = ["dep:reqwest", "dep:base64", "dep:auki-jcs", "dep:thiserror", "dep:eventsource-stream", "dep:futures", "dep:tokio", "dep:percent-encoding"]
 
 [dependencies]
 auki-identity = { path = "../auki-identity" }
@@ -70,82 +47,30 @@ uniffi = { version = "0.31", features = ["tokio"], optional = true }
 # the FFI boundary.
 anyhow = { version = "1", optional = true }
 
-# `swarm` feature
-libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "dns", "websocket", "noise", "yamux", "identify", "ping", "relay", "request-response", "json", "macros", "ed25519"], optional = true }
-libp2p-webrtc = { version = "0.9.0-alpha.1", default-features = false, features = ["tokio"], optional = true }
-# Cluster trust boundary at the libp2p layer. Inbound and outbound
-# connections from peer-ids not on `ClusterDoc.peers` are refused at
-# the `NetworkBehaviour` layer — the noise handshake completes (libp2p
-# constraint: peer-id is bound to the pubkey in noise) but no
-# protocol-level event fires, so outsiders never reach `identify`,
-# `/auki/cluster/0.0.1`, `/auki/stream/0.1.0`, or anything else on the
-# swarm. `cluster_runtime` populates the allow-list from
-# `ClusterDoc.peers` on spawn and on every Discovery-SSE update.
-# Not exposed as a feature on the `libp2p` umbrella crate; depend
-# directly. Version paired with libp2p 0.56.
-libp2p-allow-block-list = { version = "0.6", optional = true }
-# `libp2p-stream` ships separately (the libp2p umbrella crate doesn't re-export
-# it). 0.4.0-alpha pairs with libp2p 0.56 / libp2p-swarm 0.47. Pre-1.0; pin
-# exactly until libp2p stabilizes the surface.
-libp2p-stream = { version = "=0.4.0-alpha", optional = true }
 thiserror = { version = "2", optional = true }
-# Runtime + select!/sleep/interval/oneshot for `cluster_runtime`. Pulled in
-# only with `swarm`; libp2p's `tokio` feature already brings tokio into
-# the dep graph, this just exposes the bits we use directly.
-tokio = { version = "1", default-features = false, features = ["macros", "rt", "sync", "time"], optional = true }
-# `StreamExt` for polling `swarm.next()` in the runtime task.
 futures = { version = "0.3", default-features = false, optional = true }
-rand = { version = "0.8", optional = true }
-# Stream-protocol wire types — `CameraFrame`, `PointCloudFrame`,
-# `StreamMessage` envelope. Step 2 of the auki-datatypes migration
-# moves these from this crate's hand-rolled serde structs to
-# auki-datatypes-owned prost types.
+# Stream-protocol wire types — `CameraFrame`, `PointCloudFrame`, and the
+# `StreamMessage` envelope.
 auki-datatypes = { path = "../auki-datatypes", optional = true }
-# NTP-style samples derived from heartbeat echoes.
-auki-time = { path = "../auki-time", optional = true }
 # Log manifest shapes (PoseWriterMode, etc.) — used by the new catalog
 # row building blocks (Variant, PoseBlock, …) in resources_protocol.
-# Pulled in with `swarm` because resources_protocol is swarm-only.
+# Pulled in with `protocol-codecs`.
 auki-manifests = { path = "../auki-manifests", optional = true }
 # Registry reference types (RegistryRef, LogRef) for new ResourceEntry
-# manifest pointers. Pulled in with `swarm` alongside auki-manifests.
+# manifest pointers. Pulled in with `protocol-codecs` alongside auki-manifests.
 auki-registry = { path = "../auki-registry", optional = true }
+# Canonical JSON for locked catalog fixtures and codec conformance tests.
+auki-jcs = { path = "../auki-jcs", optional = true }
 # Encode/decode prost messages on the substream wire.
 prost = { version = "0.13", optional = true }
 
-# `app_instance` feature
+# `app_instance` feature.
 mac_address = { version = "1", optional = true }
 
-# `discovery_client` feature
-# rustls-tls (not the default native-tls) keeps us off OpenSSL for
-# cross-platform reproducibility; HTTPS isn't strictly required for
-# ansuz LAN deploys but the cost is small and Discovery may grow
-# beyond the LAN later. The `stream` feature exposes
-# `Response::bytes_stream` for the SSE long-poll path used by
-# `discovery_client::subscribe`.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"], optional = true }
-base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
-auki-jcs = { path = "../auki-jcs", optional = true }
-# Parses Server-Sent Events from a `Stream<Item = Result<Bytes, _>>`
-# into a stream of typed SSE events. Picked over `reqwest-eventsource`
-# because the latter adds reconnection-on-drop, which the
-# subscribe decision (caller owns retry; see parking_lot.md) explicitly
-# rejects. Pure parser; no HTTP knowledge of its own. Pulled in
-# only with `discovery_client`.
-eventsource-stream = { version = "0.2", optional = true }
-# Path-segment percent-encoding for cluster_name. Greenland T1's
-# wallet-scoped Domain identities are `{wallet_id}/{name}` — the literal
-# slash must be encoded as `%2F` before riding in a URL path segment, or
-# Discovery's router sees four path components instead of three and 404s.
-percent-encoding = { version = "2", optional = true }
-
 [dev-dependencies]
-tempfile = "3"
-# For the swarm tests (require `--features swarm`).
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 futures = "0.3"
-# RFC 8785 canonicalization for the new_blocks_tests (--features swarm).
-auki-jcs = { path = "../auki-jcs" }
+# Async codec tests only; the crate owns no Tokio runtime in production.
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 # serde_json needed by new_blocks_tests helper.
 serde_json = "1"
 # RegistryRef / LogRef used in ResourceEntry tests.
@@ -156,24 +81,9 @@ auki-manifests = { path = "../auki-manifests" }
 [[bin]]
 name = "regen_locked_fixtures"
 path = "src/bin/regen_locked_fixtures.rs"
-required-features = ["swarm"]
+required-features = ["protocol-codecs"]
 
-[[example]]
-name = "browser_full_peer_manager"
-path = "examples/browser_full_peer_manager.rs"
-required-features = ["browser_probe"]
-
-[[example]]
-name = "browser_full_peer_relay"
-path = "examples/browser_full_peer_relay.rs"
-required-features = ["browser_probe"]
-
-[[example]]
-name = "browser_join_listener"
-path = "examples/browser_join_listener.rs"
-required-features = ["browser_probe"]
-
-[[example]]
-name = "browser_probe_listener"
-path = "examples/browser_probe_listener.rs"
-required-features = ["browser_probe"]
+[[test]]
+name = "locked_json"
+path = "tests/locked_json.rs"
+required-features = ["protocol-codecs"]

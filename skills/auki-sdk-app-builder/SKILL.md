@@ -1,6 +1,6 @@
 ---
 name: auki-sdk-app-builder
-description: Use when building public applications, demos, integrations, prototypes, robot producers, or tools with the Auki SDK; when code touches peer identity, Peer/Session/Domain lifecycle, registries, logs, resource catalogs, streams, geometry, discovery, clocks, or payload contracts; or when deciding whether app code should use an SDK API versus an app-side adapter.
+description: Use when building public applications, demos, integrations, prototypes, robot producers, or tools with the Auki SDK; when code touches peer identity, authenticated Peer/Session/Domain lifecycle, registries, logs, resource catalogs, streams, geometry, routes, clocks, or payload contracts; or when deciding whether app code should use an SDK API versus an app-side adapter.
 ---
 
 # Auki SDK App Builder
@@ -9,7 +9,7 @@ Use the Auki SDK as the product surface. Build applications on top of SDK capabi
 
 ## Core Rule
 
-If the code is about how Auki peers find each other, join clusters, describe capabilities, register metadata, open streams, encode/decode SDK payloads, manage clocks, or convert frames and transforms, inspect the SDK first.
+If the code is about how Auki peers authenticate and connect, describe capabilities, register metadata, open streams, encode/decode SDK payloads, manage clocks, or convert frames and transforms, inspect the SDK first.
 
 Do not hand-roll Auki SDK concepts when an official SDK API, binding, example, or helper exists.
 
@@ -19,17 +19,17 @@ The Auki SDK handles shared distributed-system and spatial machinery for an appl
 
 Current native app layering:
 
-- Stable identity: `auki_identity` loads or reconstructs wallet seed material; `auki_network::PeerIdentity` derives the libp2p peer identity.
+- Stable identity: `auki_identity` loads or reconstructs wallet seed material; `auki_network::identity_from_wallet` constructs the canonical `auki_p2p::Identity` used by libp2p and DDS proofs.
 - `auki_session::Peer`: long-lived peer identity + app identity + storage root + peer-level registries for sensors, frames, and detectors.
 - `auki_session::Session`: one run / timeline born from `Peer::start_session()`. It owns the fresh `session_id`, the session clock registry, the auto-minted monotonic + UTC clocks, and live logs.
-- `auki_domain::Domain`: network presence for a `Peer` + `Session`. It joins/leaves clusters and serves the resource catalog built from `Peer.registries` + `Session.logs`.
+- `auki_domain::Domain`: authenticated network presence for one `Peer` + `Session` in one exact DDS Domain UUID. It owns one P2P node, serves retained protocols, and leaves with an owned cleanup barrier.
 
 Use the SDK for:
 
 - Stable peer identity: seed loading/minting, wallet reconstruction, peer identity derivation, and representing the app in the Auki network.
 - Peer/session lifecycle: `Peer::new(...)`, peer-level registry registration, `Peer::start_session()`, session clocks/logs, and `Domain::join(...)`.
-- Discovery and cluster membership: finding peers, joining/leaving clusters, reconnecting, and observing participants.
-- Live resource discovery: reading what a peer currently offers through the SDK resource catalog, including `/auki/resources`.
+- Authenticated Domain lifecycle: installing host-fetched DDS authority, joining/leaving one Domain, reconnecting over explicit routes, and observing currently authenticated peers.
+- Live resource discovery: reading what an expected authenticated peer currently offers through `/auki/auth/1/resources/0.2.0` (and retained catalog versions).
 - Registries: content-addressed metadata for sensors, frames, clocks, payloads, and typed resources.
 - Stream lifecycle: opening, accepting, producing, consuming, ending, and erroring streams.
 - Typed payload contracts: using SDK-defined message wrappers and serialization instead of raw ad hoc bytes.
@@ -61,7 +61,7 @@ Rust shape:
 ```rust
 let seed = auki_identity::load_or_mint_seed(&identity_seed_path)?;
 let wallet = auki_identity::Wallet::from_seed(seed.to_vec())?;
-let identity = auki_network::PeerIdentity::from_wallet(wallet);
+let identity = auki_network::identity_from_wallet(&wallet);
 let peer_id = identity.peer_id().to_string();
 
 let peer = auki_session::Peer::new(peer_id, app_id)
@@ -89,8 +89,16 @@ Catalog and network shape:
 ```rust
 let rows = auki_domain::catalog_of(&peer, &session);
 
-let domain = auki_domain::Domain::join(&peer, &session, domain_config).await?;
-let served_rows = domain.catalog();
+let config = auki_domain::DomainConfig::new(dds_domain_id, identity)
+    .with_listen_addresses(listen_addresses)?;
+let domain = auki_domain::Domain::join(
+    &peer,
+    &session,
+    config,
+    dds_verification_keys,
+    signed_p2p_credential,
+).await?;
+let served_rows = domain.catalog()?;
 domain.leave().await?;
 ```
 
@@ -103,7 +111,7 @@ Before implementing an SDK-based feature:
 1. Identify the SDK version, target language/runtime, and package names in use.
 2. Read the relevant official SDK docs, examples, package exports, and generated bindings.
 3. Search the existing app for SDK usage patterns before adding a new abstraction.
-4. Find the SDK primitive for each Auki concept involved: stable identity, peer, session, domain, resource, registry entry, stream, clock, payload, cluster, frame, pose, or transform.
+4. Find the SDK primitive for each Auki concept involved: stable identity, peer, session, authenticated Domain, route, resource, registry entry, stream, clock, payload, frame, pose, or transform.
 5. Implement with public SDK APIs first.
 6. Validate against an SDK example, integration test, or live SDK behavior.
 
@@ -113,8 +121,8 @@ Prefer official examples over invented patterns. If the examples and exports dis
 
 Stop and inspect the SDK before writing code that implements any of these locally:
 
-- A peer discovery mechanism.
-- A cluster join/reconnect loop.
+- A second P2P runtime, authentication handshake, or reconnect loop beside `Domain`.
+- Treating route discovery, cached participant metadata, or connectivity as authorization. Hosts may discover dial hints externally, but only DDS-signed Domain credentials authorize protocol streams.
 - Direct construction of `Session` for current native SDKs; sessions are born from `Peer::start_session()`.
 - Sensor, frame, or detector registration on `Session`; these are peer-level registries.
 - Catalog serving or domain joining on `Session`; these are `auki-domain::Domain` responsibilities.

@@ -96,7 +96,7 @@ pub struct SensorLogManifest {
 
 The split is in `auki_manifests::*Manifest` for all four log variants (`SensorLogManifest`, `PoseLogManifest`, `TimeTransformLogManifest`, `DetectionLogManifest`).
 
-### Catalog row (over `/auki/resources/0.2.0`)
+### Catalog row (over `/auki/auth/1/resources/0.2.0`)
 
 ```json
 {
@@ -110,7 +110,7 @@ The split is in `auki_manifests::*Manifest` for all four log variants (`SensorLo
 
 Defined as `auki_network::resources_protocol::ResourceEntry`. The full row shape is documented in [`dataproducts.md`](https://github.com/aukilabs/auki-sdk/blob/develop/dataproducts.md).
 
-### Stream request (over `/auki/stream/0.2.0`)
+### Stream request (over `/auki/auth/1/stream/0.2.0`)
 
 ```rust
 pub struct StreamRequest {

@@ -1,18 +1,17 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use auki_p2p::{
-    ApplicationProtocol, DOMAIN_SERVER_MAX_DOMAINS, DdsTokenVerifier, DdsVerificationKeys,
-    DomainAuthority, Error, ExactRoute, Identity, Node, NodeObservationEvent,
-    NodeObservationStatus, P2P_TOKEN_AUDIENCE, P2P_TOKEN_CLOCK_SKEW, P2P_TOKEN_ISSUER,
-    P2P_TOKEN_MAX_APPLICATION_NAME_BYTES, P2P_TOKEN_MAX_APPLICATION_VERSION_BYTES,
-    P2P_TOKEN_MAX_PEER_TYPE_BYTES, P2P_TOKEN_MAX_SCOPE_BYTES, P2P_TOKEN_MAX_SCOPES,
-    P2P_TOKEN_SCOPE, P2P_TOKEN_TTL, P2P_TOKEN_TYPE, P2PAccessClaims, P2pCredentialError,
-    PeerDisappearanceReason, PeerRole, ProtocolSpec, SessionRequirements,
-    SignedApplicationMetadata, SignedP2pCredential,
+    ApplicationProtocol, DdsTokenVerifier, DdsVerificationKeys, DomainAuthority, Error, ExactRoute,
+    Identity, Node, NodeObservationEvent, NodeObservationStatus, P2PAccessClaims,
+    P2pCredentialError, PeerDisappearanceReason, PeerRole, ProtocolSpec, SessionRequirements,
+    SignedApplicationMetadata, SignedP2pCredential, DOMAIN_SERVER_MAX_DOMAINS, P2P_TOKEN_AUDIENCE,
+    P2P_TOKEN_CLOCK_SKEW, P2P_TOKEN_ISSUER, P2P_TOKEN_MAX_APPLICATION_NAME_BYTES,
+    P2P_TOKEN_MAX_APPLICATION_VERSION_BYTES, P2P_TOKEN_MAX_PEER_TYPE_BYTES, P2P_TOKEN_MAX_SCOPES,
+    P2P_TOKEN_MAX_SCOPE_BYTES, P2P_TOKEN_SCOPE, P2P_TOKEN_TTL, P2P_TOKEN_TYPE,
 };
 use futures::io::{AsyncReadExt, AsyncWriteExt};
-use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
-use libp2p::{Multiaddr, identity::PublicKey};
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use libp2p::{identity::PublicKey, Multiaddr};
 use serde::Serialize;
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio_util::sync::CancellationToken;
@@ -157,11 +156,9 @@ async fn wait_for_listeners_waits_for_every_configured_listener() {
 
     assert_eq!(addresses.len(), 2);
     assert_ne!(addresses[0], addresses[1]);
-    assert!(
-        addresses
-            .iter()
-            .all(|address| address.to_string().starts_with("/ip4/127.0.0.1/tcp/"))
-    );
+    assert!(addresses
+        .iter()
+        .all(|address| address.to_string().starts_with("/ip4/127.0.0.1/tcp/")));
     node.shutdown().await.unwrap();
 }
 
@@ -456,11 +453,9 @@ fn verifier_enforces_the_exact_dds_claim_profile() {
     let mut bad_signature = sign(&valid_claims).into_bytes();
     let last = bad_signature.last_mut().unwrap();
     *last = if *last == b'A' { b'B' } else { b'A' };
-    assert!(
-        verifier
-            .verify(&String::from_utf8(bad_signature).unwrap())
-            .is_err()
-    );
+    assert!(verifier
+        .verify(&String::from_utf8(bad_signature).unwrap())
+        .is_err());
 
     let wrong_algorithm = encode(
         &Header::new(Algorithm::HS256),
@@ -569,14 +564,12 @@ fn application_protocol_accepts_sdk_and_posemesh_namespaces_only() {
     }
     assert!(ApplicationProtocol::new(format!("/auki-p2p/{}/1", "a".repeat(65))).is_err());
     assert!(ApplicationProtocol::new(format!("/auki-p2p/dataset/{}", "1".repeat(33))).is_err());
-    assert!(
-        ApplicationProtocol::new(format!(
-            "/auki/auth/1/{}/{}",
-            "a".repeat(64),
-            "1".repeat(32)
-        ))
-        .is_ok()
-    );
+    assert!(ApplicationProtocol::new(format!(
+        "/auki/auth/1/{}/{}",
+        "a".repeat(64),
+        "1".repeat(32)
+    ))
+    .is_ok());
     assert!(SessionRequirements::new("550E8400-E29B-41D4-A716-446655440000").is_err());
 }
 

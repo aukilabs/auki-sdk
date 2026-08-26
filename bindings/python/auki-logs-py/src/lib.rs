@@ -294,10 +294,10 @@ pub struct Log {
     root: PathBuf,
 }
 
-/// Retained source produced by `Log.stream_source(...)`. Apps hand this
-/// object directly to `auki_network.cluster.StreamDecision.accept_source`;
-/// the SDK bridge carries the source metadata across PyO3 extension
-/// module boundaries without relying on pyclass type identity.
+/// Retained source produced by `Log.stream_source(...)`. The authenticated
+/// Domain binding or an application adapter can pass it to the SDK stream
+/// provider; the bridge carries source metadata across PyO3 extension-module
+/// boundaries without relying on pyclass type identity.
 #[pyclass(module = "auki_logs", frozen)]
 #[derive(Clone)]
 pub struct StreamSource {
@@ -436,9 +436,9 @@ impl Log {
     }
 
     /// Build an SDK-owned retained stream source from this log. The
-    /// returned source carries the manifest metadata needed by
-    /// `StreamDecision.accept_source(source)`; the network binding owns
-    /// payload decoding and typed dispatch.
+    /// returned source carries the manifest metadata needed by an
+    /// authenticated Domain stream provider; the native SDK owns payload
+    /// decoding and typed dispatch.
     #[pyo3(signature = (*, sensor_id, sensor_hash, clock_id, clock_hash, payload_kind, frame_id=None, frame_hash=None))]
     fn stream_source(
         &self,

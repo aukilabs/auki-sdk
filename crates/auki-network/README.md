@@ -1,39 +1,56 @@
 # auki-network
 
-The libp2p substrate for the SDK and the Discovery HTTP client. Behind the `swarm` feature: TCP/QUIC transport, Noise, Yamux, Circuit Relay v2, identify, ping, and a native helper for reserving a relay-mediated Manager address through a Domain Relay. On top: the typed `/auki/stream/0.2.0` stream protocol, live `/auki/message/0.1.0` typed messaging, and the peer-to-peer lifecycle protocols (join, heartbeat, membership, info, resources, registries, blobs). The Discovery client carries both Manager multiaddrs and optional Relay multiaddrs for browser-compatible reachability hints.
+Transport-neutral application protocol codecs and plain networking types for
+the Auki SDK.
 
-Peer identity is derived from a wallet: `Wallet::derive_child("peer/v1")`. The `app_instance` value is MAC-derived per machine.
-
-**Status:** Shipped.
+`auki-network` no longer owns a libp2p swarm, discovery client, Manager
+lifecycle, membership control plane, heartbeat loop, relay reservation, or
+protocol task runtime. `auki-p2p` owns authenticated transport and
+`auki-domain` owns Domain policy and application protocol tasks.
 
 ## Public surface
 
-- Types: `PeerIdentity`, `ParticipantInfo`, `ReachabilityRecord`, `Capability`
-- Modules: `swarm`, `network_runtime`, `join_protocol`, `heartbeat_protocol`, `membership_protocol`, `info_protocol`, `resources_protocol`, `resources_v3_protocol`, `resources_v4_protocol`, `registries_protocol`, `blobs_protocol`, `message_protocol`, `stream_protocol`, `stream_runtime`, `app_instance`, `discovery_client`
-- `SessionHandle` trait — implemented by `auki_session::Session`; called by the resources protocol handler to serve catalog rows to remote peers. Defined here to break the potential `auki-domain` ↔ `auki-session` cycle.
-- Resource catalog protocol `/auki/resources/0.2.0`: `ResourceEntry` rows discriminated by `variant` (`sensor_log` | `pose_log` | `time_transform_log` | `detection_log`). Each row has `source_peer_id`, `writer_peer_id`, `resource_id`, `state`, `head` | `extent`, `available`, optional `sensor` block (only on `sensor_log`: `kind`/`type`/`sensor_id`/`sensor_hash`), optional `pose` block (only on `pose_log`: `writer_mode`), and a variant-specific `manifest` pointer. Replaces the old `SensorStreamResource` / `TransformEdgeResource` / `PoseStreamResource` types.
-- `/auki/resources/0.2.0` is a live, pollable snapshot of currently requestable resources. Peers may join before resources are ready; producers omit resources that cannot currently accept stream opens; consumers poll and reconcile row additions/removals. `resource_id` values stay stable across temporary outages. The current schema has no unavailable/degraded state, so absence from the catalog is the unavailability signal.
-- Resource catalog protocol `/auki/resources/0.3.0` is additive: it preserves v0.2 rows and adds receiver-owned `message_channel` rows containing `owner_peer_id`, `resource_id`, and an existing clock `RegistryRef`. Fetch v0.3 explicitly with `request_resources_catalog_v3_with`; an unsupported peer returns `RequestResourcesV3Error::UnsupportedProtocol` and never silently falls back to v0.2.
-- Resource catalog protocol `/auki/resources/0.4.0` discovers live `MapLogResource` rows. Each row pins source/writer identities plus exact Map and clock Registry refs. `MapCatalogProvider` supplies fresh snapshots; `request_map_catalog` fetches them explicitly.
-- Registry protocol `/auki/registries/0.2.0`: legacy Get-only (untagged `{kind,id,hash}` → `{entry}`). Still accepted inbound for non-`device_model`; inbound `device_model` closes with no body. Outbound Get falls back here when the peer lacks 0.3 (never for `device_model` / List).
-- Registry protocol `/auki/registries/0.3.0`: tagged Get + tip-only `device_model` List. New peers dial 0.3; List and `device_model` require 0.3 (no v2 List). Inbound request reads are timed (`REGISTRIES_REQUEST_TIMEOUT`). Oversized List/Get frames return `Error { "list too large" }` / `Error { "entry too large" }` instead of dropping the substream.
-- Blob protocol `/auki/blobs/0.1.0`: content-addressed multi-chunk transfer (prost meta + raw payload). Served from the registry app root via `set_blob_app_root`. Unconfigured serve answers `Error { "blobs not configured" }` (not NotFound). Inbound request reads and response writes are timed (`BLOBS_REQUEST_TIMEOUT`).
-- Typed-message protocol `/auki/message/0.1.0`: `NetworkRuntime::register_message_channel(resource, capacity)` atomically binds a catalog row to a bounded live receiver; `open_message_channel(owner, resource_id, expected_clock)` returns a persistent `MessageChannelSender` only when the receiver's current clock `RegistryRef` exactly matches the discovered row, so stale rows cannot silently change timestamp meaning. `send(type, timestamp_ns, payload)` resolves after transport acceptance into the receiver queue. If the event is enqueued but the ACK is lost, send returns an error with indeterminate delivery; callers must not automatically retry. Type, timestamp, and payload are opaque to the SDK.
-- Typed messages are live and ephemeral: no history, persistence, queue across disconnect, retry, replay, materialization, or application outcome semantics. The channel Resource declares the clock; messages carry only `timestamp_ns`.
-- A message-channel registration exists only while its receiver or owning runtime exists. Dropping the receiver removes the v0.3 row and closes active endpoints; runtime shutdown drains all registrations and closes retained receivers.
-- Security is intentionally coarse for this milestone: any current Noise-authenticated cluster member may send. There is no generic channel-level ACL. The `NetworkRuntime` allow-list prevents unknown or removed peers from delivering payloads to an app receiver.
-- Stream request type `StreamRequest { source_peer_id, resource_id, read_from }` where `read_from` is a `oneof` (`latest`, `from_start`, `from_timestamp(i64)`).
-- Typed stream payloads: camera, point cloud, joint encoders, audio, non-spatial scalar `Data`, pose `SpatialTransform`, detection frames, and sparse `MapUpdate`s. `StreamDispatch::AcceptScalar` and `open_stream::<scalar::Data>` use the same protobuf payload as Scalar Sensor Logs.
-- Relay reachability: `swarm::reserve_relay_circuit_addr` reserves `/p2p-circuit` on a relay and returns the Manager circuit address to publish; `discovery_client` derives `relay_multiaddrs` from circuit Manager addresses when creating or rotating Discovery entries.
-- Runtime relay reachability: `NetworkRuntimeHandle::reserve_relay_circuit_addr` lets a runtime-owned swarm reserve a Manager circuit address after spawn, for promotion/rotation flows.
-- Discovery: `ClusterEntry.relay_multiaddrs`, `create_cluster_with_relay_multiaddrs`, `rotate_manager_with_relay_multiaddrs`
-- Constants: `PEER_DERIVATION_LABEL = "peer/v1"`
-- Locked vectors pin `seed → PeerId` and the stream wire bytes across language reimplementations.
+The default feature set provides:
 
-## Depends on
+- canonical `auki_p2p::Identity` re-export and wallet derivation through
+  `identity_from_wallet`;
+- the deprecated one-release `PeerIdentity` compatibility adapter;
+- plain `ReachabilityRecord` and `Capability` values;
+- authenticated application protocol IDs in `protocol_ids`.
 
-- [`auki-identity`](../auki-identity) — for `Wallet` and child derivation.
-- [`auki-datatypes`](../auki-datatypes) (optional) — for stream payload types.
-- [`auki-time`](../auki-time) (optional) — for clock-stamped peer messages.
-- [`auki-jcs`](../auki-jcs) (optional) — for canonical-JSON peer protocol bodies.
-- [`auki-registry`](../auki-registry) (swarm) — blob serve / SHA verify for `/auki/blobs/0.1.0`.
+The `protocol-codecs` feature adds:
+
+- framing and payload codecs for info, resources v0.2/v0.3/v0.4, registries,
+  blobs, typed messages, and typed streams;
+- codec-level business validation and bounded frame sizes;
+- transport-neutral stream provider, dispatch, entry, subscription, and error
+  types in `stream_runtime`;
+- `MapCatalogProvider`, used by the Domain map-catalog handler.
+
+The `app_instance` feature adds the platform-specific application-instance
+identifier helper. The `swift-bindings` feature retains the identity adapter's
+UniFFI surface for the compatibility window.
+
+Protocol selection belongs to the authenticated runtime. Codec modules do not
+publish the retired unauthenticated `/auki/...` protocol constants. Use the
+`/auki/auth/1/...` constants from `protocol_ids`.
+
+## Locked fixtures
+
+Canonical JSON fixtures pin catalog rows and stream-request shapes across
+language implementations:
+
+```sh
+cargo test -p auki-network --no-default-features --features protocol-codecs --test locked_json
+cargo run -p auki-network --bin regen_locked_fixtures --features protocol-codecs
+```
+
+## Dependencies
+
+- [`auki-p2p`](../auki-p2p) — canonical P2P identity and authenticated protocol
+  identifiers.
+- [`auki-identity`](../auki-identity) — wallet child derivation.
+- [`auki-datatypes`](../auki-datatypes) — typed protocol payloads.
+- [`auki-manifests`](../auki-manifests) and
+  [`auki-registry`](../auki-registry) — catalog and content-addressed reference
+  types.

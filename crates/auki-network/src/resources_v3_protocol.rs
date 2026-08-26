@@ -1,21 +1,15 @@
-//! `/auki/resources/0.3.0` additive Resource Catalog protocol.
+//! `/auki/auth/1/resources/0.3.0` additive Resource Catalog payload codec.
 
 use crate::resources_protocol::{
     ResourceEntry as V2ResourceEntry, VariantContent as V2VariantContent,
 };
 use auki_registry::RegistryRef;
 use futures::{AsyncReadExt, AsyncWriteExt};
-#[cfg(feature = "swarm")]
-use libp2p::StreamProtocol;
 use libp2p_identity::PeerId;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashSet;
 use thiserror::Error;
 
-/// Additive Resource Catalog protocol that preserves v0.2 rows and adds
-/// receiver-owned message channels.
-#[cfg(feature = "swarm")]
-pub const RESOURCES_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/resources/0.3.0");
 /// Maximum encoded request or response frame size.
 pub const MAX_RESOURCES_FRAME_BYTES: u32 = 1024 * 1024;
 
@@ -337,8 +331,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "swarm")]
-    use super::RESOURCES_PROTOCOL;
     use super::{
         MessageChannelResource, ResourceEntry, ResourceVariant, ResourcesRequest,
         ResourcesResponse, read_resources_request, read_resources_response,
@@ -404,12 +396,6 @@ mod tests {
                 },
             },
         }
-    }
-
-    #[cfg(feature = "swarm")]
-    #[test]
-    fn protocol_id_is_locked() {
-        assert_eq!(RESOURCES_PROTOCOL.to_string(), "/auki/resources/0.3.0");
     }
 
     #[test]

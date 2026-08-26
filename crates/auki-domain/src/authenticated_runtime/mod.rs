@@ -1,7 +1,7 @@
-// This engine deliberately remains unreachable from the retained public
-// Domain facade until its protocol adapters are complete (P08-P11). P12 removes
-// this staging allowance when the public facade cuts over to the engine.
-#![allow(dead_code)]
+// The public `Domain` facade owns this engine. Its modules stay private so the
+// facade remains the product boundary while selected handle and error types are
+// re-exported from the crate root.
+#![allow(dead_code, missing_docs)]
 
 pub(crate) mod authority;
 pub(crate) mod blobs;
@@ -25,10 +25,13 @@ pub(crate) mod status;
 pub(crate) mod storage;
 pub(crate) mod streams;
 
-use std::{collections::BTreeMap, panic::AssertUnwindSafe, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap, panic::AssertUnwindSafe, path::PathBuf, sync::Arc, time::Duration,
+};
 
 use auki_network::{
     resources_v3_protocol::MessageChannelResource,
+    resources_v4_protocol::MapCatalogProvider,
     stream_runtime::{StreamProvider, decline_all_streams},
 };
 use auki_p2p::{
@@ -47,7 +50,7 @@ use uuid::Uuid;
 
 use authority::{DomainAuthority, DomainAuthorityError};
 use blobs::{BlobsV1, BlobsV1Error};
-use info_v1::{InfoV1, InfoV1Error};
+use info_v1::{InfoV1, InfoV1Error, ParticipantInfoProvider};
 use io_tasks::DomainIoTasks;
 use messages::{
     MessageChannelRegistration, MessageChannelRegistrationError, MessagesV1, MessagesV1Error,
@@ -62,6 +65,8 @@ use routes::{DomainRoutes, DomainRoutesError};
 use status::{DomainFailure, DomainStatus};
 use storage::{RegistryBlobStorage, StorageError};
 use streams::{Streams, StreamsError};
+
+use crate::resource_catalog::ResourceCatalogProvider;
 
 const DOMAIN_LISTENER_LIMIT: usize = 16;
 const DOMAIN_LISTEN_ADDRESS_MAX_BYTES: usize = 1_024;
@@ -178,6 +183,10 @@ impl AuthenticatedDomainConfig {
 pub(crate) struct AuthenticatedDomainServicesConfig {
     message_channels: Vec<(MessageChannelResource, usize)>,
     stream_provider: StreamProvider,
+    participant_info_provider: Option<Arc<dyn ParticipantInfoProvider>>,
+    resource_catalog_provider: Option<Arc<dyn ResourceCatalogProvider>>,
+    map_catalog_provider: Option<Arc<dyn MapCatalogProvider>>,
+    registry_app_root: Option<PathBuf>,
 }
 
 impl Default for AuthenticatedDomainServicesConfig {
@@ -185,6 +194,10 @@ impl Default for AuthenticatedDomainServicesConfig {
         Self {
             message_channels: Vec::new(),
             stream_provider: decline_all_streams(),
+            participant_info_provider: None,
+            resource_catalog_provider: None,
+            map_catalog_provider: None,
+            registry_app_root: None,
         }
     }
 }
@@ -201,6 +214,35 @@ impl AuthenticatedDomainServicesConfig {
 
     pub(crate) fn with_stream_provider(mut self, provider: StreamProvider) -> Self {
         self.stream_provider = provider;
+        self
+    }
+
+    pub(crate) fn with_participant_info_provider(
+        mut self,
+        provider: Arc<dyn ParticipantInfoProvider>,
+    ) -> Self {
+        self.participant_info_provider = Some(provider);
+        self
+    }
+
+    pub(crate) fn with_resource_catalog_provider(
+        mut self,
+        provider: Arc<dyn ResourceCatalogProvider>,
+    ) -> Self {
+        self.resource_catalog_provider = Some(provider);
+        self
+    }
+
+    pub(crate) fn with_map_catalog_provider(
+        mut self,
+        provider: Arc<dyn MapCatalogProvider>,
+    ) -> Self {
+        self.map_catalog_provider = Some(provider);
+        self
+    }
+
+    pub(crate) fn with_registry_app_root(mut self, app_root: PathBuf) -> Self {
+        self.registry_app_root = Some(app_root);
         self
     }
 }
@@ -330,6 +372,34 @@ impl AuthenticatedDomain {
             io_tasks.clone(),
         );
         let streams = Streams::new(protocols.clone(), io_tasks, lifecycle.clone());
+        if let Some(provider) = services.participant_info_provider
+            && let Err(error) = info_v1.set_provider(provider)
+        {
+            return Err(
+                rollback_join_error(&access, AuthenticatedDomainError::InfoV1(error)).await,
+            );
+        }
+        if let Some(provider) = services.resource_catalog_provider
+            && let Err(error) = resources_v2.set_provider(provider)
+        {
+            return Err(
+                rollback_join_error(&access, AuthenticatedDomainError::ResourcesV2(error)).await,
+            );
+        }
+        if let Some(provider) = services.map_catalog_provider
+            && let Err(error) = resources_v4.set_provider(provider)
+        {
+            return Err(
+                rollback_join_error(&access, AuthenticatedDomainError::ResourcesV4(error)).await,
+            );
+        }
+        if let Some(app_root) = services.registry_app_root
+            && let Err(error) = storage.set_app_root(app_root)
+        {
+            return Err(
+                rollback_join_error(&access, AuthenticatedDomainError::Storage(error)).await,
+            );
+        }
         if let Err(error) = streams.set_provider(services.stream_provider) {
             return Err(
                 rollback_join_error(&access, AuthenticatedDomainError::Streams(error)).await,
@@ -565,6 +635,20 @@ impl AuthenticatedDomain {
     ) -> Result<(), AuthenticatedDomainError> {
         self.storage.set_app_root(app_root)?;
         Ok(())
+    }
+
+    pub(crate) fn set_resource_catalog_provider(
+        &self,
+        provider: Arc<dyn ResourceCatalogProvider>,
+    ) -> Result<(), ResourcesV2Error> {
+        self.resources_v2.set_provider(provider)
+    }
+
+    pub(crate) fn set_map_catalog_provider(
+        &self,
+        provider: Arc<dyn MapCatalogProvider>,
+    ) -> Result<(), ResourcesV4Error> {
+        self.resources_v4.set_provider(provider)
     }
 
     pub(crate) fn status(&self) -> DomainStatus {
@@ -891,7 +975,7 @@ fn spawn_best_effort_shutdown(node: Node) {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum AuthenticatedDomainError {
+pub enum AuthenticatedDomainError {
     #[error("Domain configuration has {count} listeners; maximum is {maximum}")]
     ListenerLimit { count: usize, maximum: usize },
     #[error("Domain listener is {encoded_bytes} encoded bytes; maximum is {maximum}")]
@@ -948,7 +1032,7 @@ pub(crate) enum AuthenticatedDomainError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum DomainRollbackError {
+pub enum DomainRollbackError {
     #[error("rollback exceeded its 30-second cleanup deadline")]
     Timeout,
     #[error("rollback node shutdown failed: {0}")]

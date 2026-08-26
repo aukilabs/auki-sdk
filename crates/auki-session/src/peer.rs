@@ -9,9 +9,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use auki_registry::{
-    AxisConvention, DetectorBody, DetectorRegistryEntry, FrameRegistryEntry, Handedness,
-    LengthUnit, MapBody, MapRegistryEntry, RegistryRef, DeviceModelBody, DeviceModelRegistryEntry,
-    SensorBody, SensorRegistryEntry,
+    AxisConvention, DetectorBody, DetectorRegistryEntry, DeviceModelBody, DeviceModelRegistryEntry,
+    FrameRegistryEntry, Handedness, LengthUnit, MapBody, MapRegistryEntry, RegistryRef, SensorBody,
+    SensorRegistryEntry,
 };
 use parking_lot::RwLock;
 
@@ -380,7 +380,12 @@ impl PeerRegistries {
         self.inner.read().device_models.get(id).cloned()
     }
     pub fn device_models(&self) -> Vec<DeviceModelRegistryEntry> {
-        self.inner.read().device_models.iter().map(|(_, entry)| entry.clone()).collect()
+        self.inner
+            .read()
+            .device_models
+            .iter()
+            .map(|(_, entry)| entry.clone())
+            .collect()
     }
 }
 

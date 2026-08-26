@@ -1,4 +1,4 @@
-//! `/auki/blobs/0.1.0` content-addressed binary blob transfer protocol.
+//! `/auki/auth/1/blobs/0.1.0` content-addressed blob payload codec.
 //!
 //! ## Shape
 //!
@@ -14,14 +14,8 @@
 //! `chunk_len` raw payload bytes follow the framed meta.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
-#[cfg(feature = "swarm")]
-use libp2p::StreamProtocol;
 use prost::Message;
 use thiserror::Error;
-
-/// libp2p protocol id for content-addressed blob transfer.
-#[cfg(feature = "swarm")]
-pub const BLOBS_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/blobs/0.1.0");
 
 /// Cap on a single raw chunk payload.
 pub const MAX_BLOB_CHUNK_BYTES: u32 = 1024 * 1024;

@@ -4,7 +4,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use libp2p::{PeerId, swarm::ConnectionId};
+use libp2p::{swarm::ConnectionId, PeerId};
 use parking_lot::Mutex;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;

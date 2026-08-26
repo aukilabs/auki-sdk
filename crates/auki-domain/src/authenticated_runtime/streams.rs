@@ -463,7 +463,7 @@ fn unexpected_message(detail: &'static str) -> StreamsError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum StreamsError {
+pub enum StreamsError {
     #[error("the Domain runtime is stopped")]
     Stopped,
     #[error("typed stream protocol failed: {0}")]

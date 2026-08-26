@@ -380,7 +380,7 @@ fn is_normal_stream_end(kind: std::io::ErrorKind) -> bool {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum BlobsV1Error {
+pub enum BlobsV1Error {
     #[error("the Domain runtime is stopped")]
     Stopped,
     #[error("blob request is invalid: {0}")]

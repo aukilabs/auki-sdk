@@ -20,7 +20,7 @@ const PARTICIPANT_INFO_CAPACITY: usize = 1_024;
 /// One peer that is both transport-connected and mutually authenticated for
 /// this exact Domain. It is observation only, never an authorization cache.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct KnownPeer {
+pub struct KnownPeer {
     peer_id: PeerId,
     authenticated_until: DateTime<Utc>,
     application: Option<SignedApplicationMetadata>,
@@ -28,25 +28,25 @@ pub(crate) struct KnownPeer {
 }
 
 impl KnownPeer {
-    pub(crate) fn peer_id(&self) -> PeerId {
+    pub fn peer_id(&self) -> PeerId {
         self.peer_id
     }
 
-    pub(crate) fn authenticated_until(&self) -> DateTime<Utc> {
+    pub fn authenticated_until(&self) -> DateTime<Utc> {
         self.authenticated_until
     }
 
-    pub(crate) fn application(&self) -> Option<&SignedApplicationMetadata> {
+    pub fn application(&self) -> Option<&SignedApplicationMetadata> {
         self.application.as_ref()
     }
 
-    pub(crate) fn participant_info(&self) -> Option<&AuthenticatedParticipantInfo> {
+    pub fn participant_info(&self) -> Option<&AuthenticatedParticipantInfo> {
         self.participant_info.as_ref()
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum KnownPeerEvent {
+pub enum KnownPeerEvent {
     Appeared(KnownPeer),
     Updated(KnownPeer),
     Disappeared {
@@ -56,18 +56,18 @@ pub(crate) enum KnownPeerEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct KnownPeerSnapshot {
+pub struct KnownPeerSnapshot {
     peers: Vec<KnownPeer>,
 }
 
 impl KnownPeerSnapshot {
-    pub(crate) fn peers(&self) -> &[KnownPeer] {
+    pub fn peers(&self) -> &[KnownPeer] {
         &self.peers
     }
 }
 
 #[derive(Clone)]
-pub(crate) struct DomainPeers {
+pub struct DomainPeers {
     domain_id: Uuid,
     observations: NodeObservations,
     lifecycle: CancellationToken,
@@ -109,7 +109,7 @@ impl DomainPeers {
         }
     }
 
-    pub(crate) fn snapshot(&self) -> KnownPeerSnapshot {
+    pub fn snapshot(&self) -> KnownPeerSnapshot {
         if self.lifecycle.is_cancelled() {
             self.participant_info.lock().clear();
             return KnownPeerSnapshot { peers: Vec::new() };
@@ -129,11 +129,11 @@ impl DomainPeers {
         KnownPeerSnapshot { peers }
     }
 
-    pub(crate) fn peer_count(&self) -> usize {
+    pub fn peer_count(&self) -> usize {
         self.snapshot().peers.len()
     }
 
-    pub(crate) fn subscribe(&self) -> KnownPeerSubscription {
+    pub fn subscribe(&self) -> KnownPeerSubscription {
         KnownPeerSubscription {
             domain_id: self.domain_id,
             receiver: self.observations.subscribe(),
@@ -193,7 +193,7 @@ impl DomainPeers {
     }
 }
 
-pub(crate) struct KnownPeerSubscription {
+pub struct KnownPeerSubscription {
     domain_id: Uuid,
     receiver: broadcast::Receiver<NodeObservationEvent>,
     lifecycle: CancellationToken,
@@ -203,7 +203,7 @@ pub(crate) struct KnownPeerSubscription {
 }
 
 impl KnownPeerSubscription {
-    pub(crate) async fn recv(&mut self) -> Result<KnownPeerEvent, KnownPeerRecvError> {
+    pub async fn recv(&mut self) -> Result<KnownPeerEvent, KnownPeerRecvError> {
         loop {
             let event = tokio::select! {
                 biased;
@@ -254,7 +254,7 @@ enum SubscriptionEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum DomainPeerInfoError {
+pub enum DomainPeerInfoError {
     #[error("the Domain runtime is stopped")]
     Stopped,
     #[error("participant info Peer ID {actual} does not match authenticated peer {expected}")]
@@ -265,7 +265,7 @@ pub(crate) enum DomainPeerInfoError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum KnownPeerRecvError {
+pub enum KnownPeerRecvError {
     #[error("known-peer subscriber lagged by {0} events; read a fresh snapshot")]
     Lagged(u64),
     #[error("known-peer event stream is closed")]

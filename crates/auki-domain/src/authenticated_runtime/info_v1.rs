@@ -24,8 +24,17 @@ use super::{
 const INFO_V1_MAX_CONCURRENCY: usize = 16;
 const INFO_V1_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(crate) trait ParticipantInfoProvider: Send + Sync + 'static {
+pub trait ParticipantInfoProvider: Send + Sync + 'static {
     fn participant_info(&self) -> AuthenticatedParticipantInfo;
+}
+
+impl<F> ParticipantInfoProvider for F
+where
+    F: Fn() -> AuthenticatedParticipantInfo + Send + Sync + 'static,
+{
+    fn participant_info(&self) -> AuthenticatedParticipantInfo {
+        self()
+    }
 }
 
 #[derive(Clone)]
@@ -147,7 +156,7 @@ fn ensure_peer_id(
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum InfoV1Error {
+pub enum InfoV1Error {
     #[error("the Domain runtime is stopped")]
     Stopped,
     #[error("no participant info provider is installed")]

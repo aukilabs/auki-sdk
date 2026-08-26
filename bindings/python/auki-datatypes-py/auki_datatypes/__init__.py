@@ -16,7 +16,8 @@ Re-exported submodules:
 
 The opaque-bytes / structured-vector payloads (`audio`, `point_cloud`,
 `joint_encoders`) each expose a single `Data` message used on both disk
-(Sensor Log segment) and wire (libp2p `/auki/stream/0.1.0` substream).
+(Sensor Log segment) and wire (authenticated libp2p
+`/auki/auth/1/stream/0.2.0` substream).
 The dual `*_stream` packages were removed in #176.
 
 The generated files live one level down, in the `auki/` package

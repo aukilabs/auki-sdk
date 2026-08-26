@@ -1,5 +1,5 @@
-//! `/auki/registries/0.3.0` — libp2p protocol for listing and fetching a
-//! peer's content-addressed registry entries over the cluster's libp2p plane.
+//! `/auki/auth/1/registries/0.3.0` payload codec for listing and fetching a
+//! peer's content-addressed registry entries.
 //!
 //! ## Why this exists
 //!
@@ -7,10 +7,8 @@
 //! the Sensor / Clock / Frame registries. Consumers need the matching
 //! registry entry to interpret stream bytes: sensor body for payload
 //! shape, clock body for timestamps, frame body for coordinate
-//! convention. Pre-Hagall, apps could paper this over with daemon HTTP
-//! endpoints; the SDK-owned cluster path needs the same resolution over
-//! libp2p so the cluster trust boundary is the only one metadata flows
-//! through.
+//! convention. The authenticated Domain path carries the same resolution over
+//! P2P without a separate HTTP side channel.
 //!
 //! Device models are the same kind of object: immutable, content-addressed
 //! registry JSON. Discovery is a [`RegistryRequest::List`], not a resource
@@ -29,8 +27,8 @@
 //!         or RegistryResponse::Error { reason } when List is unsupported
 //! ```
 //!
-//! Peers also still **accept** untagged `/auki/registries/0.2.0` Get
-//! (`RegistryRequestV2` / `RegistryResponseV2`) so mixed clusters can
+//! Peers can also use authenticated v0.2 untagged Get payloads
+//! (`RegistryRequestV2` / `RegistryResponseV2`) so mixed SDK versions can
 //! resolve sensor/clock/frame/detector/map entries. List and
 //! `device_model` require 0.3. Inbound v2 `device_model` Gets close the
 //! substream with no body (not `{entry: null}`). Outbound clients dial
@@ -52,20 +50,8 @@
 //! JSON string — the bytes whose XXH3-128 hash is named by `hash`.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
-#[cfg(feature = "swarm")]
-use libp2p::StreamProtocol;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-
-/// libp2p protocol id for content-addressed registry list + get.
-/// Stable; bump version only on an incompatible wire-shape change.
-#[cfg(feature = "swarm")]
-pub const REGISTRIES_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/registries/0.3.0");
-
-/// Legacy Get-only protocol. Still accepted inbound; outbound Get may
-/// fall back here when the peer does not speak 0.3.
-#[cfg(feature = "swarm")]
-pub const REGISTRIES_PROTOCOL_V2: StreamProtocol = StreamProtocol::new("/auki/registries/0.2.0");
 
 /// Cap on a single framed message. Registry entries are tiny today
 /// (~100s of bytes), but 64 KiB leaves room for future sensor bodies

@@ -1,22 +1,9 @@
-//! `/auki/info/0.0.1` — libp2p protocol for fetching a peer's
-//! [`ParticipantInfo`] over the cluster's libp2p plane.
+//! Payload codec for authenticated participant information.
 //!
-//! ## Why this exists
-//!
-//! Cluster peers need to render each other in operator UIs (Park's
-//! directory, Sentinel's status board). The Hagall cluster doc
-//! ([`auki-domain::ClusterMembership`](../../auki-domain)) carries
-//! only `peer_id + multiaddrs + join_ts_ns + successor_token` — it
-//! intentionally does NOT carry per-peer `ParticipantInfo` because
-//! that's volatile (`session_now_ns` advances every call,
-//! `cluster_joined_at_ns` is lazy, etc.).
-//!
-//! Pre-Hagall, Park resolved daemon HTTP base URLs via mDNS and
-//! hit `GET /api/info` to render the directory. Hagall's
-//! constraint #6 rules out mDNS / HTTP-between-cluster-peers as
-//! side channels — peer-to-peer information exchange must ride on
-//! libp2p so the cluster's trust boundary is the only one a peer's
-//! identity flows through.
+//! Domain peers use this shape to render each other in operator UIs. The
+//! authenticated transport supplies exact Domain scope and peer identity;
+//! [`AuthenticatedParticipantInfo`] contains only application/session
+//! metadata.
 //!
 //! ## Shape
 //!
@@ -32,10 +19,8 @@
 //!
 //! ## Trust boundary
 //!
-//! Inbound substreams from peers NOT on the runtime's allow-list
-//! are silently dropped at the runtime layer, identically to
-//! `/auki/stream/0.1.0` and `/auki/membership/0.0.1`. Non-cluster
-//! peers cannot fetch identity info — privacy by membership.
+//! The codec does not authorize callers. `auki-domain` registers it with
+//! `auki-p2p` using Domain-scoped session requirements.
 //!
 //! ## Wire format
 //!
@@ -52,12 +37,6 @@ use thiserror::Error;
 
 pub use auki_datatypes::info::{InfoRequest, InfoResponse};
 
-/// libp2p protocol id for the peer-to-peer `ParticipantInfo`
-/// exchange — the canonical (and only) peer-facing identity surface
-/// (#293). Stable; bump version only on an incompatible wire-shape
-/// change.
-pub const INFO_PROTOCOL: &str = "/auki/info/0.0.1";
-
 /// Cap on a single framed message. 64 KiB — `ParticipantInfo` is
 /// under 1 KiB at demo scale; the cap is defense against malformed
 /// senders.
@@ -65,7 +44,7 @@ pub const MAX_INFO_FRAME_BYTES: u32 = 64 * 1024;
 
 /// Participant metadata served by authenticated info protocol version 1.0.0.
 ///
-/// Authentication supplies Domain membership and authority. This payload is
+/// Authentication supplies exact Domain scope and authority. This payload is
 /// diagnostic application/session metadata only, so it intentionally has no
 /// Manager, membership, authorization-role, or route fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

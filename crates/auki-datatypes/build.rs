@@ -19,7 +19,6 @@ fn main() -> std::io::Result<()> {
                 "proto/camera.proto",
                 "proto/detection.proto",
                 "proto/info.proto",
-                "proto/join.proto",
                 "proto/joint_encoders.proto",
                 "proto/message.proto",
                 "proto/map.proto",

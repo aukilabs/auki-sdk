@@ -72,9 +72,8 @@ pub fn put_urdf_package(
             format!("URDF not found: {}", urdf_path.display()),
         ))
     })?;
-    let urdf_text = String::from_utf8(urdf_bytes).map_err(|error| {
-        Error::InvalidDeviceModel(format!("URDF is not UTF-8: {error}"))
-    })?;
+    let urdf_text = String::from_utf8(urdf_bytes)
+        .map_err(|error| Error::InvalidDeviceModel(format!("URDF is not UTF-8: {error}")))?;
     let device_model_id = urdf_robot_name(&urdf_text)
         .or_else(|| {
             urdf_path
@@ -89,14 +88,12 @@ pub fn put_urdf_package(
         .map_err(|error| Error::InvalidDeviceModel(format!("invalid device_model_id: {error}")))?;
 
     let mesh_refs = collect_urdf_mesh_filenames(&urdf_text)?;
-    let package_dir = package_root
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| {
-            urdf_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .to_path_buf()
-        });
+    let package_dir = package_root.map(Path::to_path_buf).unwrap_or_else(|| {
+        urdf_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf()
+    });
 
     let mut rewritten = urdf_text;
     let mut meshes = Vec::new();
@@ -104,10 +101,8 @@ pub fn put_urdf_package(
     // Replace from the end so earlier offsets stay valid.
     for (start, end, original) in mesh_refs.into_iter().rev() {
         let rel = normalize_mesh_rel_path(&original);
-        let substitution = mesh_substitutions.and_then(|map| {
-            map.get(original.as_str())
-                .or_else(|| map.get(rel.as_str()))
-        });
+        let substitution = mesh_substitutions
+            .and_then(|map| map.get(original.as_str()).or_else(|| map.get(rel.as_str())));
         let (advertised, resolved) = if let Some(sub) = substitution {
             validate_mesh_rel_path(&sub.advertised_path)?;
             (sub.advertised_path.clone(), sub.source_path.clone())
@@ -228,9 +223,9 @@ fn collect_urdf_mesh_filenames(urdf: &str) -> Result<Vec<(usize, usize, String)>
                 if e.local_name().as_ref() == b"mesh" =>
             {
                 let end = reader.buffer_position() as usize;
-                let element = urdf
-                    .get(start..end)
-                    .ok_or_else(|| Error::InvalidDeviceModel("URDF mesh span out of range".into()))?;
+                let element = urdf.get(start..end).ok_or_else(|| {
+                    Error::InvalidDeviceModel("URDF mesh span out of range".into())
+                })?;
                 for attr in e.attributes() {
                     let attr = attr.map_err(|error| {
                         Error::InvalidDeviceModel(format!("URDF mesh attribute error: {error}"))
@@ -243,11 +238,12 @@ fn collect_urdf_mesh_filenames(urdf: &str) -> Result<Vec<(usize, usize, String)>
                             "URDF mesh filename is not UTF-8: {error}"
                         ))
                     })?;
-                    let (rel_start, rel_end) = filename_value_span(element, raw).ok_or_else(|| {
-                        Error::InvalidDeviceModel(format!(
-                            "URDF mesh filename value span not found for {raw:?}"
-                        ))
-                    })?;
+                    let (rel_start, rel_end) =
+                        filename_value_span(element, raw).ok_or_else(|| {
+                            Error::InvalidDeviceModel(format!(
+                                "URDF mesh filename value span not found for {raw:?}"
+                            ))
+                        })?;
                     out.push((start + rel_start, start + rel_end, raw.to_string()));
                 }
             }
@@ -346,13 +342,7 @@ pub fn validate_mesh_rel_path(rel: &str) -> Result<()> {
         ));
     }
     if rel.bytes().any(|b| {
-        b == b'"'
-            || b == b'\''
-            || b == b'<'
-            || b == b'>'
-            || b == b'&'
-            || b == b'\\'
-            || b < 0x20
+        b == b'"' || b == b'\'' || b == b'<' || b == b'>' || b == b'&' || b == b'\\' || b < 0x20
     }) {
         return Err(Error::InvalidDeviceModel(format!(
             "mesh path contains XML-unsafe characters: {rel:?}"
@@ -880,9 +870,14 @@ mod tests {
             },
         );
         let app = tempfile::tempdir().unwrap();
-        let package =
-            put_urdf_package(app.path(), &urdf_path, Some("ros_body".into()), None, Some(&subs))
-                .unwrap();
+        let package = put_urdf_package(
+            app.path(),
+            &urdf_path,
+            Some("ros_body".into()),
+            None,
+            Some(&subs),
+        )
+        .unwrap();
         let (urdf_sha, meshes) = package.body.as_urdf().unwrap();
         assert_eq!(meshes.len(), 1);
         assert_eq!(meshes[0].path, "draco/body.glb");

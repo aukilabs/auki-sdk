@@ -1,5 +1,4 @@
-//! `/auki/resources/0.2.0` - libp2p protocol for fetching a peer's
-//! current resource catalog over the cluster's libp2p plane.
+//! `/auki/auth/1/resources/0.2.0` resource-catalog payload codec.
 //!
 //! Resources are the generalized discovery layer. A peer answers "what can
 //! I provide right now?" with a flat list of [`ResourceEntry`] rows. Each
@@ -18,16 +17,8 @@
 //! same row instead of minting a replacement id.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
-#[cfg(feature = "swarm")]
-use libp2p::StreamProtocol;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-
-/// libp2p protocol id for "what resources can this peer provide
-/// right now?". Stable; bump version only on an incompatible
-/// wire-shape change.
-#[cfg(feature = "swarm")]
-pub const RESOURCES_PROTOCOL: StreamProtocol = StreamProtocol::new("/auki/resources/0.2.0");
 
 /// Cap on a single framed message. 1 MiB leaves room for catalogs with
 /// embedded registry JSON and several transform edges while bounding

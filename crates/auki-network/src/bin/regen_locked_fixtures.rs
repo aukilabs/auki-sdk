@@ -4,7 +4,7 @@
 //! Run after any intentional schema change to commit updated fixtures:
 //!
 //! ```sh
-//! cargo run -p auki-network --bin regen_locked_fixtures --features swarm
+//! cargo run -p auki-network --bin regen_locked_fixtures --features protocol-codecs
 //! ```
 //!
 //! Hash values for `RegistryRef` fields match the corresponding

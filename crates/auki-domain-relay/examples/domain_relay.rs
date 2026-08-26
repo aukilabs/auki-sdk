@@ -1,5 +1,5 @@
 use auki_domain_relay::{DomainRelay, DomainRelayConfig, DomainRelayEvent};
-use auki_network::PeerIdentity;
+use auki_p2p::Identity;
 use libp2p::Multiaddr;
 
 #[tokio::main(flavor = "current_thread")]
@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|addr| addr.parse::<Multiaddr>())
             .collect::<Result<Vec<_>, _>>()?
     };
-    let identity = PeerIdentity::from_seed(&[78u8; 32]);
+    let identity = Identity::from_ed25519_seed(&[78u8; 32]);
     let mut relay = DomainRelay::new(
         &identity,
         DomainRelayConfig {

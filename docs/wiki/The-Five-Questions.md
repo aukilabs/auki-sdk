@@ -14,8 +14,8 @@ Every abstraction in the SDK exists to answer one of these. Skim the table for t
 |----------|-------------------|----------------|
 | **Identity** | `auki-identity` (Wallet + ed25519 + libp2p PeerId), `auki-jcs` + `auki-hash` (content-addressing), Sensor / Clock / Frame / Detector Registries with explicit `peer_id` | — |
 | **Spatial** | Pose Logs (`from → to` transforms over time), Frame Registry, `auki-geometry` (convention conversion) | Full `convert_pose` (composition along a transform path) |
-| **Temporal** | Live in-memory `DomainClockEstimate` (heartbeat-driven), per-peer `local_clock_read` TimeTransform Log (monotonic↔UTC, on disk), `auki-time` math, Clock Registry with explicit scope | `convert_time` (a unified API over the live estimate and the recorded log) |
-| **Networking** | libp2p substrate, 8 typed peer protocols, `auki-session` `Peer` / `Session` (declarative app API) + `auki-domain::Domain::join` (network presence) | `Session::materialize_remote_log` (Phase 5 of #216), Python `Domain::join` binding |
+| **Temporal** | Per-peer `local_clock_read` TimeTransform Log (monotonic↔UTC, on disk), `auki-time` math, Clock Registry with explicit scope | `convert_time` over recorded transforms and application-supplied clock relations |
+| **Networking** | Authenticated `auki-p2p` node, explicit routes, `/auki/auth/1/...` protocols, `Peer` / `Session` / `Domain` facade | `Session::materialize_remote_log`, authenticated Python Domain binding |
 | **Tokenomics** | `Wallet` exists as the on-device primitive | All payment / billing rails |
 
 ---
@@ -105,52 +105,31 @@ For now, traversing multi-edge transform paths is a consumer-side concern. The `
 
 ## Temporal — When did this happen?
 
-Multiple peers run on different clocks: a robot's monotonic system clock, a host's UTC clock, a sensor's hardware-stamped clock. The SDK refuses to canonicalize on any one of them. Every timestamp ships with a named clock identity, and the SDK runs two parallel paths for relating clocks to each other — one **live and in-memory** for cluster-wide alignment, one **persisted on disk** for offline replay.
+Multiple peers run on different clocks: a robot's monotonic system clock, a
+host's UTC clock, or a sensor's hardware clock. The SDK does not choose a
+canonical Domain clock. Every timestamp names a content-pinned Clock Registry
+entry, and clock relationships are explicit data.
 
-### Live: heartbeat-driven domain-clock convergence
+### Persisted TimeTransform Logs
 
-The `/auki/heartbeat/0.0.1` protocol carries the four NTP timestamps (t0/t1/t2/t3) on every beat. Each peer's `ClockSyncHandle` (in `auki-time`) accumulates samples per `(local_clock, remote_clock)` pair and emits a `ClockTransformEstimate(offset_ns, uncertainty_ns)`. The Manager announces a `HeartbeatDomainClock` in *its* heartbeats — "the domain clock is at offset N ns from my backing clock." Each peer composes `(local → backing)` with `(backing → domain)` via `auki_time::estimate_domain_clock` and ends up with a live `DomainClockEstimate(local → domain)`.
-
-`ClusterManager::domain_clock_estimate(local_clock_id)` returns that estimate for use anywhere in app code. **This is what "domain time" actually is, today.** It's live state — never persisted as a TimeTransform Log.
-
-### Persisted: TimeTransform Logs on disk
-
-A TimeTransform Log records sampled offsets between two clocks over time. The only current writer is the per-peer `local_clock_read` sampler in `auki-time` (1 Hz) — it pairs **local `CLOCK_MONOTONIC` ↔ `CLOCK_REALTIME`** on a single device, anchoring monotonic timestamps in UTC for offline replay. It does **not** record the cluster-wide domain clock; that lives in memory only.
+A TimeTransform Log records sampled offsets between two clocks over time. The
+current `local_clock_read` sampler in `auki-time` pairs local monotonic and
+realtime clocks for replay. `auki-time` also retains pure NTP sample math so an
+application or future authenticated protocol can produce additional explicit
+relations; `auki-domain` owns no hidden heartbeat or synchronized-time state.
 
 ### What addresses it
 
-- [`auki-registry`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-registry) — Clock Registry; `ClockBody::MonotonicClock`, `UtcClock`, etc., with explicit `scope` (`device-local`, `global`)
-- [`auki-manifests`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-manifests) — `TimeTransformLogManifest`, `TimeTransformSource`
-- [`auki-time`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-time) — `SessionClock`, `TimeTransform` math, `NtpExchange` / `NtpSample` / `compute_ntp_sample` / `select_best_ntp_sample`, `ClockSyncHandle` (in-memory NTP accumulator), `estimate_domain_clock` (composes the live estimate), 1 Hz `local_clock_read` sampler that writes the per-peer monotonic↔UTC TimeTransform Log
-- [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain) — `ClusterManager::domain_clock_estimate(local_clock)` returns the live `DomainClockEstimate`
-- [`auki-network`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-network) — heartbeat protocol carries the four NTP timestamps and the Manager's `HeartbeatDomainClock` descriptor
-- [`auki-session`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-session) — `register_time_transform_log`, `TimeTransformLogSpec`
+- [`auki-registry`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-registry) — content-pinned Clock Registry entries.
+- [`auki-manifests`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-manifests) — `TimeTransformLogManifest` and provenance.
+- [`auki-time`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-time) — clock primitives, transform math, NTP samples, and the local sampler.
+- [`auki-session`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-session) — TimeTransform Log registration.
 
 ### What's pending
 
-- **`convert_time`** — a published SDK operation that takes `(local_ts_ns, local_clock_ref, target_clock_ref) → target_ts_ns`. The primitives exist (live `DomainClockEstimate`, on-disk TimeTransform Log entries); the consume-side operation that picks between them and produces a reproducible conversion does not.
-
-### How a consumer composes the answer (today)
-
-```rust
-let sdk_clock  = session.register_clock("session/sdk_clock", ClockBody::MonotonicClock(...))?;
-let wall_clock = session.register_clock("wall_clock",        ClockBody::UtcClock(...))?;
-
-// Per-peer monotonic ↔ UTC log on disk, written by the local_clock_read sampler.
-let _tt_log = session.register_time_transform_log(TimeTransformLogSpec {
-    from_clock: sdk_clock,
-    to_clock:   wall_clock,
-    source:     TimeTransformSource::LocalClockRead,
-    ..
-})?;
-
-// Live cluster-wide alignment — composed from heartbeats, never persisted.
-// (`domain` from `auki_domain::Domain::join(&peer, &session, config)`)
-let cluster  = domain.cluster_manager();
-let estimate = cluster.domain_clock_estimate()?;
-// estimate.total_offset_ns + estimate.uncertainty_ns
-// Or get domain time directly: cluster.domain_time_now()? -> i64
-```
+- **`convert_time`** — a published operation that evaluates recorded or
+  explicitly supplied clock relations without silently selecting a global
+  clock.
 
 > **Why no canonical clock?** Picking UTC (or any clock) as the default would silently impose a conversion at every boundary. Keeping the conversion explicit — and (when persisted) recorded as a log of its own — keeps the lineage auditable and the SDK honest about what it's done to a timestamp.
 
@@ -158,14 +137,17 @@ let estimate = cluster.domain_clock_estimate()?;
 
 ## Networking — How do I talk to you?
 
-The Auki SDK runs on libp2p — peer-to-peer, transport-agnostic, no central server. Two peers discover each other through a Discovery HTTP service, exchange identity over `/auki/info`, agree on cluster membership through `/auki/join` + `/auki/membership`, advertise their data products through `/auki/resources/0.2.0`, and stream live data over `/auki/stream/0.2.0`.
-
-App code never touches libp2p protocol plumbing directly. Apps construct a `Peer`, start a `Session`, declare what they have, and call `auki_domain::Domain::join(&peer, &session, config)` — the SDK registers stream handlers, advertises the catalog, and serves anyone who asks.
+The native SDK runs one authenticated libp2p node per `Domain`. The host gives
+`DomainBuilder` a stable identity, DDS Domain UUID, signed credential,
+verification keys, listeners, and explicit routes. Noise binds the transport
+Peer ID; the signed Domain token authorizes application protocols. Knowing an
+address is never authority.
 
 ### What addresses it
 
-- [`auki-network`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-network) — libp2p substrate (TCP/QUIC, Noise, Yamux, Circuit Relay v2), typed `/auki/stream/0.2.0` streams, Discovery HTTP client with Manager + relay address hints
-- [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain) — `Domain::join(&peer, &session, config)` is the app-facing entry; `ClusterManager` (cluster bootstrap, Manager election, membership, resource catalog, stream serving) is the engine `Domain` constructs and owns
+- [`auki-p2p`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-p2p) — stable identity, mutually authenticated transport, explicit routes, relay booking, and observations.
+- [`auki-network`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-network) — bounded payload codecs and plain protocol types; no swarm.
+- [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain) — public lifecycle, known peers, catalogs, registries, blobs, messages, and streams.
 - [`auki-domain-relay`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain-relay) — Domain Relay for browser-compatible reachability through Circuit Relay v2 (WIP)
 - [`auki-session`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-session) — `Peer` + `Session` (identity, registries, log registration; network-free) and the `materialize_remote_log` stub
 
@@ -173,38 +155,38 @@ App code never touches libp2p protocol plumbing directly. Apps construct a `Peer
 
 | Protocol | Purpose |
 |----------|---------|
-| `/auki/join/0.0.1` | Joiner asks Manager to admit it |
-| `/auki/heartbeat/0.0.1` | Pairwise liveness for Manager-death detection |
-| `/auki/membership/0.0.1` | Manager gossips membership |
-| `/auki/info/0.0.1` | Peer-to-peer `ParticipantInfo` exchange |
-| `/auki/resources/0.2.0` | Catalog row fetch (one row per peer-owned log) |
-| `/auki/registries/0.2.0` | Legacy Get-only (untagged `{ kind, id, hash }` → `{ entry }`). Still accepted inbound; outbound Get falls back here when the peer lacks 0.3. |
-| `/auki/registries/0.3.0` | Hash-pinned registry Get + tip-only `device_model` List (last successful write via TIP) |
-| `/auki/blobs/0.1.0` | Content-addressed binary blob transfer |
-| `/auki/stream/0.2.0` | Typed live data streaming |
+| `/auki/auth/1/info/1.0.0` | Bounded participant diagnostics |
+| `/auki/auth/1/resources/0.2.0` | Resource catalog rows |
+| `/auki/auth/1/resources/0.3.0` | Catalog rows plus message channels |
+| `/auki/auth/1/resources/0.4.0` | Map Log catalog |
+| `/auki/auth/1/registries/0.2.0` | Authenticated Get-only registry payload |
+| `/auki/auth/1/registries/0.3.0` | Tagged Get and bounded Device Model List |
+| `/auki/auth/1/blobs/0.1.0` | Verified content-addressed blobs |
+| `/auki/auth/1/message/0.1.0` | Receiver-owned live messages |
+| `/auki/auth/1/stream/0.2.0` | Typed streams bound to an expected producer |
 
 Plus an [HTTP control API](https://github.com/aukilabs/auki-sdk/blob/develop/docs/control-api.md) — a separate operator-facing surface for daemons that produce SDK sessions (BoosterApp, Sentinel), so any UI like [Park](https://github.com/aukilabs/park) can drive them through a uniform contract.
 
 ### What's pending
 
-- **`Session::materialize_remote_log`** — Phase 5 of #216. The plumbing for opening a `/auki/stream/0.2.0` substream against a remote peer's log exists; the materialization layer that writes a local replica with its own retention policy does not.
-- **Python `Domain::join`** — no Python binding yet (it requires a pre-built libp2p swarm, which Rust callers build themselves); Python daemons drive `auki-domain-py`'s `ClusterManager` directly.
+- **`Session::materialize_remote_log`** — persistence of a verified remote
+  stream as a local replica remains pending.
+- **Authenticated Python Domain binding** — migrated as the next native Stage
+  1 slice over the same Rust owner.
 
 ### How a consumer composes the answer
 
 ```rust
-let domain = auki_domain::Domain::join(&peer, &session, DomainConfig {
-    target,
-    local_identity,
-    local_multiaddrs,
-    discovery_url,
-    swarm,
-    stream_provider,
-    daemon_info,
-}).await?;
+let config = DomainConfig::new(domain_id, identity)
+    .with_listen_addresses(["/ip4/127.0.0.1/tcp/0".parse()?])?
+    .with_peer_routes(expected_peer, routes)?;
+let domain = Domain::builder(&peer, &session, config)
+    .authority(verification_keys, signed_credential)
+    .join()
+    .await?;
 
-let catalog = domain.catalog();  // what this peer offers
-// other peers see this peer's catalog over /auki/resources/0.2.0
+let catalog = domain.catalog()?;
+// Authenticated peers fetch the same live provider snapshot.
 ```
 
 ---
@@ -235,8 +217,8 @@ Peer
     ├── register_clock                     ← Temporal
     └── register_*_log + HeadSpec          ← Spatial / Temporal lineage
 
-Domain::join(&peer, &session, config)
-├── catalog serving + cluster lifecycle    ← Networking
+Domain::join(&peer, &session, config, authority)
+├── authenticated protocols + owned leave  ← Networking
 └── (wallet)                               ← Tokenomics (future)
 ```
 

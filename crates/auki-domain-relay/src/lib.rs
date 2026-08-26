@@ -1,6 +1,6 @@
 //! Domain Relay capability for browser-reachable Auki Domains.
 
-use auki_network::PeerIdentity;
+use auki_p2p::Identity;
 use futures::StreamExt as _;
 use libp2p::{
     Multiaddr, PeerId, identify, noise, ping, relay,
@@ -24,8 +24,8 @@ pub struct DomainRelayConfig {
 /// Events emitted by [`DomainRelay`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DomainRelayEvent {
-    /// The relay is listening on a Discovery-ready multiaddr suffixed
-    /// with `/p2p/<relay-peer-id>`.
+    /// The relay is listening on a dialable multiaddr suffixed with
+    /// `/p2p/<relay-peer-id>`.
     Listening { relay_multiaddr: Multiaddr },
 }
 
@@ -55,12 +55,17 @@ pub struct DomainRelay {
 impl DomainRelay {
     /// Build and start a relay server for `identity`.
     pub async fn new(
-        identity: &PeerIdentity,
+        identity: &Identity,
         config: DomainRelayConfig,
     ) -> Result<Self, DomainRelayError> {
         let peer_id = identity.peer_id();
+        let encoded_identity = identity
+            .to_protobuf_encoding()
+            .map_err(|error| DomainRelayError::Build(format!("identity encode: {error}")))?;
+        let keypair = libp2p::identity::Keypair::from_protobuf_encoding(&encoded_identity)
+            .map_err(|error| DomainRelayError::Build(format!("identity decode: {error}")))?;
         let agent_version = config.agent_version;
-        let mut swarm = libp2p::SwarmBuilder::with_existing_identity(identity.keypair().clone())
+        let mut swarm = libp2p::SwarmBuilder::with_existing_identity(keypair)
             .with_tokio()
             .with_tcp(
                 tcp::Config::default(),

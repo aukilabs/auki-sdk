@@ -23,28 +23,28 @@ pub(crate) const MAX_DOMAIN_ROUTE_ENCODED_BYTES: usize = 1_024;
 
 /// One expected peer and its canonical, deterministically ordered candidates.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PeerRoutes {
+pub struct PeerRoutes {
     /// Peer that every candidate is required to reach.
-    pub(crate) expected_peer: PeerId,
+    pub expected_peer: PeerId,
     /// Direct candidates first, followed by circuit candidates; each group is
     /// ordered by its canonical string form.
-    pub(crate) candidates: Vec<Multiaddr>,
+    pub candidates: Vec<Multiaddr>,
 }
 
 /// Immutable point-in-time view of one Domain's route catalog.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct DomainRouteSnapshot {
+pub struct DomainRouteSnapshot {
     /// Monotonic catalog revision. It advances only when catalog state changes.
-    pub(crate) revision: u64,
+    pub revision: u64,
     /// Peer route sets in stable Peer-ID order.
-    pub(crate) peers: Vec<PeerRoutes>,
+    pub peers: Vec<PeerRoutes>,
     /// Sum of all canonical candidates in `peers`.
-    pub(crate) total_candidates: usize,
+    pub total_candidates: usize,
 }
 
 /// A rejected Domain route operation.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum DomainRoutesError {
+pub enum DomainRoutesError {
     /// The owning Domain has begun or completed shutdown.
     #[error("the Domain route catalog is stopped")]
     Stopped,
@@ -118,14 +118,14 @@ pub(crate) enum DomainRoutesError {
 }
 
 /// Result returned by private Domain route-catalog operations.
-pub(crate) type DomainRoutesResult<T> = Result<T, DomainRoutesError>;
+pub type DomainRoutesResult<T> = Result<T, DomainRoutesError>;
 
 /// Cloneable, lifecycle-fenced catalog of explicit untrusted route hints.
 ///
 /// Routes never confer authority. Consumers must still use the expected peer
 /// and the owning Domain's authenticated protocol requirements when dialing.
 #[derive(Clone)]
-pub(crate) struct DomainRoutes {
+pub struct DomainRoutes {
     inner: Arc<DomainRoutesInner>,
 }
 
@@ -166,7 +166,7 @@ impl DomainRoutes {
     ///
     /// An empty replacement removes the peer. Invalid or over-limit input
     /// leaves the prior state and revision unchanged.
-    pub(crate) fn replace(
+    pub fn replace(
         &self,
         expected_peer: PeerId,
         candidates: impl IntoIterator<Item = Multiaddr>,
@@ -225,12 +225,12 @@ impl DomainRoutes {
     }
 
     /// Atomically remove every candidate for `expected_peer`.
-    pub(crate) fn remove(&self, expected_peer: PeerId) -> DomainRoutesResult<DomainRouteSnapshot> {
+    pub fn remove(&self, expected_peer: PeerId) -> DomainRoutesResult<DomainRouteSnapshot> {
         self.replace(expected_peer, [])
     }
 
     /// Return an immutable snapshot of the current catalog.
-    pub(crate) fn snapshot(&self) -> DomainRoutesResult<DomainRouteSnapshot> {
+    pub fn snapshot(&self) -> DomainRoutesResult<DomainRouteSnapshot> {
         self.ensure_running()?;
         let state = self.lock_state();
         self.ensure_running()?;

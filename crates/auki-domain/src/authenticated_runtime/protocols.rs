@@ -36,7 +36,7 @@ pub(crate) const DOMAIN_PROTOCOL_MAX_FRAME_BYTES: u32 = 64 * 1024 * 1024;
 
 /// One authenticated application ID and its explicit handler bounds.
 #[derive(Clone, Debug)]
-pub(crate) struct DomainProtocolSpec {
+pub struct DomainProtocolSpec {
     protocol_id: String,
     protocol: ApplicationProtocol,
     max_concurrency: usize,
@@ -44,7 +44,7 @@ pub(crate) struct DomainProtocolSpec {
 }
 
 impl DomainProtocolSpec {
-    pub(crate) fn new(
+    pub fn new(
         protocol_id: impl Into<String>,
         max_concurrency: usize,
         max_frame_bytes: u32,
@@ -70,15 +70,15 @@ impl DomainProtocolSpec {
         })
     }
 
-    pub(crate) fn protocol_id(&self) -> &str {
+    pub fn protocol_id(&self) -> &str {
         &self.protocol_id
     }
 
-    pub(crate) fn max_concurrency(&self) -> usize {
+    pub fn max_concurrency(&self) -> usize {
         self.max_concurrency
     }
 
-    pub(crate) fn max_frame_bytes(&self) -> u32 {
+    pub fn max_frame_bytes(&self) -> u32 {
         self.max_frame_bytes
     }
 }
@@ -88,17 +88,17 @@ impl DomainProtocolSpec {
 /// The generic runtime cannot infer an application's framing. Retained and
 /// third-party handlers must use a bounded codec read no larger than this
 /// value; P06's retained codecs enforce their own smaller wire bounds.
-pub(crate) struct DomainProtocolStream {
+pub struct DomainProtocolStream {
     stream: AuthenticatedStream,
     max_frame_bytes: u32,
 }
 
 impl DomainProtocolStream {
-    pub(crate) fn remote_peer(&self) -> &auki_p2p::AuthenticatedPeer {
+    pub fn remote_peer(&self) -> &auki_p2p::AuthenticatedPeer {
         self.stream.remote_peer()
     }
 
-    pub(crate) fn max_frame_bytes(&self) -> u32 {
+    pub fn max_frame_bytes(&self) -> u32 {
         self.max_frame_bytes
     }
 }
@@ -138,7 +138,7 @@ impl AsyncWrite for DomainProtocolStream {
 }
 
 #[derive(Clone)]
-pub(crate) struct DomainProtocols {
+pub struct DomainProtocols {
     access: Arc<RuntimeAccess>,
     routes: DomainRoutes,
     registry: Arc<ProtocolRegistry>,
@@ -163,7 +163,7 @@ impl DomainProtocols {
         }
     }
 
-    pub(crate) fn register<H, F>(
+    pub fn register<H, F>(
         &self,
         spec: DomainProtocolSpec,
         handler: H,
@@ -258,7 +258,7 @@ impl DomainProtocols {
         })
     }
 
-    pub(crate) async fn open(
+    pub async fn open(
         &self,
         expected_peer: PeerId,
         protocol_id: impl Into<String>,
@@ -300,7 +300,7 @@ impl DomainProtocols {
         })
     }
 
-    pub(crate) async fn open_exact(
+    pub async fn open_exact(
         &self,
         expected_peer: PeerId,
         route: Multiaddr,
@@ -507,14 +507,14 @@ impl Drop for ProtocolTaskCompletionGuard {
     }
 }
 
-pub(crate) struct DomainProtocolRegistration {
+pub struct DomainProtocolRegistration {
     registry: Weak<ProtocolRegistry>,
     entry: Arc<RegisteredProtocol>,
     closed: bool,
 }
 
 impl DomainProtocolRegistration {
-    pub(crate) async fn close(mut self) {
+    pub async fn close(mut self) {
         let mut completed = self.entry.completed.subscribe();
         self.cancel();
         while !*completed.borrow_and_update() && completed.changed().await.is_ok() {}
@@ -579,14 +579,14 @@ async fn run_protocol_host<H, F>(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DomainRouteAttempt {
-    pub(crate) route: Multiaddr,
-    pub(crate) error: String,
-    pub(crate) unsupported_protocol: bool,
+pub struct DomainRouteAttempt {
+    pub route: Multiaddr,
+    pub error: String,
+    pub unsupported_protocol: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum DomainProtocolError {
+pub enum DomainProtocolError {
     #[error("the Domain runtime is stopped")]
     Stopped,
     #[error("protocol concurrency must be between 1 and {maximum}")]

@@ -1,6 +1,7 @@
-//! Transport-independent framing for `/auki/message/0.1.0` payloads.
+//! Transport-independent framing for `/auki/auth/1/message/0.1.0` payloads.
 //!
-//! The legacy swarm and the authenticated Domain runtime share this one codec.
+//! The authenticated Domain runtime uses this codec for persistent typed-message
+//! substreams.
 //! Authentication, stream ownership, queueing, and handler lifecycle remain
 //! runtime concerns; this module owns only bounded wire bytes.
 
@@ -330,7 +331,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_message_and_ack_bytes_are_locked_without_swarm() {
+    async fn open_message_and_ack_bytes_are_locked_without_transport() {
         let clock = RegistryRef {
             peer_id: "peer".into(),
             id: "clock".into(),

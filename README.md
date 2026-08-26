@@ -24,17 +24,31 @@ The Auki protocol is built around five questions any node should be able to answ
 
 ### Temporal
 
-- **TimeTransform Logs** — segmented sampled offsets between two clocks. Combined with NTP-style exchanges between peers, they let a cluster converge on a shared **domain time** so events recorded against different local clocks can be aligned.
-- **`auki-time`** — `SessionClock`, pure `TimeTransform` math, NTP-style offset samples (`NtpExchange`, `NtpSample`, `compute_ntp_sample`, `select_best_ntp_sample`), and the 1 Hz `local_clock_read` sampler that writes the TimeTransform Log. The `convert_time` operation that consumes the log is pending.
+- **TimeTransform Logs** — segmented, application-produced offsets between two
+  explicitly identified clocks. They preserve recorded temporal lineage
+  without electing a Domain clock or deriving time authority from networking.
+- **`auki-time`** — `SessionClock` and pure affine `TimeTransform` math. The
+  `convert_time` operation that consumes recorded transforms is pending.
 
 ### Networking
 
-- **libp2p substrate** (TCP/QUIC, Noise, Yamux, Circuit Relay v2) with typed `/auki/stream/0.2.0` streams for camera, point-cloud, joint-encoder, audio, detection, and live pose `SpatialTransform` payloads. Native Managers can reserve a relay-mediated circuit address through a Domain Relay and publish the relay base metadata through Discovery for browser peers.
-- **Peer protocols**: `/auki/join`, `/auki/heartbeat`, `/auki/membership`, `/auki/info`, `/auki/resources/0.2.0`, `/auki/registries/0.2.0`, `/auki/registries/0.3.0`, `/auki/blobs/0.1.0`.
-- **`Peer` / `Session` / `Domain`** — the app-facing API split (#282): a long-lived `Peer` (in `auki-session`) owns identity and the sensor / frame / detector registries and mints `Session`s — one timeline each, with a ULID session id and auto-registered monotonic + UTC clocks (#284) — which register the logs they write. `auki-domain`'s `Domain::join(&peer, &session, config)` puts the pair on the network and serves the resource catalog; `ClusterManager` is the engine `Domain` constructs and owns.
-- The resource catalog (`/auki/resources/0.2.0`) exposes rows discriminated by a `variant` field (`sensor_log` | `pose_log` | `time_transform_log` | `detection_log`), replacing the old `sensor_stream` / `transform_edge` / `pose_stream` row types.
-- `/auki/resources/0.2.0` is a live, pollable snapshot of resources that can currently accept stream opens. Peers may join before resources are ready; consumers such as Park poll and reconcile additions/removals; producers omit unavailable resources and re-add them later with the same stable `resource_id`.
-- A registered Detection Log is served automatically by `Domain` with retained replay and live tailing. Python consumers can use `ClusterManager.open_detection_stream(...)` or the generic `open_stream_with_request(...)`; entries carry a typed `DetectionFrame(data, sensor_hash, type)` envelope. Detector Registry entries are available through `fetch_detector_entry(...)`, allowing consumers to verify open output types such as `qr` without hard-coding an implementation id.
+- **`auki-p2p` authenticated transport** owns the stable libp2p identity,
+  DDS-signed Domain credentials, mutual authentication, explicit direct/relay
+  routes, relay reservations, and live authenticated-peer observations.
+- **Authenticated application protocols** use `/auki/auth/1/...` IDs for info,
+  resource catalogs v0.2/v0.3/v0.4, registries v0.2/v0.3, blobs, messages,
+  and typed streams. `auki-network` retains their bounded codecs and plain
+  application types; it owns no swarm or control plane.
+- **`Peer` / `Session` / `Domain`**: a long-lived `Peer` owns identity and
+  registries; a `Session` owns one recording timeline and its logs; `Domain`
+  owns one authenticated P2P node for one exact DDS Domain UUID. The host
+  supplies credentials and explicit routes. There is no Manager, election,
+  membership roster, Discovery HTTP dependency, or hidden topology policy.
+- The resource catalog exposes rows discriminated by `variant`
+  (`sensor_log` | `pose_log` | `time_transform_log` | `detection_log`) and is
+  sampled live from the provider the Domain serves. Registry/blob reads are
+  content-pinned, messages are receiver-owned, and typed streams bind the
+  expected authenticated producer before application bytes flow.
 - **HTTP control API** for daemons that produce SDK sessions — see [`docs/control-api.md`](docs/control-api.md).
 
 ### Tokenomics
@@ -61,13 +75,15 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 | [`auki-geometry`](crates/auki-geometry) | Convention conversion for points / vectors / poses | ✓ |
 | [`auki-maps`](crates/auki-maps) | Deterministic voxel Map accumulation + renderer-neutral chunk updates | ✓ |
 | [`auki-mappers`](crates/auki-mappers) | SDK-native Map producers; point-cloud + pose voxel Mapper | ✓ |
-| [`auki-network`](crates/auki-network) | libp2p substrate, typed camera/point-cloud/joint-encoder/audio/pose streams, Discovery HTTP client with Manager and relay address hints, peer protocols | ✓ |
+| [`auki-p2p`](crates/auki-p2p) | Authenticated libp2p runtime, stable identity, explicit direct/relay routes, relay booking, and peer observations | ✓ |
+| [`auki-p2p-dataset`](crates/auki-p2p-dataset) | Authenticated content-addressed dataset transfer protocol | ✓ |
+| [`auki-network`](crates/auki-network) | Bounded authenticated-protocol codecs and plain networking/application types; no swarm owner | ✓ |
 | [`auki-session`](crates/auki-session) | Declarative app API: `Peer` (identity + registries) + `Session` (clocks + log registration); network-free | ✓ |
-| [`auki-domain`](crates/auki-domain) | `Domain::join(&peer, &session, config)` — app-facing network presence; owns `ClusterManager`, the cluster lifecycle engine | ✓ |
+| [`auki-domain`](crates/auki-domain) | Public authenticated `Domain` lifecycle over one DDS Domain UUID, with explicit authority/routes and retained catalogs, registries, blobs, messages, and streams | ✓ |
 | [`auki-domain-relay`](crates/auki-domain-relay) | Domain Relay capability for browser-compatible reachability | WIP (v0.0.0) |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ROS2 → SDK glue for `Image` / `CameraInfo` / `PointCloud2` | ⚠ broken at the `r2r 0.9.5` transport layer |
-| [`auki-network-browser-wasm`](crates/auki-network-browser-wasm) | Browser/WASM libp2p transport probe | WIP (v0.0.0) |
-| [`auki-domain-browser`](crates/auki-domain-browser) | TypeScript browser `Peer` contract types | WIP (v0.0.0) |
+| [`auki-network-browser-wasm`](crates/auki-network-browser-wasm) | Prior Rust/WASM runtime, retained outside the active workspace until the browser stage replaces it | Legacy line |
+| [`auki-domain-browser`](crates/auki-domain-browser) | TypeScript browser facade; authenticated-engine migration is a later stage | WIP (v0.0.0) |
 
 ### `bindings/python/` — PyO3 / betterproto
 
@@ -79,8 +95,8 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 | [`auki-registry-py`](bindings/python/auki-registry-py) | Sensor / Clock / Frame registry IO | ✓ |
 | [`auki-manifests-py`](bindings/python/auki-manifests-py) | Log-manifest builders | ✓ |
 | [`auki-layout-py`](bindings/python/auki-layout-py) | On-disk path helpers | ✓ |
-| [`auki-network-py`](bindings/python/auki-network-py) | Discovery client with relay hints + shared stream pyclasses, including `SpatialTransformFrame` | ✓ |
-| [`auki-domain-py`](bindings/python/auki-domain-py) | `ClusterManager` Python facade with `ResourceEntry`, resource-catalog fetch, and typed stream openers including pose | ✓ |
+| [`auki-network-py`](bindings/python/auki-network-py) | Prior Manager-era networking binding, outside the active workspace during the Stage 1 Python cutover | Legacy line |
+| [`auki-domain-py`](bindings/python/auki-domain-py) | Being replaced by a binding over the same authenticated `Domain` owner as Rust | In migration |
 | [`auki-mappers-py`](bindings/python/auki-mappers-py) | Python boundary for SDK-native Mappers; normalized point cloud + registry + pose to `MapUpdate` | ✓ |
 | [`auki-session-py`](bindings/python/auki-session-py) | Python binding for `auki-session` — `Session`, register_*, log specs/handles, `catalog()` | ✓ |
 
@@ -89,7 +105,7 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 | Package | Purpose | Status |
 |---|---|---|
 | [`auki-identity-swift`](bindings/swift/auki-identity-swift) | `Wallet` + `PeerIdentity` | ✓ |
-| [`auki-network-swift`](bindings/swift/auki-network-swift) | Discovery client + `NetworkRuntime` + 5-payload streams | ✓ |
+| [`auki-network-swift`](bindings/swift/auki-network-swift) | Prior Manager-compatible package line, retained outside the active workspace until the Swift stage | Legacy line |
 
 Each package's own `README.md` documents its current state, public surface, and dependencies.
 

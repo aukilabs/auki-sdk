@@ -7,7 +7,7 @@
 //!
 //! Run with:
 //! ```sh
-//! cargo test -p auki-network --features swarm --test locked_json
+//! cargo test -p auki-network --features protocol-codecs --test locked_json
 //! ```
 
 use auki_network::resources_protocol::ResourceEntry;

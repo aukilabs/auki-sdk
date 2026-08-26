@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use libp2p::PeerId;
 use p256::pkcs8::DecodePublicKey;
 use parking_lot::RwLock;
@@ -671,22 +671,18 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
 
     #[test]
     fn malformed_duplicate_and_oversized_key_sets_are_rejected() {
-        assert!(
-            DdsTokenVerifier::from_keys(DdsVerificationKeys::new(
-                1,
-                FIRST_PUBLIC_KEY.to_vec(),
-                Some(FIRST_PUBLIC_KEY.to_vec()),
-            ))
-            .is_err()
-        );
-        assert!(
-            DdsTokenVerifier::from_keys(DdsVerificationKeys::new(
-                1,
-                vec![b'x'; DDS_VERIFICATION_KEY_MAX_BYTES + 1],
-                None,
-            ))
-            .is_err()
-        );
+        assert!(DdsTokenVerifier::from_keys(DdsVerificationKeys::new(
+            1,
+            FIRST_PUBLIC_KEY.to_vec(),
+            Some(FIRST_PUBLIC_KEY.to_vec()),
+        ))
+        .is_err());
+        assert!(DdsTokenVerifier::from_keys(DdsVerificationKeys::new(
+            1,
+            vec![b'x'; DDS_VERIFICATION_KEY_MAX_BYTES + 1],
+            None,
+        ))
+        .is_err());
     }
 
     #[test]

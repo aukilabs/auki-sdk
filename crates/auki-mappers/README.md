@@ -8,7 +8,7 @@ mergeable `MapUpdate`s. It has no robot or ROS API surface.
 
 1. Merge Resource Catalog rows obtained through the SDK.
 2. Fetch the selected Map Registry body with
-   `ClusterManager::fetch_map_entry`.
+   `Domain::fetch_map_entry`.
 3. Use `VoxelMapperSources::select` to choose the unique live point-cloud and
    pose pair connecting the sensor frame to the selected Map frame. If the Map
    publisher needs to own that frame identity, construct a
@@ -16,7 +16,7 @@ mergeable `MapUpdate`s. It has no robot or ROS API surface.
    `select_with_frame_alias`; this permits only an identity-preserving rebind,
    never an implicit coordinate conversion.
 4. Open `point_cloud_request` and `pose_request` against each row's writer
-   peer through `Domain`/`ClusterManager`.
+   peer through `Domain::open_stream`.
 5. Pass the accepted subscriptions, the Rangefinder Registry body, the Voxel
    Map Registry body, and a `MapUpdateSink` to `run_sdk_voxel_mapper`.
 

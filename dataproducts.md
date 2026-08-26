@@ -7,25 +7,25 @@
 
 A *data product* is one externally addressable thing a node can offer — a sensor log, a pose log, a TimeTransform Log, or a Detection Log. Peers on the Auki network need to discover what data products a node holds: enough metadata to interpret the payload bytes, align timestamps with their own clock, locate the data in space, and decide whether to fetch.
 
-This document describes the **`ResourceEntry` descriptor schema** — the serializable shape one peer sends to another to advertise a single data product over `/auki/resources/0.2.0`.
+This document describes the **`ResourceEntry` descriptor schema** — the serializable shape one peer sends to another to advertise a single data product over `/auki/auth/1/resources/0.2.0`.
 
 ---
 
-## `/auki/resources/0.2.0` live catalog contract
+## `/auki/auth/1/resources/0.2.0` live catalog contract
 
-Cluster membership and resource readiness are decoupled. A peer may join a
-cluster before its sensors, logs, registries, or stream handlers are ready.
-Consumers must treat `/auki/resources/0.2.0` as a live, pollable snapshot of
+Authenticated Domain participation and resource readiness are decoupled. A
+peer may join before its sensors, logs, registries, or stream handlers are
+ready. Consumers must treat `/auki/auth/1/resources/0.2.0` as a live, pollable snapshot of
 the resources that are currently requestable from that peer.
 
 Contract:
 
 - A resource row means the producer can currently accept the matching
-  `/auki/stream/0.2.0` open for that `source_peer_id` + `resource_id` on the
+  `/auki/auth/1/stream/0.2.0` open for that `source_peer_id` + `resource_id` on the
   peer being dialed.
 - Producers should not advertise resources whose stream opens would currently
   fail because the backing stream, log, or registry dependency is not ready.
-- Consumers, including Park, are expected to poll `/auki/resources/0.2.0` and
+- Consumers, including Park, are expected to poll `/auki/auth/1/resources/0.2.0` and
   reconcile rows that appear or disappear over time.
 - `resource_id` values are stable logical IDs scoped to `source_peer_id`.
   Temporary outages should remove a row from the catalog, not mint a new ID; if
@@ -320,7 +320,7 @@ rate. Their Sensor Log manifest intentionally has no `frame`; each
   "head": { "kind": "rolling", "retention_ns": 60000000000 },
   "manifest": {
     "from_clock": { "hash": "…", "id": "session/sdk_clock", "peer_id": "galbot" },
-    "source":     { "kind": "heartbeat" },
+    "source":     { "kind": "local_clock_read" },
     "to_clock":   { "hash": "…", "id": "wall_clock",        "peer_id": "galbot" }
   },
   "resource_id": "session/sdk_clock->wall_clock",
@@ -356,7 +356,7 @@ rate. Their Sensor Log manifest intentionally has no `frame`; each
 ## What the consumer gets in one catalog fetch
 
 - **Log identity** — variant, resource_id, source/writer split.
-- **Sensor metadata** — closed kind, open type string, and a content-addressed hash linking to the full `SensorRegistryEntry` (resolution via `/auki/registries/0.3.0`).
+- **Sensor metadata** — closed kind, open type string, and a content-addressed hash linking to the full `SensorRegistryEntry` (resolution via `/auki/auth/1/registries/0.3.0`).
 - **Clock identity** — registry ref in the manifest block; resolve by hash to get unit, epoch, scope.
 - **Spatial frame identity** — registry ref in the manifest block; resolve to get handedness, axes, units.
 - **Coverage** — bytes, entries, duration on the `available` block; time bounds on `head` (live) or `extent` (sealed).

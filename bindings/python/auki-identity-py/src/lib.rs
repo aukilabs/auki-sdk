@@ -162,19 +162,14 @@ impl Wallet {
     /// argument that constructed it (or, for a derived wallet, the
     /// XXH3-128-derived child seed).
     ///
-    /// **Why this exists.** `cluster.spawn` in `auki_network` takes a
-    /// 32-byte seed and constructs the swarm's keypair via
-    /// `PeerIdentity::from_seed(seed)` — *not* via `from_wallet`. To make
-    /// the swarm's PeerId match what `Wallet::derive_child("peer/v1").peer_id()`
-    /// reports (the canonical wallet-rooted peer identity), the caller has
-    /// to derive the peer wallet first and hand its `.seed()` to
-    /// `cluster.spawn`. Without this getter, Python consumers couldn't
-    /// extract the derived seed bytes; the Rust `auki_identity::Wallet::seed`
-    /// method existed upstream from day one but was never wired to the
-    /// binding.
+    /// **Why this exists.** Native hosts construct the canonical P2P identity
+    /// from the 32-byte `Wallet::derive_child("peer/v1")` seed. Exposing that
+    /// same derived seed lets a Python host pass it across a narrow native
+    /// boundary without introducing a second Peer-ID derivation model. The
+    /// Rust `auki_identity::Wallet::seed` method existed upstream from day one
+    /// but was not previously wired to this binding.
     ///
-    /// Typical usage in a Python sidecar that participates in an ansuz
-    /// cluster:
+    /// Typical derivation in a Python host:
     ///
     /// ```python
     /// wallet_seed = auki_identity.load_or_mint_seed(seed_path)
@@ -182,8 +177,8 @@ impl Wallet {
     /// peer = wallet.derive_child("peer/v1")
     /// peer_seed = peer.seed()
     /// peer_id = peer.peer_id()
-    /// runtime = auki_network.cluster.spawn(seed=peer_seed, ...)
-    /// # runtime's libp2p PeerId == peer_id, by construction.
+    /// # Supply peer_seed to the authenticated Domain binding/host adapter.
+    /// # Its canonical P2P Identity must have this same peer_id.
     /// ```
     ///
     /// **Sensitivity.** This returns the secret key bytes. Treat the
@@ -377,9 +372,8 @@ mod tests {
         // A derived child's seed, when fed back into Wallet::from_seed,
         // must produce a wallet with the same peer_id as the original
         // derived child. This is the round-trip property the BoosterApp
-        // sidecar relies on: derive once, hand the seed to cluster.spawn,
-        // and trust that the swarm's PeerId matches the derived peer's
-        // peer_id.
+        // authenticated native host relies on: derive once, hand the seed to
+        // the canonical P2P identity adapter, and keep the same PeerId.
         Python::with_gil(|py| {
             let seed = PyBytes::new_bound(py, &[7u8; 32]);
             let parent = Wallet::from_seed(&seed).unwrap();
@@ -398,7 +392,7 @@ mod tests {
         // Property pin: the seed format is 32-byte ed25519 secret bytes.
         // If anything in the upstream Wallet representation changes the
         // length, this test catches it before it cascades into the
-        // cluster.spawn FFI seam (which strictly requires 32 bytes).
+        // canonical native P2P identity seam (which requires 32 bytes).
         Python::with_gil(|py| {
             let seed = PyBytes::new_bound(py, &[1u8; 32]);
             let w = Wallet::from_seed(&seed).unwrap();

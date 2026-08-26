@@ -4,7 +4,9 @@ The Auki SDK's operator-control surface. Daemons that produce SDK sessions (Boos
 
 This is **not** part of the data protocol. Data products flow through the SDK's on-disk format (registries, logs, segments). The Control API is a runtime, operator-facing concern: list and manage sensor logs (live and historical), peek at the latest captured frame, request a clean shutdown.
 
-It is also **not** an identity surface. Peer identity (`auki_network::ParticipantInfo`) is exchanged exclusively over the SDK's libp2p `/auki/info/0.0.1` protocol, gated by cluster membership — see [Identity](#identity-not-served-here) below.
+It is also **not** an identity surface. Bounded participant diagnostics are
+exchanged only after mutual authentication over
+`/auki/auth/1/info/1.0.0` — see [Identity](#identity-not-served-here) below.
 
 > **Status — HTTP frozen at SDK release v0.0.23.** This is the terminal HTTP revision of the Control API. Subsequent control-plane evolution lands as libp2p protocols (`/auki/control/sensor_logs/1.0.0`, …) using the length-prefixed framing pattern of the existing `/auki/` peer protocols. The data model in this document (unified `sensor_logs`, cross-session listing, `session_id` everywhere) is transport-neutral; libp2p protocols will adapt the same shapes once the in-process surface (`auki-session` / `auki-session-py`, shipped in #216 / #224) stabilizes. No new HTTP endpoints will be added; existing endpoints stay maintained — with one removal: `GET /api/info` is gone from the contract entirely ([#293](https://github.com/aukilabs/auki-sdk/issues/293)), because identity is libp2p-only.
 
@@ -26,9 +28,18 @@ All endpoints live under `/api/`. Daemons bind `0.0.0.0:<port>` — no authentic
 
 ### Identity (not served here)
 
-There is **no HTTP identity endpoint** in this contract. Peer identity — `auki_network::ParticipantInfo`: `app`, `name`, `session_id`, `session_clock_id` + `session_clock_hash`, `session_now_ns`, `cluster_joined_at_ns`, `peer_id`, `app_instance`, `is_manager`, `manager_peer_id` — is exchanged exclusively over the SDK's libp2p `/auki/info/0.0.1` protocol, gated by cluster membership and the runtime allow-list ([#293](https://github.com/aukilabs/auki-sdk/issues/293)).
+There is **no HTTP identity endpoint** in this contract. Diagnostic participant
+metadata — `AuthenticatedParticipantInfo { app, app_version, name, session_id,
+session_clock_id, session_clock_hash, session_now_ns, peer_id, app_instance }`
+— is exchanged only over `/auki/auth/1/info/1.0.0`, after the DDS Domain token
+and Noise Peer ID have been mutually authenticated.
 
-The earlier `GET /api/info` endpoint is removed from this spec: serving `ParticipantInfo` over unauthenticated HTTP leaked identity, session, and Manager metadata to any LAN client without cluster admission. An app MAY still expose a local identity endpoint for its own UI (Park's browser-facing `/api/info` is one) — such endpoints are app-local, operator-facing/debug surfaces, never a cross-app contract, and never a source of cluster peer identity.
+The earlier `GET /api/info` endpoint is removed from this spec: serving
+participant metadata over unauthenticated HTTP leaked identity and session
+metadata to any LAN client. An app MAY still expose a local identity endpoint
+for its own UI (Park's browser-facing `/api/info` is one) — such endpoints are
+app-local, operator-facing/debug surfaces, never a cross-app contract, and
+never a source of authenticated Domain peer identity.
 
 **No canonical clock.** The SDK does not assume UTC, monotonic, or any other specific clock as canonical for the API. Every timestamp is paired with an explicit clock identity (e.g. a log's `clock_id` + `clock_hash`); cross-clock conversion is what the [TimeTransform Log](../crates/auki-time/README.md) and `convert_time` exist for. Apps that treat UTC as canonical do so by *convention* — they configure a TimeTransform between their session clock and a UTC clock and consumers walk it via `convert_time`.
 
@@ -118,7 +129,7 @@ List sensor logs the daemon can see. **Spans every session on disk by default** 
 
 | Param | Value | Effect |
 | --- | --- | --- |
-| `session_id` | `<uuid>` or the literal `current` | Restrict to one session. `current` means the daemon's live session — the same `session_id` the daemon's `ParticipantInfo` carries over libp2p `/auki/info/0.0.1`. |
+| `session_id` | `<uuid>` or the literal `current` | Restrict to one session. `current` means the daemon's live session — the same `session_id` its authenticated participant diagnostics carry. |
 | `sensor_id` | `<id>` | Restrict to one sensor — useful for "find every log this camera ever wrote." |
 | `sensor_hash` | `<hash>` | Restrict to one schema version of a sensor. Cross-session by design: "find every log written against this exact camera schema." |
 | `clock_id` | `<id>` | Restrict to logs whose per-frame timestamps live on this clock. |
@@ -304,14 +315,14 @@ Daemons that conform to this document MUST advertise the data model exactly as s
 A daemon is conformant when:
 
 - [ ] Every endpoint above responds with the exact JSON shapes documented.
-- [ ] No HTTP endpoint serves `ParticipantInfo` to peers — identity is exchanged only over libp2p `/auki/info/0.0.1`; any app-local identity endpoint is operator-facing/debug, not contract.
+- [ ] No HTTP endpoint serves participant diagnostics to peers — those bytes are exchanged only after mutual authentication over `/auki/auth/1/info/1.0.0`; any app-local identity endpoint is operator-facing/debug, not contract.
 - [ ] `POST /api/sensor_logs` validates `sensor_id` / `sensor_hash` against the live session's bindings — `sensor_hash` mismatch returns `409`, unknown `sensor_id` returns `400`.
 - [ ] `GET /api/sensor_logs` with no query parameters returns every sensor log the daemon can enumerate, across every session on disk.
 - [ ] Each entry in `GET /api/sensor_logs` carries the full per-log shape: `sensor_log_id`, `session_id`, `sensor_id`, `sensor_hash`, `clock_id`, `clock_hash`, `retention_ns`, `duration_ns`, `started_at_ns`, `stopped_at_ns` (`null` only for live logs in the live session).
 - [ ] `PATCH /api/sensor_logs/<id>` accepts `retention_ns` and `duration_ns`; rejects mutations to any other field with `400`; returns `404` on stopped or historical logs.
 - [ ] `DELETE /api/sensor_logs/<id>` transitions the log to stopped state with non-null `stopped_at_ns`, **keeps it listed** in `GET /api/sensor_logs`, and returns `404` on stopped or historical logs.
 - [ ] Registry endpoints serve `<app_root>/registries/{sensors,clocks}/<id>/<hash>.json` verbatim, with `Cache-Control: public, max-age=31536000, immutable`.
-- [ ] Daemon registers a session clock at session boot — a fresh monotonic clock per session, on which the session's start is `0` trivially. The `clock_id` and `clock_hash` are the values carried in the daemon's `ParticipantInfo` over libp2p `/auki/info/0.0.1`.
+- [ ] Daemon registers a session clock at session boot — a fresh monotonic clock per session, on which the session's start is `0` trivially. The `clock_id` and `clock_hash` are the values carried in its authenticated participant diagnostics.
 - [ ] No timestamp in any API response is described as "UTC ns" or "monotonic ns" — every timestamp is "ns on the clock identified by `<x>_clock_id`."
 - [ ] Errors use `{"error": "..."}` JSON outside the documented per-endpoint response shapes.
 - [ ] HTTP server binds `0.0.0.0:<port>`.

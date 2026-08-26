@@ -4,16 +4,21 @@
 #![allow(dead_code)]
 
 pub(crate) mod authority;
+pub(crate) mod blobs;
 pub(crate) mod info_v1;
 #[cfg(test)]
 mod p09_tests;
+#[cfg(test)]
+mod p10_tests;
 pub(crate) mod peers;
 pub(crate) mod protocols;
+pub(crate) mod registries;
 pub(crate) mod resources_v2;
 pub(crate) mod resources_v3;
 pub(crate) mod resources_v4;
 pub(crate) mod routes;
 pub(crate) mod status;
+pub(crate) mod storage;
 
 use std::{collections::BTreeMap, panic::AssertUnwindSafe, sync::Arc, time::Duration};
 
@@ -32,14 +37,17 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use authority::{DomainAuthority, DomainAuthorityError};
+use blobs::{BlobsV1, BlobsV1Error};
 use info_v1::{InfoV1, InfoV1Error};
 use peers::DomainPeers;
 use protocols::{DomainProtocolError, DomainProtocols};
+use registries::{Registries, RegistriesError};
 use resources_v2::{ResourcesV2, ResourcesV2Error};
 use resources_v3::{ResourcesV3, ResourcesV3Error};
 use resources_v4::{ResourcesV4, ResourcesV4Error};
 use routes::{DomainRoutes, DomainRoutesError};
 use status::{DomainFailure, DomainStatus};
+use storage::{RegistryBlobStorage, StorageError};
 
 const DOMAIN_LISTENER_LIMIT: usize = 16;
 const DOMAIN_LISTEN_ADDRESS_MAX_BYTES: usize = 1_024;
@@ -157,6 +165,9 @@ pub(crate) struct AuthenticatedDomain {
     resources_v2: ResourcesV2,
     resources_v3: ResourcesV3,
     resources_v4: ResourcesV4,
+    registries: Registries,
+    blobs: BlobsV1,
+    storage: RegistryBlobStorage,
     protocol_registrations: Vec<protocols::DomainProtocolRegistration>,
     listen_addresses: Vec<Multiaddr>,
     supervisor: Option<JoinHandle<()>>,
@@ -224,6 +235,7 @@ impl AuthenticatedDomain {
         let peers = DomainPeers::new(config.domain_id, observations.clone(), lifecycle.clone());
         let (fatal_sender, fatal_receiver) = mpsc::unbounded_channel();
         let protocols = DomainProtocols::new(Arc::clone(&access), routes.clone(), fatal_sender);
+        let storage = RegistryBlobStorage::new(access.peer_id, lifecycle.clone());
         let info_v1 = InfoV1::new(
             access.peer_id,
             protocols.clone(),
@@ -238,7 +250,9 @@ impl AuthenticatedDomain {
             lifecycle.clone(),
         );
         let resources_v4 = ResourcesV4::new(protocols.clone(), lifecycle.clone());
-        let mut protocol_registrations = Vec::with_capacity(4);
+        let registries = Registries::new(protocols.clone(), storage.clone(), lifecycle.clone());
+        let blobs = BlobsV1::new(protocols.clone(), storage.clone());
+        let mut protocol_registrations = Vec::with_capacity(7);
         register_domain_protocol(
             &access,
             &protocols,
@@ -271,6 +285,31 @@ impl AuthenticatedDomain {
             resources_v4
                 .register()
                 .map_err(AuthenticatedDomainError::ResourcesV4),
+        )
+        .await?;
+        register_domain_protocol(
+            &access,
+            &protocols,
+            &mut protocol_registrations,
+            registries
+                .register_v2()
+                .map_err(AuthenticatedDomainError::Registries),
+        )
+        .await?;
+        register_domain_protocol(
+            &access,
+            &protocols,
+            &mut protocol_registrations,
+            registries
+                .register_v3()
+                .map_err(AuthenticatedDomainError::Registries),
+        )
+        .await?;
+        register_domain_protocol(
+            &access,
+            &protocols,
+            &mut protocol_registrations,
+            blobs.register().map_err(AuthenticatedDomainError::Blobs),
         )
         .await?;
 
@@ -314,6 +353,9 @@ impl AuthenticatedDomain {
             resources_v2,
             resources_v3,
             resources_v4,
+            registries,
+            blobs,
+            storage,
             protocol_registrations,
             listen_addresses,
             supervisor: Some(supervisor),
@@ -364,6 +406,22 @@ impl AuthenticatedDomain {
 
     pub(crate) fn resources_v4(&self) -> ResourcesV4 {
         self.resources_v4.clone()
+    }
+
+    pub(crate) fn registries(&self) -> Registries {
+        self.registries.clone()
+    }
+
+    pub(crate) fn blobs(&self) -> BlobsV1 {
+        self.blobs.clone()
+    }
+
+    pub(crate) fn set_registry_app_root(
+        &self,
+        app_root: impl Into<std::path::PathBuf>,
+    ) -> Result<(), AuthenticatedDomainError> {
+        self.storage.set_app_root(app_root)?;
+        Ok(())
     }
 
     pub(crate) fn status(&self) -> DomainStatus {
@@ -720,6 +778,12 @@ pub(crate) enum AuthenticatedDomainError {
     ResourcesV3(#[from] ResourcesV3Error),
     #[error("Domain resource catalog v0.4 runtime failed: {0}")]
     ResourcesV4(#[from] ResourcesV4Error),
+    #[error("Domain Registry runtime failed: {0}")]
+    Registries(#[from] RegistriesError),
+    #[error("Domain blob runtime failed: {0}")]
+    Blobs(#[from] BlobsV1Error),
+    #[error("Domain registry/blob storage failed: {0}")]
+    Storage(#[from] StorageError),
     #[error("authenticated P2P runtime failed: {0}")]
     P2p(#[source] auki_p2p::Error),
     #[error("Domain-owned task failed: {0}")]

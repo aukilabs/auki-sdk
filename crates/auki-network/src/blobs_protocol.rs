@@ -32,8 +32,8 @@ pub use auki_registry::MAX_BLOB_BYTES;
 /// Max request/response rounds on one blob substream (full fetch + slack).
 pub const MAX_BLOB_ROUNDS: u32 = (MAX_BLOB_BYTES / MAX_BLOB_CHUNK_BYTES as u64) as u32 + 8;
 
-/// Cap on a framed protobuf meta message.
-const MAX_META_BYTES: u32 = 16 * 1024;
+/// Cap on a framed protobuf request/response metadata message.
+pub const MAX_BLOB_META_BYTES: u32 = 16 * 1024;
 
 /// Body of an outbound or inbound blob chunk request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,10 +248,10 @@ where
 {
     let mut bytes = Vec::with_capacity(msg.encoded_len());
     msg.encode(&mut bytes).map_err(BlobsProtocolError::Encode)?;
-    if bytes.len() as u64 > MAX_META_BYTES as u64 {
+    if bytes.len() as u64 > MAX_BLOB_META_BYTES as u64 {
         return Err(BlobsProtocolError::FrameTooLarge {
             actual: bytes.len() as u64,
-            max: MAX_META_BYTES as u64,
+            max: MAX_BLOB_META_BYTES as u64,
         });
     }
     stream
@@ -276,10 +276,10 @@ where
         .await
         .map_err(BlobsProtocolError::Io)?;
     let len = u32::from_be_bytes(len);
-    if len == 0 || len > MAX_META_BYTES {
+    if len == 0 || len > MAX_BLOB_META_BYTES {
         return Err(BlobsProtocolError::FrameTooLarge {
             actual: len as u64,
-            max: MAX_META_BYTES as u64,
+            max: MAX_BLOB_META_BYTES as u64,
         });
     }
     let mut bytes = vec![0; len as usize];

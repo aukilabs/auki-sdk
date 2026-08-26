@@ -12,7 +12,7 @@ use std::{
 
 use auki_p2p::{
     ApplicationProtocol, AuthenticatedRouteStream, AuthenticatedStream, ExactRoute, Multiaddr,
-    PeerId, SessionRequirements,
+    PeerId, SessionRequirements, TargetedStreamError,
 };
 use futures::{
     FutureExt,
@@ -277,10 +277,19 @@ impl DomainProtocols {
                 .await
             {
                 Ok(stream) => return Ok(stream),
-                Err(DomainProtocolError::P2p(error)) => attempts.push(DomainRouteAttempt {
-                    route,
-                    error: error.to_string(),
-                }),
+                Err(DomainProtocolError::P2p(error)) => {
+                    let unsupported_protocol = matches!(
+                        &error,
+                        auki_p2p::Error::TargetedStream(
+                            TargetedStreamError::UnsupportedProtocol { .. }
+                        )
+                    );
+                    attempts.push(DomainRouteAttempt {
+                        route,
+                        error: error.to_string(),
+                        unsupported_protocol,
+                    });
+                }
                 Err(error) => return Err(error),
             }
         }
@@ -573,6 +582,7 @@ async fn run_protocol_host<H, F>(
 pub(crate) struct DomainRouteAttempt {
     pub(crate) route: Multiaddr,
     pub(crate) error: String,
+    pub(crate) unsupported_protocol: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -607,6 +617,23 @@ pub(crate) enum DomainProtocolError {
     CleanupTimeout,
 }
 
+impl DomainProtocolError {
+    /// Whether every configured route reached the expected authenticated peer
+    /// and that peer rejected only the requested application protocol.
+    ///
+    /// Retained version fallback may use this signal. Authentication, routing,
+    /// transport, and timeout failures must never be mistaken for version
+    /// negotiation.
+    pub(crate) fn all_routes_unsupported_protocol(&self) -> bool {
+        matches!(
+            self,
+            Self::AllRoutesFailed { attempts, .. }
+                if !attempts.is_empty()
+                    && attempts.iter().all(|attempt| attempt.unsupported_protocol)
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,5 +666,25 @@ mod tests {
         assert_eq!(exact.protocol_id(), id);
         assert_eq!(exact.max_concurrency(), DOMAIN_PROTOCOL_MAX_CONCURRENCY);
         assert_eq!(exact.max_frame_bytes(), DOMAIN_PROTOCOL_MAX_FRAME_BYTES);
+    }
+
+    #[test]
+    fn version_fallback_requires_every_route_to_reject_only_the_protocol() {
+        let peer_id = PeerId::random();
+        let route: Multiaddr = "/ip4/127.0.0.1/tcp/4001".parse().unwrap();
+        let error = |attempts| DomainProtocolError::AllRoutesFailed {
+            peer_id: Box::new(peer_id),
+            protocol_id: "/auki/auth/1/example/1.0.0".into(),
+            attempts,
+        };
+        let attempt = |unsupported_protocol| DomainRouteAttempt {
+            route: route.clone(),
+            error: "test".into(),
+            unsupported_protocol,
+        };
+
+        assert!(error(vec![attempt(true), attempt(true)]).all_routes_unsupported_protocol());
+        assert!(!error(Vec::new()).all_routes_unsupported_protocol());
+        assert!(!error(vec![attempt(true), attempt(false)]).all_routes_unsupported_protocol());
     }
 }

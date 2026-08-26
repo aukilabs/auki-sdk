@@ -265,7 +265,7 @@ mod tests {
             dir.path(),
             PEER_ID,
             "missing/sensor",
-            "missing-hash",
+            "00000000000000000000000000000000",
             "clock",
             "clock-hash",
         )
@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn from_registry_errors_when_frame_entry_missing() {
         let dir = tempfile::tempdir().unwrap();
-        let entry = rangefinder_sensor("not-on-disk");
+        let entry = rangefinder_sensor("00000000000000000000000000000000");
         let sensor_hash = write_sensor_bypassing_validation(dir.path(), &entry);
 
         let err = StreamManifestBuilder::from_registry(

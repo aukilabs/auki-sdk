@@ -6,10 +6,14 @@
 pub(crate) mod authority;
 pub(crate) mod blobs;
 pub(crate) mod info_v1;
+pub(crate) mod io_tasks;
+pub(crate) mod messages;
 #[cfg(test)]
 mod p09_tests;
 #[cfg(test)]
 mod p10_tests;
+#[cfg(test)]
+mod p11_tests;
 pub(crate) mod peers;
 pub(crate) mod protocols;
 pub(crate) mod registries;
@@ -19,9 +23,14 @@ pub(crate) mod resources_v4;
 pub(crate) mod routes;
 pub(crate) mod status;
 pub(crate) mod storage;
+pub(crate) mod streams;
 
 use std::{collections::BTreeMap, panic::AssertUnwindSafe, sync::Arc, time::Duration};
 
+use auki_network::{
+    resources_v3_protocol::MessageChannelResource,
+    stream_runtime::{StreamProvider, decline_all_streams},
+};
 use auki_p2p::{
     DdsTokenVerifier, DdsVerificationKeys, Identity, Multiaddr, Node, NodeObservationEvent,
     NodeObservationStatus, PeerId, SignedP2pCredential,
@@ -39,6 +48,10 @@ use uuid::Uuid;
 use authority::{DomainAuthority, DomainAuthorityError};
 use blobs::{BlobsV1, BlobsV1Error};
 use info_v1::{InfoV1, InfoV1Error};
+use io_tasks::DomainIoTasks;
+use messages::{
+    MessageChannelRegistration, MessageChannelRegistrationError, MessagesV1, MessagesV1Error,
+};
 use peers::DomainPeers;
 use protocols::{DomainProtocolError, DomainProtocols};
 use registries::{Registries, RegistriesError};
@@ -48,6 +61,7 @@ use resources_v4::{ResourcesV4, ResourcesV4Error};
 use routes::{DomainRoutes, DomainRoutesError};
 use status::{DomainFailure, DomainStatus};
 use storage::{RegistryBlobStorage, StorageError};
+use streams::{Streams, StreamsError};
 
 const DOMAIN_LISTENER_LIMIT: usize = 16;
 const DOMAIN_LISTEN_ADDRESS_MAX_BYTES: usize = 1_024;
@@ -154,6 +168,43 @@ impl AuthenticatedDomainConfig {
     }
 }
 
+/// Protocol-specific inputs composed by `DomainBuilder` alongside the narrow
+/// D05 node configuration.
+///
+/// Keeping these values separate from [`AuthenticatedDomainConfig`] preserves
+/// the locked public shape: listener/identity/routes configure the node, while
+/// receiver declarations and application providers configure their services.
+#[derive(Clone)]
+pub(crate) struct AuthenticatedDomainServicesConfig {
+    message_channels: Vec<(MessageChannelResource, usize)>,
+    stream_provider: StreamProvider,
+}
+
+impl Default for AuthenticatedDomainServicesConfig {
+    fn default() -> Self {
+        Self {
+            message_channels: Vec::new(),
+            stream_provider: decline_all_streams(),
+        }
+    }
+}
+
+impl AuthenticatedDomainServicesConfig {
+    pub(crate) fn with_message_channel(
+        mut self,
+        resource: MessageChannelResource,
+        receiver_capacity: usize,
+    ) -> Self {
+        self.message_channels.push((resource, receiver_capacity));
+        self
+    }
+
+    pub(crate) fn with_stream_provider(mut self, provider: StreamProvider) -> Self {
+        self.stream_provider = provider;
+        self
+    }
+}
+
 /// The private authenticated Domain engine used by retained protocol adapters.
 pub(crate) struct AuthenticatedDomain {
     access: Arc<RuntimeAccess>,
@@ -167,11 +218,15 @@ pub(crate) struct AuthenticatedDomain {
     resources_v4: ResourcesV4,
     registries: Registries,
     blobs: BlobsV1,
+    messages: MessagesV1,
+    streams: Streams,
     storage: RegistryBlobStorage,
+    message_channels: BTreeMap<String, MessageChannelRegistration>,
     protocol_registrations: Vec<protocols::DomainProtocolRegistration>,
     listen_addresses: Vec<Multiaddr>,
     supervisor: Option<JoinHandle<()>>,
     authority_expiry: Option<JoinHandle<()>>,
+    io_task_host: Option<JoinHandle<()>>,
     cleanup_complete: bool,
 }
 
@@ -180,6 +235,21 @@ impl AuthenticatedDomain {
         config: AuthenticatedDomainConfig,
         verification_keys: DdsVerificationKeys,
         credential: SignedP2pCredential,
+    ) -> Result<Self, AuthenticatedDomainError> {
+        Self::join_with_services(
+            config,
+            verification_keys,
+            credential,
+            AuthenticatedDomainServicesConfig::default(),
+        )
+        .await
+    }
+
+    pub(crate) async fn join_with_services(
+        config: AuthenticatedDomainConfig,
+        verification_keys: DdsVerificationKeys,
+        credential: SignedP2pCredential,
+        services: AuthenticatedDomainServicesConfig,
     ) -> Result<Self, AuthenticatedDomainError> {
         let lifecycle = CancellationToken::new();
         let status = status::DomainStatusController::credential_unavailable();
@@ -234,6 +304,7 @@ impl AuthenticatedDomain {
 
         let peers = DomainPeers::new(config.domain_id, observations.clone(), lifecycle.clone());
         let (fatal_sender, fatal_receiver) = mpsc::unbounded_channel();
+        let (io_tasks, io_task_host) = DomainIoTasks::new(lifecycle.clone(), fatal_sender.clone());
         let protocols = DomainProtocols::new(Arc::clone(&access), routes.clone(), fatal_sender);
         let storage = RegistryBlobStorage::new(access.peer_id, lifecycle.clone());
         let info_v1 = InfoV1::new(
@@ -252,7 +323,40 @@ impl AuthenticatedDomain {
         let resources_v4 = ResourcesV4::new(protocols.clone(), lifecycle.clone());
         let registries = Registries::new(protocols.clone(), storage.clone(), lifecycle.clone());
         let blobs = BlobsV1::new(protocols.clone(), storage.clone());
-        let mut protocol_registrations = Vec::with_capacity(7);
+        let messages = MessagesV1::new(
+            access.peer_id,
+            protocols.clone(),
+            lifecycle.clone(),
+            io_tasks.clone(),
+        );
+        let streams = Streams::new(protocols.clone(), io_tasks, lifecycle.clone());
+        if let Err(error) = streams.set_provider(services.stream_provider) {
+            return Err(
+                rollback_join_error(&access, AuthenticatedDomainError::Streams(error)).await,
+            );
+        }
+        let mut message_channels = BTreeMap::new();
+        for (resource, receiver_capacity) in services.message_channels {
+            let resource_id = resource.resource_id.clone();
+            let registration = match messages.declare(resource, receiver_capacity) {
+                Ok(registration) => registration,
+                Err(error) => {
+                    return Err(rollback_join_error(
+                        &access,
+                        AuthenticatedDomainError::MessageChannelRegistration(error),
+                    )
+                    .await);
+                }
+            };
+            message_channels.insert(resource_id, registration);
+        }
+        if let Err(error) = resources_v3.set_message_channel_provider(Arc::new(messages.clone())) {
+            return Err(
+                rollback_join_error(&access, AuthenticatedDomainError::ResourcesV3(error)).await,
+            );
+        }
+
+        let mut protocol_registrations = Vec::with_capacity(9);
         register_domain_protocol(
             &access,
             &protocols,
@@ -267,6 +371,24 @@ impl AuthenticatedDomain {
             resources_v2
                 .register()
                 .map_err(AuthenticatedDomainError::ResourcesV2),
+        )
+        .await?;
+        register_domain_protocol(
+            &access,
+            &protocols,
+            &mut protocol_registrations,
+            messages
+                .register()
+                .map_err(AuthenticatedDomainError::Messages),
+        )
+        .await?;
+        register_domain_protocol(
+            &access,
+            &protocols,
+            &mut protocol_registrations,
+            streams
+                .register()
+                .map_err(AuthenticatedDomainError::Streams),
         )
         .await?;
         register_domain_protocol(
@@ -313,6 +435,8 @@ impl AuthenticatedDomain {
         )
         .await?;
 
+        let io_task_host = tokio::spawn(io_task_host.run());
+
         let supervisor_access = Arc::clone(&access);
         let supervisor = tokio::spawn(async move {
             let outcome = AssertUnwindSafe(supervise_runtime(
@@ -355,11 +479,15 @@ impl AuthenticatedDomain {
             resources_v4,
             registries,
             blobs,
+            messages,
+            streams,
             storage,
+            message_channels,
             protocol_registrations,
             listen_addresses,
             supervisor: Some(supervisor),
             authority_expiry: Some(authority_expiry),
+            io_task_host: Some(io_task_host),
             cleanup_complete: false,
         })
     }
@@ -416,6 +544,21 @@ impl AuthenticatedDomain {
         self.blobs.clone()
     }
 
+    pub(crate) fn messages(&self) -> MessagesV1 {
+        self.messages.clone()
+    }
+
+    pub(crate) fn streams(&self) -> Streams {
+        self.streams.clone()
+    }
+
+    pub(crate) fn take_message_channel(
+        &mut self,
+        resource_id: &str,
+    ) -> Option<MessageChannelRegistration> {
+        self.message_channels.remove(resource_id)
+    }
+
     pub(crate) fn set_registry_app_root(
         &self,
         app_root: impl Into<std::path::PathBuf>,
@@ -447,6 +590,7 @@ impl AuthenticatedDomain {
         }
         self.access.lifecycle.cancel();
         self.peers.clear_participant_info();
+        self.messages.shutdown();
 
         let mut first_error = self
             .protocols
@@ -455,6 +599,9 @@ impl AuthenticatedDomain {
             .err()
             .map(AuthenticatedDomainError::Protocol);
         if let Err(error) = await_task_until(&mut self.authority_expiry, deadline).await {
+            first_error.get_or_insert(error);
+        }
+        if let Err(error) = await_task_until(&mut self.io_task_host, deadline).await {
             first_error.get_or_insert(error);
         }
         if let Err(error) = await_task_until(&mut self.supervisor, deadline).await {
@@ -506,11 +653,13 @@ impl Drop for AuthenticatedDomain {
         }
         self.access.lifecycle.cancel();
         self.peers.clear_participant_info();
+        self.messages.shutdown();
         // A Stopped observation is a public teardown barrier: fence every
         // cloned runtime surface before waking status subscribers.
         self.access.status.stop();
         self.protocols.abort_all();
         abort_task(&mut self.authority_expiry);
+        abort_task(&mut self.io_task_host);
         abort_task(&mut self.supervisor);
         if let Some(node) = self.access.take_node() {
             spawn_best_effort_shutdown(node);
@@ -782,6 +931,12 @@ pub(crate) enum AuthenticatedDomainError {
     Registries(#[from] RegistriesError),
     #[error("Domain blob runtime failed: {0}")]
     Blobs(#[from] BlobsV1Error),
+    #[error("Domain message runtime failed: {0}")]
+    Messages(#[from] MessagesV1Error),
+    #[error("Domain message-channel declaration failed: {0}")]
+    MessageChannelRegistration(#[from] MessageChannelRegistrationError),
+    #[error("Domain typed-stream runtime failed: {0}")]
+    Streams(#[from] StreamsError),
     #[error("Domain registry/blob storage failed: {0}")]
     Storage(#[from] StorageError),
     #[error("authenticated P2P runtime failed: {0}")]

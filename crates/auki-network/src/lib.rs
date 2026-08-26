@@ -161,11 +161,10 @@ pub trait SessionHandle: Send + Sync {
 pub use network_runtime::{
     AllowedPeer, BroadcastDiagnosticError, BroadcastMembershipError, DiagnosticEvent,
     HeartbeatNtpSampleObservation, HeartbeatTimestampSource, HeartbeatTimingObservation,
-    InfoRequestEvent, JoinEvent, MapCatalogProvider, MembershipEvent, NetworkRuntime,
-    NetworkRuntimeHandle, PeerLivenessEvent, RegistryRequestEvent, RequestBlobError,
-    RequestInfoError, RequestRegistryError, RequestResourcesError, RequestResourcesV3Error,
-    RequestResourcesV4Error, ResourcesRequestEvent, SendJoinRequestError, SpawnError, UpdateError,
-    UpdateReport,
+    InfoRequestEvent, JoinEvent, MembershipEvent, NetworkRuntime, NetworkRuntimeHandle,
+    PeerLivenessEvent, RegistryRequestEvent, RequestBlobError, RequestInfoError,
+    RequestRegistryError, RequestResourcesError, RequestResourcesV3Error, RequestResourcesV4Error,
+    ResourcesRequestEvent, SendJoinRequestError, SpawnError, UpdateError, UpdateReport,
 };
 
 #[cfg(feature = "protocol-codecs")]
@@ -193,7 +192,7 @@ pub use resources_v3_protocol::RESOURCES_PROTOCOL as RESOURCES_V3_PROTOCOL;
 
 #[cfg(feature = "protocol-codecs")]
 pub use resources_v4_protocol::{
-    MapLogResource, ResourcesProtocolError as ResourcesProtocolErrorV4,
+    MapCatalogProvider, MapLogResource, ResourcesProtocolError as ResourcesProtocolErrorV4,
     ResourcesRequest as ResourcesRequestV4, ResourcesResponse as ResourcesResponseV4,
 };
 

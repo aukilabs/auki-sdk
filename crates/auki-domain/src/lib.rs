@@ -25,6 +25,8 @@ pub mod cluster_membership;
 #[cfg(feature = "native_runtime")]
 pub mod domain;
 #[cfg(feature = "native_runtime")]
+mod resource_catalog;
+#[cfg(feature = "native_runtime")]
 pub mod stream_manifest;
 
 #[cfg(feature = "native_runtime")]
@@ -52,8 +54,8 @@ pub use cluster_manager::{
     DiagnosticMessage, DiscoveryClientError, DiscoveryClusterEntry, DomainClockEstimateUnavailable,
     DomainTimeNowError, FetchMapCatalogError, FetchParticipantInfoError, FetchRegistryEntryError,
     FetchResourcesCatalogError, FetchResourcesCatalogV3Error, InboundDiagnosticMessage,
-    JoinClusterError, LIVENESS_CHECK_INTERVAL, ManagerLossAction, ResourceCatalogProvider,
-    decide_manager_loss_action, elect_successor,
+    JoinClusterError, LIVENESS_CHECK_INTERVAL, ManagerLossAction, decide_manager_loss_action,
+    elect_successor,
 };
 pub use cluster_membership::{ClusterMember, ClusterMembership};
 #[cfg(feature = "native_runtime")]
@@ -62,5 +64,7 @@ pub use domain::{
     DomainOpenMessageChannelError, DomainSendMessageError, MessageChannelReceiver, MessageEvent,
     catalog_of, map_catalog_of,
 };
+#[cfg(feature = "native_runtime")]
+pub use resource_catalog::ResourceCatalogProvider;
 #[cfg(feature = "native_runtime")]
 pub use stream_manifest::{BuildStreamManifestError, StreamManifestBuilder};

@@ -70,6 +70,12 @@ impl ResourcesResponse {
     }
 }
 
+/// Live source for `/auki/resources/0.4.0` Map Log rows.
+pub trait MapCatalogProvider: Send + Sync {
+    /// Return the currently available Map Log catalog.
+    fn map_catalog(&self) -> ResourcesResponse;
+}
+
 #[derive(Debug, Error)]
 pub enum ResourcesProtocolError {
     #[error("io: {0}")]

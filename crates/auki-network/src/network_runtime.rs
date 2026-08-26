@@ -79,6 +79,7 @@ use crate::resources_v3_protocol::{
     write_resources_request as write_resources_request_v3,
     write_resources_response as write_resources_response_v3,
 };
+pub use crate::resources_v4_protocol::MapCatalogProvider;
 use crate::resources_v4_protocol::{
     RESOURCES_PROTOCOL as RESOURCES_V4_PROTOCOL,
     ResourcesProtocolError as ResourcesV4ProtocolError, ResourcesRequest as ResourcesRequestV4,
@@ -415,11 +416,6 @@ pub const BLOBS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long [`NetworkRuntime::request_blob`] may spend assembling after
 /// the substream is open (covers multi-chunk fetch of up to MAX_BLOB_BYTES).
 pub const BLOBS_FETCH_TIMEOUT: Duration = Duration::from_secs(180);
-
-/// Live source for `/auki/resources/0.4.0` Map Log rows.
-pub trait MapCatalogProvider: Send + Sync {
-    fn map_catalog(&self) -> ResourcesResponseV4;
-}
 
 type SharedMapCatalogProvider = Arc<Mutex<Option<Arc<dyn MapCatalogProvider>>>>;
 

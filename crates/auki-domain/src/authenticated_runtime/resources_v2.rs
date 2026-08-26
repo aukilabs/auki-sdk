@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use crate::cluster_manager::ResourceCatalogProvider;
+use crate::resource_catalog::ResourceCatalogProvider;
 
 use super::protocols::{
     DomainProtocolError, DomainProtocolRegistration, DomainProtocolSpec, DomainProtocolStream,

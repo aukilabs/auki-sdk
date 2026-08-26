@@ -4,9 +4,14 @@
 #![allow(dead_code)]
 
 pub(crate) mod authority;
+pub(crate) mod info_v1;
+#[cfg(test)]
+mod p09_tests;
 pub(crate) mod peers;
 pub(crate) mod protocols;
 pub(crate) mod resources_v2;
+pub(crate) mod resources_v3;
+pub(crate) mod resources_v4;
 pub(crate) mod routes;
 pub(crate) mod status;
 
@@ -27,9 +32,12 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use authority::{DomainAuthority, DomainAuthorityError};
+use info_v1::{InfoV1, InfoV1Error};
 use peers::DomainPeers;
 use protocols::{DomainProtocolError, DomainProtocols};
 use resources_v2::{ResourcesV2, ResourcesV2Error};
+use resources_v3::{ResourcesV3, ResourcesV3Error};
+use resources_v4::{ResourcesV4, ResourcesV4Error};
 use routes::{DomainRoutes, DomainRoutesError};
 use status::{DomainFailure, DomainStatus};
 
@@ -145,8 +153,11 @@ pub(crate) struct AuthenticatedDomain {
     routes: DomainRoutes,
     peers: DomainPeers,
     protocols: DomainProtocols,
+    info_v1: InfoV1,
     resources_v2: ResourcesV2,
-    resources_v2_registration: Option<protocols::DomainProtocolRegistration>,
+    resources_v3: ResourcesV3,
+    resources_v4: ResourcesV4,
+    protocol_registrations: Vec<protocols::DomainProtocolRegistration>,
     listen_addresses: Vec<Multiaddr>,
     supervisor: Option<JoinHandle<()>>,
     authority_expiry: Option<JoinHandle<()>>,
@@ -213,17 +224,55 @@ impl AuthenticatedDomain {
         let peers = DomainPeers::new(config.domain_id, observations.clone(), lifecycle.clone());
         let (fatal_sender, fatal_receiver) = mpsc::unbounded_channel();
         let protocols = DomainProtocols::new(Arc::clone(&access), routes.clone(), fatal_sender);
+        let info_v1 = InfoV1::new(
+            access.peer_id,
+            protocols.clone(),
+            peers.clone(),
+            lifecycle.clone(),
+        );
         let resources_v2 = ResourcesV2::new(protocols.clone(), lifecycle.clone());
-        let resources_v2_registration = match resources_v2.register() {
-            Ok(registration) => registration,
-            Err(error) => {
-                return Err(rollback_join_error(
-                    &access,
-                    AuthenticatedDomainError::ResourcesV2(error),
-                )
-                .await);
-            }
-        };
+        let resources_v3 = ResourcesV3::new(
+            access.peer_id,
+            protocols.clone(),
+            resources_v2.clone(),
+            lifecycle.clone(),
+        );
+        let resources_v4 = ResourcesV4::new(protocols.clone(), lifecycle.clone());
+        let mut protocol_registrations = Vec::with_capacity(4);
+        register_domain_protocol(
+            &access,
+            &protocols,
+            &mut protocol_registrations,
+            info_v1.register().map_err(AuthenticatedDomainError::InfoV1),
+        )
+        .await?;
+        register_domain_protocol(
+            &access,
+            &protocols,
+            &mut protocol_registrations,
+            resources_v2
+                .register()
+                .map_err(AuthenticatedDomainError::ResourcesV2),
+        )
+        .await?;
+        register_domain_protocol(
+            &access,
+            &protocols,
+            &mut protocol_registrations,
+            resources_v3
+                .register()
+                .map_err(AuthenticatedDomainError::ResourcesV3),
+        )
+        .await?;
+        register_domain_protocol(
+            &access,
+            &protocols,
+            &mut protocol_registrations,
+            resources_v4
+                .register()
+                .map_err(AuthenticatedDomainError::ResourcesV4),
+        )
+        .await?;
 
         let supervisor_access = Arc::clone(&access);
         let supervisor = tokio::spawn(async move {
@@ -261,8 +310,11 @@ impl AuthenticatedDomain {
             routes,
             peers,
             protocols,
+            info_v1,
             resources_v2,
-            resources_v2_registration: Some(resources_v2_registration),
+            resources_v3,
+            resources_v4,
+            protocol_registrations,
             listen_addresses,
             supervisor: Some(supervisor),
             authority_expiry: Some(authority_expiry),
@@ -298,8 +350,20 @@ impl AuthenticatedDomain {
         self.protocols.clone()
     }
 
+    pub(crate) fn info_v1(&self) -> InfoV1 {
+        self.info_v1.clone()
+    }
+
     pub(crate) fn resources_v2(&self) -> ResourcesV2 {
         self.resources_v2.clone()
+    }
+
+    pub(crate) fn resources_v3(&self) -> ResourcesV3 {
+        self.resources_v3.clone()
+    }
+
+    pub(crate) fn resources_v4(&self) -> ResourcesV4 {
+        self.resources_v4.clone()
     }
 
     pub(crate) fn status(&self) -> DomainStatus {
@@ -324,6 +388,7 @@ impl AuthenticatedDomain {
             return Ok(());
         }
         self.access.lifecycle.cancel();
+        self.peers.clear_participant_info();
 
         let mut first_error = self
             .protocols
@@ -382,6 +447,7 @@ impl Drop for AuthenticatedDomain {
             return;
         }
         self.access.lifecycle.cancel();
+        self.peers.clear_participant_info();
         // A Stopped observation is a public teardown barrier: fence every
         // cloned runtime surface before waking status subscribers.
         self.access.status.stop();
@@ -516,6 +582,34 @@ async fn fail_and_shutdown(access: &Arc<RuntimeAccess>, failure: DomainFailure) 
     }
 }
 
+async fn register_domain_protocol(
+    access: &Arc<RuntimeAccess>,
+    protocols: &DomainProtocols,
+    registrations: &mut Vec<protocols::DomainProtocolRegistration>,
+    registration: Result<protocols::DomainProtocolRegistration, AuthenticatedDomainError>,
+) -> Result<(), AuthenticatedDomainError> {
+    match registration {
+        Ok(registration) => {
+            registrations.push(registration);
+            Ok(())
+        }
+        Err(join) => {
+            access.lifecycle.cancel();
+            let join = match protocols
+                .shutdown_all(Instant::now() + DOMAIN_LEAVE_TIMEOUT)
+                .await
+            {
+                Ok(()) => join,
+                Err(cleanup) => AuthenticatedDomainError::ProtocolRegistrationRollback {
+                    join: Box::new(join),
+                    cleanup: Box::new(cleanup),
+                },
+            };
+            Err(rollback_join_error(access, join).await)
+        }
+    }
+}
+
 async fn rollback_join_error(
     access: &Arc<RuntimeAccess>,
     join: AuthenticatedDomainError,
@@ -607,6 +701,11 @@ pub(crate) enum AuthenticatedDomainError {
         join: Box<AuthenticatedDomainError>,
         rollback: Box<DomainRollbackError>,
     },
+    #[error("Domain protocol registration failed ({join}) and cleanup also failed ({cleanup})")]
+    ProtocolRegistrationRollback {
+        join: Box<AuthenticatedDomainError>,
+        cleanup: Box<DomainProtocolError>,
+    },
     #[error("Domain authority failed: {0}")]
     Authority(#[from] DomainAuthorityError),
     #[error(transparent)]
@@ -615,6 +714,12 @@ pub(crate) enum AuthenticatedDomainError {
     Protocol(#[from] DomainProtocolError),
     #[error("Domain resource catalog runtime failed: {0}")]
     ResourcesV2(#[from] ResourcesV2Error),
+    #[error("Domain participant info runtime failed: {0}")]
+    InfoV1(#[from] InfoV1Error),
+    #[error("Domain resource catalog v0.3 runtime failed: {0}")]
+    ResourcesV3(#[from] ResourcesV3Error),
+    #[error("Domain resource catalog v0.4 runtime failed: {0}")]
+    ResourcesV4(#[from] ResourcesV4Error),
     #[error("authenticated P2P runtime failed: {0}")]
     P2p(#[source] auki_p2p::Error),
     #[error("Domain-owned task failed: {0}")]
@@ -660,7 +765,7 @@ mod tests {
 
     use super::*;
     use crate::authenticated_runtime::protocols::{DomainProtocolError, DomainProtocolSpec};
-    use crate::cluster_manager::ResourceCatalogProvider;
+    use crate::resource_catalog::ResourceCatalogProvider;
     use auki_network::{
         protocol_ids::RESOURCES_V0_2_0,
         resources_protocol::{

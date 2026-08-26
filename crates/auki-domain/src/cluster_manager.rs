@@ -48,6 +48,7 @@
 //! [`Self::shutdown`].
 
 use crate::cluster_membership::{ClusterMember, ClusterMembership};
+pub use crate::resource_catalog::ResourceCatalogProvider;
 use auki_network::discovery_client::{
     ClusterEntry, CreateClusterOutcome, DiscoveryClient, DiscoveryError,
 };
@@ -55,7 +56,7 @@ use auki_network::heartbeat_protocol::HeartbeatDomainClock;
 use auki_network::registries_protocol::{
     RegistryEntryEnvelope, RegistryKind, RegistryListEntry, RegistryRequest, RegistryResponse,
 };
-use auki_network::resources_protocol::{ResourceEntry, ResourcesRequest, ResourcesResponse};
+use auki_network::resources_protocol::{ResourcesRequest, ResourcesResponse};
 use auki_network::{MapCatalogProvider, ParticipantInfo, SessionHandle};
 use auki_registry::{
     ClockRegistryEntry, DetectorRegistryEntry, FrameRegistryEntry, MapRegistryEntry, DeviceModelRegistryEntry,
@@ -89,7 +90,7 @@ use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -273,44 +274,6 @@ impl DomainClockSourceKey {
 }
 
 type DomainClockSources = Arc<Mutex<HashMap<DomainClockSourceKey, HeartbeatDomainClock>>>;
-
-/// Application-supplied source of truth for resources the daemon
-/// can currently provide. Install this provider for all resource
-/// types: sensor streams, pose logs, time-transform logs, etc.
-pub trait ResourceCatalogProvider: Send + Sync + 'static {
-    /// Snapshot currently-advertised resources. Called once per
-    /// inbound `/auki/resources/0.2.0` request. Keep it cheap — the
-    /// runtime's per-substream task gives the SDK 2 s to respond
-    /// before closing the substream.
-    fn snapshot(&self) -> Vec<ResourceEntry>;
-
-    /// Snapshot resources for a concrete request. The default
-    /// implementation filters by requested variant and returns the
-    /// matching rows.
-    fn snapshot_for_request(
-        &self,
-        request: &ResourcesRequest,
-        _registry_app_root: Option<&Path>,
-    ) -> Vec<ResourceEntry> {
-        let resources = self.snapshot();
-        if request.variants.is_empty() {
-            return resources;
-        }
-        use auki_network::resources_protocol::{Variant, VariantContent};
-        resources
-            .into_iter()
-            .filter(|r| {
-                let row_variant = match &r.variant_content {
-                    VariantContent::SensorLog { .. } => Variant::SensorLog,
-                    VariantContent::PoseLog { .. } => Variant::PoseLog,
-                    VariantContent::TimeTransformLog { .. } => Variant::TimeTransformLog,
-                    VariantContent::DetectionLog { .. } => Variant::DetectionLog,
-                };
-                request.variants.contains(&row_variant)
-            })
-            .collect()
-    }
-}
 
 /// What kind of cluster lifecycle action [`ClusterManager::bootstrap`]
 /// should perform. Captures the four decision shapes that every Auki

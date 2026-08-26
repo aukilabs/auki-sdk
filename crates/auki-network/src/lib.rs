@@ -1,8 +1,14 @@
+// The crate itself must keep using the one-release `PeerIdentity` adapter until
+// its legacy runtime and bindings are removed. Downstream users still receive
+// the item's deprecation warning.
+#![allow(deprecated)]
+
 //! Networking substrate for the Auki SDK.
 //!
-//! Data types: [`PeerIdentity`] derived from a [`Wallet`] via
-//! `derive_child("peer/v1")`, [`ReachabilityRecord`] describing how to
-//! dial a peer, and [`Capability`] tagging what a peer offers.
+//! Data types: the deprecated [`PeerIdentity`] adapter over the canonical
+//! [`auki_p2p::Identity`], [`ReachabilityRecord`] describing how to dial a
+//! peer, and [`Capability`] tagging what a peer offers. Wallet-backed hosts
+//! preserve their stable identity through [`identity_from_wallet`].
 //!
 //! `swarm` feature: a libp2p `Swarm` with TCP + QUIC + Noise + Yamux,
 //! a [`libp2p-allow-block-list`] gate that enforces the cluster trust
@@ -16,7 +22,8 @@
 //! bootstrap-rendezvous service.
 
 use auki_identity::Wallet;
-use libp2p_identity::{Keypair, PeerId, PublicKey, ed25519};
+pub use auki_p2p::Identity;
+use libp2p_identity::{Keypair, PeerId, PublicKey};
 use multiaddr::Multiaddr;
 use serde::{Deserialize, Serialize};
 
@@ -207,17 +214,36 @@ pub const PEER_DERIVATION_LABEL: &str = "peer/v1";
 
 // ─── PeerIdentity ────────────────────────────────────────────────────────────
 
-/// libp2p peer identity for a node. Holds the ed25519 keypair libp2p uses
-/// for connection-level authentication; treat instances as sensitive.
+/// Derive the SDK's canonical P2P identity from an existing wallet.
 ///
-/// Construct via [`PeerIdentity::from_wallet`] — this is the canonical
-/// path. [`PeerIdentity::from_seed`] is provided for tooling that already
-/// has the derived peer seed in hand (e.g. a key store that cached it
-/// instead of re-deriving from the wallet each session).
+/// The stable `peer/v1` child-label contract is intentionally owned by this
+/// wallet adapter, not by `auki-p2p`. All native networking code receives the
+/// resulting [`Identity`] and therefore shares one key owner and Peer ID.
+pub fn identity_from_wallet(wallet: &Wallet) -> Identity {
+    let peer_wallet = wallet.derive_child(PEER_DERIVATION_LABEL);
+    let seed_vec = peer_wallet.seed();
+    let seed_array: [u8; 32] = seed_vec
+        .as_slice()
+        .try_into()
+        .expect("Wallet::derive_child always produces a 32-byte seed");
+    Identity::from_ed25519_seed(&seed_array)
+}
+
+/// Deprecated source-compatibility adapter around [`auki_p2p::Identity`].
+///
+/// This type owns no keypair or Peer-ID derivation of its own. New native code
+/// should use [`Identity`] directly and obtain wallet-derived identities with
+/// [`identity_from_wallet`]. The adapter remains for one compatibility release
+/// while the old `auki-network` runtime is removed.
+#[allow(deprecated)]
+#[deprecated(
+    since = "0.1.0",
+    note = "use auki_p2p::Identity and auki_network::identity_from_wallet"
+)]
 #[cfg_attr(feature = "swift-bindings", derive(uniffi::Object))]
 #[derive(Clone)]
 pub struct PeerIdentity {
-    keypair: Keypair,
+    identity: Identity,
 }
 
 // ─── PeerIdentity impl — UniFFI-exposed surface ──────────────────────────────
@@ -226,6 +252,7 @@ pub struct PeerIdentity {
 // hang `#[uniffi::export]` on just the methods the Swift binding consumes at
 // PR A. Default builds compile the macros to nothing; semantics are unchanged
 // for upstream Rust callers.
+#[allow(deprecated)]
 #[cfg_attr(feature = "swift-bindings", uniffi::export)]
 impl PeerIdentity {
     /// Derive the peer identity from `wallet`. Equivalent to
@@ -240,17 +267,9 @@ impl PeerIdentity {
     /// `&Wallet` argument form moves to PR B if/when needed.
     #[cfg_attr(feature = "swift-bindings", uniffi::constructor)]
     pub fn from_wallet(wallet: std::sync::Arc<Wallet>) -> Self {
-        let peer_wallet = wallet.derive_child(PEER_DERIVATION_LABEL);
-        // `Wallet::seed()` returns `Vec<u8>` after the UniFFI-driven signature
-        // change in auki-identity; `PeerIdentity::from_seed` still takes a
-        // fixed-size `&[u8; 32]` (it's not UniFFI-exposed at v0). The Vec
-        // length is structurally guaranteed by `derive_child`.
-        let seed_vec: Vec<u8> = peer_wallet.seed();
-        let seed_array: [u8; 32] = seed_vec
-            .as_slice()
-            .try_into()
-            .expect("Wallet::derive_child always produces a 32-byte seed");
-        Self::from_seed(&seed_array)
+        Self {
+            identity: identity_from_wallet(wallet.as_ref()),
+        }
     }
 
     /// Canonical libp2p peer-id string (`12D3KooW…`). The Swift side
@@ -261,7 +280,7 @@ impl PeerIdentity {
     /// pre-stringified helper rather than dragging in the custom-type
     /// registration here.
     pub fn peer_id_string(&self) -> String {
-        self.keypair.public().to_peer_id().to_string()
+        self.identity.peer_id().to_string()
     }
 }
 
@@ -272,38 +291,60 @@ impl PeerIdentity {
 // (e.g. `&[u8; 32]`, libp2p `Keypair` / `PublicKey` / `PeerId`). Upstream Rust
 // callers continue to use them exactly as before. PR B may lift these up as
 // needed.
+#[allow(deprecated)]
 impl PeerIdentity {
     /// Construct directly from a 32-byte ed25519 seed. Same seed → same
     /// keypair → same `PeerId`. The seed is consumed (zeroized) by
     /// `libp2p-identity`'s ed25519 constructor; we copy first so the
     /// caller's buffer stays intact.
     pub fn from_seed(seed: &[u8; 32]) -> Self {
-        let mut seed_copy = *seed;
-        let secret = ed25519::SecretKey::try_from_bytes(&mut seed_copy)
-            .expect("ed25519::SecretKey accepts any 32 bytes");
-        let kp = ed25519::Keypair::from(secret);
         Self {
-            keypair: Keypair::from(kp),
+            identity: Identity::from_ed25519_seed(seed),
         }
     }
 
-    /// libp2p `Keypair` for swarm construction in M1. Holds the secret;
-    /// don't hand this out beyond the swarm.
-    pub fn keypair(&self) -> &Keypair {
-        &self.keypair
+    /// Borrow the canonical identity wrapped by this compatibility adapter.
+    pub fn as_identity(&self) -> &Identity {
+        &self.identity
+    }
+
+    /// Consume the adapter and return its canonical identity.
+    pub fn into_identity(self) -> Identity {
+        self.identity
+    }
+
+    /// Reconstruct a temporary libp2p `Keypair` for the deprecated runtime.
+    ///
+    /// The adapter stores only [`Identity`]; this compatibility method decodes
+    /// its canonical protobuf representation instead of retaining another key
+    /// owner. New code starts `auki-p2p` with the canonical identity directly.
+    pub fn keypair(&self) -> Keypair {
+        let encoded = self
+            .identity
+            .to_protobuf_encoding()
+            .expect("canonical Ed25519 identity always encodes");
+        Keypair::from_protobuf_encoding(&encoded)
+            .expect("canonical Ed25519 identity always decodes")
     }
 
     /// libp2p public key — safe to publish. Round-trips through the
     /// underlying ed25519 bytes.
     pub fn public_key(&self) -> PublicKey {
-        self.keypair.public()
+        self.identity.public_key()
     }
 
     /// libp2p `PeerId` — multihash of the protobuf-encoded public key.
     /// This is the dialable identity: stable for a given wallet, safe to
     /// publish, what shows up in multiaddrs as `/p2p/<peer-id>`.
     pub fn peer_id(&self) -> PeerId {
-        self.keypair.public().to_peer_id()
+        self.identity.peer_id()
+    }
+}
+
+#[allow(deprecated)]
+impl From<PeerIdentity> for Identity {
+    fn from(identity: PeerIdentity) -> Self {
+        identity.into_identity()
     }
 }
 
@@ -406,6 +447,7 @@ impl From<String> for Capability {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 
@@ -438,7 +480,7 @@ mod tests {
     #[test]
     fn locked_seed_to_peer_id_vector() {
         let w = Wallet::from_seed(vec![3u8; 32]).expect("32-byte seed");
-        let peer = PeerIdentity::from_wallet(w);
+        let peer = identity_from_wallet(w.as_ref());
         assert_eq!(
             peer.peer_id().to_string(),
             "12D3KooWAvnEo4RaYZtqt2w83qzmQ7WVW2HhN2cay95EXAiVKcar",
@@ -462,6 +504,20 @@ mod tests {
             .expect("derive_child seed is 32 bytes");
         let via_seed = PeerIdentity::from_seed(&seed_array);
         assert_eq!(via_wallet.peer_id(), via_seed.peer_id());
+    }
+
+    #[test]
+    fn deprecated_adapter_wraps_the_exact_canonical_identity() {
+        let wallet = Wallet::from_seed(vec![37u8; 32]).expect("32-byte seed");
+        let canonical = identity_from_wallet(wallet.as_ref());
+        let adapter = PeerIdentity::from_wallet(wallet).into_identity();
+
+        assert_eq!(adapter.peer_id(), canonical.peer_id());
+        assert_eq!(adapter.public_key(), canonical.public_key());
+        assert_eq!(
+            adapter.to_protobuf_encoding().unwrap(),
+            canonical.to_protobuf_encoding().unwrap()
+        );
     }
 
     #[test]
@@ -556,6 +612,7 @@ mod tests {
 }
 
 #[cfg(all(test, feature = "swift-bindings"))]
+#[allow(deprecated)]
 mod swift_bindings_tests {
     use super::*;
     use auki_identity::Wallet;

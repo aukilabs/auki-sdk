@@ -913,6 +913,7 @@ dependencies = [
  "auki-identity",
  "auki-jcs",
  "auki-manifests",
+ "auki-p2p",
  "auki-registry",
  "auki-time",
  "base64",

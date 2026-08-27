@@ -2,19 +2,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
+use serde::{Deserialize, Serialize};
+
 use crate::component::{
     Catalog, CatalogError, ComponentManifest, ComponentReference, Exposure, InvocationError,
-    Observable, ObservableContract, Observation, ObservationAccess, ObservationEmitter,
-    ObservationEvent, Operable, OperableContract, OutputManifest, OutputReference,
-    OutputTransition, PayloadContract, ProductForm, ProductManifest, current_output_observable,
-    observation_input, pinned_observable,
+    Observable, ObservableContract, Observation, ObservationAccess, ObservationDelivery,
+    ObservationEmitter, ObservationError, ObservationEvent, ObservationHandle, Operable,
+    OperableContract, OutputManifest, OutputReference, OutputTransition, PayloadContract,
+    ProductForm, ProductManifest, current_output_observable, observation_input, pinned_observable,
 };
-use crate::{Buffer, BufferError, Connection, ConnectionError, ConnectionOptions, Envelope};
+use crate::{Buffer, BufferError, Envelope, RetainedProduct};
 
 const FRAMES_SLOT: &str = "frames";
 const RGB8_ENCODING: &str = "rgb8";
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct VideoFrame {
     pub width: u32,
     pub height: u32,
@@ -22,14 +24,14 @@ pub struct VideoFrame {
     pub bytes: Arc<[u8]>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SetResolution {
     pub width: u32,
     pub height: u32,
     pub effective_at_timestamp_ns: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct AppliedResolution {
     pub changed: bool,
     pub component: ComponentReference,
@@ -39,10 +41,10 @@ pub struct AppliedResolution {
     pub effective_at_timestamp_ns: u64,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ReseedDriver;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DriverReseeded {
     pub reset_count: u64,
 }
@@ -108,7 +110,10 @@ impl ActiveCameraOutput {
             component_manifest_hash: component.manifest_hash.clone(),
             slot: FRAMES_SLOT.to_owned(),
             output_id: format!("frames-{generation}"),
+            clock_id: format!("{}.session-clock", component.peer_id),
+            spatial_frame_id: Some(format!("{}.optical-frame", component.component_id)),
             payload: PayloadContract {
+                kind: "camera".to_owned(),
                 datatype: "video_frame".to_owned(),
                 schema: "auki.video-frame/v1".to_owned(),
                 encoding: Some(RGB8_ENCODING.to_owned()),
@@ -119,7 +124,8 @@ impl ActiveCameraOutput {
             },
         };
         let reference = manifest.reference();
-        let (observable, emitter) = pinned_observable(reference.clone());
+        let (observable, emitter) =
+            pinned_observable(reference.clone(), vec![ObservationAccess::FollowNew]);
         Self {
             manifest,
             reference,
@@ -194,12 +200,11 @@ impl CameraComponent {
             schema: "auki.component-manifest/v1".to_owned(),
             peer_id: peer_id.clone(),
             component_id: component_id.clone(),
-            kind: "sensor".to_owned(),
             observables: vec![ObservableContract {
                 name: FRAMES_SLOT.to_owned(),
                 datatype: "video_frame".to_owned(),
                 schema: "auki.video-frame/v1".to_owned(),
-                access: vec![ObservationAccess::Latest, ObservationAccess::FollowNew],
+                access: vec![ObservationAccess::FollowNew],
                 exposure: Exposure::Cluster,
             }],
             operables: vec![OperableContract {
@@ -211,8 +216,12 @@ impl CameraComponent {
         };
         let component_reference = component_manifest.reference();
         let active = ActiveCameraOutput::new(&component_reference, 1, width, height);
-        let (follow_current, follow_emitter) =
-            current_output_observable(&peer_id, &component_id, FRAMES_SLOT);
+        let (follow_current, follow_emitter) = current_output_observable(
+            &peer_id,
+            &component_id,
+            FRAMES_SLOT,
+            vec![ObservationAccess::FollowNew],
+        );
 
         catalog.register_component(component_manifest.clone());
         catalog.set_current_output(active.manifest.clone())?;
@@ -417,23 +426,7 @@ fn rgb8_len(width: u32, height: u32) -> Result<usize, CameraError> {
     Ok(pixels)
 }
 
-#[derive(Clone)]
-pub struct CameraProductBuffer {
-    pub manifest: ProductManifest,
-    pub manifest_hash: String,
-    pub buffer: Buffer<Observation<VideoFrame>>,
-}
-
-impl fmt::Debug for CameraProductBuffer {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CameraProductBuffer")
-            .field("manifest", &self.manifest)
-            .field("manifest_hash", &self.manifest_hash)
-            .field("range", &self.buffer.range())
-            .finish()
-    }
-}
+pub type CameraProductBuffer = RetainedProduct<VideoFrame>;
 
 struct CameraBufferState {
     current_product_id: String,
@@ -444,14 +437,14 @@ struct CameraBufferState {
 #[derive(Debug)]
 pub enum CameraBufferError {
     Buffer(BufferError),
-    Connection(ConnectionError),
+    Observation(ObservationError),
 }
 
 impl fmt::Display for CameraBufferError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Buffer(error) => error.fmt(formatter),
-            Self::Connection(error) => error.fmt(formatter),
+            Self::Observation(error) => error.fmt(formatter),
         }
     }
 }
@@ -464,9 +457,9 @@ impl From<BufferError> for CameraBufferError {
     }
 }
 
-impl From<ConnectionError> for CameraBufferError {
-    fn from(error: ConnectionError) -> Self {
-        Self::Connection(error)
+impl From<ObservationError> for CameraBufferError {
+    fn from(error: ObservationError) -> Self {
+        Self::Observation(error)
     }
 }
 
@@ -474,14 +467,14 @@ impl From<ConnectionError> for CameraBufferError {
 /// Output. Each Product Manifest references exactly one Output Manifest.
 pub struct CameraBufferRoller {
     state: Arc<Mutex<CameraBufferState>>,
-    _connection: Connection<ObservationEvent<VideoFrame>>,
+    _observation: ObservationHandle<VideoFrame>,
 }
 
 impl CameraBufferRoller {
     pub fn attach(camera: &CameraComponent, max_entries: usize) -> Result<Self, CameraBufferError> {
         let catalog = camera.inner.catalog.clone();
         let initial =
-            create_product_buffer(&camera.current_output_reference(), &catalog, max_entries)?;
+            create_product_buffer(&camera.current_output_manifest(), &catalog, max_entries)?;
         let initial_product_id = initial.manifest.product_id.clone();
         let mut products = BTreeMap::new();
         products.insert(initial_product_id.clone(), initial);
@@ -537,11 +530,24 @@ impl CameraBufferRoller {
                         return;
                     }
                     buffer.close();
-                    match create_product_buffer(
-                        &transition.replacement,
-                        &input_catalog,
-                        max_entries,
-                    ) {
+                    let replacement_manifest = input_catalog
+                        .component(&transition.replacement.component_id)
+                        .and_then(|component| {
+                            component
+                                .current_outputs
+                                .get(&transition.replacement.slot)
+                                .map(|entry| entry.manifest.clone())
+                        })
+                        .filter(|manifest| manifest.reference() == transition.replacement);
+                    let Some(replacement_manifest) = replacement_manifest else {
+                        state.errors.push(format!(
+                            "Catalog did not resolve replacement Output {}",
+                            transition.replacement.output_id
+                        ));
+                        return;
+                    };
+                    match create_product_buffer(&replacement_manifest, &input_catalog, max_entries)
+                    {
                         Ok(replacement) => {
                             let product_id = replacement.manifest.product_id.clone();
                             state.products.insert(product_id.clone(), replacement);
@@ -552,13 +558,13 @@ impl CameraBufferRoller {
                 }
             }
         });
-        let connection = camera
+        let observation = camera
             .follow_current_output()
-            .observe_new(&input, ConnectionOptions::InlineEvery)?;
+            .follow_new(&input, ObservationDelivery::inline_every_selected())?;
 
         Ok(Self {
             state,
-            _connection: connection,
+            _observation: observation,
         })
     }
 
@@ -587,17 +593,25 @@ impl CameraBufferRoller {
 }
 
 fn create_product_buffer(
-    output: &OutputReference,
+    output: &OutputManifest,
     catalog: &Catalog,
     max_entries: usize,
 ) -> Result<CameraProductBuffer, BufferError> {
-    let product_id = format!("{}.{}.buffer", output.component_id, output.output_id);
+    let output_reference = output.reference();
+    let product_id = format!(
+        "{}.{}.buffer",
+        output_reference.component_id, output_reference.output_id
+    );
     let manifest = ProductManifest {
         schema: "auki.product-manifest/v1".to_owned(),
-        peer_id: output.peer_id.clone(),
+        peer_id: output_reference.peer_id.clone(),
         product_id: product_id.clone(),
         form: ProductForm::Buffer,
-        producer: output.clone(),
+        producer: output_reference,
+        access: vec![
+            ObservationAccess::LatestExisting,
+            ObservationAccess::TimeRange,
+        ],
     };
     let manifest_hash = manifest.hash();
     let buffer = Buffer::with_limits(
@@ -606,9 +620,10 @@ fn create_product_buffer(
         |observation: &Observation<VideoFrame>| observation.payload.bytes.len(),
     )?;
     catalog.register_product(manifest.clone());
-    Ok(CameraProductBuffer {
+    Ok(RetainedProduct {
         manifest,
         manifest_hash,
+        producer: output.clone(),
         buffer,
     })
 }

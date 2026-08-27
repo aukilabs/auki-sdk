@@ -1,11 +1,12 @@
 # Experiment: Observable and Operable Component Data Plane
 
-> **Status: revised experiment with an implemented vertical slice.** This
-> document incorporates the first typed-dataflow prototype, its measured
-> results, and the terminology decisions made after reviewing it. The
-> Component/Output identity slice is implemented on
-> `codex/observable-operable-data-plane`; see the experiment's
-> `RESULTS-OBSERVABLE-OPERABLE.md`. This is not a production API proposal.
+> **Status: phased experiment with Phase 1 implemented.** The first
+> typed-dataflow prototype, Component/Output identity vertical slice, and
+> observation selection/delivery/lifecycle slice are implemented. See
+> `RESULTS.md`, `RESULTS-OBSERVABLE-OPERABLE.md`, and
+> `RESULTS-OBSERVATION-REQUESTS.md`. Later scheduler, failure, timestamp,
+> storage, and agent-friendliness phases remain specified below. This is not a
+> production API proposal.
 
 ## North star
 
@@ -121,9 +122,16 @@ the Observable and the data available behind it, those questions might include:
 - continue showing me new observations as they become available.
 
 These are examples, not a universal enum that every Observable must implement.
-A fresh camera output, a retained Buffer, and a concluded Episode will support
-different questions. Being Observable does not itself imply retained history
-or a live subscription.
+A fresh Component Observable, retained Buffer Product, and concluded Episode
+Product will support different questions. Being Observable does not itself
+imply retained history or a live subscription.
+
+In this experiment, an Observable remains a **Component interface**. A Buffer
+or Episode is a **Product**, not a Component. Products may reuse the same typed
+selection vocabulary through a retained-product access API, but that does not
+turn the Product into an Observable Component interface. A Component
+Observable may use a Product as a backing store when it deliberately exposes
+retained access.
 
 ```text
 Camera.frames             Observable<VideoFrame>
@@ -229,8 +237,12 @@ must enumerate the actual Observable and Operable contracts; booleans such as
 
 ### Kind, datatype, schema, meaning, and unit are separate
 
-The Component or producer kind helps discovery. The port datatype and schema
-provide type safety and shape. Semantic fields explain what the value means.
+The Output kind helps discovery. The port datatype and schema provide type
+safety and shape. Semantic fields explain what the value means. In this
+experiment, `kind`, `datatype`, `schema`, `observes`, and `unit` belong to the
+immutable Output Manifest rather than the stable Component Manifest. This
+prevents a Component with several differently shaped outputs from being
+described by one misleading producer kind.
 
 The agreed Gauge example is:
 
@@ -322,7 +334,7 @@ The experiment must determine whether:
 
 ## Implementation prompt
 
-Build a second, isolated Rust experiment that evolves
+Continue the isolated Rust experiment in phases by evolving
 `experiments/typed-dataflow/`. Do not modify the SDK's production networking,
 Manager, heartbeat, Domain, Registry, Log, or streaming paths.
 
@@ -342,8 +354,10 @@ OutputManifest
 ProductManifest
 Observable<T>
 Operable<I, R>
-ObservationRequest
 Observation<T>
+ObservationHandle<T>
+RetainedProduct<T>
+FiniteObservations<T>
 Invocation
 Exposure // local or cluster
 ```
@@ -366,6 +380,31 @@ Do not encode “Observable” as shorthand for “live subscription.” Selecti
 delivery are separate concerns. For example, “show me Tuesday” selects a time
 range; whether the selected observations must all be delivered or may be
 coalesced is a different policy.
+
+Do not require one universal request enum or one universal return shape. The
+Phase 1 API must make these minimum operations explicit:
+
+```rust,ignore
+latest_existing() -> Result<Option<Observation<T>>, ObservationError>
+time_range(...)   -> Result<FiniteObservations<T>, ObservationError>
+follow_new(...)   -> Result<ObservationHandle<T>, ObservationError>
+```
+
+`latest_existing` may return only an observation that already exists. It must
+not instruct a sensor to manufacture a new sample. A fresh-only Component
+Observable therefore supports `follow_new` but not `latest_existing` or
+`time_range` unless it deliberately has retained backing storage.
+
+`ObservationHandle<T>` owns one continuing observation relationship. It must
+expose an inspectable status (`active`, `completed`, `reconfigured`, `failed`,
+or `cancelled`), explicit cancellation, delivery statistics, and a terminal
+reason. A pinned handle that encounters an Output replacement becomes
+`reconfigured` and names the replacement Output. A follow-current handle stays
+active but delivers the explicit transition.
+
+A Buffer or Episode exposes retained-product access rather than pretending to
+be a Component. Its Product Manifest declares only the finite selection
+operations that its access implementation can currently serve.
 
 An Operable must declare:
 
@@ -395,8 +434,13 @@ local Component -> local Operable invocation
 remote Component -> transported Operable invocation
 ```
 
-Local paths must not serialize. Transport-backed paths may encode and decode,
-but transport details must not leak into Component implementations.
+Local paths must not serialize. The semantic in-memory transport fixture from
+the identity slice is not evidence about network copying or performance.
+Phase 1 must also include a serialized in-memory adapter that actually encodes
+and decodes transported requests and observations, counts encoded bytes, and
+demonstrates that unavoidable transport copies are distinct from local
+zero-copy fan-out. Transport details must not leak into Component
+implementations.
 
 ### Demonstration Components
 
@@ -438,8 +482,9 @@ can invoke it while Peer B cannot discover or invoke it.
 
 Model these as two independent decisions:
 
-1. **Selection:** which observations answer the question—for example current,
-   first available, all available, a time range, or new observations from now.
+1. **Selection:** which observations answer the question—for example latest
+   existing, first available, all available, a time range, or new observations
+   from now.
 2. **Delivery:** what happens if the answer contains multiple observations and
    the observer cannot keep up.
 
@@ -457,9 +502,11 @@ Requesting the latest observation should normally return one value; following
 new observations with `CoalesceLatest` is a continuing relationship that may
 skip intermediate values under pressure.
 
-The producer must create one immutable payload representation that owning
-observers share. Adding eight local observers must not copy large payload
-bytes eight times.
+The producer must create one immutable payload representation that local owning
+observers share. Adding eight local observers must not copy large payload bytes
+eight times. A serialized remote path is expected to encode and copy bytes; it
+must report that work instead of using shared in-process ownership as false
+evidence of network zero-copy.
 
 ### Operable invocation
 
@@ -502,7 +549,7 @@ homogeneous product.
 
 ### Optional retention
 
-A Buffer is an optional observer and retention layer for an Observable:
+A Buffer is an optional Product that observes and retains an Observable:
 
 ```text
 Camera.frames Observable
@@ -513,9 +560,11 @@ Camera.frames Observable
 ```
 
 Preserve the first prototype's bounded retention, cursor, gap, shared-payload,
-and Episode-promotion correctness tests. A Buffer-backed Observable may answer
-retained-range questions that the fresh producer Observable cannot. Do not
-require direct observers or remote delivery to pass through a Buffer.
+and Episode-promotion correctness tests. Retained Product access may answer
+latest-existing and time-range questions that the fresh producer Observable
+cannot. A Component may deliberately route retained requests to that Product,
+but the Product does not become a Component. Do not require direct observers
+or remote delivery to pass through a Buffer.
 
 Keep the direct-pump and Buffer-backed-pump benchmark as a decision control.
 Do not add a chunk store unless a specific measured retention, replay,
@@ -529,6 +578,8 @@ Generate a minimal Catalog view from each Peer fixture. It must:
 - state which observation requests each Observable currently supports;
 - include the current Output ID and Output Manifest for each exposed output
   slot;
+- list Product Manifests separately and state which retained-data selections
+  their access implementation currently supports;
 - list cluster-exposed Operables with instruction and result contracts;
 - omit private and local-only interfaces;
 - distinguish kind, datatype, schema, `observes`, and unit;
@@ -589,6 +640,59 @@ Automated tests must prove:
     contract.
 27. A Buffer whose Product Manifest references the old Output Manifest does
     not silently retain observations produced under the new Output Manifest.
+28. A fresh-only Observable does not advertise or accept latest-existing or
+    time-range requests.
+29. A Buffer Product answers latest-existing and time-range requests without
+    appearing as a Component in the Catalog.
+30. A serialized transport path preserves observation semantics while
+    reporting encoded bytes and not claiming local allocation identity.
+
+## Phased execution
+
+This document is the test program, not one indivisible implementation change.
+Each phase must preserve the completed evidence and may stop independently if
+its result invalidates the model.
+
+### Completed foundation: typed dataflow
+
+Typed ports, static and dynamic dispatch, explicit delivery policies, bounded
+Buffers, shared local payload ownership, StreamPumps, Episode promotion, and
+the initial performance controls are implemented in PR #361.
+
+### Completed foundation: Component and Output identity
+
+Stable Component identity, immutable configured Output identity, Output-bound
+Buffer Products, Catalog projection, typed Operable authorization, and pinned
+versus follow-current reconfiguration are implemented on
+`codex/observable-operable-data-plane`.
+
+### Completed Phase 1: observation selection, delivery, and lifecycle
+
+The branch `codex/observation-requests-lifecycle` implements explicit
+latest-existing, time-range, and follow-new shapes; truthful request
+advertisement; retained Product access; inspectable continuing handles;
+cancellation; reconfiguration status; and serialized transport semantics.
+Correctness gates 1–14 and 24–30 apply where relevant. Its targeted benchmark
+measures the extra follow-current dispatch and serialized-copy boundary; the
+full benchmark matrix remains Phase 4 work.
+
+### Phase 2: failure, concurrency, and scheduling
+
+Implement explicit Component errors, panic boundaries, Operable deadlines and
+cancellation, concurrent instruction ordering, and a bounded shared scheduler.
+Correctness gates 15–17 and 23 apply.
+
+### Phase 3: time and retained storage
+
+Resolve timestamp policy, duration retention, shared Buffer/Episode storage,
+chunk evidence, and external-memory leases and accounting. Correctness gates
+18–22 apply.
+
+### Phase 4: evaluation
+
+Run the reproducible performance matrix, stored-Log comparison, and clean-room
+agent-friendliness exercise. Produce the final recommendation about the public
+semantic model and optimized implementation paths.
 
 ### Performance comparisons
 
@@ -616,7 +720,7 @@ must be reported rather than hidden behind a blended benchmark.
 ## Required follow-up coverage from the first results
 
 Every item listed as **Deliberately unresolved** in the first experiment's
-`RESULTS.md` is required work for this experiment. An item may remain
+`RESULTS.md` is required work for the complete phased program. An item may remain
 architecturally undecided, but it may not remain untested or unmeasured without
 an explicit blocking reason in the final report.
 
@@ -783,7 +887,7 @@ read the prototype internals as this test.
 
 ### Deliverables
 
-The revised experiment ends with:
+The complete phased experiment ends with:
 
 1. the isolated prototype code;
 2. the two-Peer demonstration;

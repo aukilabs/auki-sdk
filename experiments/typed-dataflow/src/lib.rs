@@ -24,6 +24,7 @@ mod chunk;
 mod component;
 mod episode;
 mod ports;
+mod product;
 mod pump;
 
 pub use buffer::{
@@ -37,17 +38,20 @@ pub use camera::{
 pub use chunk::{Chunk, ChunkBuilder, ChunkBuilderConfig, ChunkBuilderError, ChunkBuilderStats};
 pub use component::{
     Catalog, CatalogComponentEntry, CatalogError, CatalogOutputEntry, CatalogProductEntry,
-    ComponentManifest, ComponentReference, Exposure, InMemoryTransport, Invocation,
-    InvocationContext, InvocationError, ManifestHash, Observable, ObservableContract,
-    ObservableTarget, Observation, ObservationAccess, ObservationEvent, Operable, OperableContract,
-    OutputManifest, OutputReference, OutputTransition, PayloadContract, PeerRuntime, ProductForm,
-    ProductManifest, manifest_hash, observation_input,
+    ComponentManifest, ComponentReference, EverySelectedDelivery, Exposure, InMemoryTransport,
+    Invocation, InvocationContext, InvocationError, ManifestHash, Observable, ObservableContract,
+    ObservableTarget, Observation, ObservationAccess, ObservationDelivery, ObservationError,
+    ObservationEvent, ObservationHandle, ObservationStats, ObservationStatus, Operable,
+    OperableContract, OutputManifest, OutputReference, OutputTransition, PayloadContract,
+    PeerRuntime, ProductForm, ProductManifest, SerializedInMemoryTransport, TransportStats,
+    manifest_hash, observation_input,
 };
 pub use episode::{Episode, EpisodeError, EpisodeState, connect_episode};
 pub use ports::{
-    Connection, ConnectionError, ConnectionOptions, ConnectionStats, Envelope, EveryFullPolicy,
-    InputPort, OutputPort, PublishReport, StaticConnection, connect,
+    Connection, ConnectionControl, ConnectionError, ConnectionOptions, ConnectionStats, Envelope,
+    EveryFullPolicy, InputPort, OutputPort, PublishReport, StaticConnection, connect,
 };
+pub use product::{FiniteObservations, ProductAccessError, RetainedProduct, TimeRangeRequest};
 pub use pump::{
     PumpError, PumpOptions, PumpStats, SinkFullPolicy, StreamPump, connect_direct_latest_pump,
 };

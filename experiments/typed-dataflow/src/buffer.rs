@@ -243,6 +243,23 @@ impl<T> Buffer<T> {
             .collect()
     }
 
+    /// Returns retained entries whose declared timestamps fall inside the
+    /// inclusive range, preserving source sequence order.
+    ///
+    /// Phase 1 deliberately performs selection only. The policy for malformed
+    /// or out-of-order timestamps remains a later experiment phase.
+    pub fn snapshot_time_ns(&self, start_ns: u64, end_ns: u64) -> Vec<Arc<Envelope<T>>> {
+        self.inner
+            .state
+            .lock()
+            .unwrap()
+            .entries
+            .iter()
+            .filter(|entry| (start_ns..=end_ns).contains(&entry.envelope.timestamp_ns))
+            .map(|entry| Arc::clone(&entry.envelope))
+            .collect()
+    }
+
     pub fn subscribe(&self, start: CursorStart) -> BufferCursor<T> {
         let state = self.inner.state.lock().unwrap();
         let after_high_water = state

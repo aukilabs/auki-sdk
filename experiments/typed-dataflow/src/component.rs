@@ -1,13 +1,15 @@
 use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
-use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    Connection, ConnectionError, ConnectionOptions, Envelope, InputPort, OutputPort, PublishReport,
-    connect,
+    Connection, ConnectionControl, ConnectionError, ConnectionOptions, ConnectionStats, Envelope,
+    EveryFullPolicy, InputPort, OutputPort, PublishReport, connect,
 };
 
 pub type ManifestHash = String;
@@ -29,24 +31,24 @@ pub fn manifest_hash(manifest: &impl Serialize) -> ManifestHash {
     encoded_digest
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Exposure {
     Local,
     Cluster,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObservationAccess {
-    Latest,
+    LatestExisting,
     FirstAvailable,
     AllAvailable,
     TimeRange,
     FollowNew,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ObservableContract {
     pub name: String,
     pub datatype: String,
@@ -55,7 +57,7 @@ pub struct ObservableContract {
     pub exposure: Exposure,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OperableContract {
     pub name: String,
     pub instruction: String,
@@ -63,12 +65,11 @@ pub struct OperableContract {
     pub exposure: Exposure,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ComponentManifest {
     pub schema: String,
     pub peer_id: String,
     pub component_id: String,
-    pub kind: String,
     pub observables: Vec<ObservableContract>,
     pub operables: Vec<OperableContract>,
 }
@@ -87,15 +88,16 @@ impl ComponentManifest {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct ComponentReference {
     pub peer_id: String,
     pub component_id: String,
     pub manifest_hash: ManifestHash,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PayloadContract {
+    pub kind: String,
     pub datatype: String,
     pub schema: String,
     pub encoding: Option<String>,
@@ -105,7 +107,7 @@ pub struct PayloadContract {
     pub unit: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OutputManifest {
     pub schema: String,
     pub peer_id: String,
@@ -113,6 +115,8 @@ pub struct OutputManifest {
     pub component_manifest_hash: ManifestHash,
     pub slot: String,
     pub output_id: String,
+    pub clock_id: String,
+    pub spatial_frame_id: Option<String>,
     pub payload: PayloadContract,
 }
 
@@ -133,7 +137,7 @@ impl OutputManifest {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct OutputReference {
     pub peer_id: String,
     pub component_id: String,
@@ -143,7 +147,7 @@ pub struct OutputReference {
     pub manifest_hash: ManifestHash,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProductForm {
     Buffer,
@@ -151,13 +155,14 @@ pub enum ProductForm {
     Artifact,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProductManifest {
     pub schema: String,
     pub peer_id: String,
     pub product_id: String,
     pub form: ProductForm,
     pub producer: OutputReference,
+    pub access: Vec<ObservationAccess>,
 }
 
 impl ProductManifest {
@@ -338,7 +343,7 @@ impl PeerRuntime {
 }
 
 /// One observation returned by an Observable.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Observation<T> {
     pub output: OutputReference,
     pub sequence: u64,
@@ -357,7 +362,7 @@ impl<T> Clone for Observation<T> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OutputTransition {
     pub previous: OutputReference,
     pub replacement: OutputReference,
@@ -365,7 +370,7 @@ pub struct OutputTransition {
     pub effective_at_timestamp_ns: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum ObservationEvent<T> {
     Observation(Observation<T>),
     /// Terminal for an observation pinned to `previous`; transitional for an
@@ -382,7 +387,7 @@ impl<T> Clone for ObservationEvent<T> {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ObservableTarget {
     Pinned(OutputReference),
     CurrentOutputSlot {
@@ -397,6 +402,7 @@ pub enum ObservableTarget {
 pub struct Observable<T> {
     name: Arc<str>,
     target: ObservableTarget,
+    access: Arc<[ObservationAccess]>,
     port: OutputPort<ObservationEvent<T>>,
 }
 
@@ -405,6 +411,7 @@ impl<T> Clone for Observable<T> {
         Self {
             name: Arc::clone(&self.name),
             target: self.target.clone(),
+            access: Arc::clone(&self.access),
             port: self.port.clone(),
         }
     }
@@ -416,7 +423,208 @@ impl<T> fmt::Debug for Observable<T> {
             .debug_struct("Observable")
             .field("name", &self.name)
             .field("target", &self.target)
+            .field("access", &self.access)
             .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EverySelectedDelivery {
+    Inline,
+    Queued {
+        capacity: usize,
+        when_full: EveryFullPolicy,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObservationDelivery {
+    EverySelected(EverySelectedDelivery),
+    CoalesceLatest,
+}
+
+impl ObservationDelivery {
+    pub const fn inline_every_selected() -> Self {
+        Self::EverySelected(EverySelectedDelivery::Inline)
+    }
+
+    pub const fn queued_every_selected(capacity: usize, when_full: EveryFullPolicy) -> Self {
+        Self::EverySelected(EverySelectedDelivery::Queued {
+            capacity,
+            when_full,
+        })
+    }
+
+    pub const fn coalesce_latest() -> Self {
+        Self::CoalesceLatest
+    }
+
+    fn connection_options(self) -> ConnectionOptions {
+        match self {
+            Self::EverySelected(EverySelectedDelivery::Inline) => ConnectionOptions::InlineEvery,
+            Self::EverySelected(EverySelectedDelivery::Queued {
+                capacity,
+                when_full,
+            }) => ConnectionOptions::QueuedEvery {
+                capacity,
+                when_full,
+            },
+            Self::CoalesceLatest => ConnectionOptions::Latest,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ObservationError {
+    UnsupportedRequest(ObservationAccess),
+    Connection(ConnectionError),
+}
+
+impl fmt::Display for ObservationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnsupportedRequest(access) => {
+                write!(formatter, "Observable does not support {access:?}")
+            }
+            Self::Connection(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for ObservationError {}
+
+impl From<ConnectionError> for ObservationError {
+    fn from(error: ConnectionError) -> Self {
+        Self::Connection(error)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ObservationStatus {
+    Active,
+    Completed,
+    Reconfigured(Box<OutputTransition>),
+    Failed(String),
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TransportStats {
+    pub encoded_messages: u64,
+    pub encoded_bytes: u64,
+    pub decoded_messages: u64,
+    pub decoded_bytes: u64,
+}
+
+#[derive(Debug, Default)]
+struct TransportCounters {
+    encoded_messages: AtomicU64,
+    encoded_bytes: AtomicU64,
+    decoded_messages: AtomicU64,
+    decoded_bytes: AtomicU64,
+}
+
+impl TransportCounters {
+    fn snapshot(&self) -> TransportStats {
+        TransportStats {
+            encoded_messages: self.encoded_messages.load(Ordering::Relaxed),
+            encoded_bytes: self.encoded_bytes.load(Ordering::Relaxed),
+            decoded_messages: self.decoded_messages.load(Ordering::Relaxed),
+            decoded_bytes: self.decoded_bytes.load(Ordering::Relaxed),
+        }
+    }
+
+    fn encoded(&self, bytes: usize) {
+        self.encoded_messages.fetch_add(1, Ordering::Relaxed);
+        self.encoded_bytes
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+
+    fn decoded(&self, bytes: usize) {
+        self.decoded_messages.fetch_add(1, Ordering::Relaxed);
+        self.decoded_bytes
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ObservationStats {
+    pub accepted: u64,
+    pub delivered: u64,
+    pub coalesced: u64,
+    pub overruns: u64,
+    pub closed: bool,
+    pub transport: TransportStats,
+}
+
+/// Owns one continuing `follow_new` relationship.
+///
+/// Finite retained Product queries return finite values directly and do not
+/// manufacture a long-lived handle.
+#[must_use = "dropping an ObservationHandle cancels the continuing relationship"]
+pub struct ObservationHandle<T: Send + Sync + 'static> {
+    status: Arc<Mutex<ObservationStatus>>,
+    connection: Connection<ObservationEvent<T>>,
+    transport: Option<Arc<TransportCounters>>,
+}
+
+impl<T: Send + Sync + 'static> fmt::Debug for ObservationHandle<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ObservationHandle")
+            .field("status", &self.status())
+            .field("stats", &self.stats())
+            .finish()
+    }
+}
+
+impl<T: Send + Sync + 'static> ObservationHandle<T> {
+    pub fn status(&self) -> ObservationStatus {
+        self.status.lock().unwrap().clone()
+    }
+
+    pub fn stats(&self) -> ObservationStats {
+        let ConnectionStats {
+            accepted,
+            delivered,
+            replaced,
+            overruns,
+            closed,
+        } = self.connection.stats();
+        ObservationStats {
+            accepted,
+            delivered,
+            coalesced: replaced,
+            overruns,
+            closed,
+            transport: self
+                .transport
+                .as_ref()
+                .map_or_else(TransportStats::default, |counters| counters.snapshot()),
+        }
+    }
+
+    pub fn cancel(&self) {
+        self.connection.disconnect();
+        let mut status = self.status.lock().unwrap();
+        if *status == ObservationStatus::Active {
+            *status = ObservationStatus::Cancelled;
+        }
+    }
+
+    fn with_transport(mut self, counters: Arc<TransportCounters>) -> Self {
+        self.transport = Some(counters);
+        self
+    }
+}
+
+impl<T: Send + Sync + 'static> Drop for ObservationHandle<T> {
+    fn drop(&mut self) {
+        self.connection.disconnect();
+        let mut status = self.status.lock().unwrap();
+        if *status == ObservationStatus::Active {
+            *status = ObservationStatus::Cancelled;
+        }
     }
 }
 
@@ -429,12 +637,75 @@ impl<T: Send + Sync + 'static> Observable<T> {
         &self.target
     }
 
-    pub fn observe_new(
+    pub fn supported_access(&self) -> &[ObservationAccess] {
+        &self.access
+    }
+
+    pub fn supports(&self, access: ObservationAccess) -> bool {
+        self.access.contains(&access)
+    }
+
+    /// Requests the newest observation that already exists.
+    ///
+    /// This fresh-only experiment Observable has no retained backing. The
+    /// explicit error is preferable to manufacturing a sensor sample or
+    /// silently treating a live subscription as a finite query.
+    pub fn latest_existing(&self) -> Result<Option<Observation<T>>, ObservationError> {
+        Err(ObservationError::UnsupportedRequest(
+            ObservationAccess::LatestExisting,
+        ))
+    }
+
+    pub fn time_range(
+        &self,
+        _request: crate::product::TimeRangeRequest,
+    ) -> Result<crate::product::FiniteObservations<T>, ObservationError> {
+        Err(ObservationError::UnsupportedRequest(
+            ObservationAccess::TimeRange,
+        ))
+    }
+
+    pub fn follow_new(
         &self,
         observer: &InputPort<ObservationEvent<T>>,
-        delivery: ConnectionOptions,
-    ) -> Result<Connection<ObservationEvent<T>>, ConnectionError> {
-        connect(&self.port, observer, delivery)
+        delivery: ObservationDelivery,
+    ) -> Result<ObservationHandle<T>, ObservationError> {
+        if !self.supports(ObservationAccess::FollowNew) {
+            return Err(ObservationError::UnsupportedRequest(
+                ObservationAccess::FollowNew,
+            ));
+        }
+
+        let status = Arc::new(Mutex::new(ObservationStatus::Active));
+        let control: Arc<Mutex<Option<ConnectionControl<ObservationEvent<T>>>>> =
+            Arc::new(Mutex::new(None));
+        let pinned = matches!(self.target, ObservableTarget::Pinned(_));
+        let observer = observer.clone();
+        let callback_status = Arc::clone(&status);
+        let callback_control = Arc::clone(&control);
+        let input = InputPort::new(
+            format!("{}.follow-new", self.name),
+            move |envelope: &Envelope<ObservationEvent<T>>| {
+                observer.accept(envelope);
+                if pinned && let ObservationEvent::Reconfigured(transition) = &envelope.payload {
+                    *callback_status.lock().unwrap() =
+                        ObservationStatus::Reconfigured(Box::new(transition.clone()));
+                    if let Some(control) = callback_control.lock().unwrap().as_ref() {
+                        control.disconnect();
+                    }
+                }
+            },
+        );
+        let connection = connect(&self.port, &input, delivery.connection_options())?;
+        *control.lock().unwrap() = Some(connection.control());
+        if !matches!(*status.lock().unwrap(), ObservationStatus::Active) {
+            connection.disconnect();
+        }
+        Ok(ObservationHandle {
+            status,
+            connection,
+            transport: None,
+        })
     }
 }
 
@@ -458,6 +729,7 @@ impl<T: Send + Sync + 'static> ObservationEmitter<T> {
 
 pub(crate) fn pinned_observable<T: Send + Sync + 'static>(
     output: OutputReference,
+    access: impl Into<Arc<[ObservationAccess]>>,
 ) -> (Observable<T>, ObservationEmitter<T>) {
     let name: Arc<str> = format!(
         "{}.{}.{}",
@@ -469,6 +741,7 @@ pub(crate) fn pinned_observable<T: Send + Sync + 'static>(
         Observable {
             name,
             target: ObservableTarget::Pinned(output),
+            access: access.into(),
             port: port.clone(),
         },
         ObservationEmitter { port },
@@ -479,6 +752,7 @@ pub(crate) fn current_output_observable<T: Send + Sync + 'static>(
     peer_id: &str,
     component_id: &str,
     slot: &str,
+    access: impl Into<Arc<[ObservationAccess]>>,
 ) -> (Observable<T>, ObservationEmitter<T>) {
     let name: Arc<str> = format!("{component_id}.{slot}.current").into();
     let port = OutputPort::new(Arc::clone(&name));
@@ -490,26 +764,27 @@ pub(crate) fn current_output_observable<T: Send + Sync + 'static>(
                 component_id: component_id.to_owned(),
                 slot: slot.to_owned(),
             },
+            access: access.into(),
             port: port.clone(),
         },
         ObservationEmitter { port },
     )
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct InvocationContext {
     pub invocation_id: String,
     pub caller_peer_id: String,
     pub caller_component_id: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Invocation<R> {
     pub invocation_id: String,
     pub result: R,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum InvocationError {
     NotExposed,
     Unauthorized,
@@ -618,13 +893,13 @@ impl<I, R> Operable<I, R> {
 pub struct InMemoryTransport;
 
 impl InMemoryTransport {
-    pub fn observe_new<T: Send + Sync + 'static>(
+    pub fn follow_new<T: Send + Sync + 'static>(
         &self,
         observable: &Observable<T>,
         observer: &InputPort<ObservationEvent<T>>,
-        delivery: ConnectionOptions,
-    ) -> Result<Connection<ObservationEvent<T>>, ConnectionError> {
-        observable.observe_new(observer, delivery)
+        delivery: ObservationDelivery,
+    ) -> Result<ObservationHandle<T>, ObservationError> {
+        observable.follow_new(observer, delivery)
     }
 
     pub fn invoke<I, R>(
@@ -634,6 +909,80 @@ impl InMemoryTransport {
         instruction: I,
     ) -> Result<Invocation<R>, InvocationError> {
         operable.invoke(context, instruction)
+    }
+}
+
+/// A transport-shaped test fixture that performs a real serialization round
+/// trip while remaining independent of production networking.
+///
+/// Its byte counters make it impossible to mistake local `Arc` sharing for
+/// network zero-copy evidence.
+#[derive(Clone, Debug, Default)]
+pub struct SerializedInMemoryTransport {
+    counters: Arc<TransportCounters>,
+}
+
+impl SerializedInMemoryTransport {
+    pub fn stats(&self) -> TransportStats {
+        self.counters.snapshot()
+    }
+
+    pub(crate) fn round_trip<T>(&self, value: &T) -> Result<T, String>
+    where
+        T: Serialize + DeserializeOwned,
+    {
+        let bytes = serde_json::to_vec(value).map_err(|error| error.to_string())?;
+        self.counters.encoded(bytes.len());
+        let decoded = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+        self.counters.decoded(bytes.len());
+        Ok(decoded)
+    }
+
+    pub fn follow_new<T>(
+        &self,
+        observable: &Observable<T>,
+        observer: &InputPort<ObservationEvent<T>>,
+        delivery: ObservationDelivery,
+    ) -> Result<ObservationHandle<T>, ObservationError>
+    where
+        T: Serialize + DeserializeOwned + Send + Sync + 'static,
+    {
+        let transport = self.clone();
+        let observer = observer.clone();
+        let input = InputPort::new(
+            format!("{}.serialized-transport", observable.name()),
+            move |envelope: &Envelope<ObservationEvent<T>>| {
+                let decoded = transport
+                    .round_trip(&envelope.payload)
+                    .expect("serializable observation must survive the test transport");
+                observer.accept(&Envelope::new(
+                    envelope.sequence,
+                    envelope.timestamp_ns,
+                    decoded,
+                ));
+            },
+        );
+        observable
+            .follow_new(&input, delivery)
+            .map(|handle| handle.with_transport(Arc::clone(&self.counters)))
+    }
+
+    pub fn invoke<I, R>(
+        &self,
+        operable: &Operable<I, R>,
+        context: InvocationContext,
+        instruction: I,
+    ) -> Result<Invocation<R>, InvocationError>
+    where
+        I: Serialize + DeserializeOwned,
+        R: Serialize + DeserializeOwned,
+    {
+        let (context, instruction) = self
+            .round_trip(&(context, instruction))
+            .map_err(|error| InvocationError::Rejected(format!("transport request: {error}")))?;
+        let result = operable.invoke(context, instruction)?;
+        self.round_trip(&result)
+            .map_err(|error| InvocationError::Rejected(format!("transport result: {error}")))
     }
 }
 

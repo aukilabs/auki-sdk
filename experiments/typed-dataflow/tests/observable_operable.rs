@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use auki_typed_dataflow_experiment::{
-    CameraBufferRoller, CameraComponent, CatalogError, ConnectionOptions, InMemoryTransport,
-    InvocationContext, InvocationError, ObservationEvent, PeerRuntime, ReseedDriver, SetResolution,
-    observation_input,
+    CameraBufferRoller, CameraComponent, CatalogError, InMemoryTransport, InvocationContext,
+    InvocationError, ObservationDelivery, ObservationEvent, PeerRuntime, ReseedDriver,
+    SetResolution, observation_input,
 };
 
 fn frame_bytes(width: u32, height: u32, value: u8) -> Arc<[u8]> {
@@ -102,7 +102,7 @@ fn pinned_observation_stops_at_transition_while_follow_current_crosses_it() {
     });
     let _pinned = camera
         .current_output()
-        .observe_new(&pinned_input, ConnectionOptions::InlineEvery)
+        .follow_new(&pinned_input, ObservationDelivery::inline_every_selected())
         .unwrap();
 
     let following_events = Arc::new(Mutex::new(Vec::new()));
@@ -111,10 +111,10 @@ fn pinned_observation_stops_at_transition_while_follow_current_crosses_it() {
         following_sink.lock().unwrap().push(event.clone());
     });
     let _following = InMemoryTransport
-        .observe_new(
+        .follow_new(
             &camera.follow_current_output(),
             &following_input,
-            ConnectionOptions::InlineEvery,
+            ObservationDelivery::inline_every_selected(),
         )
         .unwrap();
 

@@ -225,7 +225,7 @@ pub struct ConnectionStats {
     pub closed: bool,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConnectionError {
     ZeroCapacity,
 }
@@ -247,6 +247,45 @@ pub struct Connection<T: Send + Sync + 'static> {
     _payload: PhantomData<fn(T)>,
 }
 
+/// A clonable cancellation capability for a [`Connection`] that does not own
+/// the connection's lifetime.
+///
+/// This lets a relationship mark itself terminal from inside its delivery
+/// callback without making `Connection` itself clonable. Dropping the control
+/// handle has no effect; dropping the owning `Connection` still disconnects.
+pub struct ConnectionControl<T: Send + Sync + 'static> {
+    endpoint: Arc<dyn Endpoint<T>>,
+    _payload: PhantomData<fn(T)>,
+}
+
+impl<T: Send + Sync + 'static> Clone for ConnectionControl<T> {
+    fn clone(&self) -> Self {
+        Self {
+            endpoint: Arc::clone(&self.endpoint),
+            _payload: PhantomData,
+        }
+    }
+}
+
+impl<T: Send + Sync + 'static> fmt::Debug for ConnectionControl<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConnectionControl")
+            .field("stats", &self.stats())
+            .finish()
+    }
+}
+
+impl<T: Send + Sync + 'static> ConnectionControl<T> {
+    pub fn stats(&self) -> ConnectionStats {
+        self.endpoint.stats()
+    }
+
+    pub fn disconnect(&self) {
+        self.endpoint.close();
+    }
+}
+
 impl<T: Send + Sync + 'static> fmt::Debug for Connection<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -259,6 +298,13 @@ impl<T: Send + Sync + 'static> fmt::Debug for Connection<T> {
 impl<T: Send + Sync + 'static> Connection<T> {
     pub fn stats(&self) -> ConnectionStats {
         self.endpoint.stats()
+    }
+
+    pub fn control(&self) -> ConnectionControl<T> {
+        ConnectionControl {
+            endpoint: Arc::clone(&self.endpoint),
+            _payload: PhantomData,
+        }
     }
 
     pub fn disconnect(&self) {

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use auki_typed_dataflow_experiment::{
-    CameraBufferRoller, CameraComponent, ConnectionOptions, InMemoryTransport, InvocationContext,
-    ObservationEvent, PeerRuntime, SetResolution, VideoFrame, observation_input,
+    CameraBufferRoller, CameraComponent, InvocationContext, ObservationDelivery, ObservationEvent,
+    PeerRuntime, SerializedInMemoryTransport, SetResolution, VideoFrame, observation_input,
 };
 
 fn rgb8(width: u32, height: u32, value: u8) -> Arc<[u8]> {
@@ -20,6 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ["peer-b".to_owned()],
     )?;
     let buffers = CameraBufferRoller::attach(&camera, 8)?;
+    let transport = SerializedInMemoryTransport::default();
 
     let pinned = observation_input(
         "peer-b.pinned-preview",
@@ -37,11 +38,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ),
         },
     );
-    let _pinned_observation = InMemoryTransport.observe_new(
-        &camera.current_output(),
-        &pinned,
-        ConnectionOptions::InlineEvery,
-    )?;
+    let pinned_observation = camera
+        .current_output()
+        .follow_new(&pinned, ObservationDelivery::inline_every_selected())?;
 
     let following = observation_input(
         "peer-b.following-preview",
@@ -59,16 +58,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ),
         },
     );
-    let _following_observation = InMemoryTransport.observe_new(
+    let following_observation = transport.follow_new(
         &camera.follow_current_output(),
         &following,
-        ConnectionOptions::InlineEvery,
+        ObservationDelivery::inline_every_selected(),
     )?;
 
     let component_before = camera.component_reference().clone();
     camera.publish_rgb8(10, 2, 2, rgb8(2, 2, 7))?;
 
-    let applied = InMemoryTransport
+    let applied = transport
         .invoke(
             &camera.set_resolution_operable(),
             InvocationContext {
@@ -85,6 +84,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .result;
 
     camera.publish_rgb8(21, 1, 1, rgb8(1, 1, 9))?;
+    let latest = transport
+        .latest_existing(&buffers.current())?
+        .expect("current Buffer has the replacement frame");
     let component_after = camera.component_reference();
     let catalog_component = peer_a.catalog().component("front-camera").unwrap();
 
@@ -103,6 +105,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .manifest
             .output_id
     );
+    println!(
+        "pinned status: {:?}; follow-current status: {:?}",
+        pinned_observation.status(),
+        following_observation.status()
+    );
+    println!(
+        "latest retained Product observation: output={} sequence={}",
+        latest.output.output_id, latest.sequence
+    );
     for product in buffers.products() {
         println!(
             "product {} -> output {} ({} observations)",
@@ -111,6 +122,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             product.buffer.range().entries
         );
     }
+    let transport_stats = transport.stats();
+    println!(
+        "serialized transport: {} messages / {} bytes encoded",
+        transport_stats.encoded_messages, transport_stats.encoded_bytes
+    );
 
     Ok(())
 }

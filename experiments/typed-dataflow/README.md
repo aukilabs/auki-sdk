@@ -18,6 +18,17 @@ prototype as a performance and ownership baseline:
   separate from its Component;
 - a **Product Manifest** references the exact Output that produced it.
 
+Phase 1 adds explicit observation selection and lifecycle:
+
+- a fresh Component Observable advertises `FollowNew` only;
+- a Buffer remains a Product and separately offers `LatestExisting` and
+  clock-qualified `TimeRange` access;
+- `ObservationHandle<T>` reports active, reconfigured, and cancelled state;
+- `EverySelected` and `CoalesceLatest` name delivery behavior rather than
+  selection;
+- a serialized in-memory fixture counts encoded messages and bytes instead of
+  pretending an `Arc` crossed a network without copying.
+
 The Camera vertical slice demonstrates why Component and Output identity are
 separate:
 
@@ -95,6 +106,8 @@ requested sequence and the first sequence still available.
 ```sh
 cargo run -p auki-typed-dataflow-experiment --bin typed-dataflow-demo
 cargo run -p auki-typed-dataflow-experiment --bin observable-operable-demo
+cargo run --release -p auki-typed-dataflow-experiment \
+  --bin observation-request-bench -- --iterations 100000
 cargo test -p auki-typed-dataflow-experiment --all-targets
 cargo test -p auki-typed-dataflow-experiment --doc
 cargo run --release -p auki-typed-dataflow-experiment \
@@ -108,7 +121,9 @@ data-plane or network types.
 
 See [`RESULTS.md`](RESULTS.md) for the first typed-port and Buffer measurements
 and [`RESULTS-OBSERVABLE-OPERABLE.md`](RESULTS-OBSERVABLE-OPERABLE.md) for the
-Component/Output identity vertical slice.
+Component/Output identity vertical slice. Phase 1 observation-selection and
+lifecycle results are in
+[`RESULTS-OBSERVATION-REQUESTS.md`](RESULTS-OBSERVATION-REQUESTS.md).
 
 This code is intentionally disposable. The design should be rejected or
 changed if the evidence does not support it.

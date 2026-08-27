@@ -59,10 +59,9 @@ The five registries: Sensor, Clock, Frame, Detector, and Map. Each entry post-#2
 
 ### [`auki-time`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-time)
 
-Clock primitives, TimeTransform math, NTP-style sample calculations, and the
-1 Hz `local_clock_read` sampler that writes a local
-`MonotonicClock ↔ UtcClock` TimeTransform Log. No Domain runtime owns a hidden
-synchronized clock.
+Clock traits, `SessionClock`, fixed affine `TimeTransform` math, and local
+sampling primitives. Recorded TimeTransform Logs carry explicit clock lineage;
+no Domain runtime owns a hidden synchronized clock.
 
 ### [`auki-geometry`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-geometry)
 
@@ -79,7 +78,7 @@ lifecycle.
 
 Owns the stable libp2p identity and the single native node: TCP/Noise/Yamux,
 DDS-signed Domain credentials, mutual-authentication framing, explicit direct
-and relay routes, relay booking, and authenticated-peer observations. It does
+and relay routes, relay reservations, and authenticated-peer observations. It does
 not fetch credentials or routes over HTTP.
 
 ### [`auki-network`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-network)
@@ -124,7 +123,10 @@ ROS 2 → SDK translator: `CameraInfo` / `Image` / `PointCloud2` → registry en
 
 ### [`auki-network-browser-wasm`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-network-browser-wasm)
 
-Browser/WASM libp2p transport probe. WIP (v0.0.0); the production browser story currently runs through the TypeScript `auki-domain-browser` package and Domain Relay reachability.
+Legacy/excluded browser/WASM libp2p transport probe. It cannot join the
+authenticated Stage 1 runtime. The TypeScript `auki-domain-browser` package is
+also a WIP contract stub; Stage 3 will replace these experiments with the
+authenticated browser engine.
 
 ---
 
@@ -141,9 +143,9 @@ Per-language wrappers. The pattern is **per-component naming** — no umbrella `
 - [`auki-manifests-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-manifests-py) — manifest builders
 - [`auki-layout-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-layout-py) — path helpers
 - [`auki-geometry-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-geometry-py) — convention conversion math
-- [`auki-network-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-network-py) — prior Manager-era package line, outside the active Stage 1 workspace
-- [`auki-domain-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-domain-py) — being migrated to the authenticated Rust `Domain` owner
-- [`auki-session-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-session-py) — `Session` + register_* + log specs/handles + `catalog()`; re-exports `RegistryRef` / `LogRef` from `auki-registry-py` for type sharing
+- `auki-network-py` — removed Manager-era package; use `auki-domain-py`
+- [`auki-domain-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-domain-py) — authenticated facade over the same Rust `Domain` owner
+- [`auki-session-py`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/python/auki-session-py) — `Peer`, `Session`, registry/log specs and handles; re-exports shared registry references
 
 ### Swift (UniFFI)
 
@@ -158,7 +160,7 @@ Per-language wrappers. The pattern is **per-component naming** — no umbrella `
 
 ## Examples
 
-- [`examples/diagnostic-app`](https://github.com/aukilabs/auki-sdk/tree/develop/examples/diagnostic-app) — temporarily outside the active workspace while it is replaced by the authenticated two-peer Domain demo.
+- [`examples/diagnostic-app`](https://github.com/aukilabs/auki-sdk/tree/develop/examples/diagnostic-app) — scriptable authenticated Domain peer and two-process direct-TCP demo.
 
 ---
 
@@ -178,8 +180,9 @@ For visualizers consuming other peers' data (Park, browser dashboards), the path
 
 - Rust today: `auki-domain::Domain` for authenticated catalog fetches and typed
   stream opens against an expected peer.
-- Python and browser consumers remain on their last Manager-compatible release
-  until the corresponding authenticated binding stages land.
+- Python today: `auki-domain-py` exposes the same authenticated Domain owner.
+- Browser consumers remain on their last compatible line until the browser
+  authenticated-engine stage lands.
 
 ---
 

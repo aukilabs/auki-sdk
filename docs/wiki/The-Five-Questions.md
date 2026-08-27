@@ -14,8 +14,8 @@ Every abstraction in the SDK exists to answer one of these. Skim the table for t
 |----------|-------------------|----------------|
 | **Identity** | `auki-identity` (Wallet + ed25519 + libp2p PeerId), `auki-jcs` + `auki-hash` (content-addressing), Sensor / Clock / Frame / Detector Registries with explicit `peer_id` | — |
 | **Spatial** | Pose Logs (`from → to` transforms over time), Frame Registry, `auki-geometry` (convention conversion) | Full `convert_pose` (composition along a transform path) |
-| **Temporal** | Per-peer `local_clock_read` TimeTransform Log (monotonic↔UTC, on disk), `auki-time` math, Clock Registry with explicit scope | `convert_time` over recorded transforms and application-supplied clock relations |
-| **Networking** | Authenticated `auki-p2p` node, explicit routes, `/auki/auth/1/...` protocols, `Peer` / `Session` / `Domain` facade | `Session::materialize_remote_log`, authenticated Python Domain binding |
+| **Temporal** | Explicit TimeTransform Logs, fixed affine `auki-time` math, and Clock Registry entries with explicit scope | `convert_time` over recorded transforms and application-supplied clock relations |
+| **Networking** | Authenticated Rust/Python `Domain` owner, explicit routes, and `/auki/auth/1/...` protocols | `Session::materialize_remote_log` and later native browser/Swift engines |
 | **Tokenomics** | `Wallet` exists as the on-device primitive | All payment / billing rails |
 
 ---
@@ -114,15 +114,14 @@ entry, and clock relationships are explicit data.
 
 A TimeTransform Log records sampled offsets between two clocks over time. The
 current `local_clock_read` sampler in `auki-time` pairs local monotonic and
-realtime clocks for replay. `auki-time` also retains pure NTP sample math so an
-application or future authenticated protocol can produce additional explicit
+realtime clocks for replay. Applications may record additional explicit clock
 relations; `auki-domain` owns no hidden heartbeat or synchronized-time state.
 
 ### What addresses it
 
 - [`auki-registry`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-registry) — content-pinned Clock Registry entries.
 - [`auki-manifests`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-manifests) — `TimeTransformLogManifest` and provenance.
-- [`auki-time`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-time) — clock primitives, transform math, NTP samples, and the local sampler.
+- [`auki-time`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-time) — clock primitives, fixed transform math, and the local sampler.
 - [`auki-session`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-session) — TimeTransform Log registration.
 
 ### What's pending
@@ -145,7 +144,7 @@ address is never authority.
 
 ### What addresses it
 
-- [`auki-p2p`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-p2p) — stable identity, mutually authenticated transport, explicit routes, relay booking, and observations.
+- [`auki-p2p`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-p2p) — stable identity, mutually authenticated transport, explicit routes, relay reservations, and observations.
 - [`auki-network`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-network) — bounded payload codecs and plain protocol types; no swarm.
 - [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain) — public lifecycle, known peers, catalogs, registries, blobs, messages, and streams.
 - [`auki-domain-relay`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain-relay) — Domain Relay for browser-compatible reachability through Circuit Relay v2 (WIP)
@@ -171,8 +170,9 @@ Plus an [HTTP control API](https://github.com/aukilabs/auki-sdk/blob/develop/doc
 
 - **`Session::materialize_remote_log`** — persistence of a verified remote
   stream as a local replica remains pending.
-- **Authenticated Python Domain binding** — migrated as the next native Stage
-  1 slice over the same Rust owner.
+- **Browser Domain engine** — the authenticated native Rust and Python owner is
+  implemented in source (the coordinated Stage 1 tag is pending); the
+  equivalent browser engine is a later platform stage.
 
 ### How a consumer composes the answer
 
@@ -217,7 +217,9 @@ Peer
     ├── register_clock                     ← Temporal
     └── register_*_log + HeadSpec          ← Spatial / Temporal lineage
 
-Domain::join(&peer, &session, config, authority)
+Domain::builder(&peer, &session, config)
+    .authority(keys, credential)
+    .join()
 ├── authenticated protocols + owned leave  ← Networking
 └── (wallet)                               ← Tokenomics (future)
 ```

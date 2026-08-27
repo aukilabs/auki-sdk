@@ -8,7 +8,7 @@ It is also **not** an identity surface. Bounded participant diagnostics are
 exchanged only after mutual authentication over
 `/auki/auth/1/info/1.0.0` — see [Identity](#identity-not-served-here) below.
 
-> **Status — HTTP frozen at SDK release v0.0.23.** This is the terminal HTTP revision of the Control API. Subsequent control-plane evolution lands as libp2p protocols (`/auki/control/sensor_logs/1.0.0`, …) using the length-prefixed framing pattern of the existing `/auki/` peer protocols. The data model in this document (unified `sensor_logs`, cross-session listing, `session_id` everywhere) is transport-neutral; libp2p protocols will adapt the same shapes once the in-process surface (`auki-session` / `auki-session-py`, shipped in #216 / #224) stabilizes. No new HTTP endpoints will be added; existing endpoints stay maintained — with one removal: `GET /api/info` is gone from the contract entirely ([#293](https://github.com/aukilabs/auki-sdk/issues/293)), because identity is libp2p-only.
+> **Status — HTTP frozen at SDK release v0.0.23.** This is the terminal HTTP revision of the Control API. It remains an operator-facing trusted-LAN contract, separate from authenticated Domain P2P. Any future P2P control protocol must use the authenticated Domain protocol-extension boundary; this document reserves no unauthenticated protocol IDs. No new HTTP endpoints will be added; existing endpoints stay maintained — with one removal: `GET /api/info` is gone from the contract entirely ([#293](https://github.com/aukilabs/auki-sdk/issues/293)), because identity is authenticated-P2P-only.
 
 ## Conformance
 
@@ -304,9 +304,7 @@ The following are intentional v1 simplifications, documented so the next design 
 
 ## Versioning
 
-This document is **Control API v1, terminal at SDK release v0.0.23.** The path prefix `/api/` does not encode a version because there will not be an HTTP v2 — control-plane evolution beyond v0.0.23 happens via libp2p protocols (`/auki/control/...`), not new HTTP endpoints. The earlier "if v2 ships, change the path prefix or add a `Server:` header" framing is retired: the trigger for it ("a real v2 use case") has been answered, and the answer was libp2p, not a second HTTP version.
-
-Daemons that conform to this document MUST advertise the data model exactly as specified. Daemons that *also* speak the forthcoming libp2p control protocols MAY do both — the two transports adapt the same in-process API surface and carry the same data shapes.
+This document is **Control API v1, terminal at SDK release v0.0.23.** The path prefix `/api/` does not encode a version because there will not be an HTTP v2. Daemons that conform to this document MUST advertise the data model exactly as specified. A future P2P control design may adapt these in-process shapes, but it must negotiate an authenticated `/auki/auth/1/...` application protocol and is not specified here.
 
 ---
 

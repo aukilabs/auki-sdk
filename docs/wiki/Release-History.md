@@ -4,7 +4,35 @@ One entry per SDK tag from v0.0.50 onward. Tags older than v0.0.50 predate the #
 
 Each entry summarizes what changed, who's affected, and any migration notes. The annotated git tag message (`git show vX.Y.Z`) is the canonical source; this page is the long-form narrative companion.
 
-> **Cadence note.** The SDK is pre-1.0; breaking changes tick the patch version (v0.0.X). Downstream consumers should pin a tag rather than a branch. Major shifts get called out below.
+> **Cadence note.** The SDK is pre-1.0; breaking changes tick the minor version.
+> Downstream consumers should pin a coordinated tag rather than a branch and
+> upgrade communicating peers together.
+
+---
+
+## Unreleased v0.1 — authenticated Domain Stage 1
+
+**Status:** source-complete migration guidance; the Stage 1 release gate and
+coordinated tag are still pending. Do not substitute a Manager-era v0.0.x tag
+for local Stage 1 evaluation.
+
+- Native Rust and Python share one owned `auki-domain::Domain` runtime with
+  host-supplied DDS authority, listeners, and exact-peer routes.
+- Manager, membership, election, heartbeat, hidden Domain time, Discovery-owned
+  startup, `NetworkRuntime`, and `auki-network-py` are removed from this line.
+- Retained application protocols negotiate only authenticated
+  `/auki/auth/1/...` IDs; there is no legacy-wire fallback.
+- `auki-domain-py==0.1.0` is paired exactly with
+  `auki-session-py==0.1.0` from the same SDK build.
+- The diagnostic CLI provides a real two-process direct-TCP catalog proof and
+  fail-closed wrong-Domain/wrong-Peer/malformed-credential checks.
+
+**Who's affected:** every native networking consumer. Upgrade a communicating
+Rust/Python group together; Swift and browser remain on their pinned prior lines
+until their later authenticated-engine stages.
+
+**Migration:** follow the
+[authenticated Domain migration guide](https://github.com/aukilabs/auki-sdk/blob/develop/docs/authenticated-domain-migration.md).
 
 ---
 

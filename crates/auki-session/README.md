@@ -1,6 +1,6 @@
 # auki-session
 
-Identity and log lifecycle for a single peer — the network-free core of the SDK's app-facing API. Apps construct a long-lived `Peer`, register the sensors / frames / detectors it owns, then mint a `Session` (one timeline) from it and register the logs that session writes. Putting the pair on the network is **not** this crate's job — that's [`auki-domain`](../auki-domain)'s `Domain::join(&peer, &session, config)`, which composes both.
+Identity and log lifecycle for a single peer — the network-free core of the SDK's app-facing API. Apps construct a long-lived `Peer`, register the sensors / frames / detectors it owns, then mint a `Session` (one timeline) from it and register the logs that session writes. Putting the pair on the network is **not** this crate's job — [`auki-domain`](../auki-domain) composes both through `Domain::builder(&peer, &session, config).authority(keys, credential).join()`.
 
 Shipped in SDK #216 (2026-05-27) as a `Session`-centric API; split into `Peer` / `Session` with the network surface inverted out to `auki-domain` in #282/#284 (2026-06).
 
@@ -85,7 +85,7 @@ Log spec types (`SensorLogSpec`, `PoseLogSpec`, `TimeTransformLogSpec`, `Detecti
 
 ### Catalog and domain — moved out in #282
 
-`Session::catalog()`, `Session::join_domain()`, `Session::leave_domain()`, and `Session::cluster_manager()` no longer exist. The equivalents live in [`auki-domain`](../auki-domain): `catalog_of(&peer, &session)` (pure, no network) and `Domain::join(&peer, &session, DomainConfig)` / `Domain::catalog()` / `Domain::leave()`.
+`Session::catalog()`, `Session::join_domain()`, `Session::leave_domain()`, and `Session::cluster_manager()` no longer exist. The equivalents live in [`auki-domain`](../auki-domain): `catalog_of(&peer, &session)` (pure, no network), `Domain::builder(...).authority(...).join()`, `Domain::catalog()`, and `Domain::leave()`.
 
 ## Depends on
 

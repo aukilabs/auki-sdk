@@ -41,6 +41,11 @@ The app is responsible for:
 
 - Product behavior, UI, workflows, and presentation.
 - Choosing which SDK resources to request, produce, display, or reconcile.
+- Acquiring and refreshing DDS verification keys and the local peer-bound
+  credential; core Domain/P2P crates perform no DDS or DMS HTTP.
+- Supplying exact-peer route hints from configuration, product state, or a
+  host-owned discovery/DDS/DMS adapter. Routes and `known_peers()` observations
+  never authorize a peer.
 - Domain adaptation at the edge, such as reading a device/vendor API and publishing the result through SDK resources.
 - User-facing error handling, observability, retries, and loading states.
 - Small glue code around public SDK APIs.
@@ -123,6 +128,10 @@ Stop and inspect the SDK before writing code that implements any of these locall
 
 - A second P2P runtime, authentication handshake, or reconnect loop beside `Domain`.
 - Treating route discovery, cached participant metadata, or connectivity as authorization. Hosts may discover dial hints externally, but only DDS-signed Domain credentials authorize protocol streams.
+- A relay-booking service inside `Domain`. The product adapter selects and
+  authorizes a provider and owns booking HTTP; canonical `auki-p2p::Node`
+  manages the Circuit Relay v2 reservation, and only its confirmed complete
+  circuit route enters distribution or a Domain's exact-peer dial hints.
 - Direct construction of `Session` for current native SDKs; sessions are born from `Peer::start_session()`.
 - Sensor, frame, or detector registration on `Session`; these are peer-level registries.
 - Catalog serving or domain joining on `Session`; these are `auki-domain::Domain` responsibilities.

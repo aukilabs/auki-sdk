@@ -5,6 +5,7 @@
 - [Overview](For-SDK-Consumers)
 - [Quickstart](Quickstart)
 - [Concept: peer-owned logs](Concept-Peer-Owned-Logs)
+- [Authenticated Domain migration](https://github.com/aukilabs/auki-sdk/blob/develop/docs/authenticated-domain-migration.md)
 
 ### Design + Architecture
 

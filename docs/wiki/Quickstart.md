@@ -2,7 +2,9 @@
 
 Boot an `auki-session` peer, declare its sensors / clocks / frames, register a sensor log, and inspect what the SDK writes to the catalog and to disk. ~10 minutes.
 
-This page covers what the Peer / Session API exposes **today** (SDK v0.0.57, post-#282 split). The remaining pieces — publishing frames into the log, joining a domain so other peers can see your catalog, materializing a remote peer's log — are tracked separately; see [Next steps](#next-steps).
+This page covers the current Peer / Session split. Publishing frames into some
+local log handles and materializing a remote peer's log remain separate work;
+authenticated Domain join is available in Rust and Python.
 
 ## What you'll build
 
@@ -16,24 +18,19 @@ A single peer that:
 
 ## Install
 
-### Rust
+Stage 1 is not yet a published tag. The old v0.0.x tags are Manager-era and are
+not wire-compatible with this guide. Use the current source checkout for local
+evaluation, then move to the coordinated 0.1 release line when it is published.
 
-In `Cargo.toml`:
+From the repository root, prove the Rust surface with:
 
-```toml
-[dependencies]
-auki-session  = { git = "https://github.com/aukilabs/auki-sdk.git", tag = "v0.0.57" }
-auki-registry = { git = "https://github.com/aukilabs/auki-sdk.git", tag = "v0.0.57" }
-auki-domain   = { git = "https://github.com/aukilabs/auki-sdk.git", tag = "v0.0.57" }
+```sh
+cargo test --locked -p auki-session --test end_to_end
+cargo check --locked -p auki-diagnostic-app
 ```
 
-### Python
-
-From source for now (PyPI publishing is on the roadmap):
-
-```bash
-pip install "auki-session @ git+https://github.com/aukilabs/auki-sdk.git@v0.0.57#subdirectory=bindings/python/auki-session-py"
-```
+Build the paired Python bindings from that same checkout with the commands in
+the [`auki-domain-py` README](https://github.com/aukilabs/auki-sdk/blob/develop/bindings/python/auki-domain-py/README.md).
 
 ## Construct a peer, start a session
 
@@ -224,9 +221,13 @@ Prints:
 galbot-01 owns head_left_rgb (live)
 ```
 
-**Python** — catalog building is not exposed from `auki-session-py`; the
-Manager-era Domain binding is being replaced with the authenticated Domain
-facade in the native Stage 1 cutover.
+**Python** — once an authenticated `auki_domain.Domain` is joined, its live
+local provider is available through the same owner:
+
+```python
+for row in domain.catalog():
+    print(row.source_peer_id, "owns", row.resource_id, f"({row.state})")
+```
 
 ## Inspect the manifest on disk
 
@@ -248,9 +249,6 @@ $ cat /data/auki/galbot-01/logs/galbot-01/head_left_rgb/manifest.json
 The Peer / Session API doesn't yet expose, at this layer:
 
 - **Publishing frames into the log.** A `SensorLogHandle::append`-style surface is planned. The underlying `auki-logs::Log::append` exists; lifting it onto the session handle is the natural next step.
-- **Joining a Domain from Python.** Rust `DomainBuilder` already owns the
-  authenticated node; the Python binding over that same lifecycle is the next
-  Stage 1 migration slice.
 - **Materializing a remote peer's log.** `Session::materialize_remote_log` returns `NotImplementedError` — this is the Phase 5 deliverable in the #216 plan.
 
 This page will grow to cover each as it lands.
@@ -260,6 +258,10 @@ This page will grow to cover each as it lands.
 The full working version of everything above lives in [`crates/auki-session/tests/end_to_end.rs`](https://github.com/aukilabs/auki-sdk/blob/develop/crates/auki-session/tests/end_to_end.rs). Copy it, swap the `peer_id`, and `cargo test`.
 
 For the Python equivalent, see [`bindings/python/auki-session-py/python_tests/test_session.py`](https://github.com/aukilabs/auki-sdk/blob/develop/bindings/python/auki-session-py/python_tests/test_session.py) — specifically `test_register_sensor_log_end_to_end` and `test_catalog_resource_id_and_shape`.
+
+To put that Peer/Session pair on the network, continue with the
+[authenticated Domain migration guide](https://github.com/aukilabs/auki-sdk/blob/develop/docs/authenticated-domain-migration.md)
+and the [`auki-domain-py` README](https://github.com/aukilabs/auki-sdk/blob/develop/bindings/python/auki-domain-py/README.md).
 
 ---
 

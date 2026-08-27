@@ -120,9 +120,11 @@ for peer in domain.known_peers().snapshot():
     print(peer.peer_id, peer.authenticated_until)
 ```
 
-`known_peers()` contains peers that have completed authenticated protocol
-traffic. It is not a configured-route list. `domain.routes().snapshot()`
-returns the current route hints.
+`known_peers()` contains peers that are currently transport-connected with
+unexpired same-Domain authority after completing an authenticated application
+stream. A peer disappears on its last connection close or credential expiry.
+This is not a configured-route list or discovery source;
+`domain.routes().snapshot()` returns the current dial hints.
 
 Verification keys and the local credential can be rotated without replacing
 the node:

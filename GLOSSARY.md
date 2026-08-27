@@ -92,7 +92,9 @@ The canonical scenegraph designated by a Domain Owner. The default served when a
 
 One of the SDK's two core operations. Translates a timestamp on one [clock](#clock-registry) into the equivalent timestamp on another, by interpolating the offset samples in a [TimeTransform Log](#timetransform-log) at the source timestamp. Lets a downstream consumer correlate data captured under different clocks (e.g. ROS 2 wall-clock, robot session-monotonic, peer-supplied UTC) without picking a "canonical" clock — every timestamp ships with a named clock identity, and `convert_time` is what bridges them.
 
-The producer/math side ships in [`auki-time`](crates/auki-time) (pure transforms, NTP-style samples, and the sampler that writes the log); the consumer-side composition is pending.
+The producer/math side ships in [`auki-time`](crates/auki-time) (fixed affine
+transforms and the local sampler that writes explicit clock relations); the
+consumer-side composition is pending.
 
 ## convert_pose
 

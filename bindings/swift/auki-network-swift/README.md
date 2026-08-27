@@ -1,8 +1,16 @@
 # auki-network-swift
 
-UniFFI Swift bindings for [`auki-network`](../../../crates/auki-network) — the v0 networking surface for native iOS / Swift consumers. Produces a `staticlib` for iOS plus a `cdylib` for host `uniffi-bindgen` introspection.
+UniFFI Swift bindings for the prior v0 Manager-era networking surface.
 
-**Status:** Shipped (v0; cluster lifecycle is `auki-domain-swift` future work).
+> **Compatibility:** this package is excluded from the active workspace and is
+> not wire-compatible with the authenticated Stage 1 Rust/Python Domain. Keep
+> using its pinned prior SDK line as a complete group until the Swift Domain
+> owner lands; do not mix it with Stage 1 peers.
+
+It produces a `staticlib` for iOS plus a `cdylib` for host `uniffi-bindgen`
+introspection on that historical line.
+
+**Status:** Legacy/excluded (v0; authenticated `auki-domain-swift` is future work).
 
 ## Public surface
 
@@ -12,7 +20,8 @@ UniFFI Swift bindings for [`auki-network`](../../../crates/auki-network) — the
 - **Heartbeat source** — `HeartbeatTimestampProvider`.
 - **5-payload stream surface** — `StreamSubscriptionAudio` / `…Camera` / `…PointCloud` / `…JointEncoders` / `…Detection` plus matching `NetworkRuntime.open_*_stream` async methods. Producer side via the `SwiftStreamProvider` callback interface with a two-call protocol (`dispatch_decision` → `SwiftStreamDecision`; on Accept, the runtime calls the matching `*_source` method).
 
-Cluster lifecycle (`ClusterManager` etc.) is the future `auki-domain-swift`, mirroring the Python `auki-network` / `auki-domain` split.
+The future authenticated Swift Domain owner replaces these Manager-era
+lifecycle surfaces; it does not port `ClusterManager` forward.
 
 ## Depends on
 

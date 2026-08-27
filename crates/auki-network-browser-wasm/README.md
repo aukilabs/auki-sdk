@@ -1,10 +1,19 @@
 # auki-network-browser-wasm
 
-Browser / WASM libp2p transport probe — `wasm-bindgen`-exposed surface that lets a browser peer derive a `PeerId` from a wallet seed and (behind the `browser_libp2p` feature) participate in a session through a minimal `ClusterManager` adapter.
+Browser / WASM libp2p transport probe for the prior Manager-era package line.
+
+> **Compatibility:** this crate is excluded from the active workspace and is
+> not wire-compatible with the authenticated Stage 1 Rust/Python Domain. Use
+> it only with its pinned prior SDK line; it cannot join Stage 1 peers. The
+> browser authenticated-engine migration is a later platform stage.
+
+Its historical `wasm-bindgen` surface lets a browser peer derive a `PeerId`
+from a wallet seed and, behind `browser_libp2p`, participate through a minimal
+`ClusterManager` adapter.
 
 A v0 exploration crate. The cluster runtime support is gated behind a feature flag and the broader browser-side stream/control protocol surface is still being scoped.
 
-**Status:** WIP (v0.0.0).
+**Status:** Legacy/excluded WIP (v0.0.0).
 
 ## Public surface
 

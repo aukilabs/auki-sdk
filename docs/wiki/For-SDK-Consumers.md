@@ -13,6 +13,7 @@ This section is for engineers building products on top of the Auki SDK. If you'r
 
 - [Quickstart](Quickstart) — boot a peer, register a sensor and log, inspect the catalog
 - [Concept: peer-owned logs](Concept-Peer-Owned-Logs) — the SDK's core data abstraction (source/writer split, materialization)
+- [Authenticated Domain migration](https://github.com/aukilabs/auki-sdk/blob/develop/docs/authenticated-domain-migration.md) — replace Manager-era Rust/Python networking and run the two-peer proof
 
 ## Pose log discovery and stream open
 
@@ -62,8 +63,9 @@ for row in response.resources {
 }
 ```
 
-The authenticated Python `Domain` binding is the next Stage 1 migration slice;
-do not use the excluded Manager-era package as a substitute.
+The authenticated Python `Domain` binding exposes the same expected-peer and
+credential boundary as Rust. Do not use the removed Manager-era package as a
+substitute.
 
 `writer_peer_id` chooses which peer to dial. `StreamRequest` identifies the
 data by `source_peer_id` and `resource_id`; it does not carry `writer_peer_id`.
@@ -87,6 +89,6 @@ Apps use `auki-session` as the entry point. See:
 
 ## Release history
 
-- [Release history](Release-History) — what changed between SDK versions, what to expect when bumping pins *(stub)*
+- [Release history](Release-History) — what changed between SDK versions and what to expect when bumping pins
 
 For the immediate "what does this version break?" answer, the annotated git tag is authoritative: `git show v0.0.53` etc.

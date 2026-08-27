@@ -102,17 +102,17 @@ This repo is in early development. The crates here implement a foundational subs
 | [`auki-manifests`](crates/auki-manifests) | ✓ Single source of truth for log manifest shapes — JCS-canonical UTF-8 JSON via `auki-jcs`. Builders for sensor, pose, time-transform, and detection logs plus `PoseSource`, `PoseWriterMode`, and `TimeTransformSource`. Symmetric with `auki-datatypes`: that crate owns segment payload shapes, this one owns per-recording manifest shapes. |
 | [`auki-jcs`](crates/auki-jcs) | ✓ RFC 8785 JSON canonicalization (used for stable hashing of registry entries) |
 | [`auki-hash`](crates/auki-hash) | ✓ XXH3-128 wrapper used for registry content-addressing |
-| [`auki-time`](crates/auki-time) | ✓ `SessionClock`, pure `TimeTransform` math, NTP-style offset samples, and the 1 Hz `local_clock_read` sampler for TimeTransform Logs. |
+| [`auki-time`](crates/auki-time) | ✓ `SessionClock`, fixed affine `TimeTransform` math, clock traits, and local sampling primitives. It owns no network-derived Domain clock. |
 | [`auki-layout`](crates/auki-layout) | ✓ Path helpers for the on-disk session shape — single source of truth for app/session/recording layout, including sensor, pose, time-transform, and detection log paths. |
 | [`auki-identity`](crates/auki-identity) | ✓ Wallet primitive: ed25519 keypairs, deterministic child derivation, signed creation certs. WASM-friendly |
 | [`auki-identity-py`](bindings/python/auki-identity-py) | ✓ PyO3 bindings for the identity primitives BoosterApp's Python sidecar consumes — `load_or_mint_seed`, `Wallet.from_seed/derive_child/peer_id/seed`, `app_instance.derive` |
 | [`auki-registry-py`](bindings/python/auki-registry-py) | ✓ PyO3 bindings for Python producers to declare and persist Sensor / Clock / Frame Registry entries. Dict constructors, canonical JSON/hash helpers, and hash-pinned `write_*` / `read_*` helpers mirror `auki-registry`, including exact `frame_id` + `frame_hash` validation for spatial sensors. |
-| [`auki-p2p`](crates/auki-p2p) | ✓ Canonical stable identity and the single native authenticated libp2p node: DDS Domain credentials, mutual authentication, explicit direct/relay routes, relay booking, and peer observations. |
+| [`auki-p2p`](crates/auki-p2p) | ✓ Canonical stable identity and the single native authenticated libp2p node: DDS Domain credentials, mutual authentication, explicit direct/relay routes, relay reservations, and peer observations. |
 | [`auki-network`](crates/auki-network) | ✓ Transport-neutral bounded codecs and plain types for `/auki/auth/1/...` info, resources, registries, blobs, messages, and typed streams. It owns no swarm or control plane. |
 | [`auki-domain`](crates/auki-domain) | ✓ Public owner for one Peer/Session in one exact DDS Domain UUID. `DomainBuilder` accepts host-supplied authority, listeners, and routes; `Domain` exposes authenticated peers, catalogs, registries, blobs, messages, streams, and ordered leave. |
 | [`auki-domain-relay`](crates/auki-domain-relay) | WIP standalone native/WebSocket Circuit Relay v2 server. Domain authority and route distribution remain outside the relay. |
-| [`auki-network-py`](bindings/python/auki-network-py) | Prior Manager-era package line, outside the active Stage 1 workspace. |
-| [`auki-domain-py`](bindings/python/auki-domain-py) | In migration to the same authenticated `Domain` owner as native Rust. |
+| `auki-network-py` | Removed Manager-era networking binding; superseded by `auki-domain-py`. |
+| [`auki-domain-py`](bindings/python/auki-domain-py) | ✓ Authenticated Python facade over the same bounded `Domain` owner as native Rust. |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ⚠ Generic ROS2 → SDK glue: `CameraInfo`/`Image` and `PointCloud2` translation, with RGB/RGBA normalization for point clouds. `frame_id` + `frame_hash` thread through both builders so sensor entries commit to an exact Frame Registry version. Currently broken at the transport layer: `r2r` 0.9.5's compile-time-generated `sensor_msgs` typesupport doesn't match the CDR layout some camera drivers publish. Fix in flight |
 
 **Not yet implemented:**
@@ -192,7 +192,7 @@ The on-device library, organized as a Cargo workspace. Each crate is independent
 | [`auki-manifests`](crates/auki-manifests) | `build_sensor_log_manifest`, `build_pose_log_manifest`, `build_time_transform_log_manifest`, `build_detection_log_manifest`, `PoseSource`, `PoseWriterMode`, `TimeTransformSource`. Single owner of the SDK's per-recording manifest schemas + builders; symmetric with `auki-datatypes` (segment payloads). Manifest encoding is JCS-JSON. |
 | [`auki-layout`](crates/auki-layout) | `registries_root`, `sensor_entry_path`, `clock_entry_path`, `frame_entry_path`, `session_root`, `timetransform_log_path`, `sensorlog_path`, `poselog_path`, `detection_log_path`, `id_to_segment` |
 | [`auki-time`](crates/auki-time) | `SessionClock`, pure affine `TimeTransform` math, `Clock` (trait), `SystemClock`, `Sampler`, `tick(...)`, plus re-exports `TimeTransformEntry` (from `auki-datatypes`) and `TimeTransformSource` (from `auki-manifests`). It owns no heartbeat synchronization or Domain clock. |
-| [`auki-p2p`](crates/auki-p2p) | `Identity`, `Node`, `DomainAuthority`, `DdsVerificationKeys`, `SignedP2pCredential`, authenticated protocol and route types, relay booking, and `NodeObservations`. |
+| [`auki-p2p`](crates/auki-p2p) | `Identity`, `Node`, `DomainAuthority`, `DdsVerificationKeys`, `SignedP2pCredential`, authenticated protocol and route types, relay reservations, and `NodeObservations`. |
 | [`auki-network`](crates/auki-network) | `Identity` compatibility helpers, `ReachabilityRecord`, `Capability`, authenticated `protocol_ids`, bounded codec modules, and transport-neutral stream types. Constant `PEER_DERIVATION_LABEL = "peer/v1"`. |
 | [`auki-domain`](crates/auki-domain) | `DomainBuilder`, `DomainConfig`, `Domain`, authority/routes/status/known-peer handles, `ResourceCatalogProvider`, retained catalog/registry/blob/message/stream operations, and bounded ordered leave. |
 | [`auki-domain-relay`](crates/auki-domain-relay) | `DomainRelay`, `DomainRelayConfig`, `DomainRelayEvent`, `DomainRelayError`. |
@@ -214,10 +214,9 @@ peer_id = wallet.derive_child("peer/v1").peer_id()    # libp2p PeerId string
 mac_id  = auki_identity.app_instance.derive()         # MAC-derived per-machine ID
 ```
 
-The prior `auki-network-py` and `auki-domain-py` Manager-era package lines are
-kept outside the active workspace while the Python Stage 1 binding is replaced.
-The replacement accepts host-fetched signed authority and explicit routes, and
-owns the same bounded authenticated `Domain` lifecycle as Rust.
+The Manager-era `auki-network-py` package is removed. `auki-domain-py` accepts
+host-fetched signed authority and explicit routes and owns the same bounded,
+authenticated `Domain` lifecycle as Rust.
 
 ### 3. HTTP control API (cross-app operator surface)
 
@@ -258,8 +257,8 @@ For peer-to-peer participation. Not REST-shaped, but they are public protocols t
 | `/auki/auth/1/message/0.1.0` | Receiver-owned live message channels with sequence ACKs. |
 | `/auki/auth/1/stream/0.2.0` | Typed live streams bound to the expected authenticated producer. |
 
-Rust consumers use the retained operations on `auki_domain::Domain`. The
-Python binding is migrated to that same owner in the native Stage 1 cutover.
+Rust and Python consumers use retained operations on the same native
+`auki_domain::Domain` owner.
 
 ---
 
@@ -288,14 +287,17 @@ outside these crates. None of those sources changes the authentication rule.
 
 ## Quickstart
 
-App code interacts with the SDK through `auki-session`'s `Peer` / `Session` pair, plus `auki-domain` to go on-network. Add them (and `auki-registry`, for the registry-body types you'll pass into log specs) as Git dependencies in your `Cargo.toml`. Pin a tag — the SDK is pre-1.0 and breaking changes tick the patch version:
+App code interacts with the SDK through `auki-session`'s `Peer` / `Session`
+pair, plus `auki-domain` to go on-network. Stage 1 is not yet a published tag;
+the old v0.0.x tags are Manager-era and are not wire-compatible with the code
+below. Evaluate the current source checkout with:
 
-```toml
-[dependencies]
-auki-session  = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.59" }
-auki-registry = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.59" }
-auki-domain   = { git = "https://github.com/aukilabs/auki-sdk", tag = "v0.0.59" }
+```sh
+cargo check --locked -p auki-diagnostic-app
 ```
+
+Move a communicating group together to the coordinated 0.1 release line when
+it is published. Breaking changes tick the minor version before 1.0.
 
 Construct a peer, declare a sensor, start a session, register a log, inspect what the SDK advertises:
 
@@ -337,14 +339,17 @@ let _log = session.register_sensor_log(SensorLogSpec {
 })?;
 
 // The catalog is what authenticated peers see over /auki/auth/1/resources/0.2.0
-// once `auki_domain::Domain::join(&peer, &session, config)` puts
-// this pair online.
+// once a DomainBuilder with host-supplied authority puts this pair online.
 for row in auki_domain::catalog_of(&peer, &session) {
     println!("{} owns {} ({})", row.source_peer_id, row.resource_id, row.state);
 }
 ```
 
-For a deeper walkthrough — including the Python equivalent and the "what's pending" list (`Domain::join` from Python, `Session::materialize_remote_log`) — see the [wiki Quickstart](https://github.com/aukilabs/auki-sdk/wiki/Quickstart). Each crate's `README.md` has the contract spec for that layer.
+For a deeper walkthrough — including the Python equivalent and the remaining
+`Session::materialize_remote_log` work — see the [wiki Quickstart](https://github.com/aukilabs/auki-sdk/wiki/Quickstart).
+The [authenticated Domain migration guide](docs/authenticated-domain-migration.md)
+covers the breaking network cutover. Each crate's `README.md` has the contract
+spec for that layer.
 
 ---
 

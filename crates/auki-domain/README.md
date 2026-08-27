@@ -13,10 +13,12 @@ keys and a signed P2P Domain credential, then supplies both to
 runtime authority supplied by the host; it does not make DDS or DMS HTTP
 requests itself.
 
-The host also supplies listeners and explicit peer routes. Relay allocation and
-route distribution stay outside this crate. Once routes are installed,
-`auki-p2p` owns dialing, relay booking, secure transport, admission, and
-authentication. Application protocols are never exposed on an unauthenticated
+The host also supplies listeners and exact-peer direct or complete relay-circuit
+dial hints. `auki-p2p` owns dialing, secure transport, admission, and
+authentication over those routes. Separately, lower-level hosts given an
+authorized `RelayProvider` assignment can use `auki-p2p::Node` reservation
+mechanics. Provider booking/HTTP and confirmed-route distribution stay outside
+the SDK. Application protocols are never exposed on an unauthenticated
 connection.
 
 ## Joining a Domain
@@ -82,7 +84,7 @@ service state without opening a network connection.
 ## Depends on
 
 - [`auki-p2p`](../auki-p2p) — identity, authenticated transport, admission,
-  dialing, and relay booking.
+  dialing, and relay-reservation primitives.
 - [`auki-network`](../auki-network) with `protocol-codecs` only — retained wire
   payloads, framing, validation, and provider/subscription types; it does not
   own a second runtime.
@@ -94,3 +96,7 @@ service state without opening a network connection.
 The old `ClusterManager`, membership document, join/election/heartbeat
 protocols, Discovery client, browser session shim, and Domain-time authority are
 not part of this crate.
+
+See the [authenticated Domain migration guide](../../docs/authenticated-domain-migration.md)
+for the Rust/Python breaking-change table, route-source boundary, relay flow,
+and runnable two-peer diagnostic example.

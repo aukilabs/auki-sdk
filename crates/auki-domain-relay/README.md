@@ -4,9 +4,10 @@ A small native libp2p Circuit Relay v2 server for Auki Domain reachability.
 
 The crate owns only the relay server swarm. It is not a Domain Manager and does
 not publish membership, elect a leader, call Discovery, or decide which peers
-belong to a Domain. Hosts distribute relay routes and credentials through their
-own control plane; authenticated clients book and use those routes through
-`auki-p2p`.
+belong to a Domain. A host control plane selects a provider and constructs an
+authorized `RelayProvider` assignment. A lower-level `auki-p2p::Node` reserves
+it, then the host distributes only the confirmed complete circuit route.
+Provider selection and booking HTTP remain external to both SDK crates.
 
 ## Public surface
 

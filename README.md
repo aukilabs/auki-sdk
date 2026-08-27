@@ -2,7 +2,7 @@
 
 On-device SDK for the Auki spatial-computing protocol — a Cargo workspace of Rust crates plus per-language bindings (Python via PyO3, Swift via UniFFI, TypeScript for the browser).
 
-See [VISION.md](VISION.md) for the aspirational spec; this file describes what's actually in the repo today. [GLOSSARY.md](GLOSSARY.md) defines the domain terms.
+See [VISION.md](VISION.md) for the aspirational spec; this file describes what's actually in the repo today. [GLOSSARY.md](GLOSSARY.md) defines the domain terms. Existing Manager-era consumers should start with the [authenticated Domain migration guide](docs/authenticated-domain-migration.md).
 
 ## What this SDK does today
 
@@ -66,7 +66,7 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 | [`auki-hash`](crates/auki-hash) | XXH3-128 wrapper for content-addressing | ✓ |
 | [`auki-jcs`](crates/auki-jcs) | RFC 8785 JSON canonicalization | ✓ |
 | [`auki-identity`](crates/auki-identity) | ed25519 wallet + child derivation + signed creation certs | ✓ |
-| [`auki-time`](crates/auki-time) | `SessionClock`, `TimeTransform` math, NTP-style sampler | ✓ |
+| [`auki-time`](crates/auki-time) | `SessionClock`, fixed affine `TimeTransform` math, clock traits, and local sampling primitives; no network-derived Domain clock | ✓ |
 | [`auki-logs`](crates/auki-logs) | Generic segmented append-only log primitive | ✓ |
 | [`auki-registry`](crates/auki-registry) | Sensor / Clock / Frame / Map identity catalogs + IO | ✓ |
 | [`auki-datatypes`](crates/auki-datatypes) | Shared protobuf segment + wire payload schemas | ✓ |
@@ -75,7 +75,7 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 | [`auki-geometry`](crates/auki-geometry) | Convention conversion for points / vectors / poses | ✓ |
 | [`auki-maps`](crates/auki-maps) | Deterministic voxel Map accumulation + renderer-neutral chunk updates | ✓ |
 | [`auki-mappers`](crates/auki-mappers) | SDK-native Map producers; point-cloud + pose voxel Mapper | ✓ |
-| [`auki-p2p`](crates/auki-p2p) | Authenticated libp2p runtime, stable identity, explicit direct/relay routes, relay booking, and peer observations | ✓ |
+| [`auki-p2p`](crates/auki-p2p) | Authenticated libp2p runtime, stable identity, explicit direct/relay routes, relay reservations, and peer observations | ✓ |
 | [`auki-p2p-dataset`](crates/auki-p2p-dataset) | Authenticated content-addressed dataset transfer protocol | ✓ |
 | [`auki-network`](crates/auki-network) | Bounded authenticated-protocol codecs and plain networking/application types; no swarm owner | ✓ |
 | [`auki-session`](crates/auki-session) | Declarative app API: `Peer` (identity + registries) + `Session` (clocks + log registration); network-free | ✓ |
@@ -95,10 +95,10 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 | [`auki-registry-py`](bindings/python/auki-registry-py) | Sensor / Clock / Frame registry IO | ✓ |
 | [`auki-manifests-py`](bindings/python/auki-manifests-py) | Log-manifest builders | ✓ |
 | [`auki-layout-py`](bindings/python/auki-layout-py) | On-disk path helpers | ✓ |
-| [`auki-network-py`](bindings/python/auki-network-py) | Prior Manager-era networking binding, outside the active workspace during the Stage 1 Python cutover | Legacy line |
-| [`auki-domain-py`](bindings/python/auki-domain-py) | Being replaced by a binding over the same authenticated `Domain` owner as Rust | In migration |
+| `auki-network-py` | Removed Manager-era networking binding; use `auki-domain-py` | Removed |
+| [`auki-domain-py`](bindings/python/auki-domain-py) | Python binding over the same authenticated `Domain` owner as Rust | ✓ |
 | [`auki-mappers-py`](bindings/python/auki-mappers-py) | Python boundary for SDK-native Mappers; normalized point cloud + registry + pose to `MapUpdate` | ✓ |
-| [`auki-session-py`](bindings/python/auki-session-py) | Python binding for `auki-session` — `Session`, register_*, log specs/handles, `catalog()` | ✓ |
+| [`auki-session-py`](bindings/python/auki-session-py) | Python binding for `auki-session` — `Peer`, `Session`, registries, log specs, and handles | ✓ |
 
 ### `bindings/swift/` — UniFFI
 

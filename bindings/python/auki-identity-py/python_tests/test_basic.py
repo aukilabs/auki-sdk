@@ -185,8 +185,8 @@ def test_app_instance_derive_returns_12_lowercase_hex_or_runtime_error() -> None
 # This string is the canonical libp2p PeerId for
 # ``Wallet.from_seed(b'\x03' * 32).derive_child("peer/v1").peer_id()`` —
 # computed from the Rust API once and baked here as a literal. The
-# parallel Rust agent's locked test asserts the same string from
-# ``PeerIdentity::from_wallet(&Wallet::from_seed(&[3u8; 32])).peer_id().to_string()``.
+# Rust's locked test asserts the same string by constructing the canonical
+# ``auki_p2p::Identity`` from that derived child seed.
 # If both pass, the bindings agree byte-for-byte with the Rust crate.
 #
 # IMPORTANT: at the time this test was authored, the local sandbox

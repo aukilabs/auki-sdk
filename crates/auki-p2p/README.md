@@ -12,9 +12,31 @@
 It deliberately does not own DDS/DMS HTTP clients, task scheduling, or an
 application protocol's wire format.
 
+## Stable identity
+
+`auki_p2p::Identity` is the canonical owner of the Ed25519 private key used by
+libp2p Noise and DDS proofs. Production hosts either restore its canonical
+protobuf encoding or construct it from stable 32-byte seed material. A
+wallet-backed host uses one derivation recipe:
+
+```rust
+let peer_seed: [u8; 32] = wallet
+    .derive_child("peer/v1")
+    .seed()
+    .try_into()
+    .expect("Wallet seeds are always 32 bytes");
+let identity = auki_p2p::Identity::from_ed25519_seed(&peer_seed);
+```
+
+Do not call `Identity::generate()` as a recovery path for missing or invalid
+persistent identity: that changes the Peer ID and invalidates peer-bound
+credentials.
+
 ## Adding an application protocol
 
-Create a sibling crate such as `auki-p2p-example` and keep all protocol-specific
+The SDK's shared authenticated wire contracts live in the sibling
+[`auki-protocols`](../auki-protocols) crate. Product-specific protocols may use
+their own sibling crate, such as `auki-p2p-example`, and keep all protocol
 messages and policy there. The protocol crate should:
 
 1. Define one versioned `ApplicationProtocol` and its inbound

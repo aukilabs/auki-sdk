@@ -6,20 +6,17 @@ use std::{
     time::Duration,
 };
 
-use auki_network::{
-    protocol_ids::STREAM_V0_2_0,
-    stream_protocol::{
-        CameraFrame, DeclineReason, EndReason, MAX_FRAME_BYTES, StreamEntry as WireStreamEntry,
-        StreamMessage, StreamProtocolError, StreamRequest, audio, joint_encoders, point_cloud,
-        pose, read_message, stream_message, stream_request_from_wire, stream_request_to_wire,
-        write_message,
-    },
-    stream_runtime::{
-        SourceStream, StreamDispatch, StreamEntry, StreamError, StreamProvider, StreamSubscription,
-        decline_all_streams,
-    },
+use crate::stream_runtime::{
+    SourceStream, StreamDispatch, StreamEntry, StreamError, StreamProvider, StreamSubscription,
+    decline_all_streams,
 };
 use auki_p2p::PeerId;
+use auki_protocols::stream::v2::{
+    CameraFrame, DeclineReason, EndReason, ID as STREAM_V0_2_0, MAX_FRAME_BYTES,
+    StreamEntry as WireStreamEntry, StreamMessage, StreamProtocolError, StreamRequest, audio,
+    joint_encoders, point_cloud, pose, read_message, stream_message, stream_request_from_wire,
+    stream_request_to_wire, write_message,
+};
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, SinkExt, Stream, StreamExt, channel::mpsc};
 use parking_lot::Mutex;
 use prost::Message;
@@ -84,8 +81,8 @@ impl Streams {
 
     /// Replace the provider used for subsequent authenticated subscriptions.
     ///
-    /// This is a private staging seam. P12 installs the provider composed by
-    /// `DomainBuilder` before public `Domain::join` returns.
+    /// `DomainBuilder` installs this provider before public `Domain::join`
+    /// returns and before the selected stream protocol is registered.
     pub(crate) fn set_provider(&self, provider: StreamProvider) -> Result<(), StreamsError> {
         self.ensure_running()?;
         let mut current = self.provider.lock();
@@ -246,7 +243,7 @@ where
 
 async fn pump_typed<S, T>(
     stream: &mut S,
-    manifest: auki_network::stream_protocol::StreamManifest,
+    manifest: auki_protocols::stream::v2::StreamManifest,
     mut source: SourceStream<T>,
     lifecycle: CancellationToken,
 ) -> Result<(), StreamsError>
@@ -563,8 +560,8 @@ mod tests {
         }
     }
 
-    fn camera_manifest() -> auki_network::stream_protocol::StreamManifest {
-        auki_network::stream_protocol::StreamManifest {
+    fn camera_manifest() -> auki_protocols::stream::v2::StreamManifest {
+        auki_protocols::stream::v2::StreamManifest {
             resource_id: "camera/front".into(),
             sensor_id: "camera/front".into(),
             sensor_hash: "sensor-hash".into(),
@@ -582,7 +579,7 @@ mod tests {
     }
 
     impl Stream for PendingCameraSource {
-        type Item = Result<auki_network::stream_runtime::StreamItem<CameraFrame>, String>;
+        type Item = Result<crate::stream_runtime::StreamItem<CameraFrame>, String>;
 
         fn poll_next(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
             Poll::Pending
@@ -601,7 +598,7 @@ mod tests {
             let request = StreamRequest {
                 source_peer_id: "source-peer".into(),
                 resource_id: "camera/front".into(),
-                from: auki_network::stream_protocol::ReadFrom::Latest,
+                from: auki_protocols::stream::v2::ReadFrom::Latest,
             };
             let mut inbound = Vec::new();
             write_message(
@@ -668,7 +665,7 @@ mod tests {
         let request = StreamRequest {
             source_peer_id: "source-peer".into(),
             resource_id: "camera/front".into(),
-            from: auki_network::stream_protocol::ReadFrom::FromTimestamp(42),
+            from: auki_protocols::stream::v2::ReadFrom::FromTimestamp(42),
         };
         let mut inbound = Vec::new();
         write_message(
@@ -687,7 +684,7 @@ mod tests {
             StreamDispatch::AcceptCamera {
                 manifest: provider_manifest.clone(),
                 source: Box::pin(futures::stream::iter(vec![Ok(
-                    auki_network::stream_runtime::StreamItem {
+                    crate::stream_runtime::StreamItem {
                         timestamp_ns: 99,
                         payload: CameraFrame {
                             dynamic_intrinsics: None,
@@ -731,7 +728,7 @@ mod tests {
             Some(stream_message::Variant::EndOfStream(reason))
                 if matches!(
                     reason.kind,
-                    Some(auki_network::stream_protocol::end_reason::Kind::SourceEnded(_))
+                    Some(auki_protocols::stream::v2::end_reason::Kind::SourceEnded(_))
                 )
         ));
     }

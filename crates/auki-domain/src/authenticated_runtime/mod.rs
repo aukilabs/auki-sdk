@@ -29,15 +29,11 @@ use std::{
     collections::BTreeMap, panic::AssertUnwindSafe, path::PathBuf, sync::Arc, time::Duration,
 };
 
-use auki_network::{
-    resources_v3_protocol::MessageChannelResource,
-    resources_v4_protocol::MapCatalogProvider,
-    stream_runtime::{StreamProvider, decline_all_streams},
-};
 use auki_p2p::{
     DdsTokenVerifier, DdsVerificationKeys, Identity, Multiaddr, Node, NodeObservationEvent,
     NodeObservationStatus, PeerId, SignedP2pCredential,
 };
+use auki_protocols::catalog::v3::MessageChannelResource;
 use futures::FutureExt;
 use parking_lot::Mutex;
 use tokio::{
@@ -66,18 +62,19 @@ use status::{DomainFailure, DomainStatus};
 use storage::{RegistryBlobStorage, StorageError};
 use streams::{Streams, StreamsError};
 
-use crate::resource_catalog::ResourceCatalogProvider;
+use crate::{
+    resource_catalog::{MapCatalogProvider, ResourceCatalogProvider},
+    served_protocols::ServedProtocols,
+    stream_runtime::{StreamProvider, decline_all_streams},
+};
 
 const DOMAIN_LISTENER_LIMIT: usize = 16;
 const DOMAIN_LISTEN_ADDRESS_MAX_BYTES: usize = 1_024;
 const DOMAIN_LISTENER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const DOMAIN_LEAVE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Private Stage-1 configuration for one Domain-owned authenticated node.
-///
-/// P12 will adapt the retained public `DomainBuilder` to this value. Keeping it
-/// private now prevents the old and new product runtimes from being started
-/// together while retained protocol adapters are still migrating.
+/// Private configuration composed by the public [`crate::DomainBuilder`] for
+/// one Domain-owned authenticated node.
 #[derive(Clone)]
 pub(crate) struct AuthenticatedDomainConfig {
     domain_id: Uuid,
@@ -187,6 +184,7 @@ pub(crate) struct AuthenticatedDomainServicesConfig {
     resource_catalog_provider: Option<Arc<dyn ResourceCatalogProvider>>,
     map_catalog_provider: Option<Arc<dyn MapCatalogProvider>>,
     registry_app_root: Option<PathBuf>,
+    served_protocols: ServedProtocols,
 }
 
 impl Default for AuthenticatedDomainServicesConfig {
@@ -198,6 +196,7 @@ impl Default for AuthenticatedDomainServicesConfig {
             resource_catalog_provider: None,
             map_catalog_provider: None,
             registry_app_root: None,
+            served_protocols: ServedProtocols::none(),
         }
     }
 }
@@ -245,6 +244,11 @@ impl AuthenticatedDomainServicesConfig {
         self.registry_app_root = Some(app_root);
         self
     }
+
+    pub(crate) fn with_served_protocols(mut self, protocols: ServedProtocols) -> Self {
+        self.served_protocols = protocols;
+        self
+    }
 }
 
 /// The private authenticated Domain engine used by retained protocol adapters.
@@ -265,6 +269,7 @@ pub(crate) struct AuthenticatedDomain {
     storage: RegistryBlobStorage,
     message_channels: BTreeMap<String, MessageChannelRegistration>,
     protocol_registrations: Vec<protocols::DomainProtocolRegistration>,
+    served_protocol_ids: Vec<&'static str>,
     listen_addresses: Vec<Multiaddr>,
     supervisor: Option<JoinHandle<()>>,
     authority_expiry: Option<JoinHandle<()>>,
@@ -293,6 +298,7 @@ impl AuthenticatedDomain {
         credential: SignedP2pCredential,
         services: AuthenticatedDomainServicesConfig,
     ) -> Result<Self, AuthenticatedDomainError> {
+        let served_protocols = services.served_protocols;
         let lifecycle = CancellationToken::new();
         let status = status::DomainStatusController::credential_unavailable();
         let routes = DomainRoutes::new(lifecycle.clone());
@@ -427,83 +433,102 @@ impl AuthenticatedDomain {
         }
 
         let mut protocol_registrations = Vec::with_capacity(9);
-        register_domain_protocol(
-            &access,
-            &protocols,
-            &mut protocol_registrations,
-            info_v1.register().map_err(AuthenticatedDomainError::InfoV1),
-        )
-        .await?;
-        register_domain_protocol(
-            &access,
-            &protocols,
-            &mut protocol_registrations,
-            resources_v2
-                .register()
-                .map_err(AuthenticatedDomainError::ResourcesV2),
-        )
-        .await?;
-        register_domain_protocol(
-            &access,
-            &protocols,
-            &mut protocol_registrations,
-            messages
-                .register()
-                .map_err(AuthenticatedDomainError::Messages),
-        )
-        .await?;
-        register_domain_protocol(
-            &access,
-            &protocols,
-            &mut protocol_registrations,
-            streams
-                .register()
-                .map_err(AuthenticatedDomainError::Streams),
-        )
-        .await?;
-        register_domain_protocol(
-            &access,
-            &protocols,
-            &mut protocol_registrations,
-            resources_v3
-                .register()
-                .map_err(AuthenticatedDomainError::ResourcesV3),
-        )
-        .await?;
-        register_domain_protocol(
-            &access,
-            &protocols,
-            &mut protocol_registrations,
-            resources_v4
-                .register()
-                .map_err(AuthenticatedDomainError::ResourcesV4),
-        )
-        .await?;
-        register_domain_protocol(
-            &access,
-            &protocols,
-            &mut protocol_registrations,
-            registries
-                .register_v2()
-                .map_err(AuthenticatedDomainError::Registries),
-        )
-        .await?;
-        register_domain_protocol(
-            &access,
-            &protocols,
-            &mut protocol_registrations,
-            registries
-                .register_v3()
-                .map_err(AuthenticatedDomainError::Registries),
-        )
-        .await?;
-        register_domain_protocol(
-            &access,
-            &protocols,
-            &mut protocol_registrations,
-            blobs.register().map_err(AuthenticatedDomainError::Blobs),
-        )
-        .await?;
+        if served_protocols.serves_info_v1() {
+            register_domain_protocol(
+                &access,
+                &protocols,
+                &mut protocol_registrations,
+                info_v1.register().map_err(AuthenticatedDomainError::InfoV1),
+            )
+            .await?;
+        }
+        if served_protocols.serves_resources_v2() {
+            register_domain_protocol(
+                &access,
+                &protocols,
+                &mut protocol_registrations,
+                resources_v2
+                    .register()
+                    .map_err(AuthenticatedDomainError::ResourcesV2),
+            )
+            .await?;
+        }
+        if served_protocols.serves_resources_v3() {
+            register_domain_protocol(
+                &access,
+                &protocols,
+                &mut protocol_registrations,
+                resources_v3
+                    .register()
+                    .map_err(AuthenticatedDomainError::ResourcesV3),
+            )
+            .await?;
+        }
+        if served_protocols.serves_resources_v4() {
+            register_domain_protocol(
+                &access,
+                &protocols,
+                &mut protocol_registrations,
+                resources_v4
+                    .register()
+                    .map_err(AuthenticatedDomainError::ResourcesV4),
+            )
+            .await?;
+        }
+        if served_protocols.serves_registries_v2() {
+            register_domain_protocol(
+                &access,
+                &protocols,
+                &mut protocol_registrations,
+                registries
+                    .register_v2()
+                    .map_err(AuthenticatedDomainError::Registries),
+            )
+            .await?;
+        }
+        if served_protocols.serves_registries_v3() {
+            register_domain_protocol(
+                &access,
+                &protocols,
+                &mut protocol_registrations,
+                registries
+                    .register_v3()
+                    .map_err(AuthenticatedDomainError::Registries),
+            )
+            .await?;
+        }
+        if served_protocols.serves_blobs_v1() {
+            register_domain_protocol(
+                &access,
+                &protocols,
+                &mut protocol_registrations,
+                blobs.register().map_err(AuthenticatedDomainError::Blobs),
+            )
+            .await?;
+        }
+        if served_protocols.serves_messages_v1() {
+            register_domain_protocol(
+                &access,
+                &protocols,
+                &mut protocol_registrations,
+                messages
+                    .register()
+                    .map_err(AuthenticatedDomainError::Messages),
+            )
+            .await?;
+        }
+        if served_protocols.serves_streams_v2() {
+            register_domain_protocol(
+                &access,
+                &protocols,
+                &mut protocol_registrations,
+                streams
+                    .register()
+                    .map_err(AuthenticatedDomainError::Streams),
+            )
+            .await?;
+        }
+        let served_protocol_ids = served_protocols.protocol_ids();
 
         let io_task_host = tokio::spawn(io_task_host.run());
 
@@ -554,6 +579,7 @@ impl AuthenticatedDomain {
             storage,
             message_channels,
             protocol_registrations,
+            served_protocol_ids,
             listen_addresses,
             supervisor: Some(supervisor),
             authority_expiry: Some(authority_expiry),
@@ -588,6 +614,10 @@ impl AuthenticatedDomain {
 
     pub(crate) fn protocols(&self) -> DomainProtocols {
         self.protocols.clone()
+    }
+
+    pub(crate) fn served_protocol_ids(&self) -> &[&'static str] {
+        &self.served_protocol_ids
     }
 
     pub(crate) fn info_v1(&self) -> InfoV1 {
@@ -1069,12 +1099,9 @@ mod tests {
     use super::*;
     use crate::authenticated_runtime::protocols::{DomainProtocolError, DomainProtocolSpec};
     use crate::resource_catalog::ResourceCatalogProvider;
-    use auki_network::{
-        protocol_ids::RESOURCES_V0_2_0,
-        resources_protocol::{
-            Available, Head, ResourceEntry, ResourcesRequest, SensorBlock, SensorKind,
-            SensorManifestPointer, VariantContent,
-        },
+    use auki_protocols::catalog::v2::{
+        Available, Head, ID as RESOURCES_V0_2_0, ResourceEntry, ResourcesRequest, SensorBlock,
+        SensorKind, SensorManifestPointer, VariantContent,
     };
     use auki_registry::RegistryRef;
 
@@ -1221,7 +1248,9 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
 
     async fn join_domain(config: AuthenticatedDomainConfig, issued_at: u64) -> AuthenticatedDomain {
         let credential = credential(config.peer_id(), config.domain_id(), issued_at);
-        AuthenticatedDomain::join(config, keys(), credential)
+        let services = AuthenticatedDomainServicesConfig::default()
+            .with_served_protocols(ServedProtocols::none().with_resources_v2());
+        AuthenticatedDomain::join_with_services(config, keys(), credential, services)
             .await
             .unwrap()
     }
@@ -1263,6 +1292,53 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
             Err(DomainProtocolError::Stopped
                 | DomainProtocolError::Routes(DomainRoutesError::Stopped))
         ));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn default_serves_nothing_and_omitted_exact_id_is_unsupported() {
+        let domain_id = Uuid::new_v4();
+        let server_identity = identity(20);
+        let server_peer = server_identity.peer_id();
+        let server_config = AuthenticatedDomainConfig::new(domain_id, server_identity)
+            .with_listen_addresses([Multiaddr::from_str("/ip4/127.0.0.1/tcp/0").unwrap()])
+            .unwrap();
+        let server_credential = credential(server_peer, domain_id, unix_time());
+        let server = AuthenticatedDomain::join(server_config, keys(), server_credential)
+            .await
+            .unwrap();
+        assert!(server.served_protocol_ids().is_empty());
+
+        let client_identity = identity(21);
+        let client_peer = client_identity.peer_id();
+        let client_config = AuthenticatedDomainConfig::new(domain_id, client_identity)
+            .with_peer_routes(server_peer, [server.listen_addresses()[0].clone()])
+            .unwrap();
+        let client_credential = credential(client_peer, domain_id, unix_time());
+        let client = AuthenticatedDomain::join(client_config, keys(), client_credential)
+            .await
+            .unwrap();
+        assert!(client.served_protocol_ids().is_empty());
+
+        let error = client
+            .resources_v2()
+            .fetch(server_peer, ResourcesRequest::all())
+            .await
+            .unwrap_err();
+        match error {
+            ResourcesV2Error::Protocol(DomainProtocolError::AllRoutesFailed {
+                protocol_id,
+                attempts,
+                ..
+            }) => {
+                assert_eq!(protocol_id, RESOURCES_V0_2_0);
+                assert!(!attempts.is_empty());
+                assert!(attempts.iter().all(|attempt| attempt.unsupported_protocol));
+            }
+            other => panic!("omitted exact ID must negotiate as unsupported: {other}"),
+        }
+
+        client.leave().await.unwrap();
+        server.leave().await.unwrap();
     }
 
     #[test]

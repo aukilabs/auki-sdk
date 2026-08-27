@@ -10,21 +10,18 @@ use std::{
 use auki_datatypes::map::{
     ColorEvidenceDelta, MapUpdate, SemanticDelta, VoxelChunkUpdate, VoxelDelta,
 };
-use auki_network::{
-    message_codec::MAX_MESSAGE_FRAME_BYTES,
-    protocol_ids::{MESSAGE_V0_1_0, STREAM_V0_2_0},
-    resources_v3_protocol::{
-        MessageChannelResource, ResourceEntry, ResourceVariant, ResourcesRequest,
-    },
-    stream_protocol::{
-        CameraFrame, MAX_FRAME_BYTES, ReadFrom, StreamManifest, StreamRequest, end_reason,
-    },
-    stream_runtime::{StreamDispatch, StreamError, StreamItem, StreamProvider},
-};
 use auki_p2p::{
     ApplicationProtocol, DdsTokenVerifier, DdsVerificationKeys, Identity, Multiaddr, Node,
     P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_TTL, P2P_TOKEN_TYPE, P2PAccessClaims, PeerId,
     SessionRequirements, SignedApplicationMetadata, SignedP2pCredential,
+};
+use auki_protocols::{
+    catalog::v3::{MessageChannelResource, ResourceEntry, ResourceVariant, ResourcesRequest},
+    message::v1::{ID as MESSAGE_V0_1_0, MAX_MESSAGE_FRAME_BYTES},
+    stream::v2::{
+        CameraFrame, ID as STREAM_V0_2_0, MAX_FRAME_BYTES, ReadFrom, StreamManifest, StreamRequest,
+        end_reason,
+    },
 };
 use auki_registry::RegistryRef;
 use futures::{AsyncWriteExt, StreamExt, stream};
@@ -38,6 +35,10 @@ use super::{
     messages::{OpenMessageChannelError, SendMessageError},
     peers::{KnownPeer, KnownPeerEvent, KnownPeerSubscription},
     streams::StreamsError,
+};
+use crate::{
+    served_protocols::ServedProtocols,
+    stream_runtime::{StreamDispatch, StreamError, StreamItem, StreamProvider},
 };
 
 const TEST_DDS_PRIVATE_KEY: &[u8] = br#"-----BEGIN PRIVATE KEY-----
@@ -105,6 +106,12 @@ async fn join_domain(
     services: AuthenticatedDomainServicesConfig,
 ) -> AuthenticatedDomain {
     let credential = credential(config.peer_id(), config.domain_id(), issued_at);
+    let services = services.with_served_protocols(
+        ServedProtocols::none()
+            .with_resources_v3()
+            .with_messages_v1()
+            .with_streams_v2(),
+    );
     AuthenticatedDomain::join_with_services(config, keys(), credential, services)
         .await
         .unwrap()
@@ -247,7 +254,7 @@ fn finite_stream_provider(
                 })])),
             },
             _ => StreamDispatch::Decline {
-                reason: auki_network::stream_protocol::DeclineReason::sensor_not_found(),
+                reason: auki_protocols::stream::v2::DeclineReason::sensor_not_found(),
             },
         }
     })
@@ -630,7 +637,7 @@ async fn p11_oversized_authenticated_frames_reach_neither_application_surface() 
         let provider: StreamProvider = Arc::new(move |_requester, _request| {
             calls.fetch_add(1, Ordering::SeqCst);
             StreamDispatch::Decline {
-                reason: auki_network::stream_protocol::DeclineReason::sensor_not_found(),
+                reason: auki_protocols::stream::v2::DeclineReason::sensor_not_found(),
             }
         });
         let services = AuthenticatedDomainServicesConfig::default()

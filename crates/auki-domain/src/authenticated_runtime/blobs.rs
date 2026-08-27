@@ -1,14 +1,11 @@
 use std::{path::Path, time::Duration};
 
-use auki_network::{
-    blobs_protocol::{
-        BlobChunkMeta, BlobRequest, BlobResponse, BlobsProtocolError, MAX_BLOB_BYTES,
-        MAX_BLOB_CHUNK_BYTES, MAX_BLOB_META_BYTES, MAX_BLOB_ROUNDS, is_sha256_hex,
-        read_blob_request, read_blob_response, write_blob_request, write_blob_response,
-    },
-    protocol_ids::BLOBS_V0_1_0,
-};
 use auki_p2p::PeerId;
+use auki_protocols::blob::v1::{
+    BlobChunkMeta, BlobRequest, BlobResponse, BlobsProtocolError, ID as BLOBS_V0_1_0,
+    MAX_BLOB_BYTES, MAX_BLOB_CHUNK_BYTES, MAX_BLOB_META_BYTES, MAX_BLOB_ROUNDS, is_sha256_hex,
+    read_blob_request, read_blob_response, write_blob_request, write_blob_response,
+};
 use futures::{AsyncRead, AsyncWrite};
 use tokio::time::timeout;
 

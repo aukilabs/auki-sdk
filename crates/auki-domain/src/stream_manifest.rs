@@ -1,6 +1,6 @@
 //! Registry-backed stream manifest construction for producers.
 //!
-//! `auki-network` treats [`StreamManifest`] as an already-formed wire
+//! `auki-protocols` treats [`StreamManifest`] as an already-formed wire
 //! payload. This module is the domain-layer bridge that looks up the
 //! producer's Sensor Registry entry, copies and verifies its committed frame
 //! reference when the sensor is spatial, and leaves frame fields empty for
@@ -12,7 +12,7 @@
 use std::io;
 use std::path::Path;
 
-use auki_network::stream_protocol::StreamManifest;
+use auki_protocols::stream::v2::StreamManifest;
 use auki_registry::{SensorBody, read_frame, read_sensor};
 
 /// Builds stream manifests from registry entries.

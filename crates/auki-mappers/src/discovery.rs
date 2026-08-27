@@ -1,9 +1,9 @@
 //! Peer-agnostic SDK catalog selection for the voxel Mapper.
 
 use auki_datatypes::{point_cloud::Data as PointCloudData, pose::SpatialTransform};
-use auki_network::resources_protocol::{ResourceEntry, SensorKind, VariantContent};
-use auki_network::stream_protocol::{ReadFrom, StreamRequest};
-use auki_network::stream_runtime::StreamSubscription;
+use auki_domain::StreamSubscription;
+use auki_protocols::catalog::v2::{ResourceEntry, SensorKind, VariantContent};
+use auki_protocols::stream::v2::{ReadFrom, StreamRequest};
 use auki_registry::{LogRef, Rangefinder, RegistryRef, VoxelMap};
 
 use crate::{
@@ -299,12 +299,12 @@ mod tests {
         map::MapUpdate,
         pose::{Quat, Vec3},
     };
+    use auki_domain::StreamEntry;
     use auki_manifests::{PoseSource, PoseWriterMode};
-    use auki_network::resources_protocol::{
+    use auki_protocols::catalog::v2::{
         Available, Head, PoseBlock, PoseManifestPointer, SensorBlock, SensorManifestPointer,
     };
-    use auki_network::stream_protocol::StreamManifest;
-    use auki_network::stream_runtime::StreamEntry;
+    use auki_protocols::stream::v2::StreamManifest;
     use auki_registry::{
         FiniteF64, FrameRegistryEntry, PointField, PointFieldDataType, VoxelValueModel,
     };

@@ -20,20 +20,27 @@ for local Stage 1 evaluation.
   host-supplied DDS authority, listeners, and exact-peer routes.
 - Manager, membership, election, heartbeat, hidden Domain time, Discovery-owned
   startup, `NetworkRuntime`, and `auki-network-py` are removed from this line.
+- The `auki-network` crate is removed. `auki-p2p` owns canonical identity and
+  transport, `auki-protocols` owns exact wire contracts, and `auki-domain` owns
+  hosting policy and protocol tasks.
 - Retained application protocols negotiate only authenticated
   `/auki/auth/1/...` IDs; there is no legacy-wire fallback.
+- `ServedProtocols` defaults to none; hosts opt in to each exact inbound
+  protocol version while client operations remain available independently.
 - `auki-domain-py==0.1.0` is paired exactly with
   `auki-session-py==0.1.0` from the same SDK build.
 - The diagnostic CLI provides a real two-process direct-TCP catalog proof and
   fail-closed wrong-Domain/wrong-Peer/malformed-credential checks.
-- The active Cargo workspace pins Rust `1.89.0`; `auki-domain` and `auki-p2p`
-  are versioned `0.1.0`. Rust Domain is consumed from the coordinated source
-  tag, while the transport crate is published independently. Posemesh owns its
-  dataset application protocol and pins this transport revision/version.
+- The active Cargo workspace pins Rust `1.89.0`; `auki-domain`,
+  `auki-protocols`, and `auki-p2p` are versioned `0.1.0`. Rust Domain and its
+  wire-contract crate are consumed from the coordinated source tag, while the
+  transport crate is published independently. Posemesh owns its dataset
+  application protocol and pins this transport revision/version.
 
 **Who's affected:** every native networking consumer. Upgrade a communicating
-Rust/Python group together; Swift and browser remain on their pinned prior lines
-until their later authenticated-engine stages.
+Rust/Python group together. The Manager-era Swift network and browser sources
+are deleted from HEAD and remain available only at `v0.0.60` until their later
+external authenticated-engine migrations.
 
 **Migration:** follow the
 [authenticated Domain migration guide](https://github.com/aukilabs/auki-sdk/blob/develop/docs/authenticated-domain-migration.md).

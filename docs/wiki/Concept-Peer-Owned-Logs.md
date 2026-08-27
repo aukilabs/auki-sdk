@@ -108,7 +108,7 @@ The split is in `auki_manifests::*Manifest` for all four log variants (`SensorLo
 }
 ```
 
-Defined as `auki_network::resources_protocol::ResourceEntry`. The full row shape is documented in [`dataproducts.md`](https://github.com/aukilabs/auki-sdk/blob/develop/dataproducts.md).
+Defined as `auki_protocols::catalog::v2::ResourceEntry`. The full row shape is documented in [`dataproducts.md`](https://github.com/aukilabs/auki-sdk/blob/develop/dataproducts.md).
 
 ### Stream request (over `/auki/auth/1/stream/0.2.0`)
 

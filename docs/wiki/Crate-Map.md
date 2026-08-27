@@ -20,7 +20,7 @@ RFC 8785 JCS (JSON Canonicalization Scheme). Every JSON the SDK hashes — regis
 
 ### [`auki-identity`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-identity)
 
-Wallet primitive: ed25519 keypair with deterministic label-based child derivation (BIP32-like). `Wallet::derive_child("peer/v1")` produces the libp2p `PeerId`; future payment/billing rails will derive their keys here too. WASM-friendly.
+Wallet primitive: ed25519 keypair with deterministic label-based child derivation (BIP32-like). The seed from `Wallet::derive_child("peer/v1")` constructs the canonical `auki_p2p::Identity` and libp2p `PeerId`; future payment/billing rails will derive their keys here too. WASM-friendly.
 
 ---
 
@@ -71,8 +71,8 @@ Pure spatial math. Phase 1 ships convention conversion via `convert_pose_convent
 
 ## Network
 
-Authenticated transport, bounded application codecs, and the public Domain
-lifecycle.
+Authenticated transport, transport-neutral wire contracts, and the public
+Domain lifecycle.
 
 ### [`auki-p2p`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-p2p)
 
@@ -81,19 +81,22 @@ DDS-signed Domain credentials, mutual-authentication framing, explicit direct
 and relay routes, relay reservations, and authenticated-peer observations. It does
 not fetch credentials or routes over HTTP.
 
-### [`auki-network`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-network)
+### [`auki-protocols`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-protocols)
 
-Retains transport-neutral bounded codecs and plain types for the authenticated
-`/auki/auth/1/...` info, resource-catalog, registry, blob, message, and typed
-stream protocols. It owns no swarm, Manager control plane, or Discovery client.
+Owns the exact authenticated `/auki/auth/1/...` IDs, versioned wire types,
+bounded framing, validation, and locked vectors for info, catalogs, registries,
+blobs, messages, and typed streams. Protocol families are compile-time opt-in;
+the crate owns no transport, handlers, or task lifecycle.
 
 ### [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain)
 
 The app-facing owner for one exact DDS Domain UUID. `DomainBuilder` binds one
 `Peer`/`Session` pair to one `auki-p2p` node with host-supplied credentials,
-listeners, and explicit routes. `Domain` exposes authenticated known peers,
-catalogs, registry/blob fetches, messages, typed streams, and ordered leave.
-There is no Manager, membership roster, election, or hidden discovery policy.
+listeners, explicit routes, and exact-version `ServedProtocols`. The default
+serves none; client operations remain available independently. `Domain` exposes
+authenticated known peers, catalogs, registry/blob fetches, messages, typed
+streams, and ordered leave. There is no Manager, membership roster, election,
+or hidden discovery policy.
 
 ### [`auki-domain-relay`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain-relay)
 
@@ -115,18 +118,17 @@ Declarative app-facing API shipped in #216, split into `Peer` / `Session` in #28
 
 ## Adapters
 
-External-system bridges. Each adapter targets one foreign data plane (ROS 2, browser, etc.).
+External-system bridges. Each adapter targets one foreign data plane.
 
 ### [`auki-ros-adapter`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-ros-adapter)
 
 ROS 2 → SDK translator: `CameraInfo` / `Image` / `PointCloud2` → registry entries + sensor log entries. `frame_id` + `frame_hash` thread through both builders so sensor entries commit to an exact Frame Registry version. Currently **broken** at the `r2r` 0.9.5 transport layer — fix in flight.
 
-### [`auki-network-browser-wasm`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-network-browser-wasm)
-
-Legacy/excluded browser/WASM libp2p transport probe. It cannot join the
-authenticated Stage 1 runtime. The TypeScript `auki-domain-browser` package is
-also a WIP contract stub; Stage 3 will replace these experiments with the
-authenticated browser engine.
+The old Rust/WASM and TypeScript browser runtimes were removed from HEAD. Their
+sources remain available only in
+[`v0.0.60`](https://github.com/aukilabs/auki-sdk/tree/v0.0.60) and cannot join
+the authenticated Stage 1 runtime. Browser support requires a future external
+authenticated-engine migration.
 
 ---
 
@@ -149,12 +151,18 @@ Per-language wrappers. The pattern is **per-component naming** — no umbrella `
 
 ### Swift (UniFFI)
 
-- [`auki-identity-swift`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/swift/auki-identity-swift) — Wallet + `PeerIdentity`
-- [`auki-network-swift`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/swift/auki-network-swift) — prior Manager-compatible line, outside the active workspace until the Swift stage
+- [`auki-identity-swift`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/swift/auki-identity-swift) — Wallet only
+
+The old Manager-compatible `auki-network-swift` source was removed from HEAD.
+It remains available only in
+[`v0.0.60`](https://github.com/aukilabs/auki-sdk/tree/v0.0.60/bindings/swift/auki-network-swift)
+and is not compatible with Stage 1.
 
 ### Browser (TypeScript)
 
-- [`auki-domain-browser`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain-browser) — TypeScript browser `Peer` contract types. WIP.
+There is no current browser package in HEAD. The Manager-era browser sources
+are available at `v0.0.60`; an authenticated replacement is a future external
+migration.
 
 ---
 
@@ -171,10 +179,10 @@ If you're building a robot data-plane producer, you probably pull:
 - `auki-session` + `auki-registry` (Rust) — what the [Quickstart](Quickstart) uses.
 - `auki-session-py` + `auki-registry-py` (Python) — equivalent.
 
-You generally don't touch `auki-logs` or `auki-network` directly: `Session`
+You generally don't touch `auki-logs` or `auki-protocols` directly: `Session`
 owns the recording timeline and `Domain` owns authenticated network I/O. The
 lower-level crates remain available for unusual cases such as processing logs
-offline or registering an additional authenticated application protocol.
+offline or authoring an additional authenticated application protocol.
 
 For visualizers consuming other peers' data (Park, browser dashboards), the path is:
 

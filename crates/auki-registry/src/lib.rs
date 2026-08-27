@@ -2739,7 +2739,7 @@ mod tests {
     /// Locks the JCS canonical bytes for the locked Frame Registry vector.
     /// Cross-language readers (Park's browser side, future Sentinel) MUST
     /// produce these exact bytes for the same input. Joins the
-    /// `auki-hash` / `auki-identity` / `auki-network` cross-language
+    /// `auki-hash` / `auki-identity` / `auki-protocols` cross-language
     /// conformance set.
     #[test]
     fn frame_entry_serializes_to_canonical_bytes_matching_locked_vector() {

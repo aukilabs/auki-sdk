@@ -6,28 +6,24 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use auki_network::{
-    info_protocol::AuthenticatedParticipantInfo,
-    registries_protocol::{RegistryKind, RegistryListEntry},
-    resources_protocol::{
-        Available, DetectionManifestPointer, Head, PoseBlock, PoseManifestPointer, ResourceEntry,
-        ResourcesRequest, ResourcesResponse, SensorBlock, SensorKind, SensorManifestPointer,
-        TimeTransformManifestPointer, VariantContent,
-    },
-    resources_v3_protocol::{
-        MessageChannelResource, ResourcesRequest as ResourcesRequestV3,
-        ResourcesResponse as ResourcesResponseV3,
-    },
-    resources_v4_protocol::{
-        MapCatalogProvider, MapLogResource, ResourcesResponse as ResourcesResponseV4,
-    },
-    stream_protocol::{ReadFrom, StreamManifest, StreamRequest, map::MapUpdate},
-    stream_runtime::{
-        SourceStream, StreamDispatch, StreamItem, StreamProvider, StreamSubscription,
-        decline_all_streams,
-    },
-};
 use auki_p2p::{DdsVerificationKeys, Identity, Multiaddr, PeerId, SignedP2pCredential};
+use auki_protocols::{
+    catalog::{
+        v2::{
+            Available, DetectionManifestPointer, Head, PoseBlock, PoseManifestPointer,
+            ResourceEntry, ResourcesRequest, ResourcesResponse, SensorBlock, SensorKind,
+            SensorManifestPointer, TimeTransformManifestPointer, VariantContent,
+        },
+        v3::{
+            MessageChannelResource, ResourcesRequest as ResourcesRequestV3,
+            ResourcesResponse as ResourcesResponseV3,
+        },
+        v4::{MapLogResource, ResourcesResponse as ResourcesResponseV4},
+    },
+    info::v1::AuthenticatedParticipantInfo,
+    registry::v3::{RegistryKind, RegistryListEntry},
+    stream::v2::{ReadFrom, StreamManifest, StreamRequest, map::MapUpdate},
+};
 use auki_registry::{
     ClockRegistryEntry, DetectorRegistryEntry, DeviceModelRegistryEntry, FrameRegistryEntry,
     MapRegistryEntry, SensorBody, SensorRegistryEntry,
@@ -59,7 +55,12 @@ use crate::{
         status::DomainStatus,
         streams::StreamsError,
     },
-    resource_catalog::ResourceCatalogProvider,
+    resource_catalog::{MapCatalogProvider, ResourceCatalogProvider},
+    served_protocols::ServedProtocols,
+    stream_runtime::{
+        SourceStream, StreamDispatch, StreamItem, StreamProvider, StreamSubscription,
+        decline_all_streams,
+    },
 };
 
 /// Inputs needed to create one Domain-owned authenticated P2P node.
@@ -118,6 +119,7 @@ pub struct DomainBuilder<'a> {
     registry_app_root: Option<PathBuf>,
     message_channels: Vec<(MessageChannelResource, usize)>,
     stream_provider: StreamProvider,
+    served_protocols: ServedProtocols,
 }
 
 impl<'a> DomainBuilder<'a> {
@@ -134,6 +136,7 @@ impl<'a> DomainBuilder<'a> {
             registry_app_root: None,
             message_channels: Vec::new(),
             stream_provider: decline_all_streams(),
+            served_protocols: ServedProtocols::none(),
         }
     }
 
@@ -144,6 +147,15 @@ impl<'a> DomainBuilder<'a> {
         credential: SignedP2pCredential,
     ) -> Self {
         self.authority = Some((verification_keys, credential));
+        self
+    }
+
+    /// Select the exact application protocol versions this Domain will serve.
+    ///
+    /// Client operations remain available regardless of this selection. When
+    /// omitted, the Domain serves no application protocols.
+    pub fn served_protocols(mut self, protocols: ServedProtocols) -> Self {
+        self.served_protocols = protocols;
         self
     }
 
@@ -216,7 +228,7 @@ impl<'a> DomainBuilder<'a> {
         Ok(self)
     }
 
-    /// Validate inputs, bind listeners and all built-in protocols, and return.
+    /// Validate inputs, bind listeners and explicitly selected protocols, and return.
     pub async fn join(self) -> Result<Domain, DomainError> {
         let (verification_keys, credential) = self
             .authority
@@ -242,6 +254,7 @@ impl<'a> DomainBuilder<'a> {
         );
 
         let mut services = AuthenticatedDomainServicesConfig::default()
+            .with_served_protocols(self.served_protocols)
             .with_resource_catalog_provider(resource_provider)
             .with_map_catalog_provider(map_provider)
             .with_registry_app_root(registry_app_root)
@@ -298,7 +311,7 @@ pub enum DomainBuilderError {
     },
     /// The v0.3 catalog row is malformed.
     #[error("invalid message channel resource: {0}")]
-    InvalidMessageChannel(#[source] auki_network::resources_v3_protocol::ResourcesProtocolError),
+    InvalidMessageChannel(#[source] auki_protocols::catalog::v3::ResourcesProtocolError),
 }
 
 /// Domain join and ordered-leave failures.
@@ -397,7 +410,7 @@ impl MessageChannelSender {
 pub enum DomainOpenMapStreamError {
     /// The catalog row is malformed.
     #[error("invalid map resource: {0}")]
-    InvalidResource(#[source] auki_network::resources_v4_protocol::ResourcesProtocolError),
+    InvalidResource(#[source] auki_protocols::catalog::v4::ResourcesProtocolError),
     /// The row's writer does not match the expected authenticated producer.
     #[error("map writer {writer_peer_id} does not match target {target}")]
     WriterMismatch {
@@ -438,20 +451,6 @@ impl Domain {
         config: DomainConfig,
     ) -> DomainBuilder<'a> {
         DomainBuilder::new(peer, session, config)
-    }
-
-    /// Join using explicit initial authority material.
-    pub async fn join(
-        peer: &Peer,
-        session: &Session,
-        config: DomainConfig,
-        verification_keys: DdsVerificationKeys,
-        credential: SignedP2pCredential,
-    ) -> Result<Self, DomainError> {
-        Self::builder(peer, session, config)
-            .authority(verification_keys, credential)
-            .join()
-            .await
     }
 
     /// Exact DDS Domain UUID owned by this runtime.
@@ -497,6 +496,11 @@ impl Domain {
     /// Restricted authenticated protocol extension surface.
     pub fn protocols(&self) -> DomainProtocols {
         self.runtime.protocols()
+    }
+
+    /// Exact application protocol IDs currently served by this Domain.
+    pub fn served_protocol_ids(&self) -> &[&'static str] {
+        self.runtime.served_protocol_ids()
     }
 
     /// Current local Resource Catalog v0.2 rows from the active provider.
@@ -889,7 +893,7 @@ fn map_stream_provider(fallback: StreamProvider, logs: SessionLogs) -> StreamPro
                 source,
             },
             Err(detail) => StreamDispatch::Decline {
-                reason: auki_network::stream_protocol::DeclineReason::other(detail),
+                reason: auki_protocols::stream::v2::DeclineReason::other(detail),
             },
         }
     })
@@ -911,7 +915,7 @@ fn detection_stream_provider(fallback: StreamProvider, logs: SessionLogs) -> Str
                 source,
             },
             Err(detail) => StreamDispatch::Decline {
-                reason: auki_network::stream_protocol::DeclineReason::other(detail),
+                reason: auki_protocols::stream::v2::DeclineReason::other(detail),
             },
         }
     })

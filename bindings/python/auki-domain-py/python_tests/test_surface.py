@@ -87,6 +87,7 @@ def test_authenticated_domain_surface_and_removed_control_plane() -> None:
         "subscribe_status",
         "routes",
         "known_peers",
+        "served_protocol_ids",
         "catalog",
         "fetch_resources_catalog",
         "list_registry_entries",
@@ -107,6 +108,15 @@ def test_authenticated_domain_surface_and_removed_control_plane() -> None:
         "stream_provider",
         "registry_app_root",
         "message_channel",
+        "serve_info_v1",
+        "serve_resources_v2",
+        "serve_resources_v3",
+        "serve_resources_v4",
+        "serve_registries_v2",
+        "serve_registries_v3",
+        "serve_blobs_v1",
+        "serve_messages_v1",
+        "serve_streams_v2",
         "join",
     ):
         assert hasattr(auki_domain.DomainBuilder, name), name

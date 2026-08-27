@@ -5,7 +5,7 @@ use auki_domain_rs::{
     MessageChannelResource, Multiaddr, PeerId, ReadFrom, RegistryListEntry, ResourceEntry,
     SignedP2pCredential, StreamRequest,
 };
-use auki_network::resources_protocol::VariantContent;
+use auki_protocols::catalog::v2::VariantContent;
 use auki_registry::RegistryRef;
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},

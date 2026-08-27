@@ -26,7 +26,7 @@ A peer needs a durable, cryptographically grounded answer to "who am I" — and 
 
 | ID | Lifetime | Where it comes from |
 |----|----------|---------------------|
-| `peer_id` | Durable per device | `Wallet::derive_child("peer/v1")` → libp2p `PeerId` |
+| `peer_id` | Durable per device | `Wallet::derive_child("peer/v1").seed()` → `auki_p2p::Identity` → libp2p `PeerId` |
 | `app_id` | Stable per app on this device | Caller-supplied string (e.g. `"galbot-ctrl"`) |
 | `session_id` | Fresh per session start | ULID minted by `Peer::start_session()` |
 
@@ -145,7 +145,7 @@ address is never authority.
 ### What addresses it
 
 - [`auki-p2p`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-p2p) — stable identity, mutually authenticated transport, explicit routes, relay reservations, and observations.
-- [`auki-network`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-network) — bounded payload codecs and plain protocol types; no swarm.
+- [`auki-protocols`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-protocols) — exact IDs, versioned wire types, bounded codecs, validation, and locked vectors; no runtime.
 - [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain) — public lifecycle, known peers, catalogs, registries, blobs, messages, and streams.
 - [`auki-domain-relay`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain-relay) — Domain Relay for browser-compatible reachability through Circuit Relay v2 (WIP)
 - [`auki-session`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-session) — `Peer` + `Session` (identity, registries, log registration; network-free) and the `materialize_remote_log` stub
@@ -163,6 +163,10 @@ address is never authority.
 | `/auki/auth/1/blobs/0.1.0` | Verified content-addressed blobs |
 | `/auki/auth/1/message/0.1.0` | Receiver-owned live messages |
 | `/auki/auth/1/stream/0.2.0` | Typed streams bound to an expected producer |
+
+`ServedProtocols` defaults to none. A host opts in to each exact inbound
+version it implements; compiling the wire type or using a client method does
+not install the corresponding handler.
 
 Plus an [HTTP control API](https://github.com/aukilabs/auki-sdk/blob/develop/docs/control-api.md) — a separate operator-facing surface for daemons that produce SDK sessions (BoosterApp, Sentinel), so any UI like [Park](https://github.com/aukilabs/park) can drive them through a uniform contract.
 
@@ -182,6 +186,7 @@ let config = DomainConfig::new(domain_id, identity)
     .with_peer_routes(expected_peer, routes)?;
 let domain = Domain::builder(&peer, &session, config)
     .authority(verification_keys, signed_credential)
+    .served_protocols(ServedProtocols::none().with_resources_v2())
     .join()
     .await?;
 
@@ -219,8 +224,9 @@ Peer
 
 Domain::builder(&peer, &session, config)
     .authority(keys, credential)
+    .served_protocols(ServedProtocols::none().with_resources_v2())
     .join()
-├── authenticated protocols + owned leave  ← Networking
+├── selected exact protocols + owned leave  ← Networking
 └── (wallet)                               ← Tokenomics (future)
 ```
 

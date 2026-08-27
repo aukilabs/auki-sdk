@@ -7,7 +7,7 @@ use auki_domain_rs::{
     KnownPeerEvent as RustKnownPeerEvent, KnownPeerSubscription as RustKnownPeerSubscription,
     MessageChannelReceiver as RustMessageChannelReceiver,
     MessageChannelSender as RustMessageChannelSender, MessageEvent as RustMessageEvent,
-    ResourcesRequest, ResourcesRequestV3,
+    ResourcesRequest, ResourcesRequestV3, ServedProtocols,
 };
 use parking_lot::Mutex as SyncMutex;
 use pyo3::{
@@ -233,6 +233,7 @@ pub(crate) struct PyDomainBuilder {
     stream_provider: bool,
     registry_app_root: Option<PathBuf>,
     message_channels: Vec<(auki_domain_rs::MessageChannelResource, usize)>,
+    served_protocols: ServedProtocols,
     consumed: bool,
 }
 
@@ -257,6 +258,7 @@ impl PyDomainBuilder {
             stream_provider: false,
             registry_app_root: None,
             message_channels: Vec::new(),
+            served_protocols: ServedProtocols::none(),
             consumed: false,
         })
     }
@@ -331,6 +333,60 @@ impl PyDomainBuilder {
         Ok(())
     }
 
+    fn serve_info_v1(&mut self) -> PyResult<()> {
+        self.ensure_mutable()?;
+        self.served_protocols = self.served_protocols.with_info_v1();
+        Ok(())
+    }
+
+    fn serve_resources_v2(&mut self) -> PyResult<()> {
+        self.ensure_mutable()?;
+        self.served_protocols = self.served_protocols.with_resources_v2();
+        Ok(())
+    }
+
+    fn serve_resources_v3(&mut self) -> PyResult<()> {
+        self.ensure_mutable()?;
+        self.served_protocols = self.served_protocols.with_resources_v3();
+        Ok(())
+    }
+
+    fn serve_resources_v4(&mut self) -> PyResult<()> {
+        self.ensure_mutable()?;
+        self.served_protocols = self.served_protocols.with_resources_v4();
+        Ok(())
+    }
+
+    fn serve_registries_v2(&mut self) -> PyResult<()> {
+        self.ensure_mutable()?;
+        self.served_protocols = self.served_protocols.with_registries_v2();
+        Ok(())
+    }
+
+    fn serve_registries_v3(&mut self) -> PyResult<()> {
+        self.ensure_mutable()?;
+        self.served_protocols = self.served_protocols.with_registries_v3();
+        Ok(())
+    }
+
+    fn serve_blobs_v1(&mut self) -> PyResult<()> {
+        self.ensure_mutable()?;
+        self.served_protocols = self.served_protocols.with_blobs_v1();
+        Ok(())
+    }
+
+    fn serve_messages_v1(&mut self) -> PyResult<()> {
+        self.ensure_mutable()?;
+        self.served_protocols = self.served_protocols.with_messages_v1();
+        Ok(())
+    }
+
+    fn serve_streams_v2(&mut self) -> PyResult<()> {
+        self.ensure_mutable()?;
+        self.served_protocols = self.served_protocols.with_streams_v2();
+        Ok(())
+    }
+
     fn join<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.ensure_mutable()?;
         self.consumed = true;
@@ -346,6 +402,7 @@ impl PyDomainBuilder {
         let stream_provider = self.stream_provider;
         let registry_app_root = self.registry_app_root.take();
         let message_channels = std::mem::take(&mut self.message_channels);
+        let served_protocols = self.served_protocols;
 
         let (sender, receiver) = oneshot::channel();
         pyo3_async_runtimes::tokio::get_runtime().spawn(async move {
@@ -353,7 +410,8 @@ impl PyDomainBuilder {
                 let (keys, credential) =
                     authority.ok_or(DomainJoinFailure::InitialAuthorityRequired)?;
                 let mut builder = RustDomainBuilder::new(peer.as_ref(), session.as_ref(), config)
-                    .authority(keys, credential);
+                    .authority(keys, credential)
+                    .served_protocols(served_protocols);
                 if let Some(info) = participant_info {
                     builder = builder.participant_info_provider(Arc::new(move || info.clone()));
                 } else if participant_provider {
@@ -430,6 +488,7 @@ pub(crate) struct PyDomain {
     domain_id: String,
     peer_id: String,
     listen_addresses: Vec<String>,
+    served_protocol_ids: Vec<String>,
     authority: RustDomainAuthority,
     routes: RustDomainRoutes,
     peers: RustDomainPeers,
@@ -446,6 +505,11 @@ impl PyDomain {
             .iter()
             .map(ToString::to_string)
             .collect();
+        let served_protocol_ids = domain
+            .served_protocol_ids()
+            .iter()
+            .map(|protocol_id| (*protocol_id).to_owned())
+            .collect();
         let authority = domain.authority();
         let routes = domain.routes();
         let peers = domain.known_peers();
@@ -455,6 +519,7 @@ impl PyDomain {
             domain_id,
             peer_id,
             listen_addresses,
+            served_protocol_ids,
             authority,
             routes,
             peers,
@@ -488,6 +553,11 @@ impl PyDomain {
     #[getter]
     fn listen_addresses(&self) -> Vec<String> {
         self.listen_addresses.clone()
+    }
+
+    #[getter]
+    fn served_protocol_ids(&self) -> Vec<String> {
+        self.served_protocol_ids.clone()
     }
 
     fn status(&self) -> PyDomainStatus {
@@ -933,7 +1003,7 @@ impl Drop for PyDomain {
 }
 
 fn resource_request(variants: Option<Vec<String>>) -> PyResult<ResourcesRequest> {
-    use auki_network::resources_protocol::Variant;
+    use auki_protocols::catalog::v2::Variant;
     let variants = variants
         .unwrap_or_default()
         .into_iter()

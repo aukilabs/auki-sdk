@@ -1,6 +1,9 @@
 //! Application-owned resource catalog snapshots.
 
-use auki_network::resources_protocol::{ResourceEntry, ResourcesRequest};
+use auki_protocols::catalog::{
+    v2::{ResourceEntry, ResourcesRequest, Variant, VariantContent},
+    v4::ResourcesResponse as ResourcesResponseV4,
+};
 use std::path::Path;
 
 /// Application-supplied source of truth for resources this Domain can
@@ -23,7 +26,6 @@ pub trait ResourceCatalogProvider: Send + Sync + 'static {
         if request.variants.is_empty() {
             return resources;
         }
-        use auki_network::resources_protocol::{Variant, VariantContent};
         resources
             .into_iter()
             .filter(|r| {
@@ -37,4 +39,11 @@ pub trait ResourceCatalogProvider: Send + Sync + 'static {
             })
             .collect()
     }
+}
+
+/// Application-supplied source of truth for Map Log rows this Domain can
+/// currently provide through resource catalog v0.4.0.
+pub trait MapCatalogProvider: Send + Sync + 'static {
+    /// Return the currently available Map Log catalog.
+    fn map_catalog(&self) -> ResourcesResponseV4;
 }

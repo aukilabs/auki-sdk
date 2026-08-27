@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use auki_domain::{Domain, DomainBuilder, DomainConfig, Multiaddr, PeerId};
+use auki_domain::{Domain, DomainBuilder, DomainConfig, Multiaddr, PeerId, ServedProtocols};
 use auki_session::Peer;
 use auth::{create_demo_material, load_authority, require_empty_or_missing_directory};
 use catalog::StaticCatalog;
@@ -180,6 +180,7 @@ async fn run(args: RunArgs) -> Result<()> {
     let domain = match DomainBuilder::new(&peer, &session, config)
         .authority(authority.keys, authority.credential)
         .resource_catalog_provider(provider)
+        .served_protocols(ServedProtocols::none().with_resources_v2())
         .join()
         .await
     {

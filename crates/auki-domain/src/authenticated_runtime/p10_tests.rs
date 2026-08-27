@@ -4,20 +4,26 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use auki_network::{
-    blobs_protocol::MAX_BLOB_CHUNK_BYTES,
-    protocol_ids::{BLOBS_V0_1_0, REGISTRIES_V0_2_0, REGISTRIES_V0_3_0},
-    registries_protocol::{
-        MAX_REGISTRIES_FRAME_BYTES, RegistriesProtocolError, RegistryEntryEnvelope, RegistryKind,
-        RegistryListEntry, RegistryRequest, RegistryRequestV2, RegistryResponse,
-        RegistryResponseV2, read_registry_request, read_registry_request_v2,
-        write_registry_response_v2,
-    },
-};
 use auki_p2p::{
     ApplicationProtocol, DdsTokenVerifier, DdsVerificationKeys, Identity, Multiaddr, Node,
     P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_TTL, P2P_TOKEN_TYPE, P2PAccessClaims, PeerId,
     SessionRequirements, SignedApplicationMetadata, SignedP2pCredential,
+};
+use auki_protocols::{
+    blob::v1::{ID as BLOBS_V0_1_0, MAX_BLOB_CHUNK_BYTES},
+    registry::{
+        v2::{
+            ID as REGISTRIES_V0_2_0, RegistryRequest as RegistryRequestV2,
+            RegistryResponse as RegistryResponseV2,
+            read_registry_request as read_registry_request_v2,
+            write_registry_response as write_registry_response_v2,
+        },
+        v3::{
+            ID as REGISTRIES_V0_3_0, MAX_REGISTRIES_FRAME_BYTES, RegistriesProtocolError,
+            RegistryEntryEnvelope, RegistryKind, RegistryListEntry, RegistryRequest,
+            RegistryResponse, read_registry_request,
+        },
+    },
 };
 use auki_registry::{
     DeviceModelBody, DeviceModelFormat, DeviceModelRegistryEntry, FrameRegistryEntry,
@@ -28,10 +34,12 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use super::{
-    AuthenticatedDomain, AuthenticatedDomainConfig, DomainStatus,
+    AuthenticatedDomain, AuthenticatedDomainConfig, AuthenticatedDomainServicesConfig,
+    DomainStatus,
     peers::{KnownPeer, KnownPeerEvent, KnownPeerSubscription},
     registries::RegistriesError,
 };
+use crate::served_protocols::ServedProtocols;
 
 const TEST_DDS_PRIVATE_KEY: &[u8] = br#"-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQggm4twpf4y/yNNw/k
@@ -90,7 +98,13 @@ fn credential(peer_id: PeerId, domain_id: Uuid, issued_at: u64) -> SignedP2pCred
 
 async fn join_domain(config: AuthenticatedDomainConfig, issued_at: u64) -> AuthenticatedDomain {
     let credential = credential(config.peer_id(), config.domain_id(), issued_at);
-    AuthenticatedDomain::join(config, keys(), credential)
+    let services = AuthenticatedDomainServicesConfig::default().with_served_protocols(
+        ServedProtocols::none()
+            .with_registries_v2()
+            .with_registries_v3()
+            .with_blobs_v1(),
+    );
+    AuthenticatedDomain::join_with_services(config, keys(), credential, services)
         .await
         .unwrap()
 }

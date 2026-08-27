@@ -8,39 +8,42 @@ use std::{
 };
 
 use auki_manifests::{PoseSource, PoseWriterMode};
-use auki_network::{
-    info_protocol::AuthenticatedParticipantInfo,
-    protocol_ids::{INFO_V1_0_0, RESOURCES_V0_2_0, RESOURCES_V0_3_0, RESOURCES_V0_4_0},
-    resources_protocol::{
-        Available, Head, PoseBlock, PoseManifestPointer, ResourceEntry as ResourceEntryV2,
-        ResourcesRequest as ResourcesRequestV2, SensorBlock, SensorKind, SensorManifestPointer,
-        Variant as VariantV2, VariantContent,
-    },
-    resources_v3_protocol::{
-        MessageChannelResource, ResourceEntry as ResourceEntryV3, ResourceVariant,
-        ResourcesRequest as ResourcesRequestV3,
-    },
-    resources_v4_protocol::{
-        MapCatalogProvider, MapLogResource, ResourcesResponse as ResourcesResponseV4,
-    },
-};
 use auki_p2p::{
     ApplicationProtocol, DdsTokenVerifier, DdsVerificationKeys, Identity, Multiaddr, Node,
     P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_TTL, P2P_TOKEN_TYPE, P2PAccessClaims, PeerId,
     SessionRequirements, SignedApplicationMetadata, SignedP2pCredential,
+};
+use auki_protocols::{
+    catalog::{
+        v2::{
+            Available, Head, ID as RESOURCES_V0_2_0, PoseBlock, PoseManifestPointer,
+            ResourceEntry as ResourceEntryV2, ResourcesRequest as ResourcesRequestV2, SensorBlock,
+            SensorKind, SensorManifestPointer, Variant as VariantV2, VariantContent,
+        },
+        v3::{
+            ID as RESOURCES_V0_3_0, MessageChannelResource, ResourceEntry as ResourceEntryV3,
+            ResourceVariant, ResourcesRequest as ResourcesRequestV3,
+        },
+        v4::{ID as RESOURCES_V0_4_0, MapLogResource, ResourcesResponse as ResourcesResponseV4},
+    },
+    info::v1::{AuthenticatedParticipantInfo, ID as INFO_V1_0_0},
 };
 use auki_registry::RegistryRef;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use uuid::Uuid;
 
 use super::{
-    AuthenticatedDomain, AuthenticatedDomainConfig, DomainStatus,
+    AuthenticatedDomain, AuthenticatedDomainConfig, AuthenticatedDomainServicesConfig,
+    DomainStatus,
     info_v1::ParticipantInfoProvider,
     peers::{KnownPeer, KnownPeerEvent, KnownPeerSubscription},
     resources_v3::MessageChannelCatalogProvider,
     routes::DomainRoutesError,
 };
-use crate::resource_catalog::ResourceCatalogProvider;
+use crate::{
+    resource_catalog::{MapCatalogProvider, ResourceCatalogProvider},
+    served_protocols::ServedProtocols,
+};
 
 const TEST_DDS_PRIVATE_KEY: &[u8] = br#"-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQggm4twpf4y/yNNw/k
@@ -99,7 +102,14 @@ fn credential(peer_id: PeerId, domain_id: Uuid, issued_at: u64) -> SignedP2pCred
 
 async fn join_domain(config: AuthenticatedDomainConfig, issued_at: u64) -> AuthenticatedDomain {
     let credential = credential(config.peer_id(), config.domain_id(), issued_at);
-    AuthenticatedDomain::join(config, keys(), credential)
+    let services = AuthenticatedDomainServicesConfig::default().with_served_protocols(
+        ServedProtocols::none()
+            .with_info_v1()
+            .with_resources_v2()
+            .with_resources_v3()
+            .with_resources_v4(),
+    );
+    AuthenticatedDomain::join_with_services(config, keys(), credential, services)
         .await
         .unwrap()
 }

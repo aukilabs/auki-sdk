@@ -21,6 +21,11 @@ Consumers such as Park should treat `/auki/auth/1/resources/0.2.0` as the live
 catalog of requestable resources. Poll it, reconcile additions/removals, and
 open streams by the row's stable `resource_id`.
 
+On the producer, these handlers are exact-version opt-ins. A Domain serves none
+by default, so select resource catalog v0.2 and stream v0.2 explicitly when the
+application hosts those operations. Consumers retain their client methods
+independently of their own inbound selection.
+
 For a live movable pose stream:
 
 1. Fetch a peer's resources with a `pose_log` variant filter.

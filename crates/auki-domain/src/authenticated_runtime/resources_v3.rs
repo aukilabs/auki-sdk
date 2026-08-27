@@ -1,15 +1,15 @@
 use std::{sync::Arc, time::Duration};
 
-use auki_network::{
-    protocol_ids::RESOURCES_V0_3_0,
-    resources_protocol::{ResourcesRequest as ResourcesRequestV2, Variant as VariantV2},
-    resources_v3_protocol::{
-        MAX_RESOURCES_FRAME_BYTES, MessageChannelResource, ResourceEntry, ResourceVariant,
-        ResourcesProtocolError, ResourcesRequest, ResourcesResponse, read_resources_request,
-        read_resources_response, write_resources_request, write_resources_response,
+use auki_p2p::PeerId;
+use auki_protocols::catalog::{
+    v2::{ResourcesRequest as ResourcesRequestV2, Variant as VariantV2},
+    v3::{
+        ID as RESOURCES_V0_3_0, MAX_RESOURCES_FRAME_BYTES, MessageChannelResource, ResourceEntry,
+        ResourceVariant, ResourcesProtocolError, ResourcesRequest, ResourcesResponse,
+        read_resources_request, read_resources_response, write_resources_request,
+        write_resources_response,
     },
 };
-use auki_p2p::PeerId;
 use parking_lot::Mutex;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;

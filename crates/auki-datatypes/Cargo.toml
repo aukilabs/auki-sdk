@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Single source of truth for the Auki SDK's shared cross-language data types. Owns the .proto schemas and the prost-generated Rust code for log payload types (camera frames, point clouds, audio chunks, transforms, time-transform samples). Downstream Rust crates (auki-logs, auki-network, auki-ros-adapter, auki-time) import the generated types from here. Cross-language consumers (Python via betterproto, future Sentinel ports) generate their own bindings from the same .proto files. Encoding is protobuf via prost; the name names the responsibility, not the implementation."
+description = "Single source of truth for the Auki SDK's shared cross-language data types. Owns the .proto schemas and prost-generated Rust payload types consumed by logs, protocols, adapters, and time primitives."
 
 [dependencies]
 # Runtime support for prost-generated types — Message trait, encode /

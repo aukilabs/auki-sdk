@@ -28,7 +28,7 @@ test-support = ["dep:auki-p2p", "dep:jsonwebtoken"]
 auki-datatypes = { path = "../../../crates/auki-datatypes" }
 auki-domain-rs = { package = "auki-domain", path = "../../../crates/auki-domain", features = ["native_runtime"] }
 auki-logs-rs = { package = "auki-logs", path = "../../../crates/auki-logs" }
-auki-network = { path = "../../../crates/auki-network", features = ["protocol-codecs"] }
+auki-protocols = { path = "../../../crates/auki-protocols", features = ["catalog", "stream"] }
 auki-p2p = { path = "../../../crates/auki-p2p", optional = true }
 auki-registry = { path = "../../../crates/auki-registry" }
 auki-session-rs = { package = "auki-session", path = "../../../crates/auki-session" }

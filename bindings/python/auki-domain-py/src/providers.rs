@@ -127,7 +127,7 @@ impl ProviderSlots {
         Arc::new(move |requester, request| {
             let Some(slot) = slot.read().clone() else {
                 return auki_domain_rs::StreamDispatch::Decline {
-                    reason: auki_network::stream_protocol::DeclineReason::producer_shutting_down(),
+                    reason: auki_protocols::stream::v2::DeclineReason::producer_shutting_down(),
                 };
             };
             streams::dispatch_python_stream(

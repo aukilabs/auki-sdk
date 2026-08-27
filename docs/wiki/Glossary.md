@@ -8,7 +8,11 @@ If you're new, skim top-to-bottom — terms are ordered roughly from identity ou
 
 ## Peer
 
-A device participating in the Auki network — addressed by a libp2p `PeerId` derived from a [Wallet](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-identity) via `Wallet::derive_child("peer/v1")`. Same wallet seed produces the same `PeerId` across reboots and reinstalls; a peer's identity is durable per device, not per process.
+A device participating in the Auki network — addressed by the libp2p `PeerId`
+of its canonical `auki_p2p::Identity`. A wallet-backed host constructs that
+identity from `Wallet::derive_child("peer/v1").seed()`. The same wallet seed
+produces the same `PeerId` across reboots and reinstalls; a peer's identity is
+durable per device, not per process.
 
 **In code:** `auki_identity::Wallet`, canonical `auki_p2p::Identity`, and
 `peer_id: PeerId` fields on registry entries, manifests, and catalog rows.
@@ -62,7 +66,8 @@ A domain is **not** a scenegraph (the structured map of a space; many possible p
 **In code:** [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain)
 — `DomainBuilder` creates one public `Domain` over one `auki-p2p` node.
 Authority, listeners, and explicit routes are host inputs; there is no Manager,
-membership roster, or election layer.
+membership roster, or election layer. `ServedProtocols` is a separate,
+default-none selection of exact inbound application protocol versions.
 
 **Common confusions:**
 - *Domain vs known peers.* A Domain is the authority scope. `known_peers()` is
@@ -177,8 +182,9 @@ served after mutual authentication over `/auki/auth/1/resources/0.2.0`.
 
 Every row carries `source_peer_id`, `writer_peer_id`, `resource_id`, `state` (`"live"` / `"sealed"`), a `variant` discriminator (`sensor_log` / `pose_log` / `time_transform_log` / `detection_log`), and a variant-specific `manifest` block with the registry refs a consumer needs.
 
-**In code:** `auki_network::resources_protocol::ResourceEntry`. The default
-Domain provider is built from `Peer` + `Session`; the full row shape is
+**In code:** `auki_protocols::catalog::v2::ResourceEntry`. The default Domain
+provider is built from `Peer` + `Session`, but the v0.2 handler is installed
+only when selected in `ServedProtocols`; the full row shape is
 documented in [`dataproducts.md`](https://github.com/aukilabs/auki-sdk/blob/develop/dataproducts.md).
 
 **Common confusions:**
@@ -217,7 +223,7 @@ The two-axis taxonomy that identifies a sensor on the wire and in the registry:
 
 A consumer that wants "all lidar streams" filters on `sensor.kind = "rangefinder"`; one that wants 3D lidar specifically filters on `sensor.kind = "rangefinder" AND sensor.type = "3d_lidar"`.
 
-**In code:** `auki_network::resources_protocol::SensorKind` (closed enum, mirrored across Rust, Python, and locked JSON fixtures). The `type` is a `String` on each `SensorBody` variant. The catalog `kind` value mirrors the registry body's serde tag — invariant enforced via locked tests.
+**In code:** `auki_protocols::catalog::v2::SensorKind` (closed enum, mirrored across Rust, Python, and locked JSON fixtures). The `type` is a `String` on each `SensorBody` variant. The catalog `kind` value mirrors the registry body's serde tag — invariant enforced via locked tests.
 
 **Common confusions:**
 - *Kind vs type collapsed into one field.* The pre-#216 schema used a single `sensor.kind` field that conflated `point_cloud` (a sensor modality) with `camera` (a sensor family). #216 split them: `point_cloud` is now `kind=rangefinder, type=point_cloud`.

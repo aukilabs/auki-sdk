@@ -82,6 +82,7 @@ async def join_domain(
     credential_identity=None,
     credential_domain: str | None = None,
     expired: bool = False,
+    serve_all: bool = True,
 ):
     import auki_domain
 
@@ -97,6 +98,21 @@ async def join_domain(
         expired=expired,
     )
     builder.authority(keys, credential)
+    # Test profile: explicitly serve every retained protocol family. Production
+    # applications should call only the exact version methods they host.
+    if serve_all:
+        for enable in (
+            builder.serve_info_v1,
+            builder.serve_resources_v2,
+            builder.serve_resources_v3,
+            builder.serve_resources_v4,
+            builder.serve_registries_v2,
+            builder.serve_registries_v3,
+            builder.serve_blobs_v1,
+            builder.serve_messages_v1,
+            builder.serve_streams_v2,
+        ):
+            enable()
     if provider is not None:
         builder.resource_catalog_provider(provider)
     if participant_provider is not None:
@@ -104,6 +120,22 @@ async def join_domain(
     if stream_provider is not None:
         builder.stream_provider(stream_provider)
     domain = await asyncio.wait_for(builder.join(), 10)
+    expected_ids = (
+        [
+            "/auki/auth/1/info/1.0.0",
+            "/auki/auth/1/resources/0.2.0",
+            "/auki/auth/1/resources/0.3.0",
+            "/auki/auth/1/resources/0.4.0",
+            "/auki/auth/1/registries/0.2.0",
+            "/auki/auth/1/registries/0.3.0",
+            "/auki/auth/1/blobs/0.1.0",
+            "/auki/auth/1/message/0.1.0",
+            "/auki/auth/1/stream/0.2.0",
+        ]
+        if serve_all
+        else []
+    )
+    assert domain.served_protocol_ids == expected_ids
     return domain, root, peer, session
 
 
@@ -262,6 +294,55 @@ def test_bidirectional_resources_auth_negatives_and_ordered_leave() -> None:
         b_root.cleanup()
 
     asyncio.run(asyncio.wait_for(scenario(), 45))
+
+
+def test_client_only_domain_does_not_serve_its_configured_provider() -> None:
+    vectors = json.loads(AUTH_VECTORS.read_text())
+
+    async def scenario() -> None:
+        import auki_domain
+
+        server_identity = identity(106)
+        client_identity = identity(107)
+        server_catalog = CountingCatalog(
+            [
+                auki_domain.ResourceEntry.from_dict(
+                    resource(server_identity.peer_id, "selected-server-camera")
+                )
+            ]
+        )
+        client_catalog = CountingCatalog(
+            [
+                auki_domain.ResourceEntry.from_dict(
+                    resource(client_identity.peer_id, "configured-but-unserved-camera")
+                )
+            ]
+        )
+        server, server_root, _peer, _session = await join_domain(
+            vectors["domain_id"], server_identity, provider=server_catalog
+        )
+        client, client_root, _peer, _session = await join_domain(
+            vectors["domain_id"],
+            client_identity,
+            provider=client_catalog,
+            serve_all=False,
+        )
+        client.routes().replace(server.peer_id, server.listen_addresses)
+        server.routes().replace(client.peer_id, client.listen_addresses)
+
+        rows = await client.fetch_resources_catalog(server.peer_id)
+        assert [row.resource_id for row in rows] == ["selected-server-camera"]
+        assert server_catalog.calls == 1
+
+        with pytest.raises(RuntimeError):
+            await server.fetch_resources_catalog(client.peer_id)
+        assert client_catalog.calls == 0
+
+        await asyncio.gather(client.leave(), server.leave())
+        client_root.cleanup()
+        server_root.cleanup()
+
+    asyncio.run(asyncio.wait_for(scenario(), 30))
 
 
 def test_cancelled_leave_and_provider_cycle_gc_finish_native_cleanup() -> None:

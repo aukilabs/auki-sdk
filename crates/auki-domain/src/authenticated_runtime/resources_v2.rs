@@ -1,14 +1,11 @@
 use std::{sync::Arc, time::Duration};
 
-use auki_network::{
-    protocol_ids::RESOURCES_V0_2_0,
-    resources_protocol::{
-        MAX_RESOURCES_FRAME_BYTES, ResourcesProtocolError, ResourcesRequest, ResourcesResponse,
-        read_resources_request, read_resources_response, write_resources_request,
-        write_resources_response,
-    },
-};
 use auki_p2p::PeerId;
+use auki_protocols::catalog::v2::{
+    ID as RESOURCES_V0_2_0, MAX_RESOURCES_FRAME_BYTES, ResourcesProtocolError, ResourcesRequest,
+    ResourcesResponse, read_resources_request, read_resources_response, write_resources_request,
+    write_resources_response,
+};
 use parking_lot::Mutex;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -132,7 +129,7 @@ impl ResourcesV2 {
 fn snapshot_catalog(
     provider: Option<Arc<dyn ResourceCatalogProvider>>,
     request: &ResourcesRequest,
-) -> Vec<auki_network::resources_protocol::ResourceEntry> {
+) -> Vec<auki_protocols::catalog::v2::ResourceEntry> {
     if let Some(provider) = provider {
         provider.snapshot_for_request(request, None)
     } else {
@@ -156,7 +153,7 @@ pub enum ResourcesV2Error {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use auki_network::resources_protocol::{
+    use auki_protocols::catalog::v2::{
         Available, Head, ResourceEntry, SensorBlock, SensorKind, SensorManifestPointer, Variant,
         VariantContent,
     };

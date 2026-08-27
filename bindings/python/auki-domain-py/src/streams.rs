@@ -12,13 +12,13 @@ use auki_datatypes::{
     point_cloud::Data as PointCloudFrame, pose::SpatialTransform, scalar::Data as ScalarFrame,
 };
 use auki_domain_rs::{
-    Domain, PeerId, ReadFrom, SourceStream, StreamDispatch, StreamItem, StreamRequest,
+    Domain, PeerId, ReadFrom, SourceStream, StreamDispatch, StreamEntry, StreamItem, StreamRequest,
+    StreamSubscription,
 };
 use auki_logs_rs::{Log as RetainedLog, LogPayload};
-use auki_network::{
-    resources_protocol::{ResourceEntry, SensorKind, VariantContent},
-    stream_protocol::{CameraFrame, DeclineReason, StreamManifest, decline_reason},
-    stream_runtime::{StreamEntry, StreamSubscription},
+use auki_protocols::{
+    catalog::v2::{ResourceEntry, SensorKind, VariantContent},
+    stream::v2::{CameraFrame, DeclineReason, DynamicIntrinsics, StreamManifest, decline_reason},
 };
 use futures::{Stream, StreamExt};
 use prost::Message;
@@ -274,13 +274,13 @@ impl PyStreamManifestBuilder {
 }
 
 // Producer payloads intentionally retain the public shape from the former
-// `auki-network-py` bridge.  The authenticated Domain owns transport and
+// prior network bridge. The authenticated Domain owns transport and
 // admission now; these classes are only typed application payloads.
 
 #[pyclass(name = "DynamicIntrinsics", frozen)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PyDynamicIntrinsics {
-    inner: auki_network::stream_protocol::DynamicIntrinsics,
+    inner: DynamicIntrinsics,
 }
 
 #[pymethods]
@@ -289,7 +289,7 @@ impl PyDynamicIntrinsics {
     #[pyo3(signature = (*, fx, fy, cx, cy, distortion_coefficients=None))]
     fn new(fx: f64, fy: f64, cx: f64, cy: f64, distortion_coefficients: Option<Vec<f64>>) -> Self {
         Self {
-            inner: auki_network::stream_protocol::DynamicIntrinsics {
+            inner: DynamicIntrinsics {
                 fx,
                 fy,
                 cx,

@@ -3,12 +3,12 @@ use std::{
     sync::Arc,
 };
 
-use auki_network::info_protocol::AuthenticatedParticipantInfo;
 use auki_p2p::{
     AuthenticatedPeer, AuthenticatedPeerObservation, ConnectionId, NodeObservationEvent,
     NodeObservations, PEER_OBSERVATION_CHANNEL_CAPACITY, PeerDisappearanceReason, PeerId,
     SignedApplicationMetadata,
 };
+use auki_protocols::info::v1::AuthenticatedParticipantInfo;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use tokio::sync::broadcast;

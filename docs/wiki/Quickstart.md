@@ -36,7 +36,7 @@ the [`auki-domain-py` README](https://github.com/aukilabs/auki-sdk/blob/develop/
 
 Since #282 the entry point is a long-lived `Peer` that mints `Session`s. The identities split across the two:
 
-- `peer_id` — your network identity, on the `Peer`. Stable across boots for this device. (Any string works for local experiments; to join a domain later it must be the libp2p peer-id derived from your wallet.)
+- `peer_id` — your network identity, on the `Peer`. Stable across boots for this device. (Any string works for local experiments; to join a Domain later it must equal the Peer ID of the canonical `auki_p2p::Identity`, commonly constructed from `Wallet::derive_child("peer/v1").seed()`.)
 - `app_id` — the app running on this peer (e.g. `galbot-ctrl` vs `galbot-teleop`), on the `Peer`.
 - `session_id` — fresh ULID minted by `Peer::start_session()`, on the `Session`.
 
@@ -200,6 +200,9 @@ print("log_ref:", log.log_ref.source_peer_id, "/", log.log_ref.resource_id)
 `auki_domain::catalog_of(&peer, &session)` returns one `ResourceEntry` row per
 registered log in the `/auki/auth/1/resources/0.2.0` payload shape — pure and
 network-free. A default `DomainBuilder` installs this snapshot provider.
+It still serves no protocol by default: select
+`ServedProtocols::none().with_resources_v2()` when remote peers should fetch
+that catalog. Client operations do not require a matching inbound selection.
 
 Over the network, `/auki/auth/1/resources/0.2.0` is a live snapshot of resources that
 are currently requestable. A peer may join before every producer is ready.

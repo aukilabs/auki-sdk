@@ -14,23 +14,29 @@ pub mod domain;
 #[cfg(feature = "native_runtime")]
 mod resource_catalog;
 #[cfg(feature = "native_runtime")]
+mod served_protocols;
+#[cfg(feature = "native_runtime")]
 pub mod stream_manifest;
+#[cfg(feature = "native_runtime")]
+mod stream_runtime;
 
 #[cfg(feature = "native_runtime")]
-pub use auki_network::{
-    MapCatalogProvider, MapLogResource, MessageChannelResource, ResourceEntryV3, ResourceVariantV3,
-    ResourcesRequestV3, ResourcesResponseV3, ResourcesResponseV4,
-    info_protocol::AuthenticatedParticipantInfo,
-    registries_protocol::{RegistryKind, RegistryListEntry},
-    resources_protocol::{ResourceEntry, ResourcesRequest, ResourcesResponse},
-    stream_protocol::{ReadFrom, StreamRequest, map::MapUpdate},
-    stream_runtime::{
-        SourceStream, StreamDispatch, StreamEntry, StreamError, StreamItem, StreamProvider,
-        StreamSubscription, decline_all_streams,
-    },
-};
-#[cfg(feature = "native_runtime")]
 pub use auki_p2p::{DdsVerificationKeys, Identity, Multiaddr, PeerId, SignedP2pCredential};
+#[cfg(feature = "native_runtime")]
+pub use auki_protocols::{
+    catalog::{
+        v2::{ResourceEntry, ResourcesRequest, ResourcesResponse},
+        v3::{
+            MessageChannelResource, ResourceEntry as ResourceEntryV3,
+            ResourceVariant as ResourceVariantV3, ResourcesRequest as ResourcesRequestV3,
+            ResourcesResponse as ResourcesResponseV3,
+        },
+        v4::{MapLogResource, ResourcesResponse as ResourcesResponseV4},
+    },
+    info::v1::AuthenticatedParticipantInfo,
+    registry::v3::{RegistryKind, RegistryListEntry},
+    stream::v2::{ReadFrom, StreamRequest, map::MapUpdate},
+};
 #[cfg(feature = "native_runtime")]
 pub use auki_registry::{
     ClockRegistryEntry, DetectorRegistryEntry, DeviceModelRegistryEntry, FrameRegistryEntry,
@@ -70,6 +76,13 @@ pub use domain::{
     map_catalog_of,
 };
 #[cfg(feature = "native_runtime")]
-pub use resource_catalog::ResourceCatalogProvider;
+pub use resource_catalog::{MapCatalogProvider, ResourceCatalogProvider};
+#[cfg(feature = "native_runtime")]
+pub use served_protocols::ServedProtocols;
 #[cfg(feature = "native_runtime")]
 pub use stream_manifest::{BuildStreamManifestError, StreamManifestBuilder};
+#[cfg(feature = "native_runtime")]
+pub use stream_runtime::{
+    SourceStream, StreamDispatch, StreamEntry, StreamError, StreamItem, StreamProvider,
+    StreamSubscription, decline_all_streams,
+};

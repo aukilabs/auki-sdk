@@ -5,15 +5,12 @@
 //! additionally round-trips the retained v0.2 codec.
 
 use auki_domain::Identity;
-use auki_network::{
-    protocol_ids::RESOURCES_V0_2_0,
-    resources_protocol::{
-        ResourcesRequest, ResourcesResponse, read_resources_request, read_resources_response,
-        write_resources_request, write_resources_response,
-    },
-};
 use auki_p2p::{
     P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_TTL, P2P_TOKEN_TYPE, P2PAccessClaims,
+};
+use auki_protocols::catalog::v2::{
+    ID as RESOURCES_V0_2_0, ResourcesRequest, ResourcesResponse, read_resources_request,
+    read_resources_response, write_resources_request, write_resources_response,
 };
 use futures::io::Cursor;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};

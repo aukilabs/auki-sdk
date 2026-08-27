@@ -33,10 +33,10 @@ impl Identity {
 
     /// Construct the canonical libp2p identity from a 32-byte Ed25519 seed.
     ///
-    /// This wallet-agnostic constructor is the compatibility seam for hosts
-    /// that derive a stable seed elsewhere. For example, `auki-network`
-    /// derives the seed from `Wallet::derive_child("peer/v1")` and passes only
-    /// the resulting 32 bytes here. The caller's buffer is not modified.
+    /// This wallet-agnostic constructor lets a host derive stable seed material
+    /// elsewhere. A wallet-based host can derive `Wallet::derive_child("peer/v1")`
+    /// and pass only the resulting 32 bytes here. The caller's buffer is not
+    /// modified.
     pub fn from_ed25519_seed(seed: &[u8; 32]) -> Self {
         let mut seed_copy = *seed;
         let secret = identity::ed25519::SecretKey::try_from_bytes(&mut seed_copy)

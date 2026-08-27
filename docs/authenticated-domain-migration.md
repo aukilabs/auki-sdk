@@ -6,10 +6,11 @@ change: there is no compatibility mode and no unauthenticated protocol
 fallback.
 
 Upgrade a communicating native Rust/Python group together. Stage 1 peers do not
-retry legacy protocol IDs, and the retained Swift/browser package lines cannot
-join this authenticated runtime until their later platform stages land. A
-rollback means restoring the prior SDK line for the whole communicating group,
-not enabling a per-peer compatibility switch.
+retry legacy protocol IDs. The old Manager-era Swift network and browser
+packages are deleted from HEAD and remain available only at source tag
+`v0.0.60`; they cannot join this authenticated runtime. A rollback means
+restoring that prior SDK line for the whole communicating group, not enabling a
+per-peer compatibility switch.
 
 ## Release and toolchain matrix
 
@@ -21,6 +22,7 @@ Stage 1 is the coordinated `0.1.0` native/Python line and has a Rust MSRV of
 |---|---|
 | SDK source | Git tag `v0.1.0` once the release gate is complete |
 | canonical transport crate | `auki-p2p==0.1.0` |
+| application wire-contract crate | `auki-protocols==0.1.0` in the coordinated source line |
 | Rust Domain | `auki-domain==0.1.0`, consumed from the coordinated Git tag for Stage 1 |
 | Python | `auki-domain-py==0.1.0` plus exact `auki-session-py==0.1.0` |
 | unsupported Swift/browser lines | source tag `v0.0.60` until their later stages |
@@ -40,10 +42,24 @@ does not imply that the tag or registry artifacts have already been published.
   storage.
 - `auki-session::Session` owns one recording timeline, its clocks, and logs.
 - `auki-domain::Domain` owns one native P2P node for one exact DDS Domain UUID.
+- `auki-protocols` owns exact application protocol IDs, wire types, bounded
+  framing, validation, and locked vectors; it owns no transport or handlers.
 - The host acquires DDS verification keys and a signed P2P credential, persists
   the P2P identity, selects listeners, and supplies explicit peer routes.
 - `auki-p2p` verifies the signed authority against the Noise Peer ID before any
   application bytes and operates direct or Circuit Relay v2 transport.
+
+Each Domain serves no built-in application protocols by default. The host must
+select every exact inbound version with `ServedProtocols`; client operations
+remain available regardless of that selection. Compiling an `auki-protocols`
+feature means the wire contract is available, not that a handler is installed.
+
+The configured key owner is always `auki_p2p::Identity`. Restore its canonical
+protobuf private-key encoding, or for a wallet-backed host pass the 32-byte seed
+from `Wallet::derive_child("peer/v1")` to
+`Identity::from_ed25519_seed`. Never generate a replacement as fallback for
+missing or invalid persistent state: it will have a different Peer ID and will
+not match the signed credential.
 
 The SDK does not call DDS or DMS HTTP. Route discovery and authorization are
 separate: a configured or discovered address is only a dial hint; a valid
@@ -54,6 +70,7 @@ same-Domain credential bound to the Noise Peer ID is authority.
 | Before | Stage 1 replacement |
 |---|---|
 | `ClusterManager`, `NetworkRuntime` | `auki_domain::Domain` |
+| `auki-network` runtime, identity adapters, and codecs | `auki-p2p::Identity` and transport; `auki-protocols` wire contracts; `auki-domain` hosting policy |
 | cluster create/join/bootstrap | `Domain::builder(&peer, &session, config).authority(keys, credential).join().await` |
 | `ClusterTarget` or Discovery URL | `DomainConfig::with_peer_routes(...)` initially; `domain.routes().replace(...)` at runtime |
 | Manager/leader identity | Removed; applications target an expected authenticated `PeerId` |
@@ -68,7 +85,7 @@ same-Domain credential bound to the Noise Peer ID is authority.
 Minimal construction shape:
 
 ```rust
-use auki_domain::{Domain, DomainConfig};
+use auki_domain::{Domain, DomainConfig, ServedProtocols};
 
 let config = DomainConfig::new(dds_domain_id, identity)
     .with_listen_addresses(listen_addresses)?
@@ -76,6 +93,7 @@ let config = DomainConfig::new(dds_domain_id, identity)
 
 let domain = Domain::builder(&peer, &session, config)
     .authority(dds_verification_keys, signed_p2p_credential)
+    .served_protocols(ServedProtocols::none().with_resources_v2())
     .join()
     .await?;
 
@@ -86,6 +104,8 @@ domain.leave().await?;
 
 The configured identity, `Peer`, `Session`, and signed credential must resolve
 to the same canonical Peer ID. A mismatch fails before the node becomes ready.
+Omit `served_protocols(...)` only for a client-only Domain that intentionally
+accepts no built-in inbound application protocol.
 
 ## Python breaking changes
 
@@ -102,6 +122,10 @@ The Python surface exposes authority rotation, routes, status, known peers,
 catalog/registry/blob operations, messages, and typed streams over the same Rust
 owner. See the [`auki-domain-py` guide](../bindings/python/auki-domain-py/README.md)
 for a complete join example.
+
+Python uses the same default-none rule. Call only the exact methods the
+application hosts, such as `builder.serve_resources_v2()` or
+`builder.serve_streams_v2()`, before `await builder.join()`.
 
 `auki-domain-py==0.1.0` requires the exactly paired
 `auki-session-py==0.1.0` wheel from the same SDK build. Their private native
@@ -165,11 +189,13 @@ produce `JOIN_FAILED` and no `CATALOG` output.
    ID and DDS Domain UUID.
 2. Move registry ownership to `Peer` and recording/log ownership to `Session`.
 3. Replace cluster bootstrap with `DomainBuilder` and host-supplied authority.
-4. Replace discovery or target objects with explicit exact-peer route updates.
-5. Replace membership/Manager policy with application policy over expected peer
+4. Select each exact inbound protocol version the application actually serves;
+   assume none are installed by default.
+5. Replace discovery or target objects with explicit exact-peer route updates.
+6. Replace membership/Manager policy with application policy over expected peer
    IDs; do not treat `known_peers()` as authorization.
-6. Replace heartbeat-derived time with explicit clock lineage and recorded
+7. Replace heartbeat-derived time with explicit clock lineage and recorded
    transforms.
-7. Await `Domain::leave()` (or Python `Domain.leave()`) on normal shutdown.
-8. Test wrong-peer, wrong-Domain, expired, and missing credentials: none may
+8. Await `Domain::leave()` (or Python `Domain.leave()`) on normal shutdown.
+9. Test wrong-peer, wrong-Domain, expired, and missing credentials: none may
    expose application data.

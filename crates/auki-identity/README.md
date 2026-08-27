@@ -1,6 +1,6 @@
 # auki-identity
 
-The SDK's identity primitive — ed25519 keypair, deterministic label-based child derivation, and signed creation certs. One wallet seed regenerates every derived key on a fresh machine: libp2p peer id (via `derive_child("peer/v1")`), per-Domain owner keys, signing keys, and so on. WASM-friendly.
+The SDK's wallet primitive — ed25519 keypair, deterministic label-based child derivation, and signed creation certs. One wallet seed regenerates every derived key on a fresh machine, including the seed a host passes from `derive_child("peer/v1")` to the canonical `auki_p2p::Identity`. WASM-friendly; this crate does not own a network runtime.
 
 **Status:** Shipped.
 

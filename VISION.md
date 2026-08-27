@@ -108,8 +108,8 @@ This repo is in early development. The crates here implement a foundational subs
 | [`auki-identity-py`](bindings/python/auki-identity-py) | ✓ PyO3 bindings for the identity primitives BoosterApp's Python sidecar consumes — `load_or_mint_seed`, `Wallet.from_seed/derive_child/peer_id/seed`, `app_instance.derive` |
 | [`auki-registry-py`](bindings/python/auki-registry-py) | ✓ PyO3 bindings for Python producers to declare and persist Sensor / Clock / Frame Registry entries. Dict constructors, canonical JSON/hash helpers, and hash-pinned `write_*` / `read_*` helpers mirror `auki-registry`, including exact `frame_id` + `frame_hash` validation for spatial sensors. |
 | [`auki-p2p`](crates/auki-p2p) | ✓ Canonical stable identity and the single native authenticated libp2p node: DDS Domain credentials, mutual authentication, explicit direct/relay routes, relay reservations, and peer observations. |
-| [`auki-network`](crates/auki-network) | ✓ Transport-neutral bounded codecs and plain types for `/auki/auth/1/...` info, resources, registries, blobs, messages, and typed streams. It owns no swarm or control plane. |
-| [`auki-domain`](crates/auki-domain) | ✓ Public owner for one Peer/Session in one exact DDS Domain UUID. `DomainBuilder` accepts host-supplied authority, listeners, and routes; `Domain` exposes authenticated peers, catalogs, registries, blobs, messages, streams, and ordered leave. |
+| [`auki-protocols`](crates/auki-protocols) | ✓ Exact `/auki/auth/1/...` IDs, bounded codecs, validation, locked vectors, and transport-neutral wire types. Protocol families are compile-time opt-in; the crate owns no runtime. |
+| [`auki-domain`](crates/auki-domain) | ✓ Public owner for one Peer/Session in one exact DDS Domain UUID. `DomainBuilder` accepts host-supplied authority, listeners, routes, and exact-version `ServedProtocols`; the default serves none. `Domain` exposes authenticated peers, catalogs, registries, blobs, messages, streams, and ordered leave. |
 | [`auki-domain-relay`](crates/auki-domain-relay) | WIP standalone native/WebSocket Circuit Relay v2 server. Domain authority and route distribution remain outside the relay. |
 | `auki-network-py` | Removed Manager-era networking binding; superseded by `auki-domain-py`. |
 | [`auki-domain-py`](bindings/python/auki-domain-py) | ✓ Authenticated Python facade over the same bounded `Domain` owner as native Rust. |
@@ -193,8 +193,8 @@ The on-device library, organized as a Cargo workspace. Each crate is independent
 | [`auki-layout`](crates/auki-layout) | `registries_root`, `sensor_entry_path`, `clock_entry_path`, `frame_entry_path`, `session_root`, `timetransform_log_path`, `sensorlog_path`, `poselog_path`, `detection_log_path`, `id_to_segment` |
 | [`auki-time`](crates/auki-time) | `SessionClock`, pure affine `TimeTransform` math, `Clock` (trait), `SystemClock`, `Sampler`, `tick(...)`, plus re-exports `TimeTransformEntry` (from `auki-datatypes`) and `TimeTransformSource` (from `auki-manifests`). It owns no heartbeat synchronization or Domain clock. |
 | [`auki-p2p`](crates/auki-p2p) | `Identity`, `Node`, `DomainAuthority`, `DdsVerificationKeys`, `SignedP2pCredential`, authenticated protocol and route types, relay reservations, and `NodeObservations`. |
-| [`auki-network`](crates/auki-network) | `Identity` compatibility helpers, `ReachabilityRecord`, `Capability`, authenticated `protocol_ids`, bounded codec modules, and transport-neutral stream types. Constant `PEER_DERIVATION_LABEL = "peer/v1"`. |
-| [`auki-domain`](crates/auki-domain) | `DomainBuilder`, `DomainConfig`, `Domain`, authority/routes/status/known-peer handles, `ResourceCatalogProvider`, retained catalog/registry/blob/message/stream operations, and bounded ordered leave. |
+| [`auki-protocols`](crates/auki-protocols) | Exact protocol IDs and versioned modules such as `catalog::v2`, `catalog::v3`, `catalog::v4`, and `stream::v2`; bounded framing and validation; no transport or hosting lifecycle. |
+| [`auki-domain`](crates/auki-domain) | `DomainBuilder`, `DomainConfig`, `Domain`, `ServedProtocols`, authority/routes/status/known-peer handles, `ResourceCatalogProvider`, catalog/registry/blob/message/stream operations, and bounded ordered leave. |
 | [`auki-domain-relay`](crates/auki-domain-relay) | `DomainRelay`, `DomainRelayConfig`, `DomainRelayEvent`, `DomainRelayError`. |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ROS2 message structs (`StampMsg`, `CameraInfoMsg`, `ImageMsg`, `PointCloud2Msg`, `PointFieldMsg`); builders (`build_camera_registry_entry`, `build_sensor_log_entry`, `build_point_cloud_registry_entry`, `build_point_cloud_log_entry`); `CameraSubscriber` / `PointCloudSubscriber` traits + mocks; `r2r_subscriber` module |
 
@@ -208,9 +208,12 @@ PyO3 wrappers shipped as separate crates, one per Rust component. The pattern is
 
 ```python
 import auki_identity
+import auki_domain
 seed   = auki_identity.load_or_mint_seed(path)        # bytes
 wallet = auki_identity.Wallet.from_seed(seed)
-peer_id = wallet.derive_child("peer/v1").peer_id()    # libp2p PeerId string
+peer = wallet.derive_child("peer/v1")
+identity = auki_domain.Identity.from_ed25519_seed(peer.seed())
+peer_id = identity.peer_id                            # libp2p PeerId string
 mac_id  = auki_identity.app_instance.derive()         # MAC-derived per-machine ID
 ```
 
@@ -257,6 +260,11 @@ For peer-to-peer participation. Not REST-shaped, but they are public protocols t
 | `/auki/auth/1/message/0.1.0` | Receiver-owned live message channels with sequence ACKs. |
 | `/auki/auth/1/stream/0.2.0` | Typed live streams bound to the expected authenticated producer. |
 
+`auki-protocols` owns these exact wire contracts. Compiling a family does not
+serve it: each `Domain` starts with `ServedProtocols::none()` and the host opts
+in to every exact inbound version it implements. Client operations remain
+available independently.
+
 Rust and Python consumers use retained operations on the same native
 `auki_domain::Domain` owner.
 
@@ -267,8 +275,9 @@ Rust and Python consumers use retained operations on the same native
 A native daemon joins one exact DDS Domain UUID through `DomainBuilder`. The
 host supplies a stable identity, signed Domain credential, verification keys,
 listeners, and explicit route candidates. `Domain` owns exactly one
-`auki-p2p` node and all registered application protocol tasks. Routes describe
-reachability only; the signed token plus Noise Peer ID is the authority.
+`auki-p2p` node and only the application protocol tasks selected through
+`ServedProtocols`. Routes describe reachability only; the signed token plus
+Noise Peer ID is the authority.
 
 The main live paths are:
 
@@ -308,7 +317,12 @@ use auki_session::{FrameDef, HeadSpec, Peer, SensorLogSpec};
 
 let seed = auki_identity::load_or_mint_seed(&seed_path)?;
 let wallet = auki_identity::Wallet::from_seed(seed.to_vec())?;
-let identity = auki_network::identity_from_wallet(&wallet);
+let peer_seed: [u8; 32] = wallet
+    .derive_child("peer/v1")
+    .seed()
+    .try_into()
+    .expect("Wallet seeds are always 32 bytes");
+let identity = auki_p2p::Identity::from_ed25519_seed(&peer_seed);
 
 let peer = Peer::new(identity.peer_id().to_string(), "galbot-ctrl")
     .with_storage_root("/data/auki/galbot-01".into());
@@ -362,14 +376,14 @@ Critical wire-format and derivation chains are pinned by **locked test vectors**
 | [`auki-hash`](crates/auki-hash) | `tests::locked_*` (existing) | XXH3-128 byte vectors (used for content-addressed registry hashes) |
 | [`auki-identity`](crates/auki-identity) | `tests::locked_derive_child_peer_v1_pubkey_vector` | `Wallet::from_seed([3u8; 32]).derive_child("peer/v1").public_key()` → 32-byte ed25519 pubkey |
 | [`auki-identity`](crates/auki-identity) | `tests::locked_sign_canonical_json_vector` | `Wallet::from_seed([3u8; 32]).sign_canonical_json(<Vinland-shaped registration>)` → exact RFC 8785 canonical bytes + 64-byte ed25519 signature |
-| [`auki-network`](crates/auki-network) | `tests::locked_seed_to_peer_id_vector` | `PeerIdentity::from_wallet(Wallet::from_seed([3u8; 32])).peer_id()` → canonical `12D3KooW…` libp2p PeerId string |
-| [`auki-network`](crates/auki-network) | `stream_protocol::tests::camera_frame_serializes_to_locked_wire_bytes` | `CameraFrame { dynamic_intrinsics: None, frame: <10-byte JFIF prefix> }` → exact prost wire bytes (`120a` tag/length prefix + payload) |
-| [`auki-network`](crates/auki-network) | `stream_protocol::tests::point_cloud_data_serializes_to_locked_wire_bytes` | `point_cloud::Data { data: <8-byte fixture> }` → exact prost wire bytes for the shared disk/wire point-cloud payload |
-| [`auki-network`](crates/auki-network) | `stream_protocol::tests::locked_stream_message_entry_with_point_cloud_payload` | Full envelope: `StreamMessage::Entry { timestamp_ns, seq, payload: <prost-encoded point_cloud::Data> }` → exact prost-encoded bytes. Park's browser-side decoder + cross-language reimplementations pin against this. |
+| [`auki-identity-py`](bindings/python/auki-identity-py) | `tests::locked_peer_id_vector` | `Wallet.from_seed(b"\x03" * 32).derive_child("peer/v1").peer_id()` → the canonical `auki-p2p::Identity` Peer ID string |
+| [`auki-protocols`](crates/auki-protocols) | `stream::v2::tests::camera_frame_serializes_to_locked_wire_bytes` | `CameraFrame { dynamic_intrinsics: None, frame: <10-byte JFIF prefix> }` → exact prost wire bytes (`120a` tag/length prefix + payload) |
+| [`auki-protocols`](crates/auki-protocols) | `stream::v2::tests::point_cloud_data_serializes_to_locked_wire_bytes` | `point_cloud::Data { data: <8-byte fixture> }` → exact prost wire bytes for the shared disk/wire point-cloud payload |
+| [`auki-protocols`](crates/auki-protocols) | `stream::v2::tests::locked_stream_message_entry_with_point_cloud_payload` | Full envelope: `StreamMessage::Entry { timestamp_ns, seq, payload: <prost-encoded point_cloud::Data> }` → exact prost-encoded bytes. Browser-side decoders and cross-language reimplementations pin against this. |
 | [`auki-registry`](crates/auki-registry) | `tests::frame_entry_serializes_to_canonical_bytes_matching_locked_vector` | `FrameRegistryEntry::ros_body("K1-AABBCCDDEEFF/base_link")` → `{"axes":{"x":"forward","y":"left","z":"up"},...}` JSON + XXH3-128 `fd0dc3789e898b71b5e16ee122a81a44` |
 
-The identity adapter plus `auki-p2p::Identity` pin the `Wallet -> libp2p PeerId`
-derivation used by authenticated Domains. The stream vectors pin wire shapes
+The wallet-child vector plus `auki-p2p::Identity::from_ed25519_seed` pin the
+`Wallet -> libp2p PeerId` derivation used by authenticated Domains. The stream vectors pin wire shapes
 that cross language boundaries to browser and other consumers. The Frame
 Registry vector pins convention names so every reader parses `"forward"` /
 `"left"` / `"up"` byte-identically.

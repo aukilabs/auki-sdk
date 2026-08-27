@@ -12,9 +12,9 @@ description = "Authenticated Domain lifecycle and retained Auki application prot
 default = ["native_runtime"]
 native_runtime = [
     "dep:auki-p2p",
+    "dep:auki-protocols",
     "dep:auki-datatypes",
     "dep:auki-hash",
-    "auki-network/protocol-codecs",
     "dep:auki-registry",
     "dep:auki-session",
     "dep:prost",
@@ -31,7 +31,14 @@ native_runtime = [
 auki-p2p = { path = "../auki-p2p", optional = true }
 auki-datatypes = { path = "../auki-datatypes", optional = true }
 auki-hash = { path = "../auki-hash", optional = true }
-auki-network = { path = "../auki-network", default-features = false }
+auki-protocols = { path = "../auki-protocols", optional = true, features = [
+    "blob",
+    "catalog",
+    "info",
+    "message",
+    "registry",
+    "stream",
+] }
 auki-registry = { path = "../auki-registry", optional = true }
 # `Domain` composes a `&Peer` + `&Session` from auki-session and serves their
 # retained application protocols; the dependency points domain → session.

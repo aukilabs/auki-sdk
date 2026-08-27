@@ -10,7 +10,7 @@ Shipped in SDK #216 (2026-05-27) as a `Session`-centric API; split into `Peer` /
 
 ### Peer — long-lived identity + registries
 
-- `Peer::new(peer_id, app_id)` — `peer_id` is the libp2p peer-id string the app derived from its wallet (`PeerIdentity::from_wallet(...)`). The peer outlives any one session.
+- `Peer::new(peer_id, app_id)` — `peer_id` is the libp2p peer-id string from the host's canonical `auki_p2p::Identity`. The peer outlives any one session.
 - `Peer::with_storage_root(root)` — take-by-value builder; sets the disk root for registry and log files.
 - `Peer::set_storage_root(&self, root)` — in-place equivalent for FFI / binding wrappers that can't express take-by-value builders (PyO3, UniFFI).
 - `Peer::peer_id()`, `app_id()`, `storage_root()` — read accessors.
@@ -64,7 +64,7 @@ let registered = RegisteredCameraDetector::register(
 let task = registered.start(&session, instance, &sensor_log)?;
 ```
 
-`DetectorTask::start(detector, camera, input, output)` is the detector-agnostic recorded/local runner. It tails an open Camera Sensor Log in order and does not drop accepted samples. `StreamingDetectorTask::start(detector, camera, binding, frames, output)` consumes any asynchronous stream of `CameraFrameSample` values, including a remote `auki-network` subscription mapped by the application. Both paths use the same cadence/provenance/output pipeline: they apply the Detection Log's `EveryFrame` or timestamp-based `Periodic` cadence, invoke the detector, stamp results with the exact input sensor hash, and append them to the Detection Log.
+`DetectorTask::start(detector, camera, input, output)` is the detector-agnostic recorded/local runner. It tails an open Camera Sensor Log in order and does not drop accepted samples. `StreamingDetectorTask::start(detector, camera, binding, frames, output)` consumes any asynchronous stream of `CameraFrameSample` values, including a remote `auki-domain` subscription mapped by the application. Both paths use the same cadence/provenance/output pipeline: they apply the Detection Log's `EveryFrame` or timestamp-based `Periodic` cadence, invoke the detector, stamp results with the exact input sensor hash, and append them to the Detection Log.
 
 The live streaming runner keeps ingestion on Tokio and runs the synchronous detector plus Detection Log writes on a dedicated blocking worker. It retains one pending frame: when the detector is slower than the stream, a newer frame replaces the stale pending frame and `dropped_frames()` reports the replacement. This latest-wins policy bounds latency and memory without blocking unrelated SDK networking and control-plane tasks. `DetectorTask` deliberately retains exhaustive replay semantics.
 
@@ -94,4 +94,4 @@ Log spec types (`SensorLogSpec`, `PoseLogSpec`, `TimeTransformLogSpec`, `Detecti
 - [`auki-logs`](../auki-logs) + [`auki-datatypes`](../auki-datatypes) — log primitive + payload types (`SpatialTransform` stub return type).
 - [`auki-identity`](../auki-identity), [`auki-time`](../auki-time), [`auki-hash`](../auki-hash), [`auki-jcs`](../auki-jcs).
 
-Deliberately **not** here: `auki-network` and `auki-domain`. The dependency points the other way — `auki-domain` consumes `Peer::registries()` + `Session::logs()` through its catalog bridge (#282 dependency inversion).
+Deliberately **not** here: `auki-protocols` and `auki-domain`. The dependency points the other way — `auki-domain` consumes `Peer::registries()` + `Session::logs()` through its catalog bridge (#282 dependency inversion).

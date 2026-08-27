@@ -14,20 +14,19 @@ use auki_domain::{
     Domain, DomainBuilder, DomainConfig, DomainRoutesError, DomainStatus, Identity, KnownPeer,
     KnownPeerEvent, KnownPeerSubscription, MapCatalogProvider, MapLogResource,
     MessageChannelResource, Multiaddr, PeerId, ReadFrom, ResourceCatalogProvider, ResourcesRequest,
-    ResourcesRequestV3, SignedP2pCredential, StreamRequest,
-};
-use auki_network::{
-    protocol_ids::RESOURCES_V0_2_0,
-    resources_protocol::{
-        Available, Head, ResourceEntry, SensorBlock, SensorKind, SensorManifestPointer,
-        VariantContent,
-    },
-    stream_protocol::CameraFrame,
+    ResourcesRequestV3, ServedProtocols, SignedP2pCredential, StreamRequest,
 };
 use auki_p2p::{
     ApplicationProtocol, DdsTokenVerifier, DdsVerificationKeys, Node, P2P_TOKEN_AUDIENCE,
     P2P_TOKEN_ISSUER, P2P_TOKEN_TTL, P2P_TOKEN_TYPE, P2PAccessClaims, SessionRequirements,
     SignedApplicationMetadata,
+};
+use auki_protocols::{
+    catalog::v2::{
+        Available, Head, ID as RESOURCES_V0_2_0, ResourceEntry, SensorBlock, SensorKind,
+        SensorManifestPointer, VariantContent,
+    },
+    stream::v2::CameraFrame,
 };
 use auki_registry::RegistryRef;
 use auki_session::Peer;
@@ -259,6 +258,27 @@ async fn join_domain(
     initial_route: Option<(PeerId, Multiaddr)>,
     provider: Option<Arc<dyn ResourceCatalogProvider>>,
 ) -> (Domain, TempDir) {
+    join_domain_with_protocols(
+        domain_id,
+        identity,
+        issued_at,
+        listen,
+        initial_route,
+        provider,
+        ServedProtocols::none().with_resources_v2(),
+    )
+    .await
+}
+
+async fn join_domain_with_protocols(
+    domain_id: Uuid,
+    identity: Identity,
+    issued_at: u64,
+    listen: bool,
+    initial_route: Option<(PeerId, Multiaddr)>,
+    provider: Option<Arc<dyn ResourceCatalogProvider>>,
+    served_protocols: ServedProtocols,
+) -> (Domain, TempDir) {
     let root = tempfile::tempdir().unwrap();
     let peer = Peer::new(identity.peer_id().to_string(), "public-domain-test")
         .with_storage_root(root.path().to_path_buf());
@@ -271,7 +291,8 @@ async fn join_domain(
         config = config.with_peer_routes(expected_peer, [route]).unwrap();
     }
     let mut builder = DomainBuilder::new(&peer, &session, config)
-        .authority(keys(), credential(identity.peer_id(), domain_id, issued_at));
+        .authority(keys(), credential(identity.peer_id(), domain_id, issued_at))
+        .served_protocols(served_protocols);
     if let Some(provider) = provider {
         builder = builder.resource_catalog_provider(provider);
     }
@@ -344,19 +365,20 @@ async fn shared_auth_vectors_gate_public_domain_join() {
             )
             .with_storage_root(app_root.path().to_path_buf());
             let session = peer.start_session().unwrap();
-            let result = Domain::join(
+            let result = Domain::builder(
                 &peer,
                 &session,
                 DomainConfig::new(domain_id, local_identity),
-                keys(),
-                credential,
             )
+            .authority(keys(), credential)
+            .join()
             .await;
 
             match (case.expected_join, result) {
                 (ExpectedJoin::Ready, Ok(domain)) => {
                     ready += 1;
                     assert_eq!(domain.status(), DomainStatus::Ready, "{}", case.name);
+                    assert!(domain.served_protocol_ids().is_empty(), "{}", case.name);
                     let status = domain.subscribe_status();
                     domain.leave().await.unwrap();
                     assert_eq!(*status.borrow(), DomainStatus::Stopped, "{}", case.name);
@@ -386,6 +408,71 @@ async fn shared_auth_vectors_gate_public_domain_join() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn client_use_and_provider_configuration_do_not_implicitly_serve() {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        let domain_id = Uuid::new_v4();
+        let issued_at = unix_time();
+
+        let server_identity = identity(211);
+        let server_peer = server_identity.peer_id();
+        let server_calls = Arc::new(AtomicUsize::new(0));
+        let server_row = resource(server_peer, "selected-server-camera");
+        let (server, _server_root) = join_domain_with_protocols(
+            domain_id,
+            server_identity,
+            issued_at,
+            true,
+            None,
+            Some(Arc::new(CountingCatalog {
+                rows: vec![server_row.clone()],
+                calls: Arc::clone(&server_calls),
+            })),
+            ServedProtocols::none().with_resources_v2(),
+        )
+        .await;
+        let server_address = server.listen_addresses()[0].clone();
+
+        let client_identity = identity(212);
+        let client_peer = client_identity.peer_id();
+        let client_calls = Arc::new(AtomicUsize::new(0));
+        let (client, _client_root) = join_domain_with_protocols(
+            domain_id,
+            client_identity,
+            issued_at,
+            true,
+            Some((server_peer, server_address)),
+            Some(Arc::new(CountingCatalog {
+                rows: vec![resource(client_peer, "configured-but-unserved-camera")],
+                calls: Arc::clone(&client_calls),
+            })),
+            ServedProtocols::none(),
+        )
+        .await;
+        assert!(client.served_protocol_ids().is_empty());
+
+        let response = client.fetch_resources_catalog(server_peer).await.unwrap();
+        assert_eq!(response.resources, [server_row]);
+        assert_eq!(server_calls.load(Ordering::SeqCst), 1);
+
+        server
+            .routes()
+            .replace(client_peer, [client.listen_addresses()[0].clone()])
+            .unwrap();
+        assert!(server.fetch_resources_catalog(client_peer).await.is_err());
+        assert_eq!(
+            client_calls.load(Ordering::SeqCst),
+            0,
+            "configuring a provider must not mount its protocol"
+        );
+
+        client.leave().await.unwrap();
+        server.leave().await.unwrap();
+    })
+    .await
+    .expect("client-only serving proof must remain bounded");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn public_domain_d16_vertical_slice_is_authenticated_and_owned() {
     tokio::time::timeout(TEST_BOUND, async {
         let domain_id = Uuid::new_v4();
@@ -407,6 +494,7 @@ async fn public_domain_d16_vertical_slice_is_authenticated_and_owned() {
             })),
         )
         .await;
+        assert_eq!(a.served_protocol_ids(), [RESOURCES_V0_2_0]);
         let a_address = a.listen_addresses()[0].clone();
         let a_port = tcp_port(&a_address);
 
@@ -426,6 +514,7 @@ async fn public_domain_d16_vertical_slice_is_authenticated_and_owned() {
             })),
         )
         .await;
+        assert_eq!(b.served_protocol_ids(), [RESOURCES_V0_2_0]);
         let b_address = b.listen_addresses()[0].clone();
         let b_port = tcp_port(&b_address);
         a.routes().replace(b_peer, [b_address]).unwrap();

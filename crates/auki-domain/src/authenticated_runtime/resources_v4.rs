@@ -1,17 +1,16 @@
 use std::{sync::Arc, time::Duration};
 
-use auki_network::{
-    protocol_ids::RESOURCES_V0_4_0,
-    resources_v4_protocol::{
-        MAX_RESOURCES_FRAME_BYTES, MapCatalogProvider, ResourcesProtocolError, ResourcesRequest,
-        ResourcesResponse, read_resources_request, read_resources_response,
-        write_resources_request, write_resources_response,
-    },
-};
 use auki_p2p::PeerId;
+use auki_protocols::catalog::v4::{
+    ID as RESOURCES_V0_4_0, MAX_RESOURCES_FRAME_BYTES, ResourcesProtocolError, ResourcesRequest,
+    ResourcesResponse, read_resources_request, read_resources_response, write_resources_request,
+    write_resources_response,
+};
 use parking_lot::Mutex;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
+
+use crate::resource_catalog::MapCatalogProvider;
 
 use super::protocols::{
     DomainProtocolError, DomainProtocolRegistration, DomainProtocolSpec, DomainProtocolStream,

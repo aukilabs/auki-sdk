@@ -11,7 +11,7 @@ description = "Manual direct-TCP proof for one authenticated Auki Domain."
 [dependencies]
 anyhow = { workspace = true }
 auki-domain = { path = "../../crates/auki-domain" }
-auki-network = { path = "../../crates/auki-network", features = ["protocol-codecs"] }
+auki-protocols = { path = "../../crates/auki-protocols", features = ["catalog"] }
 auki-p2p = { path = "../../crates/auki-p2p" }
 auki-registry = { path = "../../crates/auki-registry" }
 auki-session = { path = "../../crates/auki-session" }

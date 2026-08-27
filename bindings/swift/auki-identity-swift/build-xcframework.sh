@@ -9,12 +9,6 @@
 # package level while the xcframework Headers stay clean (FFI header +
 # modulemap only).
 #
-# Same TLS-backend story as auki-network-swift PR #152: rustls `ring`
-# 0.17 has first-class iOS cross-compile support so no CC/SDK env
-# intervention is required. PR A doesn't pull swarm/libp2p so no
-# SystemConfiguration.framework consumer-link concern applies here yet
-# (it lands when PR B's network expansion brings the swarm feature in).
-#
 # Prereqs:
 #   rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 set -euo pipefail

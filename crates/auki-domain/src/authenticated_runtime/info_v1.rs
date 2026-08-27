@@ -1,14 +1,11 @@
 use std::{sync::Arc, time::Duration};
 
-use auki_network::{
-    info_protocol::{
-        AuthenticatedParticipantInfo, InfoProtocolError, MAX_INFO_FRAME_BYTES,
-        read_authenticated_info_response, read_info_request, write_authenticated_info_response,
-        write_info_request,
-    },
-    protocol_ids::INFO_V1_0_0,
-};
 use auki_p2p::PeerId;
+use auki_protocols::info::v1::{
+    AuthenticatedParticipantInfo, ID as INFO_V1_0_0, InfoProtocolError, MAX_INFO_FRAME_BYTES,
+    read_authenticated_info_response, read_info_request, write_authenticated_info_response,
+    write_info_request,
+};
 use parking_lot::Mutex;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;

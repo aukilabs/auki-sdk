@@ -8,16 +8,15 @@ use std::{
 };
 
 use auki_datatypes::message::Message;
-use auki_network::{
-    message_codec::{
-        MAX_MESSAGE_FRAME_BYTES, MessageProtocolError, decode_message_frame, read_ack_frame,
-        read_frame_body, read_frame_length, read_open_response, write_ack_frame,
+use auki_p2p::PeerId;
+use auki_protocols::{
+    catalog::v3::{MessageChannelResource, ResourcesProtocolError},
+    message::v1::{
+        ID as MESSAGE_V0_1_0, MAX_MESSAGE_FRAME_BYTES, MessageProtocolError, decode_message_frame,
+        read_ack_frame, read_frame_body, read_frame_length, read_open_response, write_ack_frame,
         write_message_frame, write_open_frame, write_open_response,
     },
-    protocol_ids::MESSAGE_V0_1_0,
-    resources_v3_protocol::{MessageChannelResource, ResourcesProtocolError},
 };
-use auki_p2p::PeerId;
 use futures::{AsyncRead, AsyncWrite};
 use parking_lot::Mutex;
 use tokio::sync::{Semaphore, mpsc, oneshot};
@@ -645,7 +644,7 @@ where
         result = read_frame_body(&mut stream, open_frame_len) => result?,
     };
     let (owner_peer_id, resource_id, expected_clock) =
-        auki_network::message_codec::decode_open_frame(&open_payload)?;
+        auki_protocols::message::v1::decode_open_frame(&open_payload)?;
     drop(open_frame_memory);
 
     let Some(endpoint) = router.lookup_exact(owner_peer_id, &resource_id, &expected_clock) else {

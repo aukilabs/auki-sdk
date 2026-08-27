@@ -15,7 +15,7 @@ members = [
     "crates/auki-manifests",
     "bindings/python/auki-manifests-py",
     "crates/auki-p2p",
-    "crates/auki-network",
+    "crates/auki-protocols",
     "crates/auki-domain-relay",
     "bindings/swift/auki-identity-swift",
     "crates/auki-datatypes",

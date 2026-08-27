@@ -1,5 +1,5 @@
 use auki_domain::{PeerId, ResourceCatalogProvider};
-use auki_network::resources_protocol::{
+use auki_protocols::catalog::v2::{
     Available, Head, ResourceEntry, SensorBlock, SensorKind, SensorManifestPointer, VariantContent,
 };
 use auki_registry::RegistryRef;

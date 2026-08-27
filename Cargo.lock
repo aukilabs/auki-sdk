@@ -296,8 +296,8 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "auki-domain",
- "auki-network",
  "auki-p2p",
+ "auki-protocols",
  "auki-registry",
  "auki-session",
  "clap",
@@ -317,8 +317,8 @@ dependencies = [
  "auki-hash",
  "auki-layout",
  "auki-manifests",
- "auki-network",
  "auki-p2p",
+ "auki-protocols",
  "auki-registry",
  "auki-session",
  "chrono",
@@ -346,8 +346,8 @@ dependencies = [
  "auki-datatypes",
  "auki-domain",
  "auki-logs",
- "auki-network",
  "auki-p2p",
+ "auki-protocols",
  "auki-registry",
  "auki-session",
  "futures",
@@ -411,6 +411,7 @@ dependencies = [
  "auki-hash",
  "auki-jcs",
  "ed25519-dalek",
+ "mac_address",
  "rand_core 0.6.4",
  "serde",
  "serde_bytes",
@@ -425,7 +426,7 @@ name = "auki-identity-py"
 version = "0.0.0"
 dependencies = [
  "auki-identity",
- "auki-network",
+ "auki-p2p",
  "pyo3",
  "tempfile",
 ]
@@ -435,7 +436,6 @@ name = "auki-identity-swift"
 version = "0.0.0"
 dependencies = [
  "auki-identity",
- "auki-network",
  "uniffi",
 ]
 
@@ -509,8 +509,9 @@ name = "auki-mappers"
 version = "0.0.0"
 dependencies = [
  "auki-datatypes",
+ "auki-domain",
  "auki-manifests",
- "auki-network",
+ "auki-protocols",
  "auki-registry",
  "auki-session",
  "futures",
@@ -542,29 +543,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "auki-network"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "auki-datatypes",
- "auki-identity",
- "auki-jcs",
- "auki-manifests",
- "auki-p2p",
- "auki-registry",
- "futures",
- "libp2p-identity",
- "mac_address",
- "multiaddr",
- "prost",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "uniffi",
-]
-
-[[package]]
 name = "auki-p2p"
 version = "0.1.0"
 dependencies = [
@@ -583,6 +561,24 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "auki-protocols"
+version = "0.1.0"
+dependencies = [
+ "auki-datatypes",
+ "auki-jcs",
+ "auki-manifests",
+ "auki-p2p",
+ "auki-registry",
+ "futures",
+ "libp2p-identity",
+ "prost",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

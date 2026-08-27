@@ -19,15 +19,16 @@ The Auki SDK handles shared distributed-system and spatial machinery for an appl
 
 Current native app layering:
 
-- Stable identity: `auki_identity` loads or reconstructs wallet seed material; `auki_network::identity_from_wallet` constructs the canonical `auki_p2p::Identity` used by libp2p and DDS proofs.
+- Stable identity: `auki_identity` loads or reconstructs wallet seed material; a wallet-backed host passes the 32-byte seed from `Wallet::derive_child("peer/v1")` to `auki_p2p::Identity::from_ed25519_seed`. That `Identity` is the canonical key owner used by libp2p and DDS proofs.
 - `auki_session::Peer`: long-lived peer identity + app identity + storage root + peer-level registries for sensors, frames, and detectors.
 - `auki_session::Session`: one run / timeline born from `Peer::start_session()`. It owns the fresh `session_id`, the session clock registry, the auto-minted monotonic + UTC clocks, and live logs.
-- `auki_domain::Domain`: authenticated network presence for one `Peer` + `Session` in one exact DDS Domain UUID. It owns one P2P node, serves retained protocols, and leaves with an owned cleanup barrier.
+- `auki_protocols`: exact authenticated protocol IDs, versioned wire types, bounded framing, validation, and locked vectors. It owns no runtime or handlers.
+- `auki_domain::Domain`: authenticated network presence for one `Peer` + `Session` in one exact DDS Domain UUID. It owns one P2P node, serves only the exact versions selected through default-none `ServedProtocols`, and leaves with an owned cleanup barrier.
 
 Use the SDK for:
 
 - Stable peer identity: seed loading/minting, wallet reconstruction, peer identity derivation, and representing the app in the Auki network.
-- Peer/session lifecycle: `Peer::new(...)`, peer-level registry registration, `Peer::start_session()`, session clocks/logs, and `Domain::join(...)`.
+- Peer/session lifecycle: `Peer::new(...)`, peer-level registry registration, `Peer::start_session()`, session clocks/logs, and `Domain::builder(...).join()`.
 - Authenticated Domain lifecycle: installing host-fetched DDS authority, joining/leaving one Domain, reconnecting over explicit routes, and observing currently authenticated peers.
 - Live resource discovery: reading what an expected authenticated peer currently offers through `/auki/auth/1/resources/0.2.0` (and retained catalog versions).
 - Registries: content-addressed metadata for sensors, frames, clocks, payloads, and typed resources.
@@ -36,6 +37,7 @@ Use the SDK for:
 - Clocks and timestamps: declaring clock metadata and interpreting stream timestamps consistently.
 - `auki-geometry`: coordinate frames, frame conventions, convention conversion, pose/transform composition, transform inversion, and spatial payload interpretation.
 - Protocol compatibility: relying on SDK protocol versions and bindings rather than copying protocol details into app code.
+- Inbound protocol policy: selecting each exact version the application really hosts. Compiling an `auki_protocols` feature or calling a client method does not install an inbound handler.
 
 The app is responsible for:
 
@@ -59,14 +61,20 @@ For a native app using the current split API, the startup order is:
 3. Register peer-level metadata on the `Peer`.
 4. Start a `Session` from the `Peer`.
 5. Register session logs on the `Session`.
-6. Join a `Domain` only when network presence/catalog serving is needed.
+6. Join a `Domain` only when network presence is needed; explicitly select each
+   exact inbound protocol version the app serves.
 
 Rust shape:
 
 ```rust
 let seed = auki_identity::load_or_mint_seed(&identity_seed_path)?;
 let wallet = auki_identity::Wallet::from_seed(seed.to_vec())?;
-let identity = auki_network::identity_from_wallet(&wallet);
+let peer_seed: [u8; 32] = wallet
+    .derive_child("peer/v1")
+    .seed()
+    .try_into()
+    .expect("Wallet seeds are always 32 bytes");
+let identity = auki_p2p::Identity::from_ed25519_seed(&peer_seed);
 let peer_id = identity.peer_id().to_string();
 
 let peer = auki_session::Peer::new(peer_id, app_id)
@@ -96,16 +104,24 @@ let rows = auki_domain::catalog_of(&peer, &session);
 
 let config = auki_domain::DomainConfig::new(dds_domain_id, identity)
     .with_listen_addresses(listen_addresses)?;
-let domain = auki_domain::Domain::join(
-    &peer,
-    &session,
-    config,
-    dds_verification_keys,
-    signed_p2p_credential,
-).await?;
+let domain = auki_domain::Domain::builder(&peer, &session, config)
+    .authority(dds_verification_keys, signed_p2p_credential)
+    .served_protocols(auki_domain::ServedProtocols::none().with_resources_v2())
+    .join()
+    .await?;
 let served_rows = domain.catalog()?;
 domain.leave().await?;
 ```
+
+Omit `served_protocols(...)` only for a client-only Domain that intentionally
+accepts no built-in inbound application protocols. In Python, call the matching
+exact methods such as `builder.serve_resources_v2()` and
+`builder.serve_streams_v2()` before `await builder.join()`.
+
+The current `auki-identity-swift` binding exposes `Wallet` only. The removed
+Manager-era Swift network and browser packages exist only at the prior
+`v0.0.60` tag and cannot join the authenticated Stage 1 runtime. Browser
+support requires a future external authenticated-engine migration.
 
 When docs, READMEs, examples, and exports disagree, prefer the current package exports, source-level public API, and tests for the SDK version being used.
 
@@ -138,6 +154,7 @@ Stop and inspect the SDK before writing code that implements any of these locall
 - A custom resource catalog or resource polling contract.
 - A local registry or content-addressed hash format.
 - A stream protocol, stream request envelope, stream accept path, or stream error path.
+- Assuming a Domain serves a protocol merely because its wire types or client method are available.
 - A custom payload wrapper for SDK transport.
 - A clock model or timestamp normalization layer.
 - Coordinate-frame convention conversion.
@@ -153,7 +170,7 @@ Treat the SDK resource catalog as the source of truth for what a peer can curren
 - Register frames, sensors, and detectors on `auki_session::Peer`.
 - Start a `Session` from the peer; the SDK mints `session_id` and registers monotonic + UTC session clocks.
 - Register extra clocks and owned logs on `auki_session::Session`.
-- Build/serve catalog rows through `auki_domain::catalog_of(&peer, &session)` or `Domain::join(...)`, not through app-owned catalog builders.
+- Build catalog rows through `auki_domain::catalog_of(&peer, &session)` and serve them through a `DomainBuilder` that explicitly selects the matching catalog version, not through app-owned catalog builders.
 - Use SDK resource APIs to discover sensors, streams, pose resources, and other capabilities.
 - Use resource IDs as stable handles for requestable resources.
 - Use registry references and hashes to fetch immutable metadata instead of embedding guessed schemas in app code.
@@ -246,6 +263,7 @@ Before coding:
 - Official docs/examples/exports inspected.
 - Existing app SDK patterns inspected.
 - Current lifecycle selected: identity -> `Peer` -> `Session` -> optional `Domain`.
+- Exact inbound `ServedProtocols` selected, or default-none client-only behavior documented.
 - Robot/vendor APIs and docs inspected when building a robot producer.
 - SDK resource inventory completed for every exposed robot capability.
 - SDK-owned responsibilities separated from app-owned responsibilities.
@@ -256,6 +274,7 @@ Before finishing:
 - No local replacement exists for an available SDK concept.
 - Identity, peer/session/domain lifecycle, resource, registry, stream, clock, payload, and frame metadata paths use public SDK APIs.
 - Peer-level metadata is registered on `Peer`; clocks/logs are registered on `Session`; catalog/network presence is handled by `Domain`.
+- Each inbound protocol handler is an intentional exact-version opt-in; client operations are not confused with serving.
 - Robot producer catalogs include all requestable SDK-relevant resources and required registry metadata.
 - Any app-side workaround is isolated and documented as a missing SDK capability.
 - Spatial math uses SDK geometry helpers or clearly justified device-specific calibration.

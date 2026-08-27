@@ -32,13 +32,16 @@ connection.
 - `Domain::builder(&peer, &session, config)` composes the existing
   `auki-session` peer/session data with the authenticated transport.
 - `DomainBuilder::authority(keys, credential)` is required before `join()`.
+- `DomainBuilder::served_protocols(ServedProtocols::none()...)` explicitly
+  selects the exact inbound protocol versions. Omitting it serves none; client
+  operations remain compiled and available.
 - `DomainBuilder::participant_info_provider(...)`,
   `resource_catalog_provider(...)`, `map_catalog_provider(...)`,
   `registry_app_root(...)`, `stream_provider(...)`, and `message_channel(...)`
   install application-owned providers and bounded receivers before protocol
   handlers start.
 - `DomainBuilder::join()` binds listeners, verifies the identity/domain chain,
-  installs the retained services, and returns only once the Domain is ready.
+  installs only the selected services, and returns once the Domain is ready.
 - `Domain::leave()` performs bounded, ordered shutdown. Dropping the Domain is
   the best-effort backstop and still fences cloned handles immediately.
 
@@ -56,13 +59,16 @@ traffic is accepted.
   for this Domain and currently reachable. It is not a membership roster.
 - `protocols()` registers and opens additional authenticated protocols without
   exposing the underlying node.
+- `served_protocol_ids()` reports the exact built-in IDs selected for this
+  Domain instance; the list is diagnostic, not remote authority.
 - `domain_id()`, `peer_id()`, and `listen_addresses()` expose stable identity
   and bound listener state.
 
 ## Retained Auki protocols
 
-The facade preserves the useful product operations while changing their
-transport and authorization internals:
+The facade can serve the useful product operations while changing their
+transport and authorization internals. Each exact version is opt-in through
+`ServedProtocols`:
 
 - participant info;
 - resource catalogs v0.2, v0.3, and v0.4;
@@ -85,9 +91,8 @@ service state without opening a network connection.
 
 - [`auki-p2p`](../auki-p2p) — identity, authenticated transport, admission,
   dialing, and relay-reservation primitives.
-- [`auki-network`](../auki-network) with `protocol-codecs` only — retained wire
-  payloads, framing, validation, and provider/subscription types; it does not
-  own a second runtime.
+- [`auki-protocols`](../auki-protocols) — pure wire payloads, framing, IDs, and
+  validation. Provider/subscription types stay here with the hosting runtime.
 - [`auki-session`](../auki-session) — application peer/session data and catalog
   sources.
 - [`auki-registry`](../auki-registry) and [`auki-hash`](../auki-hash) —

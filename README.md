@@ -1,6 +1,7 @@
 # Auki SDK
 
-On-device SDK for the Auki spatial-computing protocol — a Cargo workspace of Rust crates plus per-language bindings (Python via PyO3, Swift via UniFFI, TypeScript for the browser).
+On-device SDK for the Auki spatial-computing protocol — a Cargo workspace of
+Rust crates plus Python (PyO3) and Swift (UniFFI) bindings.
 
 See [VISION.md](VISION.md) for the aspirational spec; this file describes what's actually in the repo today. [GLOSSARY.md](GLOSSARY.md) defines the domain terms. Existing Manager-era consumers should start with the [authenticated Domain migration guide](docs/authenticated-domain-migration.md).
 
@@ -14,6 +15,7 @@ by every workspace package and checked at that exact toolchain before release.
 |---|---|
 | SDK source | coordinated Git tag `v0.1.0` after the release gate |
 | `auki-p2p` | crate `0.1.0`; canonical transport published by this repository |
+| `auki-protocols` | crate `0.1.0`; exact wire contracts in the coordinated source line |
 | Rust `auki-domain` | crate version `0.1.0`, consumed from the coordinated Git tag in Stage 1 |
 | Python Domain/Session | exact paired wheels `auki-domain-py==0.1.0` and `auki-session-py==0.1.0` from one build |
 | Swift and browser | prior Manager-era source tag `v0.0.60`; not wire-compatible with Stage 1 |
@@ -32,7 +34,9 @@ The Auki protocol is built around five questions any node should be able to answ
 
 ### Identity
 
-- **`Wallet`** — ed25519 keypair with deterministic child derivation. Mints libp2p peer identities via `Wallet::derive_child("peer/v1")` and signs creation certs.
+- **`Wallet`** — ed25519 keypair with deterministic child derivation. A host
+  constructs its canonical `auki_p2p::Identity` from the 32-byte seed of
+  `Wallet::derive_child("peer/v1")`; the wallet also signs creation certs.
 - **`auki-jcs` + `auki-hash`** — RFC 8785 JSON canonicalization + XXH3-128 content-addressing. The hash IS the version; refining an entry is a sibling-write under the same id.
 - **Sensor / Clock / Frame Registries** — content-addressed catalogs for every entity referenced by the logs. Logs pin their `sensor_hash` / `clock_hash` / `frame_hash`; spatial sensors pin an exact `frame_id` + `frame_hash`.
 
@@ -59,13 +63,15 @@ The Auki protocol is built around five questions any node should be able to answ
   routes, relay reservations, and live authenticated-peer observations.
 - **Authenticated application protocols** use `/auki/auth/1/...` IDs for info,
   resource catalogs v0.2/v0.3/v0.4, registries v0.2/v0.3, blobs, messages,
-  and typed streams. `auki-network` retains their bounded codecs and plain
-  application types; it owns no swarm or control plane.
+  and typed streams. `auki-protocols` owns their exact IDs, bounded codecs,
+  validation, and transport-neutral wire types; it owns no runtime.
 - **`Peer` / `Session` / `Domain`**: a long-lived `Peer` owns identity and
   registries; a `Session` owns one recording timeline and its logs; `Domain`
   owns one authenticated P2P node for one exact DDS Domain UUID. The host
-  supplies credentials and explicit routes. There is no Manager, election,
-  membership roster, Discovery HTTP dependency, or hidden topology policy.
+  supplies credentials and explicit routes. A Domain serves no built-in
+  application protocols by default; the host opts in to each exact version
+  with `ServedProtocols`. There is no Manager, election, membership roster,
+  Discovery HTTP dependency, or hidden topology policy.
 - The resource catalog exposes rows discriminated by `variant`
   (`sensor_log` | `pose_log` | `time_transform_log` | `detection_log`) and is
   sampled live from the provider the Domain serves. Registry/blob reads are
@@ -81,7 +87,7 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 
 ## Crate map
 
-### `crates/` — Rust workspace (plus one TypeScript browser package)
+### `crates/` — Rust workspace
 
 | Crate | Purpose | Status |
 |---|---|---|
@@ -98,13 +104,11 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 | [`auki-maps`](crates/auki-maps) | Deterministic voxel Map accumulation + renderer-neutral chunk updates | ✓ |
 | [`auki-mappers`](crates/auki-mappers) | SDK-native Map producers; point-cloud + pose voxel Mapper | ✓ |
 | [`auki-p2p`](crates/auki-p2p) | Authenticated libp2p runtime, stable identity, explicit direct/relay routes, relay reservations, and peer observations | ✓ |
-| [`auki-network`](crates/auki-network) | Bounded authenticated-protocol codecs and plain networking/application types; no swarm owner | ✓ |
+| [`auki-protocols`](crates/auki-protocols) | Exact authenticated-protocol IDs, bounded codecs, validation, and transport-neutral wire types; no runtime | ✓ |
 | [`auki-session`](crates/auki-session) | Declarative app API: `Peer` (identity + registries) + `Session` (clocks + log registration); network-free | ✓ |
 | [`auki-domain`](crates/auki-domain) | Public authenticated `Domain` lifecycle over one DDS Domain UUID, with explicit authority/routes and retained catalogs, registries, blobs, messages, and streams | ✓ |
 | [`auki-domain-relay`](crates/auki-domain-relay) | Domain Relay capability for browser-compatible reachability | WIP (v0.0.0) |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ROS2 → SDK glue for `Image` / `CameraInfo` / `PointCloud2` | ⚠ broken at the `r2r 0.9.5` transport layer |
-| [`auki-network-browser-wasm`](crates/auki-network-browser-wasm) | Prior Rust/WASM runtime, retained outside the active workspace until the browser stage replaces it | Legacy line |
-| [`auki-domain-browser`](crates/auki-domain-browser) | TypeScript browser facade; authenticated-engine migration is a later stage | WIP (v0.0.0) |
 
 ### `bindings/python/` — PyO3 / betterproto
 
@@ -125,10 +129,14 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 
 | Package | Purpose | Status |
 |---|---|---|
-| [`auki-identity-swift`](bindings/swift/auki-identity-swift) | `Wallet` + `PeerIdentity` | ✓ |
-| [`auki-network-swift`](bindings/swift/auki-network-swift) | Prior Manager-compatible package line, retained outside the active workspace until the Swift stage | Legacy line |
+| [`auki-identity-swift`](bindings/swift/auki-identity-swift) | `Wallet` only; no P2P runtime or `PeerIdentity` compatibility type | ✓ |
 
 Each package's own `README.md` documents its current state, public surface, and dependencies.
+The removed Manager-era `auki-network`, `auki-network-swift`,
+`auki-network-browser-wasm`, and `auki-domain-browser` sources are available
+only at the prior
+[`v0.0.60` tag](https://github.com/aukilabs/auki-sdk/tree/v0.0.60); they are not
+wire-compatible with Stage 1.
 
 ## Contributing & license
 

@@ -1,23 +1,18 @@
-//! PyO3 bindings for a tiny slice of the Auki SDK.
+//! Synchronous PyO3 bindings for Auki identity primitives.
 //!
-//! This crate exposes exactly three things to Python so Boosterapp's
-//! Python sidecar can build its SDK identity (`ParticipantInfo`
-//! fields) today, ahead of the full `auki-py` MVP (Swarm + async
-//! runtime):
+//! This crate exposes three narrowly owned operations:
 //!
 //! 1. [`load_or_mint_seed`] — wraps `auki_identity::load_or_mint_seed`
 //!    for persistent peer-key material across daemon restarts.
 //! 2. [`Wallet`] (with `from_seed` + `derive_child` + `peer_id`) —
-//!    wraps `auki_identity::Wallet` and the canonical PeerId
-//!    derivation recipe `auki_network::PeerIdentity::from_wallet` uses.
+//!    wraps `auki_identity::Wallet` and constructs the canonical
+//!    `auki_p2p::Identity` from the explicitly derived wallet child.
 //! 3. `app_instance::derive` — wraps
-//!    `auki_network::app_instance::derive` for the per-machine
+//!    `auki_identity::app_instance::derive` for the per-machine
 //!    identifier carried in `ParticipantInfo.app_instance`.
 //!
-//! Out of scope: libp2p Swarm, async / Tokio integration, the cluster
-//! protocol, all signing primitives. Those land in the full `auki-py`
-//! crate later. This crate is data-only — pure synchronous functions
-//! with no GIL-around-await dance.
+//! Network and Domain lifecycle belong to `auki-domain-py`. This crate stays
+//! data-only: pure synchronous functions with no GIL-around-await bridge.
 //!
 //! See [`bindings/python/auki-identity-py/README.md`](../README.md) for the
 //! Python-side surface and install instructions.
@@ -38,10 +33,11 @@ use pyo3::types::{PyBytes, PyModule};
 // in Cargo.toml so it doesn't collide with this crate's own lib name
 // (`auki_identity` — also the Python module name).
 use auki_identity_rs::{
-    SeedError, Wallet as RustWallet, load_or_mint_seed as rust_load_or_mint_seed,
+    SeedError, Wallet as RustWallet,
+    app_instance::{DeriveError, derive as rust_app_instance_derive},
+    load_or_mint_seed as rust_load_or_mint_seed,
 };
-use auki_network::Identity;
-use auki_network::app_instance::{DeriveError, derive as rust_app_instance_derive};
+use auki_p2p::Identity;
 
 // ─── load_or_mint_seed ───────────────────────────────────────────────────────
 
@@ -204,7 +200,7 @@ impl Wallet {
 /// (12 lowercase hex chars, no separators) used as the
 /// `ParticipantInfo.app_instance` field.
 ///
-/// Wraps `auki_network::app_instance::derive`. Recipe: first
+/// Wraps `auki_identity::app_instance::derive`. Recipe: first
 /// non-loopback IEEE-administered MAC (skipping locally-administered
 /// MACs whose U/L bit is set), sorted lexicographically, lowercased.
 ///
@@ -414,7 +410,7 @@ mod tests {
     fn locked_peer_id_vector() {
         // Cross-language locked vector. The same string must come out
         // of the parallel-agent's locked Rust test
-        // (`PeerIdentity::from_wallet(Wallet::from_seed(vec![3u8; 32]).expect("32-byte seed")).peer_id().to_string()`).
+        // (`Identity::from_ed25519_seed(&Wallet::from_seed(...).derive_child("peer/v1").seed())`).
         // If both pass, the bindings agree byte-for-byte with the Rust
         // crate.
         //

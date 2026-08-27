@@ -30,6 +30,8 @@ A Domain is *not* a scenegraph and *not* a coordinate system. A Domain has zero 
 When devices network on the real world web, each `Domain` runtime is configured
 with one exact DDS Domain UUID. A DDS-signed P2P access token is the baseline
 admission rule; explicit routes describe reachability but grant no authority.
+Inbound built-in services are also explicit: `ServedProtocols` defaults to none,
+and the host opts in to each exact protocol version it implements.
 
 ## Domain Owner
 
@@ -104,14 +106,16 @@ Pose Log capture is in place; the consumer-side composition / path-finding is pe
 
 ## Wallet
 
-The identity primitive — an ed25519 keypair plus deterministic child derivation (label-based, like BIP32 but simpler). One wallet seed regenerates every derived key on a fresh machine: the [Peer ID](#peer-id) (`derive_child("peer/v1")`), per-Domain owner keys, signing keys for [TagClaims](#tagclaim), and so on. Foundational for content-addressing and signing across the SDK; ships in [`auki-identity`](crates/auki-identity), WASM-friendly.
+The identity primitive — an ed25519 keypair plus deterministic child derivation (label-based, like BIP32 but simpler). One wallet seed regenerates every derived key on a fresh machine: the seed for the canonical [Peer ID](#peer-id) identity (`derive_child("peer/v1").seed()`), per-Domain owner keys, signing keys for [TagClaims](#tagclaim), and so on. Foundational for content-addressing and signing across the SDK; ships in [`auki-identity`](crates/auki-identity), WASM-friendly.
 
 ## Peer ID
 
 The libp2p identifier used in `/p2p/<peer-id>` multiaddrs and bound by Noise
-during mutual authentication. Derived from a [Wallet](#wallet) via
-`Wallet::derive_child("peer/v1")` and the standard libp2p public-key chain.
-Same wallet seed means the same Peer ID across machines and reboots.
+during mutual authentication. The canonical key owner is `auki_p2p::Identity`.
+A wallet-backed host passes the 32-byte seed from
+`Wallet::derive_child("peer/v1")` to `Identity::from_ed25519_seed`; the standard
+libp2p public-key chain produces the Peer ID. Same wallet seed means the same
+Peer ID across machines and reboots.
 
 ## Session ID
 
@@ -129,7 +133,7 @@ Orthogonal to Domain (which place?), Scenegraph (which structured map?), and Ses
 
 An identifier for the specific machine an application is running on — derived
 by the SDK from a stable platform-level value. The current implementation
-(`auki-network::app_instance::derive`) reads the first non-loopback
+(`auki-identity::app_instance::derive`) reads the first non-loopback
 IEEE-administered MAC, sorts lexicographically for determinism, and renders 12
 lowercase hex characters. It is optional diagnostic metadata, never authority.
 
@@ -208,6 +212,6 @@ A signed assertion that some data product has a property — e.g. *"this Pose Lo
 
 Any host/application mechanism that supplies explicit peer routes. Static
 configuration, DDS/DMS adapters, mDNS, or another discovery service may all do
-this without changing authentication. Core `auki-p2p`, `auki-network`, and
-`auki-domain` perform no Discovery HTTP requests and never treat route
-knowledge as authorization.
+this without changing authentication. Core `auki-p2p` and `auki-domain`
+perform no Discovery HTTP requests and never treat route knowledge as
+authorization.

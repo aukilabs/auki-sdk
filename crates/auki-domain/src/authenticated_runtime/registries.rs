@@ -1,16 +1,21 @@
 use std::{path::Path, time::Duration};
 
-use auki_network::{
-    protocol_ids::{REGISTRIES_V0_2_0, REGISTRIES_V0_3_0},
-    registries_protocol::{
-        MAX_REGISTRIES_FRAME_BYTES, RegistriesProtocolError, RegistryEntryEnvelope, RegistryKind,
-        RegistryListEntry, RegistryRequest, RegistryRequestV2, RegistryResponse,
-        RegistryResponseV2, read_registry_request, read_registry_request_v2,
-        read_registry_response, read_registry_response_v2, write_registry_request,
-        write_registry_request_v2, write_registry_response, write_registry_response_v2,
+use auki_p2p::PeerId;
+use auki_protocols::registry::{
+    v2::{
+        ID as REGISTRIES_V0_2_0, RegistryRequest as RegistryRequestV2,
+        RegistryResponse as RegistryResponseV2, read_registry_request as read_registry_request_v2,
+        read_registry_response as read_registry_response_v2,
+        write_registry_request as write_registry_request_v2,
+        write_registry_response as write_registry_response_v2,
+    },
+    v3::{
+        ID as REGISTRIES_V0_3_0, MAX_REGISTRIES_FRAME_BYTES, RegistriesProtocolError,
+        RegistryEntryEnvelope, RegistryKind, RegistryListEntry, RegistryRequest, RegistryResponse,
+        read_registry_request, read_registry_response, write_registry_request,
+        write_registry_response,
     },
 };
-use auki_p2p::PeerId;
 use auki_registry::{
     ClockRegistryEntry, DetectorRegistryEntry, DeviceModelRegistryEntry, FrameRegistryEntry,
     MapRegistryEntry, SensorRegistryEntry,

@@ -84,6 +84,8 @@ async def main() -> None:
     # Direct construction is equivalent:
     # builder = auki_domain.DomainBuilder(peer, session, config)
     builder.authority(keys, credential)
+    builder.serve_info_v1()
+    builder.serve_resources_v2()
     domain = await builder.join()
 
     try:
@@ -99,6 +101,20 @@ asyncio.run(main())
 Builder setters mutate the builder and return `None`; call them before
 `await builder.join()`. A builder is single-use. `Domain.leave()` is idempotent
 and should be awaited for deterministic shutdown.
+
+`DomainBuilder` serves no built-in application protocols by default. Select
+only exact inbound versions this application hosts before joining:
+`serve_info_v1`, `serve_resources_v2`, `serve_resources_v3`,
+`serve_resources_v4`, `serve_registries_v2`, `serve_registries_v3`,
+`serve_blobs_v1`, `serve_messages_v1`, and `serve_streams_v2`. Client methods
+remain available without the matching inbound selection.
+`domain.served_protocol_ids` reports the selected exact IDs.
+
+A wallet-backed host derives the same canonical identity by passing
+`wallet.derive_child("peer/v1").seed()` from `auki-identity-py` to
+`Identity.from_ed25519_seed(...)`. Persist the wallet seed or the canonical
+protobuf identity bytes; never silently generate a replacement for invalid
+state because the resulting PeerId will not match its credential.
 
 ## Routes and authenticated peers
 
@@ -291,4 +307,5 @@ an unsafe raw-stream shortcut.
 - [`auki-session`](../../../crates/auki-session) and
   [`auki-session-py`](../auki-session-py) for the shared process peer and
   Session; and
-- [`auki-network`](../../../crates/auki-network) for application wire codecs.
+- [`auki-protocols`](../../../crates/auki-protocols) for application wire
+  contracts.

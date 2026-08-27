@@ -1,0 +1,24 @@
+[package]
+name = "auki-typed-dataflow-experiment"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+auki-datatypes = { path = "../../crates/auki-datatypes", optional = true }
+auki-session = { path = "../../crates/auki-session", optional = true }
+
+[features]
+current-sdk-baseline = ["dep:auki-datatypes", "dep:auki-session"]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[[bin]]
+name = "typed-dataflow-demo"
+path = "src/bin/demo.rs"
+
+[[bin]]
+name = "typed-dataflow-bench"
+path = "src/bin/benchmark.rs"

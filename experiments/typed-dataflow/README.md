@@ -29,6 +29,18 @@ Phase 1 adds explicit observation selection and lifecycle:
 - a serialized in-memory fixture counts encoded messages and bytes instead of
   pretending an `Arc` crossed a network without copying.
 
+Phase 2A stresses observation delivery and failure without touching production
+networking:
+
+- `SharedScheduler` runs many relationships on a fixed worker pool;
+- each relationship still owns an explicit bounded `EverySelected` queue or
+  one-slot `CoalesceLatest` queue;
+- returned observer errors and observer panics close only the affected
+  relationship and become inspectable through its handle;
+- a producer can report a terminal Output failure;
+- Buffer eviction and cancellation release ownership without invalidating
+  payload leases held elsewhere.
+
 The Camera vertical slice demonstrates why Component and Output identity are
 separate:
 
@@ -84,6 +96,11 @@ Delivery is explicit:
 - `Latest` owns one pending slot, replaces stale pending values, and counts
   every replacement.
 
+`connect_shared` and `Observable::follow_new_shared` preserve those delivery
+semantics while submitting drain work to a fixed pool. The pool deliberately
+processes one observation per scheduled turn to make fairness visible. That
+choice is tested, not presented as the final scheduler policy.
+
 `StaticConnection<T, F>` is a separate concrete path used to test whether a
 fully static local graph can compile down near a direct function call.
 
@@ -108,6 +125,8 @@ cargo run -p auki-typed-dataflow-experiment --bin typed-dataflow-demo
 cargo run -p auki-typed-dataflow-experiment --bin observable-operable-demo
 cargo run --release -p auki-typed-dataflow-experiment \
   --bin observation-request-bench -- --iterations 100000
+cargo run --release -p auki-typed-dataflow-experiment \
+  --bin dataflow-scheduler-stress
 cargo test -p auki-typed-dataflow-experiment --all-targets
 cargo test -p auki-typed-dataflow-experiment --doc
 cargo run --release -p auki-typed-dataflow-experiment \
@@ -123,7 +142,9 @@ See [`RESULTS.md`](RESULTS.md) for the first typed-port and Buffer measurements
 and [`RESULTS-OBSERVABLE-OPERABLE.md`](RESULTS-OBSERVABLE-OPERABLE.md) for the
 Component/Output identity vertical slice. Phase 1 observation-selection and
 lifecycle results are in
-[`RESULTS-OBSERVATION-REQUESTS.md`](RESULTS-OBSERVATION-REQUESTS.md).
+[`RESULTS-OBSERVATION-REQUESTS.md`](RESULTS-OBSERVATION-REQUESTS.md). Phase 2A
+failure and scheduler results are in
+[`RESULTS-DATAFLOW-STRESS.md`](RESULTS-DATAFLOW-STRESS.md).
 
 This code is intentionally disposable. The design should be rejected or
 changed if the evidence does not support it.

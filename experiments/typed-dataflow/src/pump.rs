@@ -7,7 +7,8 @@ use std::time::Duration;
 
 use crate::buffer::{Buffer, CursorRead, CursorStart};
 use crate::ports::{
-    Connection, ConnectionStats, DeliveryStatus, Endpoint, EndpointKind, Envelope, OutputPort,
+    ComponentError, Connection, ConnectionStats, DeliveryStatus, Endpoint, EndpointKind, Envelope,
+    OutputPort,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -249,6 +250,7 @@ struct DirectPumpEndpoint<T> {
     delivered: AtomicU64,
     replaced: AtomicU64,
     closed: AtomicBool,
+    failure: Mutex<Option<ComponentError>>,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -263,6 +265,7 @@ impl<T: Send + Sync + 'static> DirectPumpEndpoint<T> {
             delivered: AtomicU64::new(0),
             replaced: AtomicU64::new(0),
             closed: AtomicBool::new(false),
+            failure: Mutex::new(None),
             worker: Mutex::new(None),
         });
         let worker_endpoint = Arc::clone(&endpoint);
@@ -291,7 +294,9 @@ impl<T: Send + Sync + 'static> DirectPumpEndpoint<T> {
                 if !self.receiver_delay.is_zero() {
                     thread::sleep(self.receiver_delay);
                 }
-                if self.recipient.append_shared(envelope).is_err() {
+                if let Err(error) = self.recipient.append_shared(envelope) {
+                    *self.failure.lock().unwrap() =
+                        Some(ComponentError::Reported(error.to_string()));
                     self.closed.store(true, Ordering::Release);
                     return;
                 }
@@ -329,7 +334,12 @@ impl<T: Send + Sync + 'static> Endpoint<T> for DirectPumpEndpoint<T> {
             replaced: self.replaced.load(Ordering::Relaxed),
             overruns: 0,
             closed: self.closed.load(Ordering::Acquire),
+            failed: self.failure.lock().unwrap().is_some(),
         }
+    }
+
+    fn failure(&self) -> Option<ComponentError> {
+        self.failure.lock().unwrap().clone()
     }
 
     fn is_closed(&self) -> bool {

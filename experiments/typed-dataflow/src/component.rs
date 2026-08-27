@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    Connection, ConnectionControl, ConnectionError, ConnectionOptions, ConnectionStats, Envelope,
-    EveryFullPolicy, InputPort, OutputPort, PublishReport, connect,
+    ComponentError, Connection, ConnectionControl, ConnectionError, ConnectionOptions,
+    ConnectionStats, Envelope, EveryFullPolicy, InputPort, OutputPort, PublishReport,
+    SharedDelivery, SharedDispatcher, connect, connect_shared,
 };
 
 pub type ManifestHash = String;
@@ -370,12 +371,20 @@ pub struct OutputTransition {
     pub effective_at_timestamp_ns: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ObservationFailure {
+    pub output: OutputReference,
+    pub reason: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ObservationEvent<T> {
     Observation(Observation<T>),
     /// Terminal for an observation pinned to `previous`; transitional for an
     /// explicit follow-current observation of the containing output slot.
     Reconfigured(OutputTransition),
+    /// Terminal failure reported by the producing Component for this Output.
+    Failed(ObservationFailure),
 }
 
 impl<T> Clone for ObservationEvent<T> {
@@ -383,6 +392,7 @@ impl<T> Clone for ObservationEvent<T> {
         match self {
             Self::Observation(observation) => Self::Observation(observation.clone()),
             Self::Reconfigured(transition) => Self::Reconfigured(transition.clone()),
+            Self::Failed(failure) => Self::Failed(failure.clone()),
         }
     }
 }
@@ -554,6 +564,7 @@ pub struct ObservationStats {
     pub coalesced: u64,
     pub overruns: u64,
     pub closed: bool,
+    pub failed: bool,
     pub transport: TransportStats,
 }
 
@@ -580,7 +591,14 @@ impl<T: Send + Sync + 'static> fmt::Debug for ObservationHandle<T> {
 
 impl<T: Send + Sync + 'static> ObservationHandle<T> {
     pub fn status(&self) -> ObservationStatus {
-        self.status.lock().unwrap().clone()
+        let failure = self.connection.failure();
+        let mut status = self.status.lock().unwrap();
+        if *status == ObservationStatus::Active
+            && let Some(failure) = failure
+        {
+            *status = ObservationStatus::Failed(failure.to_string());
+        }
+        status.clone()
     }
 
     pub fn stats(&self) -> ObservationStats {
@@ -590,6 +608,7 @@ impl<T: Send + Sync + 'static> ObservationHandle<T> {
             replaced,
             overruns,
             closed,
+            failed,
         } = self.connection.stats();
         ObservationStats {
             accepted,
@@ -597,6 +616,7 @@ impl<T: Send + Sync + 'static> ObservationHandle<T> {
             coalesced: replaced,
             overruns,
             closed,
+            failed,
             transport: self
                 .transport
                 .as_ref()
@@ -670,6 +690,31 @@ impl<T: Send + Sync + 'static> Observable<T> {
         observer: &InputPort<ObservationEvent<T>>,
         delivery: ObservationDelivery,
     ) -> Result<ObservationHandle<T>, ObservationError> {
+        self.follow_new_using(observer, |input| {
+            connect(&self.port, input, delivery.connection_options())
+        })
+    }
+
+    /// Runs this relationship on a fixed worker pool shared with other
+    /// relationships. Observation queues remain per relationship and bounded.
+    pub fn follow_new_shared(
+        &self,
+        observer: &InputPort<ObservationEvent<T>>,
+        dispatcher: &SharedDispatcher,
+        delivery: SharedDelivery,
+    ) -> Result<ObservationHandle<T>, ObservationError> {
+        self.follow_new_using(observer, |input| {
+            connect_shared(&self.port, input, dispatcher, delivery)
+        })
+    }
+
+    fn follow_new_using(
+        &self,
+        observer: &InputPort<ObservationEvent<T>>,
+        connector: impl FnOnce(
+            &InputPort<ObservationEvent<T>>,
+        ) -> Result<Connection<ObservationEvent<T>>, ConnectionError>,
+    ) -> Result<ObservationHandle<T>, ObservationError> {
         if !self.supports(ObservationAccess::FollowNew) {
             return Err(ObservationError::UnsupportedRequest(
                 ObservationAccess::FollowNew,
@@ -683,20 +728,30 @@ impl<T: Send + Sync + 'static> Observable<T> {
         let observer = observer.clone();
         let callback_status = Arc::clone(&status);
         let callback_control = Arc::clone(&control);
-        let input = InputPort::new(
+        let input = InputPort::with_component_errors(
             format!("{}.follow-new", self.name),
             move |envelope: &Envelope<ObservationEvent<T>>| {
-                observer.accept(envelope);
-                if pinned && let ObservationEvent::Reconfigured(transition) = &envelope.payload {
-                    *callback_status.lock().unwrap() =
-                        ObservationStatus::Reconfigured(Box::new(transition.clone()));
-                    if let Some(control) = callback_control.lock().unwrap().as_ref() {
-                        control.disconnect();
+                match &envelope.payload {
+                    ObservationEvent::Reconfigured(transition) if pinned => {
+                        *callback_status.lock().unwrap() =
+                            ObservationStatus::Reconfigured(Box::new(transition.clone()));
                     }
+                    ObservationEvent::Failed(failure) => {
+                        *callback_status.lock().unwrap() =
+                            ObservationStatus::Failed(failure.reason.clone());
+                    }
+                    ObservationEvent::Observation(_) | ObservationEvent::Reconfigured(_) => {}
                 }
+                let terminal =
+                    !matches!(*callback_status.lock().unwrap(), ObservationStatus::Active);
+                observer.accept(envelope)?;
+                if terminal && let Some(control) = callback_control.lock().unwrap().as_ref() {
+                    control.disconnect();
+                }
+                Ok(())
             },
         );
-        let connection = connect(&self.port, &input, delivery.connection_options())?;
+        let connection = connector(&input)?;
         *control.lock().unwrap() = Some(connection.control());
         if !matches!(*status.lock().unwrap(), ObservationStatus::Active) {
             connection.disconnect();
@@ -949,21 +1004,51 @@ impl SerializedInMemoryTransport {
     {
         let transport = self.clone();
         let observer = observer.clone();
-        let input = InputPort::new(
+        let input = InputPort::with_component_errors(
             format!("{}.serialized-transport", observable.name()),
             move |envelope: &Envelope<ObservationEvent<T>>| {
-                let decoded = transport
-                    .round_trip(&envelope.payload)
-                    .expect("serializable observation must survive the test transport");
+                let decoded = transport.round_trip(&envelope.payload).map_err(|error| {
+                    ComponentError::Reported(format!("serialized observation: {error}"))
+                })?;
                 observer.accept(&Envelope::new(
                     envelope.sequence,
                     envelope.timestamp_ns,
                     decoded,
-                ));
+                ))
             },
         );
         observable
             .follow_new(&input, delivery)
+            .map(|handle| handle.with_transport(Arc::clone(&self.counters)))
+    }
+
+    pub fn follow_new_shared<T>(
+        &self,
+        observable: &Observable<T>,
+        observer: &InputPort<ObservationEvent<T>>,
+        dispatcher: &SharedDispatcher,
+        delivery: SharedDelivery,
+    ) -> Result<ObservationHandle<T>, ObservationError>
+    where
+        T: Serialize + DeserializeOwned + Send + Sync + 'static,
+    {
+        let transport = self.clone();
+        let observer = observer.clone();
+        let input = InputPort::with_component_errors(
+            format!("{}.serialized-transport", observable.name()),
+            move |envelope: &Envelope<ObservationEvent<T>>| {
+                let decoded = transport.round_trip(&envelope.payload).map_err(|error| {
+                    ComponentError::Reported(format!("serialized observation: {error}"))
+                })?;
+                observer.accept(&Envelope::new(
+                    envelope.sequence,
+                    envelope.timestamp_ns,
+                    decoded,
+                ))
+            },
+        );
+        observable
+            .follow_new_shared(&input, dispatcher, delivery)
             .map(|handle| handle.with_transport(Arc::clone(&self.counters)))
     }
 

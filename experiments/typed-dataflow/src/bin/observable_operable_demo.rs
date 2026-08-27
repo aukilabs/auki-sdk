@@ -36,6 +36,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "pinned transition: {} -> {}",
                 transition.previous.output_id, transition.replacement.output_id
             ),
+            ObservationEvent::Failed(failure) => {
+                println!("pinned failure: {}", failure.reason)
+            }
         },
     );
     let pinned_observation = camera
@@ -56,6 +59,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "following transition: {} -> {}",
                 transition.previous.output_id, transition.replacement.output_id
             ),
+            ObservationEvent::Failed(failure) => {
+                println!("following failure: {}", failure.reason)
+            }
         },
     );
     let following_observation = transport.follow_new(

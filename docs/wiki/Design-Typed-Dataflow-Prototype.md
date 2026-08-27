@@ -1,12 +1,13 @@
 # Experiment: Observable and Operable Component Data Plane
 
-> **Status: phased experiment with Phase 1 implemented.** The first
+> **Status: phased experiment with Phase 2A implemented.** The first
 > typed-dataflow prototype, Component/Output identity vertical slice, and
-> observation selection/delivery/lifecycle slice are implemented. See
+> observation selection/delivery/lifecycle slice are implemented. A focused
+> observation-failure and shared-scheduler stress slice is also implemented. See
 > `RESULTS.md`, `RESULTS-OBSERVABLE-OPERABLE.md`, and
-> `RESULTS-OBSERVATION-REQUESTS.md`. Later scheduler, failure, timestamp,
-> storage, and agent-friendliness phases remain specified below. This is not a
-> production API proposal.
+> `RESULTS-OBSERVATION-REQUESTS.md`, and `RESULTS-DATAFLOW-STRESS.md`. Operable
+> concurrency, timestamp, storage, evaluation, and agent-friendliness work
+> remains specified below. This is not a production API proposal.
 
 ## North star
 
@@ -508,6 +509,20 @@ eight times. A serialized remote path is expected to encode and copy bytes; it
 must report that work instead of using shared in-process ownership as false
 evidence of network zero-copy.
 
+Asynchronous execution is independent of delivery semantics. The experiment
+therefore retains the thread-per-relationship path as a baseline and adds a
+fixed worker pool shared by many relationships. A blocked callback may occupy
+one worker, but it must not create a new thread per observer or starve unrelated
+relationships while another worker is available. Each relationship retains
+its own bounded queue and lifecycle state.
+
+Returned observer errors and observer panics are contained at the `InputPort`
+boundary in this experiment. They close the affected relationship and become
+an inspectable failure; unrelated relationships continue. A terminal producer
+failure is a typed observation event and also makes the handle terminal. This
+is the selected experimental boundary, not a claim that every internal runtime
+panic is recoverable.
+
 ### Operable invocation
 
 Test at least:
@@ -676,11 +691,20 @@ Correctness gates 1–14 and 24–30 apply where relevant. Its targeted benchmar
 measures the extra follow-current dispatch and serialized-copy boundary; the
 full benchmark matrix remains Phase 4 work.
 
-### Phase 2: failure, concurrency, and scheduling
+### Completed Phase 2A: observation failure and shared scheduling
 
-Implement explicit Component errors, panic boundaries, Operable deadlines and
-cancellation, concurrent instruction ordering, and a bounded shared scheduler.
-Correctness gates 15–17 and 23 apply.
+The branch `codex/dataflow-stress-lifecycle` implements returned observer
+errors, contained observer panics, terminal producer failure, overwrite-safe
+payload leases, cancellation cleanup, and a fixed shared worker pool. It
+compares one, eight, 64, and 256 simultaneous relationships against the first
+prototype's thread-per-relationship path. Correctness gates 15–17 and 23 apply
+to observation relationships. See `RESULTS-DATAFLOW-STRESS.md`.
+
+### Phase 2B: Operable concurrency
+
+Implement Operable deadlines and cancellation, concurrent instruction ordering,
+and failure isolation for simultaneous invocations. Phase 2A's scheduler result
+does not choose a final global SDK executor.
 
 ### Phase 3: time and retained storage
 
@@ -783,6 +807,11 @@ is not sufficient evidence.
 
 ### Scheduler alternatives
 
+Phase 2A completes the first bounded shared-worker comparison and records its
+thread-count, throughput, latency, blocked-observer, cancellation, and shutdown
+results in `RESULTS-DATAFLOW-STRESS.md`. Allocation, CPU, and peak-memory
+measurements remain part of Phase 4.
+
 The first prototype used one OS thread per `BufferReader` and queued
 connection. Compare that baseline with at least one bounded shared worker or
 async scheduler implementation.
@@ -802,6 +831,10 @@ that the semantic model does not require one thread per observer and to expose
 the cost of the alternative.
 
 ### Component errors and panics
+
+Phase 2A implements and tests this boundary for Observable observers and one
+producer-reported terminal Output failure. Operable deadline and concurrent
+failure behavior remains Phase 2B.
 
 Give Observable delivery and Operable invocation explicit failure state. Test
 at least:

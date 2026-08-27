@@ -6,8 +6,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::ports::{
-    Connection, ConnectionStats, DeliveryStatus, Endpoint, EndpointKind, Envelope, InputPort,
-    OutputPort,
+    ComponentError, Connection, ConnectionStats, DeliveryStatus, Endpoint, EndpointKind, Envelope,
+    InputPort, OutputPort,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -413,6 +413,7 @@ pub struct BufferReaderStats {
     pub gap_events: u64,
     pub gap_entries: u64,
     pub cancelled: bool,
+    pub failed: bool,
 }
 
 /// One Component's bounded cursor over a Buffer. The reader leases only its
@@ -423,6 +424,7 @@ pub struct BufferReader<T> {
     delivered: Arc<AtomicU64>,
     gap_events: Arc<AtomicU64>,
     gap_entries: Arc<AtomicU64>,
+    failed: Arc<AtomicBool>,
     worker: Mutex<Option<JoinHandle<()>>>,
     _payload: std::marker::PhantomData<fn(T)>,
 }
@@ -433,19 +435,24 @@ impl<T: Send + Sync + 'static> BufferReader<T> {
         let delivered = Arc::new(AtomicU64::new(0));
         let gap_events = Arc::new(AtomicU64::new(0));
         let gap_entries = Arc::new(AtomicU64::new(0));
+        let failed = Arc::new(AtomicBool::new(false));
         let mut cursor = buffer.subscribe(start);
         let input = input.clone();
         let worker_cancelled = Arc::clone(&cancelled);
         let worker_delivered = Arc::clone(&delivered);
         let worker_gap_events = Arc::clone(&gap_events);
         let worker_gap_entries = Arc::clone(&gap_entries);
+        let worker_failed = Arc::clone(&failed);
         let worker = thread::Builder::new()
             .name("typed-dataflow-buffer-reader".into())
             .spawn(move || {
                 while !worker_cancelled.load(Ordering::Acquire) {
                     match cursor.next_timeout(Duration::from_millis(2)) {
                         CursorRead::Item(envelope) => {
-                            input.accept(&envelope);
+                            if input.accept(&envelope).is_err() {
+                                worker_failed.store(true, Ordering::Release);
+                                return;
+                            }
                             worker_delivered.fetch_add(1, Ordering::Relaxed);
                         }
                         CursorRead::Gap(gap) => {
@@ -467,6 +474,7 @@ impl<T: Send + Sync + 'static> BufferReader<T> {
             delivered,
             gap_events,
             gap_entries,
+            failed,
             worker: Mutex::new(Some(worker)),
             _payload: std::marker::PhantomData,
         }
@@ -478,6 +486,7 @@ impl<T: Send + Sync + 'static> BufferReader<T> {
             gap_events: self.gap_events.load(Ordering::Relaxed),
             gap_entries: self.gap_entries.load(Ordering::Relaxed),
             cancelled: self.cancelled.load(Ordering::Acquire),
+            failed: self.failed.load(Ordering::Acquire),
         }
     }
 
@@ -507,6 +516,7 @@ struct BufferEndpoint<T> {
     accepted: AtomicU64,
     overruns: AtomicU64,
     closed: AtomicBool,
+    failure: Mutex<Option<ComponentError>>,
 }
 
 impl<T: Send + Sync + 'static> Endpoint<T> for BufferEndpoint<T> {
@@ -523,10 +533,11 @@ impl<T: Send + Sync + 'static> Endpoint<T> for BufferEndpoint<T> {
                 self.accepted.fetch_add(1, Ordering::Relaxed);
                 DeliveryStatus::Accepted
             }
-            Err(_) => {
+            Err(error) => {
                 self.overruns.fetch_add(1, Ordering::Relaxed);
                 self.closed.store(true, Ordering::Release);
-                DeliveryStatus::Disconnected
+                *self.failure.lock().unwrap() = Some(ComponentError::Reported(error.to_string()));
+                DeliveryStatus::Failed
             }
         }
     }
@@ -539,7 +550,12 @@ impl<T: Send + Sync + 'static> Endpoint<T> for BufferEndpoint<T> {
             replaced: 0,
             overruns: self.overruns.load(Ordering::Relaxed),
             closed: self.closed.load(Ordering::Acquire),
+            failed: self.failure.lock().unwrap().is_some(),
         }
+    }
+
+    fn failure(&self) -> Option<ComponentError> {
+        self.failure.lock().unwrap().clone()
     }
 
     fn is_closed(&self) -> bool {
@@ -560,5 +576,6 @@ pub fn connect_buffer<T: Send + Sync + 'static>(
         accepted: AtomicU64::new(0),
         overruns: AtomicU64::new(0),
         closed: AtomicBool::new(false),
+        failure: Mutex::new(None),
     }))
 }

@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::component::{
     Catalog, CatalogError, ComponentManifest, ComponentReference, Exposure, InvocationError,
     Observable, ObservableContract, Observation, ObservationAccess, ObservationDelivery,
-    ObservationEmitter, ObservationError, ObservationEvent, ObservationHandle, Operable,
-    OperableContract, OutputManifest, OutputReference, OutputTransition, PayloadContract,
+    ObservationEmitter, ObservationError, ObservationEvent, ObservationFailure, ObservationHandle,
+    Operable, OperableContract, OutputManifest, OutputReference, OutputTransition, PayloadContract,
     ProductForm, ProductManifest, current_output_observable, observation_input, pinned_observable,
 };
 use crate::{Buffer, BufferError, Envelope, RetainedProduct};
@@ -60,6 +60,7 @@ pub enum CameraError {
         expected_bytes: usize,
         actual_bytes: usize,
     },
+    OutputFailed(String),
     Catalog(CatalogError),
 }
 
@@ -80,6 +81,7 @@ impl fmt::Display for CameraError {
                  ({expected_bytes} bytes), got {actual_width}x{actual_height} \
                  ({actual_bytes} bytes)"
             ),
+            Self::OutputFailed(reason) => write!(formatter, "camera Output failed: {reason}"),
             Self::Catalog(error) => error.fmt(formatter),
         }
     }
@@ -99,6 +101,7 @@ struct ActiveCameraOutput {
     observable: Observable<VideoFrame>,
     emitter: ObservationEmitter<VideoFrame>,
     next_sequence: u64,
+    failure: Option<String>,
 }
 
 impl ActiveCameraOutput {
@@ -132,6 +135,7 @@ impl ActiveCameraOutput {
             observable,
             emitter,
             next_sequence: 0,
+            failure: None,
         }
     }
 
@@ -316,6 +320,9 @@ impl CameraComponent {
         bytes: Arc<[u8]>,
     ) -> Result<Observation<VideoFrame>, CameraError> {
         let mut state = self.inner.state.lock().unwrap();
+        if let Some(reason) = &state.active.failure {
+            return Err(CameraError::OutputFailed(reason.clone()));
+        }
         let expected_width = state.active.width();
         let expected_height = state.active.height();
         let expected_bytes = rgb8_len(expected_width, expected_height)?;
@@ -348,6 +355,24 @@ impl CameraComponent {
         state.active.emitter.emit(timestamp_ns, event.clone());
         self.inner.follow_emitter.emit(timestamp_ns, event);
         Ok(observation)
+    }
+
+    /// Reports a terminal failure for the configured Output. Existing
+    /// observations remain valid, but this Output emits no further frames.
+    pub fn fail_current_output(&self, timestamp_ns: u64, reason: impl Into<String>) -> bool {
+        let mut state = self.inner.state.lock().unwrap();
+        if state.active.failure.is_some() {
+            return false;
+        }
+        let reason = reason.into();
+        state.active.failure = Some(reason.clone());
+        let event = ObservationEvent::Failed(ObservationFailure {
+            output: state.active.reference.clone(),
+            reason,
+        });
+        state.active.emitter.emit(timestamp_ns, event.clone());
+        self.inner.follow_emitter.emit(timestamp_ns, event);
+        true
     }
 }
 
@@ -555,6 +580,23 @@ impl CameraBufferRoller {
                         }
                         Err(error) => state.errors.push(error.to_string()),
                     }
+                }
+                ObservationEvent::Failed(failure) => {
+                    let current_product_id = state.current_product_id.clone();
+                    let (producer, buffer) = {
+                        let current = state
+                            .products
+                            .get(&current_product_id)
+                            .expect("current Camera Product must exist");
+                        (current.manifest.producer.clone(), current.buffer.clone())
+                    };
+                    if producer != failure.output {
+                        state.errors.push(format!(
+                            "failure from {} reached Buffer for {}",
+                            failure.output.output_id, producer.output_id
+                        ));
+                    }
+                    buffer.close();
                 }
             }
         });

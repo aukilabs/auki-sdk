@@ -41,15 +41,17 @@ pub use component::{
     ComponentManifest, ComponentReference, EverySelectedDelivery, Exposure, InMemoryTransport,
     Invocation, InvocationContext, InvocationError, ManifestHash, Observable, ObservableContract,
     ObservableTarget, Observation, ObservationAccess, ObservationDelivery, ObservationError,
-    ObservationEvent, ObservationHandle, ObservationStats, ObservationStatus, Operable,
-    OperableContract, OutputManifest, OutputReference, OutputTransition, PayloadContract,
+    ObservationEvent, ObservationFailure, ObservationHandle, ObservationStats, ObservationStatus,
+    Operable, OperableContract, OutputManifest, OutputReference, OutputTransition, PayloadContract,
     PeerRuntime, ProductForm, ProductManifest, SerializedInMemoryTransport, TransportStats,
     manifest_hash, observation_input,
 };
 pub use episode::{Episode, EpisodeError, EpisodeState, connect_episode};
 pub use ports::{
-    Connection, ConnectionControl, ConnectionError, ConnectionOptions, ConnectionStats, Envelope,
-    EveryFullPolicy, InputPort, OutputPort, PublishReport, StaticConnection, connect,
+    ComponentError, Connection, ConnectionControl, ConnectionError, ConnectionOptions,
+    ConnectionStats, Envelope, EveryFullPolicy, InputPort, OutputPort, PublishReport,
+    SchedulerError, SharedDelivery, SharedDispatcher, SharedScheduler, SharedSchedulerStats,
+    StaticConnection, connect, connect_shared,
 };
 pub use product::{FiniteObservations, ProductAccessError, RetainedProduct, TimeRangeRequest};
 pub use pump::{

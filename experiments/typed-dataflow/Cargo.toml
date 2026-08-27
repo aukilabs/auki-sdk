@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 auki-datatypes = { path = "../../crates/auki-datatypes", optional = true }
 auki-session = { path = "../../crates/auki-session", optional = true }
+crossbeam-channel = "0.5"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 sha2 = "0.10"
@@ -33,3 +34,7 @@ path = "src/bin/observable_operable_demo.rs"
 [[bin]]
 name = "observation-request-bench"
 path = "src/bin/observation_request_benchmark.rs"
+
+[[bin]]
+name = "dataflow-scheduler-stress"
+path = "src/bin/scheduler_stress_benchmark.rs"

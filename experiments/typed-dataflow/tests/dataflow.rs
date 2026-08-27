@@ -125,9 +125,11 @@ fn queued_every_disconnect_reports_full_queue_instead_of_dropping() {
     wait_until(Duration::from_secs(1), || entered.load(Ordering::Acquire));
     assert_eq!(output.publish(1, 1).accepted, 1);
     let report = output.publish(2, 2);
-    assert_eq!(report.disconnected, 1);
+    assert_eq!(report.failed, 1);
     assert_eq!(connection.stats().overruns, 1);
     assert!(connection.stats().closed);
+    assert!(connection.stats().failed);
+    assert!(connection.failure().is_some());
 
     let (lock, changed) = &*gate;
     *lock.lock().unwrap() = true;

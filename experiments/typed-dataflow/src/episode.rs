@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::buffer::{Buffer, BufferRange};
 use crate::ports::{
-    Connection, ConnectionStats, DeliveryStatus, Endpoint, EndpointKind, Envelope, OutputPort,
+    ComponentError, Connection, ConnectionStats, DeliveryStatus, Endpoint, EndpointKind, Envelope,
+    OutputPort,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -194,6 +195,7 @@ struct EpisodeEndpoint<T> {
     accepted: AtomicU64,
     overruns: AtomicU64,
     closed: AtomicBool,
+    failure: Mutex<Option<ComponentError>>,
 }
 
 impl<T: Send + Sync + 'static> Endpoint<T> for EpisodeEndpoint<T> {
@@ -210,10 +212,11 @@ impl<T: Send + Sync + 'static> Endpoint<T> for EpisodeEndpoint<T> {
                 self.accepted.fetch_add(1, Ordering::Relaxed);
                 DeliveryStatus::Accepted
             }
-            Err(_) => {
+            Err(error) => {
                 self.overruns.fetch_add(1, Ordering::Relaxed);
                 self.closed.store(true, Ordering::Release);
-                DeliveryStatus::Disconnected
+                *self.failure.lock().unwrap() = Some(ComponentError::Reported(error.to_string()));
+                DeliveryStatus::Failed
             }
         }
     }
@@ -226,7 +229,12 @@ impl<T: Send + Sync + 'static> Endpoint<T> for EpisodeEndpoint<T> {
             replaced: 0,
             overruns: self.overruns.load(Ordering::Relaxed),
             closed: self.closed.load(Ordering::Acquire),
+            failed: self.failure.lock().unwrap().is_some(),
         }
+    }
+
+    fn failure(&self) -> Option<ComponentError> {
+        self.failure.lock().unwrap().clone()
     }
 
     fn is_closed(&self) -> bool {
@@ -248,5 +256,6 @@ pub fn connect_episode<T: Send + Sync + 'static>(
         accepted: AtomicU64::new(0),
         overruns: AtomicU64::new(0),
         closed: AtomicBool::new(false),
+        failure: Mutex::new(None),
     }))
 }

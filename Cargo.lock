@@ -1117,6 +1117,9 @@ version = "0.0.1"
 dependencies = [
  "auki-datatypes",
  "auki-session",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

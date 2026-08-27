@@ -1,661 +1,822 @@
-# Experiment: Typed Dataflow Prototype
+# Experiment: Observable and Operable Component Data Plane
 
-> **Status: experiment in progress.** The first network-independent prototype
-> lives in `experiments/typed-dataflow`. It is not a proposed production API.
-> See that crate's `RESULTS.md` for measured findings and open gates.
+> **Status: revised experiment with an implemented vertical slice.** This
+> document incorporates the first typed-dataflow prototype, its measured
+> results, and the terminology decisions made after reviewing it. The
+> Component/Output identity slice is implemented on
+> `codex/observable-operable-data-plane`; see the experiment's
+> `RESULTS-OBSERVABLE-OPERABLE.md`. This is not a production API proposal.
 
-## Decision this experiment must support
+## North star
 
-Should the SDK use one network-independent typed dataflow model for local
-production, processing, retention, and delivery?
+The SDK should help developers create composable Components that may expose
+Observables, Operables, or both. Those Components should compose in the same
+conceptual way whether they run in one process, on one Peer, or across Peers.
 
-The candidate shape is:
+The ultimate purpose is multi-robot orchestration. The data plane contributes
+three foundations:
+
+1. **Shared frames of reference** — identity, time, space, representation,
+   units, and semantics must travel with data and instructions.
+2. **Language hygiene** — one term should name one concept, and declarations
+   must truthfully describe the SDK payload or instruction at the interface.
+3. **Composability** — Components should form typed, inspectable collaborative
+   pipes without inventing a new integration path for each application.
+
+In one sentence:
+
+> The SDK provides typed Component interfaces that let Components observe and
+> operate one another without ambiguity about identity, meaning, or execution
+> context.
+
+## Decisions and terminology
+
+### Peer
+
+A **Peer is an authenticated SDK runtime**. It is the SDK's identity,
+authority, networking, Catalog, and runtime boundary.
+
+Identity, credentials, and runtime configuration create a live Peer instance:
 
 ```text
-Component OutputPort<T>
-  ├─ direct Connection<T> ─→ Component InputPort<T>
-  └─ Buffer<T>
-       ├─ local Component
-       ├─ StreamPump ─→ recipient
-       └─ Episode
+PeerIdentity + Credentials + PeerConfig
+                    |
+                    v
+             running Peer instance
+                    |
+                    v
+              hosts Components
 ```
 
-The experiment is successful only if it gives evidence about both sides of
-the decision:
+The same stable Peer identity and configuration may create a new runtime
+session after a restart. A Peer is therefore not merely a robot, process, or
+configuration object.
 
-1. Can the API make a typed processing graph obvious to an application author
-   and to a coding agent?
-2. Can its hot paths approach specialized Rust code without copying payload
-   bytes, serializing local data, or allocating unnecessarily?
-3. Can slow consumers be isolated with bounded and observable behavior?
-4. Can a Buffer fan out retained payloads without becoming a mandatory disk or
-   chunking boundary?
+### Component
 
-An attractive example that lacks measurements is not a successful result.
+A **Component is a composable unit of behavior hosted by a Peer**. It may read
+from outside the SDK, compute from SDK inputs, affect the outside world, or
+combine those behaviors.
 
-## Hypotheses
+```text
+Peer: robot-7
+|- Component: front-camera
+|- Component: object-detector
+|- Component: battery-monitor
+`- Component: left-arm
+```
 
-### H1 — explicit ports make graphs understandable
+The Peer answers **who is participating and under whose authority**. The
+Component answers **what behavior or capability is provided**.
 
-An application should be able to read the direction and type of a connection
-at the call site:
+### Component and Component Output identity
+
+A Component and one configured output of that Component have separate
+identities:
+
+- **Component ID and Component Manifest hash** identify the stable unit of
+  behavior and its declared Observable and Operable interface contract.
+- **Output ID and Output Manifest hash** identify one immutable configured
+  production contract for one named Component output slot.
+
+```text
+Camera Component: front-camera @ component-hash-a
+  output slot: frames
+    current Output: frames-17 @ output-hash-17
+```
+
+Changing a contract-affecting setting such as camera resolution replaces the
+Output, not the Camera Component:
+
+```text
+front-camera @ component-hash-a                 unchanged
+  frames-17 @ output-hash-17, 1920x1080         concluded
+  frames-18 @ output-hash-18, 1280x720          current
+```
+
+The stable output slot name `frames` may resolve to the current Output. An
+observation pinned to `frames-17` never silently becomes an observation of
+`frames-18`. A separate follow-current request may cross the replacement only
+by reporting the old and new Output identities explicitly.
+
+Products reference the exact Output that produced their observations. A
+Product Manifest must therefore name the producer Component ID, Output ID, and
+Output Manifest hash. Hashes pin exact manifests for identity and integrity;
+consumers compare typed standardized fields, not hashes, for compatibility.
+
+### Observable
+
+An **Observable<T> is a named typed interface through which one Component can
+show another Component something**. It defines what can be observed, including
+its type and meaning. It does not prescribe how the observing Component must
+ask or how the answer must be delivered.
+
+Each Observable declares the questions it knows how to answer. Depending on
+the Observable and the data available behind it, those questions might include:
+
+- show me the latest observation;
+- show me the first available observation;
+- show me every available observation;
+- show me the observations from a particular time or time range;
+- continue showing me new observations as they become available.
+
+These are examples, not a universal enum that every Observable must implement.
+A fresh camera output, a retained Buffer, and a concluded Episode will support
+different questions. Being Observable does not itself imply retained history
+or a live subscription.
+
+```text
+Camera.frames             Observable<VideoFrame>
+BatteryMonitor.charge     Observable<GaugeObservation>
+Arm.joint_states          Observable<JointState>
+```
+
+The observing Component may be hosted by the same Peer or another Peer.
+Observable does not mean public to the whole cluster; exposure and
+authorization determine which Components may observe it.
+
+### Operable
+
+An **Operable<I, R> is a named typed interface through which another Component
+may instruct a Component to configure itself or execute behavior**. `I` is the
+instruction type and `R` is an acknowledgement or result type when one exists.
+
+```text
+Camera.set_resolution     Operable<SetResolution, AppliedResolution>
+Camera.take_photo         Operable<CaptureRequest, PhotoReference>
+Display.present           Operable<DisplayFrame, Presented>
+Arm.move_joints           Operable<JointTargets, MotionAccepted>
+```
+
+An internal method is not automatically an Operable. The interface must be
+deliberately exposed to another Component. A camera whose application alone
+can call a private `set_resolution` method is not Operable through that method.
+It becomes Operable when `set_resolution` is exposed as a typed Component
+interface.
+
+An Operable is also not synonymous with every `InputPort<T>`. An input port may
+be ordinary implementation plumbing for a processing graph. An Operable
+expresses agency: another Component can intentionally cause configuration or
+execution.
+
+### Components may expose either or both
+
+Observable and Operable are not mutually exclusive Component kinds:
+
+```yaml
+component: front_camera
+
+observables:
+  - name: frames
+    datatype: video_frame
+
+operables:
+  - name: set_resolution
+    instruction: camera_resolution
+    result: applied_camera_resolution
+  - name: start_capture
+    instruction: start_capture
+  - name: stop_capture
+    instruction: stop_capture
+```
+
+Joint encoder readings are Observable. Joint control is Operable. That does
+not imply that one robot-arm Component should expose both. A clean design may
+use a joint-state Sensor Component and a separate joint-control Actuator
+Component, even when both ultimately refer to the same physical arm.
+
+Observable and Operable describe interfaces, not a requirement to combine
+sensing and actuation. Prefer separate Components when observation and control
+have different authority, safety, lifecycle, failure, or replacement
+boundaries. Combine them only when one Component must own an inseparable device
+state machine or provide atomic behavior that would become incorrect across a
+Component boundary. Separate Components must not independently race to own the
+same hardware driver; they may share a lower-level device owner that is not
+itself part of the public Component model.
+
+### Interface meaning is independent of reachability
+
+Whether an interaction crosses a Peer boundary does not redefine the
+interface:
+
+```text
+Component A --asks to observe--> Component B Observable<T>
+Component A --instructs------> Component B Operable<I, R>
+```
+
+Either relationship may be local or remote. The implementation path may be
+very different, but the application-level meaning should remain stable.
+
+Each exposed interface has a reachability policy:
 
 ```rust
-connect(
-    camera.outputs().frames(),
-    detector.inputs().frames(),
-    ConnectionOptions::inline_every(),
-)?;
-```
-
-The type parameter should normally be inferred. Connecting
-`OutputPort<CameraFrame>` to `InputPort<AudioFrame>` must fail at compile time.
-
-### H2 — a static inline path can be nearly free
-
-For concrete producer and consumer types, an inline `Every` connection should
-be capable of reducing to a borrowed function call:
-
-```text
-producer.publish(payload)
-  → consumer.accept(&payload)
-```
-
-It must not require serialization, heap allocation, reference counting, a
-queue, an async task, or a context switch.
-
-### H3 — a dynamic port path has measurable but bounded overhead
-
-Named ports that can be connected at runtime will probably require indirect
-dispatch. The experiment must measure this path separately rather than imply
-that it receives the same compiler optimization as the static path.
-
-### H4 — owning consumers can share one payload instance
-
-When queued connections or a Buffer must retain a payload beyond the publish
-call, the runtime should create at most one shared owned representation. Eight
-subscribers must not produce eight copies of the payload bytes.
-
-### H5 — retention can remain off the direct path
-
-A Buffer is an explicit subscriber to an output port. Local Components that do
-not need retention may connect directly. A Buffer append may retain a shared
-payload reference and notify its subscribers, but the first implementation
-must not serialize, chunk, or write to disk.
-
-### H6 — a lightweight Buffer can be the common remote-stream source
-
-Requiring remote Streams to read from a Buffer should add only bounded ring
-insertion, sequence assignment, and subscriber notification. It should not add
-payload copying, serialization, chunk-seal latency, or disk I/O.
-
-The experiment must compare:
-
-```text
-OutputPort → direct live pump
-OutputPort → one-entry Buffer → pump from Latest
-```
-
-The direct pump is a control implementation, not the presumed public design.
-If the lightweight Buffer has negligible cost, its stable identity, sequence
-space, replay options, gap reporting, and Episode-promotion path favor making
-it the required remote-stream source.
-
-### H7 — batching belongs behind the live Buffer path
-
-Rerun improves storage and transport efficiency by micro-batching small log
-calls into immutable chunks, flushing on time or byte thresholds. The useful
-hypothesis for this SDK is narrower:
-
-```text
-Buffer append
-  ├─ notify live subscribers immediately
-  └─ asynchronously build immutable retained chunks
-```
-
-A StreamPump following `Latest` must not wait for a chunk to seal. Chunked
-replay or storage may trade a small amount of latency for throughput, but that
-trade must not leak into direct local processing or the live Buffer cursor.
-
-## Non-goals
-
-The first experiment does not include:
-
-- libp2p, Discovery, Domain joining, Managers, membership, or heartbeats;
-- the existing network wire protocol;
-- authentication or authorization;
-- Catalog or Registry schemas;
-- disk persistence;
-- content hashing;
-- Arrow or another specific columnar representation in the first phase;
-- a production chunk format;
-- production FFI bindings;
-- automatic graph scheduling or distributed execution;
-- compatibility with current SDK APIs.
-
-These omissions are deliberate. The first question is whether the local data
-plane is sound.
-
-## Rerun-informed comparison boundary
-
-Rerun is useful evidence, not the target architecture. Its logging SDK routes
-one RecordingStream to [file and gRPC sinks](https://rerun.io/docs/concepts/logging-and-ingestion/sinks),
-[micro-batches rows into chunks](https://rerun.io/docs/reference/sdk/micro-batching),
-and uses bounded in-memory stores to serve late viewers. Its
-[logical recordings](https://rerun.io/docs/concepts/logging-and-ingestion/recordings)
-are not deliberately concluded Episodes, and its
-["components"](https://rerun.io/docs/concepts/logging-and-ingestion/entity-component)
-are ECS data fields rather than executable processors.
-
-This experiment borrows four ideas for direct evaluation:
-
-1. one producer path may fan out to live and retained destinations;
-2. retention should be bounded by bytes as well as entries or time;
-3. small retained entries may benefit from time-and-size micro-batching;
-4. immutable retained storage units may be shared by a Buffer and an Episode.
-
-It does **not** assume that local Component connections should encode Arrow
-rows, that all produced data belongs to one logical recording, or that a file
-sink defines an Episode.
-
-## Location and isolation
-
-Build the prototype as an experimental Rust crate:
-
-```text
-experiments/typed-dataflow/
-```
-
-It should have no dependency on `auki-network` or `auki-domain`. Reusing an
-existing payload datatype for one integration benchmark is allowed, but the
-core abstractions must not depend on today's Log, Manifest, Registry, Catalog,
-or Stream types.
-
-## Candidate public vocabulary
-
-The experiment should begin with the following concepts:
-
-```rust
-struct OutputPort<T> { /* candidate implementation */ }
-struct InputPort<T> { /* candidate implementation */ }
-struct Connection<T> { /* owns connection lifetime */ }
-
-enum ConnectionOptions {
-    InlineEvery,
-    QueuedEvery {
-        capacity: usize,
-        when_full: EveryFullPolicy,
-    },
-    Latest,
-}
-
-enum EveryFullPolicy {
-    Backpressure,
-    Disconnect,
-}
-```
-
-Dropping `Connection<T>` disconnects the ports. Connection lifetime must not be
-hidden in an unowned global graph.
-
-The exact Rust representation is part of the experiment. The names above are
-the intended application model, not a requirement to force every
-implementation through the same struct layout.
-
-### Named direction
-
-Ports must be visibly separated by direction:
-
-```rust
-camera.outputs().frames()
-detector.inputs().frames()
-detector.outputs().detections()
-display.inputs().frame()
-```
-
-Prefer semantic port names to generic names such as `input`, `output`, or
-`data`.
-
-## Delivery semantics
-
-### `InlineEvery`
-
-```text
-Produced: A B C D
-Called:   A B C D
-```
-
-- The publisher invokes the consumer on the publishing thread.
-- Every payload is delivered in order.
-- The publisher waits for the consumer.
-- The consumer receives a borrowed payload.
-- The connection has no queue and cannot silently drop.
-- Multiple inline consumers run in connection-registration order for the
-  prototype.
-- A slow or blocking consumer delays the publisher and later inline consumers.
-
-The experiment must document whether a consumer error closes only that
-connection or aborts the publish operation. Panics are not recovered across
-the connection boundary in the first implementation.
-
-### `QueuedEvery`
-
-```text
-publisher → bounded queue → consumer worker
-```
-
-- Every accepted payload is delivered once and in order.
-- The queue has an explicit positive capacity.
-- When full, the connection either applies backpressure or disconnects with an
-  explicit overrun error.
-- It must never claim `Every` while silently dropping an entry.
-- Each queued connection progresses independently from other queued
-  connections.
-
-### `Latest`
-
-```text
-Produced: A B C D
-Pending:          D
-```
-
-- The connection retains at most one pending payload.
-- A newly published payload replaces an unconsumed pending payload.
-- Replacement increments an observable dropped/replaced counter.
-- The consumer eventually observes the newest value available while it runs;
-  it is not required to observe intermediate values.
-
-## Payload ownership candidates
-
-The prototype must not assume that `T` contains its bytes directly. A camera
-payload may be a handle to heap, shared-memory, DMA, or GPU-backed storage.
-
-Test at least these two publication cases:
-
-### Borrowed inline-only publication
-
-If every connection is inline, the publisher should be able to lend the
-payload to every consumer without creating shared ownership:
-
-```text
-T on producer stack
-  ├─ &T → consumer A
-  └─ &T → consumer B
-```
-
-### Shared owning publication
-
-If any subscriber must outlive the call, create one shared owned payload and
-clone only its handle:
-
-```text
-shared payload
-  ├─ handle → queued consumer A
-  ├─ handle → latest consumer B
-  └─ handle → Buffer
-```
-
-The experiment may use `Arc<T>` initially, but the public model must not imply
-that all future payload storage is ordinary heap-owned Rust data.
-
-## Two implementations to compare
-
-### A. Static inline composition
-
-Use concrete generic producer and consumer types with no trait object in the
-per-payload call path. This is the candidate that may be monomorphized and
-inlined end to end.
-
-The compiled benchmark should be inspected sufficiently to establish whether
-the consumer call remains indirect. If it does, the experiment must not call
-this a zero-cost path.
-
-### B. Runtime-connectable named ports
-
-Use named `OutputPort<T>` and `InputPort<T>` handles that can be connected after
-the Component instances exist. Indirect dispatch is acceptable, but must be
-measured independently.
-
-This path represents the ergonomically strongest design for dynamic graphs,
-Catalog adapters, and language bindings. The comparison will determine whether
-both paths are necessary.
-
-## Buffer scope
-
-The first `Buffer<T>` is a bounded in-memory ring of shared immutable payloads.
-It is not a disk Log and does not use chunks.
-
-It must provide:
-
-- append from an `OutputPort<T>` connection;
-- a positive entry-capacity limit;
-- monotonically increasing sequence numbers;
-- one retained payload instance regardless of subscriber count;
-- a current retained sequence range;
-- subscription from `Latest`, `Current`, or `FromSequence`;
-- explicit overrun when a subscriber requests or falls behind evicted data;
-- prompt release of the Buffer's ownership when an entry is evicted;
-- bounded pending state per subscriber.
-
-The Buffer's ring slot may be reused after eviction, while a payload already
-leased to a consumer remains alive until that consumer releases its handle.
-Subscriber limits must prevent a stalled consumer from retaining unbounded
-history outside the ring.
-
-### Retention-budget extension
-
-After the entry-bounded ring passes, add combined limits:
-
-```rust
-struct BufferLimits {
-    max_entries: Option<usize>,
-    max_bytes: Option<usize>,
-    target_duration: Option<Duration>,
+enum Exposure {
+    Local,
+    Cluster,
 }
 ```
 
-At least one hard bound (`max_entries` or `max_bytes`) is required. A target
-duration is a desired window, not permission to exceed the hard memory bound.
-The Buffer must expose the actual retained sequence and time range after
-eviction.
+This is only candidate vocabulary. The important separation is:
 
-For the experiment, payload fixtures may report a known retained byte size.
-The future SDK will need a truthful accounting interface for external or GPU
-storage rather than assuming `size_of::<T>()` measures payload memory.
+- **Observable versus Operable** says what the interface means.
+- **Local versus cluster exposure** says where it may be reached.
+- **Authorization** says which caller may use it.
+- **Transport** says how an allowed interaction is delivered.
 
-### Why chunks are staged after the payload ring
+Only cluster-exposed interfaces appear in the Cluster Catalog. The Catalog
+must enumerate the actual Observable and Operable contracts; booleans such as
+`observable: true` or `operable: true` are insufficient.
 
-A chunk is a possible future physical retention unit, not the definition of a
-Buffer. Starting with a payload ring lets the experiment measure the simplest
-correct live and retained path.
+### Kind, datatype, schema, meaning, and unit are separate
 
-After the payload-ring baseline is measured, introduce a small asynchronous
-chunk-builder comparison only for retained replay and Episode promotion. It
-should be justified against one or more of:
+The Component or producer kind helps discovery. The port datatype and schema
+provide type safety and shape. Semantic fields explain what the value means.
 
-- large Buffer memory overhead;
-- expensive Episode promotion;
-- replay/indexing throughput;
-- repeated network encoding;
-- disk persistence.
+The agreed Gauge example is:
 
-The Buffer remains the semantic data product in both implementations:
-
-```text
-Buffer
-  identity + provenance + retention policy + available range + cursors
-    └─ storage implementation
-         ├─ shared payload ring
-         └─ open builder + immutable sealed chunks
+```yaml
+kind: gauge
+observes: battery_state_of_charge
+datatype: float64
+unit: percent
 ```
 
-A chunk has no Catalog identity or retention policy in this experiment. When
-the Buffer evicts a sealed chunk it releases its ownership. If an Episode also
-references that chunk, the chunk remains alive until the Episode releases it.
+## What the first experiment established
 
-## Transport-neutral StreamPump
+The first implementation is in PR
+[#361](https://github.com/aukilabs/auki-sdk/pull/361). It tested static and
+runtime-connectable typed ports, explicit delivery policies, shared immutable
+payloads, Buffers, StreamPumps, Episode promotion, and an experimental chunk
+builder.
 
-After the local port and Buffer measurements pass their correctness checks,
-add an in-memory StreamPump experiment:
+### Supported findings
 
-```text
-Peer-like A                                      Peer-like B
+1. **Typed named interfaces make graphs legible.** Compile-time payload types
+   rejected incompatible connections, and semantic names made direction clear.
+2. **A static local path can be essentially free.** The concrete inline path
+   matched the handwritten call in the first benchmark and compiled without an
+   indirect per-payload call.
+3. **Dynamic composition has real overhead.** Runtime port dispatch was about
+   40 ns per small publication in the recorded run, versus about 2.2 ns for the
+   static and direct paths.
+4. **Shared immutable payload ownership works.** Eight consumers, a Buffer, a
+   receiving Buffer, and an Episode could share payload storage without eight
+   byte-for-byte copies.
+5. **Delivery policy must be explicit.** The prototype's `Every` and `Latest`
+   policies make different delivery promises and must report backpressure,
+   replacement, disconnection, and gaps truthfully. The revised vocabulary
+   distinguishes those policies from observation-selection questions.
+6. **Buffers can be bounded and independently useful.** They provide recent
+   history, cursors, retained ranges, gap evidence, and Episode promotion.
+7. **A Buffer has not earned a mandatory place on every path.** The prototype
+   Buffer and Buffer-backed pump were materially slower than narrower control
+   paths.
+8. **Chunks remain an implementation experiment.** No measured result yet
+   justifies making immutable chunks the semantic definition or required
+   storage unit of a Buffer.
 
-Camera OutputPort
-  → Camera Buffer
-      → StreamPump → bounded in-memory sink → Remote Camera Buffer
-                                               → Detector input
+### First recorded benchmark
+
+The following was one unpinned local run and is evidence, not a universal
+performance claim:
+
+| Case | Nanoseconds per publication |
+|---|---:|
+| Handwritten direct call | 2.23 |
+| Static inline connection | 2.19 |
+| Dynamic inline connection | 40.05 |
+| One-entry Buffer append | 78.33 |
+| Current `CameraFrameHub`, eight stalled subscribers | 21.77 |
+| Direct latest pump | 121.66 |
+| One-entry Buffer then pump | 181.81 |
+
+The first experiment therefore supports one public semantic model with more
+than one optimized implementation path. It does **not** support forcing every
+local connection or every remote stream through one runtime mechanism.
+
+## Revised experiment question
+
+The original question was whether the SDK should use one typed dataflow
+runtime for local production, processing, retention, and delivery. That is now
+too coarse.
+
+The revised question is:
+
+> Can the SDK present one precise Component model—Observable and Operable
+> interfaces—while selecting distinct static, dynamic, retained, and
+> transported implementations without changing application semantics?
+
+The experiment must determine whether:
+
+1. Components can expose typed Observables and Operables without knowing
+   whether the observing or instructing Components are local or remote.
+2. Local static composition can remain compiler-optimizable.
+3. Dynamic local and transport-backed handles can preserve the same semantics
+   with measurable, bounded overhead.
+4. Buffers can remain optional observers used for retention rather than a
+   compulsory hop.
+5. Cluster Catalog entries can truthfully describe only the interfaces that
+   are deliberately cluster-exposed.
+6. A coding agent can assemble a valid graph without confusing producer kind,
+   datatype, schema, meaning, retention, or reachability.
+
+## Implementation prompt
+
+Build a second, isolated Rust experiment that evolves
+`experiments/typed-dataflow/`. Do not modify the SDK's production networking,
+Manager, heartbeat, Domain, Registry, Log, or streaming paths.
+
+The goal is not to preserve the first prototype API. Keep its benchmark and
+correctness evidence as baselines, but replace assumptions that no longer fit
+the revised model.
+
+### Required public model
+
+Prototype the smallest coherent form of these concepts:
+
+```rust
+Component
+ComponentManifest
+ComponentOutput<T>
+OutputManifest
+ProductManifest
+Observable<T>
+Operable<I, R>
+ObservationRequest
+Observation<T>
+Invocation
+Exposure // local or cluster
 ```
 
-This is not a network test. The sink deliberately models only the transport
-properties the data plane must handle:
+The exact Rust representation is part of the experiment. Do not force all
+concepts through trait objects or heap allocation merely to make their names
+uniform.
 
-- asynchronous acceptance;
-- bounded capacity;
-- cancellation;
-- receiver failure;
-- optional delay;
-- an observable delivered sequence;
-- a gap when the receiver cannot keep up.
+An Observable must declare:
 
-Use one logical pump per recipient. Multiple pumps may reference the same
-Buffer payload, but each owns its delivery progress, cancellation, and
-backpressure behavior.
+- Component identity and semantic interface name;
+- observation datatype;
+- the observation requests it supports;
+- delivery behavior for requests that may return more than one observation;
+- local or cluster exposure;
+- enough metadata to associate observations with their source identity,
+  clock, spatial frame when applicable, schema, semantics, and unit.
 
-### Direct-pump control
+Do not encode “Observable” as shorthand for “live subscription.” Selection and
+delivery are separate concerns. For example, “show me Tuesday” selects a time
+range; whether the selected observations must all be delivered or may be
+coalesced is a different policy.
 
-Implement a control path that subscribes a pump directly to an OutputPort with
-live-from-now semantics. Compare it with a pump following a one-entry Buffer
-from `Latest`.
+An Operable must declare:
 
-The comparison must answer:
+- Component identity and semantic interface name;
+- typed instruction and result or acknowledgement;
+- local or cluster exposure;
+- invocation identity and caller context;
+- explicit completion, rejection, cancellation, and error behavior.
 
-- Does the Buffer add an allocation or payload-byte copy?
-- Does it materially change publish-to-sink latency?
-- Can both paths isolate a stalled recipient equally well?
-- Does direct pumping duplicate sequence, gap, or fan-out machinery already
-  required by the Buffer?
+Do not treat ordinary private methods, lifecycle hooks, or all processing
+inputs as Operables.
 
-The result may preserve the direct path, but it should do so because of measured
-benefit rather than because another logging system models network delivery as a
-sibling sink.
+### Local and remote-shaped paths
 
-## Episode promotion extension
+Implement two in-memory Peer runtimes. They are test fixtures, not a new
+network stack. A Peer fixture should supply identity, Component hosting,
+Catalog projection, and a bounded transport adapter. Authentication may be
+represented by explicit caller identity and an allow/deny policy; do not build
+cryptography or integrate the production authorization system.
 
-After the Buffer experiment is correct, add the smallest possible Episode
-model:
-
-```text
-Buffer with sequence range [100, 200]
-  → promote [150, 200]
-  → Episode initially references the same retained payloads
-  → Episode continues accepting new payloads
-  → Episode concludes at sequence 260
-```
-
-For this first version, promotion may retain shared per-payload handles. It
-must not copy the payload bytes. Whether a later implementation should share
-immutable chunks is a separate benchmark-driven decision.
-
-For the chunk-builder extension, repeat promotion after several chunks have
-sealed. Confirm that the Buffer and Episode share those chunks, while any open
-partial chunk is handled explicitly. Record whether sealing or copying that
-partial chunk creates a latency or memory spike.
-
-## Demonstration graph
-
-The executable example should use this graph:
+Exercise the same interface semantics in four cases:
 
 ```text
-FakeCamera output.frames
-  ├─ InlineEvery  → MeanBrightness input.frames
-  │                   → output.level
-  │                       → Level Buffer
-  ├─ Latest       → SlowPreview input.frames
-  └─ QueuedEvery  → Camera Buffer
-                       ├─ StreamPump → Remote Camera Buffer
-                       │                → RemoteDetector input.frames
-                       └─ promoted Camera Episode
+local Component -> local Observable request and response
+remote Component -> transported Observable request and response
+local Component -> local Operable invocation
+remote Component -> transported Operable invocation
 ```
 
-The program should print or expose only evidence useful to the experiment:
-delivered sequences, replacements, overruns, retained ranges, and pointer or
-storage identity. It should not introduce a Catalog UI or network simulation.
+Local paths must not serialize. Transport-backed paths may encode and decode,
+but transport details must not leak into Component implementations.
 
-## Workload matrix
+### Demonstration Components
 
-Use three payload profiles:
+Build this minimum graph:
 
-| Profile | Representative shape | Purpose |
-|---|---:|---|
-| Small | 16–32 byte scalar/IMU observation | expose dispatch, allocation, and atomic overhead |
-| Medium | 4–16 KiB audio block | exercise ordinary queued delivery |
-| Large | approximately 6 MiB RGB frame handle | detect payload copying and memory retention |
+```text
+Peer A
+  Camera Component
+    Observable<VideoFrame>: frames
+    Operable<SetResolution, AppliedResolution>: set_resolution
+    private local method: reset_driver
 
-Large payload bytes should be allocated from a small reusable fixture pool
-outside the timed benchmark region. The benchmark must still use distinct
-payload identities and sequences; repeatedly publishing one constant pointer
-is insufficient to test retention behavior.
+  MeanBrightness Component
+    asks Camera.frames to show each new frame locally
+    Observable<GaugeObservation>: level
 
-Run each relevant case with:
+Peer B
+  Preview Component
+    asks Camera.frames to continue showing new frames through the transport adapter
 
-- one consumer;
-- eight consumers;
-- one and three processing stages;
-- all consumers keeping up;
-- one consumer deliberately stalled;
-- Buffer capacities of `1`, `60`, and a larger stress capacity appropriate to
-  the host running the benchmark.
+  CameraController Component
+    invokes Camera.set_resolution through the transport adapter
+```
 
-For the retained small-payload cases, compare:
+Use truthful Gauge metadata for the derived value, for example:
 
-- one stored object per payload;
-- chunk flushing by entry count;
-- chunk flushing by elapsed time;
-- chunk flushing by encoded byte threshold;
-- whichever of time or byte threshold fires first.
+```yaml
+kind: gauge
+observes: image_mean_luminance
+datatype: float64
+unit: percent
+```
 
-The experiment should not assume Rerun's particular default thresholds are
-appropriate for robotic data.
+The private `reset_driver` method must not become an Operable or appear in the
+Catalog. Add a local-only Operable as well and prove that a Component on Peer A
+can invoke it while Peer B cannot discover or invoke it.
 
-## Baselines
+### Observable selection and delivery
 
-Compare against:
+Model these as two independent decisions:
 
-1. A handwritten direct concrete function call.
-2. A purpose-built bounded queue for the same producer and consumer.
-3. The current SDK's `CameraFrameHub` for shared-reference latest delivery.
-4. The current stored-Log detector input path as a separate end-to-end
-   reference; label its disk I/O and decoding costs rather than conflating them
-   with dispatch overhead.
-5. A direct OutputPort-to-pump control against a one-entry Buffer-to-pump path.
-6. Per-payload retained storage against the experimental immutable chunk
-   builder for small, medium, and large payload profiles.
+1. **Selection:** which observations answer the question—for example current,
+   first available, all available, a time range, or new observations from now.
+2. **Delivery:** what happens if the answer contains multiple observations and
+   the observer cannot keep up.
 
-## Measurements
+Retain the first experiment's explicit delivery guarantees, but use names that
+do not confuse them with a “show me the latest” selection request:
 
-Collect:
+- **EverySelected:** preserve accepted selected observations in order. A full
+  bounded path must backpressure, reject, or disconnect explicitly; it may not
+  silently drop.
+- **CoalesceLatest:** retain at most the newest pending selected observation.
+  Replacements must be counted and observable.
 
-- messages per second;
-- publish-call duration;
-- end-to-end p50 and p99 delivery latency for queued paths;
-- allocations per published payload;
-- bytes copied per published payload where measurable;
-- CPU time;
-- peak retained memory;
-- replacement/drop/overrun counts;
-- shutdown and cancellation completion time.
-- chunk-fill ratio, chunk count, and time-to-first-live-delivery for chunked
-  retained cases.
+The exact API names remain experimental. The semantic distinction does not.
+Requesting the latest observation should normally return one value; following
+new observations with `CoalesceLatest` is a continuing relationship that may
+skip intermediate values under pressure.
 
-Report results separately for each payload profile and connection mode. A
-single blended throughput number is not useful.
+The producer must create one immutable payload representation that owning
+observers share. Adding eight local observers must not copy large payload
+bytes eight times.
 
-## Correctness tests
+### Operable invocation
 
-The prototype must include automated tests proving:
+Test at least:
 
-1. Incompatible port types do not compile.
-2. `InlineEvery` delivers every sequence once and in order.
-3. `QueuedEvery` delivers every accepted sequence once and in order.
-4. A full `QueuedEvery` connection never silently drops.
-5. `Latest` eventually delivers the newest sequence and reports replacements.
-6. Eight consumers observe the same large payload storage identity.
-7. A slow consumer does not block unrelated queued or latest consumers.
-8. A Buffer never exposes an evicted sequence as retained.
-9. A Buffer reports a gap when a cursor falls behind its retained range.
-10. A stalled subscriber cannot cause unbounded memory growth.
-11. Dropping a Connection stops future delivery and releases retained handles.
-12. An Episode promotion shares payload storage with its source Buffer.
-13. A StreamPump cancellation affects only its recipient.
-14. A remote-style receiving Buffer preserves source sequence and gap evidence.
-15. A one-entry Buffer-to-pump path does not copy payload bytes.
-16. Live pump delivery does not wait for retained chunk sealing.
-17. Buffer eviction releases its chunk ownership while an Episode reference
-    keeps the shared chunk alive.
-18. Combined entry/byte limits never exceed their hard configured bounds,
-    allowing only explicitly documented accounting slack.
+- successful local and transported invocation;
+- typed acknowledgement or result;
+- invalid instruction types rejected at compile time on typed handles;
+- unauthorized caller rejection;
+- unknown or unexposed Operable rejection;
+- cancellation or deadline behavior;
+- concurrent instructions with a declared ordering policy;
+- errors attributed to the target Operable rather than reported as observation
+  loss.
 
-## Performance decision gates
+Changing camera resolution changes the configured production contract, but it
+does not replace the Camera Component. Applying `set_resolution` must conclude
+the current `frames` Output and create a new immutable Output with a new Output
+ID, Output Manifest, and Output Manifest hash. The Component ID and Component
+Manifest hash remain stable.
 
-Before running the benchmarks, record the host, compiler, optimization profile,
-and CPU-affinity settings. Compare like with like.
+The `AppliedResolution` result must identify the replacement Output and the
+exact sequence or time boundary at which it becomes effective. Frames before
+that boundary reference the old Output Manifest hash; frames after it reference
+the new Output Manifest hash. The old Observable must not silently begin
+emitting observations governed by a different Output contract.
 
-The initial gates are:
+The experiment must choose and document how an active observation relationship
+crosses this boundary. The simplest correct behavior is to conclude the old
+relationship with an explicit `Reconfigured` reason and require the observer
+to resolve and observe the replacement Output. A distinct follow-current
+request may automatically rebind only if the transition and new Output
+identity remain explicit to the observer.
 
-- Static `InlineEvery` has no heap allocation per payload and is within 5% of
-  the handwritten direct-call baseline for the small payload benchmark.
-- Fan-out does not copy large payload bytes solely because another consumer is
-  attached.
-- All queue and Buffer configurations remain within calculable bounded memory
-  when a consumer stalls indefinitely.
-- `Latest` and overrun counters exactly account for payloads the consumer did
-  not receive in deterministic tests.
-- The publishing hot path performs no serialization or disk I/O.
-- A one-entry Buffer-to-pump path is compared directly with a live-from-now
-  OutputPort pump. If the Buffer path is materially slower, the universal
-  remote-stream-source rule must be reconsidered.
-- Retained chunk batching must improve a measured storage, replay, encoding, or
-  memory metric enough to justify its additional lifecycle complexity.
-- Live subscribers receive entries before or independently of chunk sealing.
-- The runtime-connectable implementation's cost is reported rather than hidden.
-  If its overhead is unacceptable for small payloads, the result should favor a
-  two-path design rather than weakening the measurements.
+Any Buffer or Episode whose Product Manifest names the old producer Output
+must continue to describe only observations produced under that contract. The
+experiment should roll to a new Buffer when the replacement Output becomes
+effective rather than mixing two production contracts into one deceptively
+homogeneous product.
 
-The 5% figure is an experiment threshold, not a universal SDK performance
-requirement. If measurement noise is larger, fix the benchmark before drawing
-an architectural conclusion.
+### Optional retention
 
-## Agent-friendliness check
+A Buffer is an optional observer and retention layer for an Observable:
 
-Give the public API documentation—but not the prototype implementation—to a
-coding agent and ask it to add:
+```text
+Camera.frames Observable
+  |- direct local observer
+  |- transport-backed observer
+  `- Buffer
+       `- Episode promotion
+```
 
-1. a typed `FakeMicrophone` output;
-2. a `Volume` Component with an explicitly named audio input and level output;
-3. a latest-only level display;
-4. a 60-entry audio Buffer;
-5. one deliberately invalid audio-to-camera connection test.
+Preserve the first prototype's bounded retention, cursor, gap, shared-payload,
+and Episode-promotion correctness tests. A Buffer-backed Observable may answer
+retained-range questions that the fresh producer Observable cannot. Do not
+require direct observers or remote delivery to pass through a Buffer.
 
-Record:
+Keep the direct-pump and Buffer-backed-pump benchmark as a decision control.
+Do not add a chunk store unless a specific measured retention, replay,
+encoding, persistence, or promotion problem motivates it.
 
-- whether the first implementation compiles;
-- incorrect assumptions made about direction, retention, or ownership;
-- whether the agent invents string type names or bypasses typed ports;
-- how much additional instruction was necessary.
+### Catalog projection
 
-This is qualitative evidence, but it directly tests the stated goal that the
-SDK should guide agents toward compliant construction.
+Generate a minimal Catalog view from each Peer fixture. It must:
 
-## Deliverables
+- list cluster-exposed Observables by Component and interface name;
+- state which observation requests each Observable currently supports;
+- include the current Output ID and Output Manifest for each exposed output
+  slot;
+- list cluster-exposed Operables with instruction and result contracts;
+- omit private and local-only interfaces;
+- distinguish kind, datatype, schema, `observes`, and unit;
+- avoid claiming availability for an interface that the transport adapter
+  cannot currently serve.
 
-The experiment ends with:
+The Catalog is a projection of runtime exposure, not the owner of Component
+behavior.
 
-1. the isolated prototype crate;
-2. the executable demonstration graph;
-3. correctness and compile-fail tests;
-4. reproducible benchmarks and raw results;
-5. a short report comparing static, dynamic, and current SDK paths;
-6. a comparison of direct and Buffer-backed StreamPump sources;
-7. a comparison of per-payload and chunk-backed retained storage;
-8. a decision: reject the model, adopt one implementation, or retain distinct
-   static and dynamic connection paths;
-9. a list of unresolved questions before Catalog, Registry, production storage,
-   or real networking work begins.
+### Correctness gates
+
+Automated tests must prove:
+
+1. A Component may expose only Observables, only Operables, or both.
+2. Incompatible typed Observable observation paths do not compile.
+3. Incompatible typed Operable instructions do not compile.
+4. Local and transported Observable paths preserve the declared selection and
+   delivery semantics.
+5. Local and transported Operable paths produce equivalent typed results.
+6. An Operable invocation can cause a visible change in Component behavior.
+7. Private and local-only interfaces do not appear in the remote Catalog.
+8. A remote Component cannot invoke a local-only Operable.
+9. Caller Peer and Component identity reach the Operable invocation context.
+10. Eight observers share one large immutable payload allocation.
+11. A stalled dynamic observer cannot create unbounded memory growth.
+12. Adding or removing a Buffer does not change Observable payload semantics.
+13. Dropping an observation or invocation handle releases its owned runtime
+    state.
+14. No local static path serializes or performs disk I/O.
+15. A returned Component error changes the affected observation or invocation
+    relationship to an explicit inspectable state rather than silently ending
+    delivery.
+16. A panic on an asynchronous path cannot silently kill a worker while its
+    handle continues to claim that it is live; the experiment must document
+    and test the chosen panic boundary.
+17. One failed observer or Operable invocation does not terminate unrelated
+    observers or invocations.
+18. Buffers handle equal, missing, and out-of-order source timestamps according
+    to an explicit policy.
+19. Time-range observation requests and duration eviction use a declared time
+    basis and never silently mix source time with arrival time.
+20. An Episode and Buffer can share sealed retained storage without copying;
+    each releases its ownership independently.
+21. Evicting an externally backed payload does not recycle or overwrite its
+    storage while an observer, Buffer, Episode, or transport still holds a
+    lease.
+22. External-memory accounting contributes truthful retained bytes to hard
+    Buffer limits.
+23. A bounded shared scheduler can cancel and drain observation work without
+    leaking tasks or requiring one OS thread per observer.
+24. Applying `set_resolution` preserves the Component ID and Component
+    Manifest hash while creating a replacement Output ID and Output Manifest
+    hash.
+25. Observations on either side of the reconfiguration boundary reference the
+    correct immutable Output Manifest.
+26. An existing observer receives an explicit reconfiguration transition and
+    cannot unknowingly consume observations governed by the replacement
+    contract.
+27. A Buffer whose Product Manifest references the old Output Manifest does
+    not silently retain observations produced under the new Output Manifest.
+
+### Performance comparisons
+
+Measure these paths independently:
+
+1. handwritten concrete observation callback;
+2. static live Observable observation;
+3. dynamically connected local live Observable observation;
+4. transport-adapter live Observable observation;
+5. handwritten direct configuration call;
+6. static Operable invocation;
+7. dynamically resolved local Operable invocation;
+8. transport-adapter Operable invocation;
+9. direct Observable-to-pump delivery;
+10. Observable-to-Buffer-to-pump delivery.
+
+Report publish or invocation cost, end-to-end p50 and p99 latency, allocation
+count, bytes copied, CPU time, peak retained memory, and all replacement,
+backpressure, rejection, cancellation, and gap counts.
+
+The static paths should again be inspected for indirect calls in the hot loop.
+Dynamic and transported paths are allowed to cost more, but their overhead
+must be reported rather than hidden behind a blended benchmark.
+
+## Required follow-up coverage from the first results
+
+Every item listed as **Deliberately unresolved** in the first experiment's
+`RESULTS.md` is required work for this experiment. An item may remain
+architecturally undecided, but it may not remain untested or unmeasured without
+an explicit blocking reason in the final report.
+
+### Measurement harness
+
+Replace the one-off timing run with a reproducible harness that:
+
+- records host, operating system, compiler, target, optimization profile, and
+  relevant feature flags;
+- pins the benchmark to a CPU when the platform supports it, and records when
+  pinning is unavailable;
+- includes warmup and repeated samples rather than reporting one run;
+- prevents the compiler from removing payload construction or consumption;
+- counts allocations and deallocations per observation or invocation;
+- instruments payload-byte copies separately from cheap handle clones;
+- reports p50 and p99 publish-to-observer or invoke-to-result latency;
+- reports CPU time and peak retained memory;
+- reports throughput together with every replacement, rejection,
+  backpressure, overrun, and gap count.
+
+Run the matrix with small scalar observations, medium audio blocks, and large
+camera-frame handles. Separate producer-call latency from end-to-end latency;
+neither substitutes for the other.
+
+### Current stored-Log detector comparison
+
+Add a separate end-to-end comparison with the current stored-Log detector
+input path. Feed logically equivalent camera observations through:
+
+```text
+decoded frame -> direct typed Component path -> detector
+decoded frame -> Buffer path -> detector
+stored Log -> read -> decode -> current detector path
+```
+
+Report storage read, decoding, dispatch, and detector execution costs
+separately. Include warm-cache and cold-cache results where the platform makes
+that distinction measurable. Do not blend disk I/O and decoding into a number
+presented as typed-dispatch overhead.
+
+This benchmark is a reference comparison. It does not authorize changes to the
+production stored-Log path.
+
+### Chunk and Episode evidence
+
+Extend the chunk sidecar only far enough to answer whether chunks solve a
+measured problem. Test:
+
+- a Buffer and promoted Episode sharing the same sealed-chunk storage identity;
+- Buffer eviction while the Episode continues retaining the chunk;
+- final release after both data products relinquish the chunk;
+- promotion while an open partial chunk exists;
+- replay, encoding, persistence, memory, and promotion cost against per-payload
+  retained storage;
+- live observation latency remaining independent of chunk sealing.
+
+The final report must identify a measured win that justifies chunk complexity
+or recommend removing chunks from the next design. Lifecycle correctness alone
+is not sufficient evidence.
+
+### Scheduler alternatives
+
+The first prototype used one OS thread per `BufferReader` and queued
+connection. Compare that baseline with at least one bounded shared worker or
+async scheduler implementation.
+
+Run one, eight, 64, and 256 simultaneous queued observation or instruction
+relationships, including one deliberately blocked observer. Measure:
+
+- OS thread and task count;
+- throughput and p50/p99 latency;
+- fairness between observers;
+- memory per relationship;
+- cancellation and shutdown completion time;
+- whether a blocked observer starves unrelated work.
+
+The purpose is not to choose the SDK's final global scheduler. It is to prove
+that the semantic model does not require one thread per observer and to expose
+the cost of the alternative.
+
+### Component errors and panics
+
+Give Observable delivery and Operable invocation explicit failure state. Test
+at least:
+
+- a recoverable error returned by an inline observer;
+- a recoverable error returned by an asynchronous observer;
+- an Observable producer reporting a terminal Component error;
+- an Operable rejecting an otherwise well-typed instruction;
+- a panic on the inline path;
+- a panic on an asynchronous worker;
+- inspection of the failed relationship after the failure;
+- isolation of unrelated observers and Operables;
+- cancellation, cleanup, and payload release after failure.
+
+The experiment need not promise recovery from every panic. It must prevent a
+handle from claiming healthy delivery after its worker has silently died, and
+it must document whether panic propagation, containment, or process abort is
+the supported boundary for each path.
+
+### Timestamp and retention correctness
+
+Sequence order and time order are not equivalent. Test Buffers and time-based
+observation requests with:
+
+- strictly increasing source timestamps;
+- equal timestamps;
+- observations arriving out of timestamp order;
+- a source clock moving backward;
+- observations without a usable source timestamp;
+- source timestamps from the wrong declared clock;
+- arrival time disagreeing materially with source time.
+
+The Buffer must declare whether duration retention and time-range selection use
+source time, arrival time, or another normalized time basis. Unsupported or
+invalid timestamp cases must be rejected, quarantined, or handled by another
+explicit policy; they must not silently corrupt the advertised retained range.
+
+### GPU, DMA, pooled, and other external storage
+
+Add a payload fixture whose bytes are owned outside ordinary `Arc<T>` heap
+storage. A simulated external allocation with explicit lease and release hooks
+is acceptable if real GPU or DMA hardware is unavailable.
+
+Prove that:
+
+- fan-out clones a handle or lease rather than copying payload bytes;
+- Buffer eviction releases only the Buffer's lease;
+- Episode promotion and transport can retain independent leases;
+- the backing allocation is released or returned to its pool exactly once;
+- a producer cannot overwrite pooled storage while any observer retains it;
+- retained-byte accounting reflects the external allocation rather than
+  `size_of::<T>()`;
+- an unavoidable GPU-to-CPU readback is explicit and measured as a copy.
+
+Run the large-payload fan-out and retention benchmarks with both ordinary heap
+storage and the external-storage fixture.
+
+### Agent-friendliness check
+
+Give only the public experiment documentation to a coding agent and ask it to
+add:
+
+1. a Microphone Component with an `audio` Observable;
+2. a local-only `set_gain` Operable;
+3. a cluster-exposed `start_capture` Operable;
+4. a Volume Component that observes `audio` and emits a Gauge Observable;
+5. a deliberately invalid audio-to-video observation path;
+6. a deliberately invalid remote invocation of `set_gain`.
+
+Record whether the agent:
+
+- distinguishes Observable delivery from Operable invocation;
+- keeps local versus cluster exposure separate from interface meaning;
+- uses typed contracts rather than stringly typed payloads;
+- describes the final emitted payload truthfully;
+- uses `kind`, `datatype`, `schema`, `observes`, and `unit` consistently;
+- bypasses the SDK abstractions or invents undeclared Catalog entries.
+
+This exercise must actually be run. Preserve the initial prompt, generated
+patch, compiler and test output, corrections requested from the agent, and
+final result. Do not count an implementation written by an author who already
+read the prototype internals as this test.
+
+### Deliverables
+
+The revised experiment ends with:
+
+1. the isolated prototype code;
+2. the two-Peer demonstration;
+3. compile-fail and runtime correctness tests;
+4. reproducible benchmarks, environment metadata, and raw samples;
+5. allocation, copy, latency, CPU, and retained-memory measurements;
+6. the separate current stored-Log detector comparison with staged costs;
+7. the per-payload versus shared-chunk result and recommendation;
+8. the one-thread-per-observer versus bounded-scheduler result;
+9. documented error, panic, timestamp, and retention policies;
+10. the external-storage ownership and accounting tests;
+11. an example Catalog projection;
+12. the complete agent-friendliness test artifact and observations;
+13. a comparison with the first experiment's measurements;
+14. a decision about the public semantic model and required optimized paths;
+15. explicit unresolved questions before production networking or Catalog
+    work.
 
 ## Stop conditions
 
-Stop and reassess rather than expanding the prototype if:
+Stop and reassess instead of expanding the prototype if:
 
-- typed named ports require serialization on local connections;
-- payload fan-out requires byte copies per consumer;
-- memory cannot be bounded under a stalled consumer;
-- static inline composition cannot approach a direct call;
-- delivery semantics cannot be stated without application-specific exceptions;
-- the simple demonstration requires hidden global state or a general graph
-  scheduler;
-- a chunk store becomes necessary merely to implement basic live fan-out.
+- Observable and Operable cannot be defined without transport-specific
+  behavior leaking into Components;
+- local static composition requires serialization, allocation, or indirect
+  dispatch in the hot path;
+- Operable becomes indistinguishable from every input port or public method;
+- cluster exposure cannot be represented separately from interface meaning;
+- payload fan-out requires a byte copy per observer;
+- a stalled observer or instruction can cause unbounded memory growth;
+- Catalog generation requires Components to lie about availability;
+- the experiment begins rebuilding Manager, heartbeat, membership, or
+  production networking logic.
 
-The purpose of the prototype is to learn whether the model deserves to become
-the SDK's center. It is not to accumulate enough experimental code that the
-model becomes difficult to reject.
+The experiment exists to test whether this vocabulary deserves to organize
+the SDK. It must remain easy to reject or revise.

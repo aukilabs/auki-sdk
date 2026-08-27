@@ -19,7 +19,9 @@
 //! ```
 
 mod buffer;
+mod camera;
 mod chunk;
+mod component;
 mod episode;
 mod ports;
 mod pump;
@@ -28,7 +30,19 @@ pub use buffer::{
     Buffer, BufferCursor, BufferError, BufferLimits, BufferRange, BufferReader, BufferReaderStats,
     CursorRead, CursorStart, Gap, connect_buffer,
 };
+pub use camera::{
+    AppliedResolution, CameraBufferError, CameraBufferRoller, CameraComponent, CameraError,
+    CameraProductBuffer, DriverReseeded, ReseedDriver, SetResolution, VideoFrame,
+};
 pub use chunk::{Chunk, ChunkBuilder, ChunkBuilderConfig, ChunkBuilderError, ChunkBuilderStats};
+pub use component::{
+    Catalog, CatalogComponentEntry, CatalogError, CatalogOutputEntry, CatalogProductEntry,
+    ComponentManifest, ComponentReference, Exposure, InMemoryTransport, Invocation,
+    InvocationContext, InvocationError, ManifestHash, Observable, ObservableContract,
+    ObservableTarget, Observation, ObservationAccess, ObservationEvent, Operable, OperableContract,
+    OutputManifest, OutputReference, OutputTransition, PayloadContract, PeerRuntime, ProductForm,
+    ProductManifest, manifest_hash, observation_input,
+};
 pub use episode::{Episode, EpisodeError, EpisodeState, connect_episode};
 pub use ports::{
     Connection, ConnectionError, ConnectionOptions, ConnectionStats, Envelope, EveryFullPolicy,

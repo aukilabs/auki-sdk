@@ -1,8 +1,38 @@
-# Typed dataflow experiment
+# Observable and Operable Component data-plane experiment
 
 This crate tests a network-independent data plane for SDK Components and data
 products. It deliberately does not use the current Log, Registry, Catalog,
 Domain, Manager, or networking implementations.
+
+The second slice adds a sharper public model while retaining the first
+prototype as a performance and ownership baseline:
+
+- a **Peer** is an authenticated-runtime-shaped test fixture;
+- a **Component** is stable composable behavior hosted by a Peer;
+- an **Observable** can show typed observations to another Component;
+- an **Operable** lets another Component intentionally configure or execute
+  behavior;
+- **exposure** determines whether an interface is discoverable through the
+  experimental Catalog;
+- a configured **Component Output** has an identity and immutable Manifest
+  separate from its Component;
+- a **Product Manifest** references the exact Output that produced it.
+
+The Camera vertical slice demonstrates why Component and Output identity are
+separate:
+
+```text
+Camera Component @ stable Component Manifest hash
+  Operable: set_resolution
+  output slot: frames
+    frames-1 @ Output Manifest hash 1  --Reconfigured-->
+    frames-2 @ Output Manifest hash 2
+```
+
+A pinned observation of `frames-1` ends at the explicit transition. An
+opt-in follow-current observation crosses to `frames-2` while reporting both
+identities. Buffer Products roll at the same boundary so one Product Manifest
+never claims observations produced under two Output contracts.
 
 ```text
 Component OutputPort<T>
@@ -64,6 +94,7 @@ requested sequence and the first sequence still available.
 
 ```sh
 cargo run -p auki-typed-dataflow-experiment --bin typed-dataflow-demo
+cargo run -p auki-typed-dataflow-experiment --bin observable-operable-demo
 cargo test -p auki-typed-dataflow-experiment --all-targets
 cargo test -p auki-typed-dataflow-experiment --doc
 cargo run --release -p auki-typed-dataflow-experiment \
@@ -74,6 +105,10 @@ cargo run --release -p auki-typed-dataflow-experiment \
 The optional benchmark feature imports the current `CameraFrameHub` only as a
 comparison baseline. The core experiment has no dependency on current SDK
 data-plane or network types.
+
+See [`RESULTS.md`](RESULTS.md) for the first typed-port and Buffer measurements
+and [`RESULTS-OBSERVABLE-OPERABLE.md`](RESULTS-OBSERVABLE-OPERABLE.md) for the
+Component/Output identity vertical slice.
 
 This code is intentionally disposable. The design should be rejected or
 changed if the evidence does not support it.

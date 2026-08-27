@@ -331,7 +331,7 @@ impl Session {
         }
 
         let head_spec = spec.head.clone();
-        let writer_mode = spec.writer_mode.clone();
+        let writer_mode = spec.writer_mode;
         let root = log_root(&storage_root, &inner.session_id, &peer_id, &resource_id);
         let manifest = PoseLogManifest {
             source_peer_id: peer_id.clone(),
@@ -359,7 +359,7 @@ impl Session {
             log_ref: log_ref.clone(),
             manifest: manifest.clone(),
             head_spec: head_spec.clone(),
-            writer_mode: writer_mode.clone(),
+            writer_mode,
             root: root.clone(),
         };
         inner.pose_logs.insert(

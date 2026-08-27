@@ -1616,12 +1616,7 @@ fn read_device_model_tip(
         return Ok(None);
     }
     let entry_path = model_dir.join(format!("{hash}.json"));
-    Ok(load_device_model_list_candidate(
-        app_root,
-        &entry_path,
-        peer_id,
-        visits,
-    )?)
+    load_device_model_list_candidate(app_root, &entry_path, peer_id, visits)
 }
 
 fn consume_device_model_list_visit(visits: &mut usize) -> Result<()> {
@@ -1774,12 +1769,8 @@ pub fn put_blob(app_root: &Path, bytes: &[u8]) -> Result<String> {
     }
     let sha256 = sha256_hex(bytes);
     let path = auki_layout::blob_path(app_root, &sha256);
-    if path.exists() {
-        match get_blob(app_root, &sha256)? {
-            Some(_) => return Ok(sha256),
-            // exists() raced with a delete (or non-file) — fall through and write.
-            None => {}
-        }
+    if path.exists() && get_blob(app_root, &sha256)?.is_some() {
+        return Ok(sha256);
     }
     let dir = path.parent().expect("blob path has parent");
     fs::create_dir_all(dir)?;

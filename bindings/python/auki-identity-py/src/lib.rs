@@ -22,6 +22,12 @@
 //! See [`bindings/python/auki-identity-py/README.md`](../README.md) for the
 //! Python-side surface and install instructions.
 
+// PyO3 0.22 generates unsafe helper calls and redundant conversions inside
+// proc-macro expansions under Rust 2024. Keep the release gate strict for
+// handwritten code while the binding family remains ABI-pinned to 0.22.
+#![allow(unsafe_op_in_unsafe_fn)]
+#![allow(clippy::useless_conversion)]
+
 use std::path::PathBuf;
 
 use pyo3::exceptions::{PyOSError, PyRuntimeError, PyValueError};
@@ -34,7 +40,7 @@ use pyo3::types::{PyBytes, PyModule};
 use auki_identity_rs::{
     SeedError, Wallet as RustWallet, load_or_mint_seed as rust_load_or_mint_seed,
 };
-use auki_network::PeerIdentity;
+use auki_network::Identity;
 use auki_network::app_instance::{DeriveError, derive as rust_app_instance_derive};
 
 // ─── load_or_mint_seed ───────────────────────────────────────────────────────
@@ -136,24 +142,21 @@ impl Wallet {
     /// pid = peer.peer_id()
     /// ```
     ///
-    /// This matches `auki_network::PeerIdentity::from_wallet(Arc::clone(&w)).peer_id()`
-    /// byte-for-byte: that function is sugar for
-    /// `from_seed(w.derive_child("peer/v1").seed()).peer_id()`.
+    /// This matches `auki_p2p::Identity::from_ed25519_seed(...)` byte-for-byte.
     ///
     /// The encoding is libp2p's: ed25519 pubkey → protobuf-wrapped
     /// `PublicKey` → SHA-256 multihash → base58btc multibase.
     #[pyo3(text_signature = "($self, /)")]
     fn peer_id(&self) -> String {
-        // `Wallet::seed()` returns `Vec<u8>` after the swift-bindings
-        // signature change; `PeerIdentity::from_seed` still takes
-        // `&[u8; 32]`. Bridge the two with try_into — the length is
-        // structurally guaranteed (signing key seed is 32 bytes).
+        // `Wallet::seed()` returns `Vec<u8>`; bridge it to the canonical
+        // fixed-size Identity constructor. The length is structurally
+        // guaranteed because a wallet signing-key seed is 32 bytes.
         let seed_vec: Vec<u8> = self.inner.seed();
         let seed_array: [u8; 32] = seed_vec
             .as_slice()
             .try_into()
             .expect("32-byte seed from Wallet::seed()");
-        let peer = PeerIdentity::from_seed(&seed_array);
+        let peer = Identity::from_ed25519_seed(&seed_array);
         peer.peer_id().to_string()
     }
 

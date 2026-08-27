@@ -141,8 +141,7 @@ fn format_mac(mac: &[u8; 6]) -> String {
 /// arrays in `mac_address`'s native iteration order; filtering and
 /// ordering are [`derive_from`]'s job.
 fn collect_macs() -> io::Result<Vec<[u8; 6]>> {
-    let iter = mac_address::MacAddressIterator::new()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    let iter = mac_address::MacAddressIterator::new().map_err(io::Error::other)?;
     Ok(iter.map(|m| m.bytes()).collect())
 }
 

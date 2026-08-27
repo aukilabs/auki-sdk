@@ -40,7 +40,6 @@ rust-version = "1.89.0"
 license = "MIT"
 repository = "https://github.com/aukilabs/auki-sdk"
 authors = ["Auki Labs Limited"]
-version = "0.0.1"
 
 [workspace.dependencies]
 anyhow = "1.0.95"

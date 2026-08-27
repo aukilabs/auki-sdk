@@ -11,6 +11,29 @@ join this authenticated runtime until their later platform stages land. A
 rollback means restoring the prior SDK line for the whole communicating group,
 not enabling a per-peer compatibility switch.
 
+## Release and toolchain matrix
+
+Stage 1 is the coordinated `0.1.0` native/Python line and has a Rust MSRV of
+`1.89.0`. Every active Cargo workspace package inherits that exact
+`rust-version`; release gates run on `+1.89.0`, not only on a newer compiler.
+
+| Surface | Coordinated version |
+|---|---|
+| SDK source | Git tag `v0.1.0` once the release gate is complete |
+| canonical transport crates | `auki-p2p==0.1.0`, then `auki-p2p-dataset==0.1.0` |
+| Rust Domain | `auki-domain==0.1.0`, consumed from the coordinated Git tag for Stage 1 |
+| Python | `auki-domain-py==0.1.0` plus exact `auki-session-py==0.1.0` |
+| unsupported Swift/browser lines | source tag `v0.0.60` until their later stages |
+
+The Rust Domain package still composes in-repository path crates, so the Stage
+1 distribution boundary is the coordinated Git tag rather than an independent
+`auki-domain` crates.io publish. The two canonical P2P crates are publishable;
+publish `auki-p2p` first because dataset package verification resolves its
+exact `0.1.0` dependency from the registry. The Python wheel pair must be built
+atomically from the same tag, lockfile, compiler, target, features, and
+allocator. This document describes the pending release line; it does not imply
+that the tag or registry artifacts have already been published.
+
 ## The new ownership model
 
 - `auki-session::Peer` owns stable application identity, peer registries, and

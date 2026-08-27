@@ -10,6 +10,10 @@
 //! types visible to UniFFI's metadata scanner.
 
 pub use auki_identity_rs::Wallet;
+// D14 deliberately keeps this deprecated canonical-Identity adapter for the
+// pinned Swift line for one release. Stage 2 replaces the Swift runtime rather
+// than teaching this compatibility scaffold the new Domain lifecycle.
+#[allow(deprecated)]
 pub use auki_network_rs::PeerIdentity;
 
 uniffi::setup_scaffolding!();
@@ -23,6 +27,7 @@ mod tests {
     /// the expected deterministic outputs. This is the proof that the
     /// scaffolding + feature-flagged annotations land coherently.
     #[test]
+    #[allow(deprecated)]
     fn wallet_and_peer_identity_round_trip_through_re_exports() {
         let wallet = Wallet::from_seed(vec![42u8; 32]).expect("32-byte seed");
         let wallet_again = Wallet::from_seed(vec![42u8; 32]).expect("32-byte seed");

@@ -396,10 +396,7 @@ fn path_has_parent_dir(path: &Path) -> bool {
 fn resolve_urdf_mesh(package_dir: &Path, original: &str, rel: &str) -> Option<PathBuf> {
     let mut candidates = vec![package_dir.join(rel)];
     if let Some(rest) = original.strip_prefix("package://") {
-        let (pkg, relative) = rest
-            .split_once('/')
-            .map(|(pkg, relative)| (pkg, relative))
-            .unwrap_or((rest, ""));
+        let (pkg, relative) = rest.split_once('/').unwrap_or((rest, ""));
         candidates.push(package_dir.join(rest));
         if !relative.is_empty() {
             candidates.push(package_dir.join(pkg).join(relative));

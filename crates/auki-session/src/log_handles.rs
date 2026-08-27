@@ -11,6 +11,12 @@ use std::sync::Arc;
 
 use crate::log_specs::HeadSpec;
 
+/// A consistent persisted-log snapshot paired with its live append receiver.
+pub type LogSnapshot<T> = (
+    Vec<auki_logs::Entry<T>>,
+    tokio::sync::broadcast::Receiver<(i64, T)>,
+);
+
 pub struct SensorLogHandle {
     pub resource_id: String,
     pub log_ref: LogRef,
@@ -83,10 +89,7 @@ impl MapLogHandle {
     /// replay/live boundary from losing or duplicating an append.
     pub fn snapshot_and_subscribe(
         &self,
-    ) -> crate::Result<(
-        Vec<auki_logs::Entry<auki_datatypes::map::MapUpdate>>,
-        tokio::sync::broadcast::Receiver<(i64, auki_datatypes::map::MapUpdate)>,
-    )> {
+    ) -> crate::Result<LogSnapshot<auki_datatypes::map::MapUpdate>> {
         let mut writer = self.writer.lock();
         writer.flush()?;
         let entries =
@@ -239,13 +242,7 @@ impl DetectionLogHandle {
     /// Atomically capture persisted history and subscribe to future entries.
     pub fn snapshot_and_subscribe(
         &self,
-    ) -> Result<
-        (
-            Vec<auki_logs::Entry<auki_datatypes::detection::DetectionFrame>>,
-            tokio::sync::broadcast::Receiver<(i64, auki_datatypes::detection::DetectionFrame)>,
-        ),
-        auki_logs::Error,
-    > {
+    ) -> Result<LogSnapshot<auki_datatypes::detection::DetectionFrame>, auki_logs::Error> {
         let mut writer = self.writer.lock();
         writer.flush()?;
         let history =

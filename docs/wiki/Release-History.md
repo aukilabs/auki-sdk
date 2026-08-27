@@ -10,7 +10,7 @@ Each entry summarizes what changed, who's affected, and any migration notes. The
 
 ---
 
-## Unreleased v0.1 — authenticated Domain Stage 1
+## Unreleased v0.1.0 — authenticated Domain Stage 1
 
 **Status:** source-complete migration guidance; the Stage 1 release gate and
 coordinated tag are still pending. Do not substitute a Manager-era v0.0.x tag
@@ -26,6 +26,9 @@ for local Stage 1 evaluation.
   `auki-session-py==0.1.0` from the same SDK build.
 - The diagnostic CLI provides a real two-process direct-TCP catalog proof and
   fail-closed wrong-Domain/wrong-Peer/malformed-credential checks.
+- The active Cargo workspace pins Rust `1.89.0`; `auki-domain`, `auki-p2p`,
+  and `auki-p2p-dataset` are versioned `0.1.0`. Publish the P2P crate before
+  dataset, while Rust Domain is consumed from the coordinated source tag.
 
 **Who's affected:** every native networking consumer. Upgrade a communicating
 Rust/Python group together; Swift and browser remain on their pinned prior lines
@@ -33,6 +36,29 @@ until their later authenticated-engine stages.
 
 **Migration:** follow the
 [authenticated Domain migration guide](https://github.com/aukilabs/auki-sdk/blob/develop/docs/authenticated-domain-migration.md).
+
+---
+
+## v0.0.60 — SDK-native voxel mapping and scalar sensors
+
+**Released:** 2026-08-07 · [`git show v0.0.60`](https://github.com/aukilabs/auki-sdk/releases/tag/v0.0.60)
+
+- Added SDK-native voxel mapping, replay checkpoints, frame aliases, map
+  source color, and independent Mapper output clocks.
+- Added application-owned detector execution and streamed detection-log
+  resources.
+- Added live typed messages and Python send/receive surfaces.
+- Added the scalar sensor family across registries, logs, resources, streams,
+  and Python bindings.
+- Hardened stream teardown and expanded geometry conversion bindings.
+
+**Who's affected:** Manager-era native, Swift, and browser consumers that need
+the final pre-Stage-1 source line. This tag remains the pinned prior line while
+authenticated Swift/browser engines are developed separately.
+
+**Migration:** Do not mix `v0.0.60` peers with authenticated `v0.1.0` peers.
+Upgrade a communicating Rust/Python group together, or keep the entire group on
+this tag.
 
 ---
 

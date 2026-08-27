@@ -4,6 +4,25 @@ On-device SDK for the Auki spatial-computing protocol — a Cargo workspace of R
 
 See [VISION.md](VISION.md) for the aspirational spec; this file describes what's actually in the repo today. [GLOSSARY.md](GLOSSARY.md) defines the domain terms. Existing Manager-era consumers should start with the [authenticated Domain migration guide](docs/authenticated-domain-migration.md).
 
+## Stage 1 release line
+
+The authenticated native/Python release candidate is the coordinated `0.1.0`
+line. The active Cargo workspace declares an MSRV of Rust `1.89.0`, inherited
+by every workspace package and checked at that exact toolchain before release.
+
+| Artifact | Stage 1 version/distribution |
+|---|---|
+| SDK source | coordinated Git tag `v0.1.0` after the release gate |
+| `auki-p2p` | crate `0.1.0`; publish before dependent crates |
+| `auki-p2p-dataset` | crate `0.1.0`; publish after `auki-p2p 0.1.0` |
+| Rust `auki-domain` | crate version `0.1.0`, consumed from the coordinated Git tag in Stage 1 |
+| Python Domain/Session | exact paired wheels `auki-domain-py==0.1.0` and `auki-session-py==0.1.0` from one build |
+| Swift and browser | prior Manager-era source tag `v0.0.60`; not wire-compatible with Stage 1 |
+
+No `v0.1.0` tag or registry package is published by this source checkout.
+Publishing is a separate release action after the local gate; unsupported
+platforms remain retrievable at `v0.0.60` until their later breaking stages.
+
 ## What this SDK does today
 
 The Auki protocol is built around five questions any node should be able to answer about any other node — **Identity (who am I?)**, **Spatial (where did this happen?)**, **Temporal (when did this happen?)**, **Networking (how do I talk to you?)**, and **Tokenomics (how do I compensate you?)**. The SDK today implements the foundations for each.

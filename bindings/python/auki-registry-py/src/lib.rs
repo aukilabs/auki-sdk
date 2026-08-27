@@ -18,6 +18,12 @@
 //! without building plain dicts by hand. Both are serialized as `dict`
 //! when passed through the `hash_*` / `write_*` helpers.
 
+// PyO3 0.22 proc-macro expansions trigger these Rust 2024/Clippy lints. They
+// cannot be corrected in handwritten wrapper code without changing the shared
+// binding ABI, so scope the compatibility allowance to this crate.
+#![allow(unsafe_op_in_unsafe_fn)]
+#![allow(clippy::useless_conversion)]
+
 use std::path::PathBuf;
 
 use auki_registry_rs as registry;
@@ -207,6 +213,7 @@ fn frame_unity(py: Python<'_>, peer_id: &str, frame_id: &str) -> PyResult<PyObje
 
 #[pyfunction]
 #[pyo3(signature = (*, peer_id, frame_id, handedness, x, y, z, units))]
+#[allow(clippy::too_many_arguments)]
 fn frame_entry(
     py: Python<'_>,
     peer_id: &str,
@@ -298,6 +305,7 @@ fn camera_sensor_entry(
 
 #[pyfunction]
 #[pyo3(signature = (*, peer_id, sensor_id, sensor_type, fields, point_step, is_bigendian, frame_rate_hz, frame))]
+#[allow(clippy::too_many_arguments)]
 fn rangefinder_sensor_entry(
     py: Python<'_>,
     peer_id: &str,
@@ -328,6 +336,7 @@ fn rangefinder_sensor_entry(
 
 #[pyfunction]
 #[pyo3(signature = (*, peer_id, sensor_id, sensor_type, sample_rate_hz, channels, sample_format, channel_layout, frame))]
+#[allow(clippy::too_many_arguments)]
 fn audio_sensor_entry(
     py: Python<'_>,
     peer_id: &str,
@@ -518,6 +527,7 @@ fn utc_clock_entry(
 
 #[pyfunction]
 #[pyo3(signature = (*, peer_id, map_id, frame, voxel_size_m, chunk_dimension, color_model=None, semantic_classes=Vec::new()))]
+#[allow(clippy::too_many_arguments)]
 fn voxel_map_entry(
     py: Python<'_>,
     peer_id: &str,

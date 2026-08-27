@@ -23,11 +23,16 @@ Current native app layering:
 - `auki_session::Peer`: long-lived peer identity + app identity + storage root + peer-level registries for sensors, frames, and detectors.
 - `auki_session::Session`: one run / timeline born from `Peer::start_session()`. It owns the fresh `session_id`, the session clock registry, the auto-minted monotonic + UTC clocks, and live logs.
 - `auki_protocols`: exact authenticated protocol IDs, versioned wire types, bounded framing, validation, and locked vectors. It owns no runtime or handlers.
+- `auki_auth`: optional native User/App API + DDS authority preparation. It
+  returns one validated `PreparedPeer`; it owns no Domain, route, relay,
+  discovery, protocol, or background renewal lifecycle.
 - `auki_domain::Domain`: authenticated network presence for one `Peer` + `Session` in one exact DDS Domain UUID. It owns one P2P node, serves only the exact versions selected through default-none `ServedProtocols`, and leaves with an owned cleanup barrier.
 
 Use the SDK for:
 
-- Stable peer identity: seed loading/minting, wallet reconstruction, peer identity derivation, and representing the app in the Auki network.
+- Stable peer identity: use `auki_p2p::Identity::load_or_create` for a native
+  persisted P2P identity. Use wallet child derivation only when the product
+  intentionally binds its Peer ID to an existing wallet lineage.
 - Peer/session lifecycle: `Peer::new(...)`, peer-level registry registration, `Peer::start_session()`, session clocks/logs, and `Domain::builder(...).join()`.
 - Authenticated Domain lifecycle: installing host-fetched DDS authority, joining/leaving one Domain, reconnecting over explicit routes, and observing currently authenticated peers.
 - Live resource discovery: reading what an expected authenticated peer currently offers through `/auki/auth/1/resources/0.2.0` (and retained catalog versions).
@@ -43,8 +48,9 @@ The app is responsible for:
 
 - Product behavior, UI, workflows, and presentation.
 - Choosing which SDK resources to request, produce, display, or reconcile.
-- Acquiring and refreshing DDS verification keys and the local peer-bound
-  credential; core Domain/P2P crates perform no DDS or DMS HTTP.
+- Choosing the authority adapter. Native User/App hosts may use `auki_auth`;
+  Robot/Compute hosts use product-owned machine adapters. Core Domain/P2P
+  crates perform no DDS or DMS HTTP, and the host owns renewal scheduling.
 - Supplying exact-peer route hints from configuration, product state, or a
   host-owned discovery/DDS/DMS adapter. Routes and `known_peers()` observations
   never authorize a peer.
@@ -56,7 +62,8 @@ The app is responsible for:
 
 For a native app using the current split API, the startup order is:
 
-1. Load or reconstruct stable identity.
+1. Load or create stable identity. For a native P2P peer, prefer
+   `auki_p2p::Identity::load_or_create`.
 2. Construct a `Peer`.
 3. Register peer-level metadata on the `Peer`.
 4. Start a `Session` from the `Peer`.
@@ -67,14 +74,7 @@ For a native app using the current split API, the startup order is:
 Rust shape:
 
 ```rust
-let seed = auki_identity::load_or_mint_seed(&identity_seed_path)?;
-let wallet = auki_identity::Wallet::from_seed(seed.to_vec())?;
-let peer_seed: [u8; 32] = wallet
-    .derive_child("peer/v1")
-    .seed()
-    .try_into()
-    .expect("Wallet seeds are always 32 bytes");
-let identity = auki_p2p::Identity::from_ed25519_seed(&peer_seed);
+let identity = auki_p2p::Identity::load_or_create(&identity_path)?;
 let peer_id = identity.peer_id().to_string();
 
 let peer = auki_session::Peer::new(peer_id, app_id)

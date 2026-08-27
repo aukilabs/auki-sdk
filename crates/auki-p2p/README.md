@@ -15,9 +15,16 @@ application protocol's wire format.
 ## Stable identity
 
 `auki_p2p::Identity` is the canonical owner of the Ed25519 private key used by
-libp2p Noise and DDS proofs. Production hosts either restore its canonical
-protobuf encoding or construct it from stable 32-byte seed material. A
-wallet-backed host uses one derivation recipe:
+libp2p Noise and DDS proofs. Native hosts should use the race-safe canonical
+store directly:
+
+```rust
+let identity = auki_p2p::Identity::load_or_create("./state/peer.identity")?;
+```
+
+It creates only when absent and rejects corrupt, noncanonical, unsafe, or
+wrong-algorithm existing material without replacing it. A wallet-backed host
+may instead use one deliberate derivation recipe:
 
 ```rust
 let peer_seed: [u8; 32] = wallet
@@ -49,8 +56,9 @@ messages and policy there. The protocol crate should:
 5. Export a narrow, cloneable service facade for its callers.
 
 The host application remains the composition root: it acquires and refreshes
-credentials, owns shutdown, constructs one `Node`/`DomainAuthority`/
-`RouteCatalog`, and gives those shared capabilities to each protocol crate.
+credentials (native User/App hosts may opt into sibling [`auki-auth`](../auki-auth)),
+owns shutdown, constructs one `Node`/`DomainAuthority`/`RouteCatalog`, and gives
+those shared capabilities to each protocol crate.
 
 The SDK's `ApplicationProtocol` vectors and authenticated Domain protocol tests
 prove this generic boundary without making a product protocol part of the

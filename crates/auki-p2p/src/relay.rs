@@ -221,7 +221,7 @@ impl ReservationGeneration {
 /// An immutable capability used to stamp evidence for one reservation.
 ///
 /// The private node instance ID prevents a handle minted by a different
-/// [`RelayReservationNode`] from mutating this node, even when both nodes use
+/// `RelayReservationNode` from mutating this node, even when both nodes use
 /// the same local Peer ID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RelayReservationHandle {

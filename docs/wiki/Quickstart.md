@@ -32,6 +32,12 @@ cargo check --locked -p auki-diagnostic-app
 Build the paired Python bindings from that same checkout with the commands in
 the [`auki-domain-py` README](https://github.com/aukilabs/auki-sdk/blob/develop/bindings/python/auki-domain-py/README.md).
 
+For a native Rust experiment that needs real Domain authority, use
+[`auki-auth`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-auth):
+email/password or a trusted App key/secret selects an accessible DDS Domain and
+returns the Peer-ID-bound authority consumed by `DomainBuilder`. Peer routes
+and discovery remain a separate host input.
+
 ## Construct a peer, start a session
 
 Since #282 the entry point is a long-lived `Peer` that mints `Session`s. The identities split across the two:

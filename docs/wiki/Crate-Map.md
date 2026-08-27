@@ -81,6 +81,15 @@ DDS-signed Domain credentials, mutual-authentication framing, explicit direct
 and relay routes, relay reservations, and authenticated-peer observations. It does
 not fetch credentials or routes over HTTP.
 
+### [`auki-auth`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-auth)
+
+Native, bounded API/DDS client for turning a trusted User email/password or App
+key/secret into one selected-Domain, Peer-ID-bound `PreparedPeer`. It validates
+the returned credential and verification-key lineage before the host starts a
+Domain. It owns no routes, discovery, relay booking, protocol handlers, or
+background renewal task. Robot and Compute authority adapters remain
+Posemesh-owned because their Domain is assigned/scheduled rather than selected.
+
 ### [`auki-protocols`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-protocols)
 
 Owns the exact authenticated `/auki/auth/1/...` IDs, versioned wire types,

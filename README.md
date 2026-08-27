@@ -15,6 +15,7 @@ by every workspace package and checked at that exact toolchain before release.
 |---|---|
 | SDK source | coordinated Git tag `v0.1.0` after the release gate |
 | `auki-p2p` | crate `0.1.0`; canonical transport published by this repository |
+| `auki-auth` | crate `0.1.0`; native API/DDS authority preparation in the coordinated source line |
 | `auki-protocols` | crate `0.1.0`; exact wire contracts in the coordinated source line |
 | Rust `auki-domain` | crate version `0.1.0`, consumed from the coordinated Git tag in Stage 1 |
 | Python Domain/Session | exact paired wheels `auki-domain-py==0.1.0` and `auki-session-py==0.1.0` from one build |
@@ -34,9 +35,11 @@ The Auki protocol is built around five questions any node should be able to answ
 
 ### Identity
 
-- **`Wallet`** — ed25519 keypair with deterministic child derivation. A host
-  constructs its canonical `auki_p2p::Identity` from the 32-byte seed of
-  `Wallet::derive_child("peer/v1")`; the wallet also signs creation certs.
+- **Stable P2P identity** — native hosts use
+  `auki_p2p::Identity::load_or_create` for canonical, race-safe persistent
+  Ed25519 identity. Products that intentionally bind Peer ID to a wallet may
+  instead construct it from `Wallet::derive_child("peer/v1")`; the wallet also
+  signs creation certs.
 - **`auki-jcs` + `auki-hash`** — RFC 8785 JSON canonicalization + XXH3-128 content-addressing. The hash IS the version; refining an entry is a sibling-write under the same id.
 - **Sensor / Clock / Frame Registries** — content-addressed catalogs for every entity referenced by the logs. Logs pin their `sensor_hash` / `clock_hash` / `frame_hash`; spatial sensors pin an exact `frame_id` + `frame_hash`.
 
@@ -61,6 +64,9 @@ The Auki protocol is built around five questions any node should be able to answ
 - **`auki-p2p` authenticated transport** owns the stable libp2p identity,
   DDS-signed Domain credentials, mutual authentication, explicit direct/relay
   routes, relay reservations, and live authenticated-peer observations.
+- **`auki-auth` native authority preparation** exchanges a trusted User
+  email/password or App key/secret for a selected-Domain, Peer-ID-bound DDS
+  credential. It owns no Domain runtime, routes, discovery, or background task.
 - **Authenticated application protocols** use `/auki/auth/1/...` IDs for info,
   resource catalogs v0.2/v0.3/v0.4, registries v0.2/v0.3, blobs, messages,
   and typed streams. `auki-protocols` owns their exact IDs, bounded codecs,
@@ -104,6 +110,7 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 | [`auki-maps`](crates/auki-maps) | Deterministic voxel Map accumulation + renderer-neutral chunk updates | ✓ |
 | [`auki-mappers`](crates/auki-mappers) | SDK-native Map producers; point-cloud + pose voxel Mapper | ✓ |
 | [`auki-p2p`](crates/auki-p2p) | Authenticated libp2p runtime, stable identity, explicit direct/relay routes, relay reservations, and peer observations | ✓ |
+| [`auki-auth`](crates/auki-auth) | Bounded native User/App API + DDS flow producing validated authority for one selected Domain | WIP (dev deployment proof pending) |
 | [`auki-protocols`](crates/auki-protocols) | Exact authenticated-protocol IDs, bounded codecs, validation, and transport-neutral wire types; no runtime | ✓ |
 | [`auki-session`](crates/auki-session) | Declarative app API: `Peer` (identity + registries) + `Session` (clocks + log registration); network-free | ✓ |
 | [`auki-domain`](crates/auki-domain) | Public authenticated `Domain` lifecycle over one DDS Domain UUID, with explicit authority/routes and retained catalogs, registries, blobs, messages, and streams | ✓ |

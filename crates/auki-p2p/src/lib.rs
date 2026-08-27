@@ -8,6 +8,8 @@
 mod authority;
 mod error;
 mod identity;
+#[cfg(not(target_arch = "wasm32"))]
+mod identity_store;
 mod observation;
 mod relay;
 mod relay_client;
@@ -20,7 +22,7 @@ mod transport;
 
 pub use authority::{DomainAuthority, P2pCredentialError, P2pCredentialResult};
 pub use error::{Error, Result};
-pub use identity::Identity;
+pub use identity::{Identity, PeerIdentityProof};
 pub use libp2p::{multiaddr::Protocol, swarm::ConnectionId, Multiaddr, PeerId};
 pub use observation::{
     AuthenticatedPeerObservation, NodeFailure, NodeObservationEvent, NodeObservationSnapshot,

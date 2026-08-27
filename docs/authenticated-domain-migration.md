@@ -22,6 +22,7 @@ Stage 1 is the coordinated `0.1.0` native/Python line and has a Rust MSRV of
 |---|---|
 | SDK source | Git tag `v0.1.0` once the release gate is complete |
 | canonical transport crate | `auki-p2p==0.1.0` |
+| native User/App authority client | `auki-auth==0.1.0` in the coordinated source line |
 | application wire-contract crate | `auki-protocols==0.1.0` in the coordinated source line |
 | Rust Domain | `auki-domain==0.1.0`, consumed from the coordinated Git tag for Stage 1 |
 | Python | `auki-domain-py==0.1.0` plus exact `auki-session-py==0.1.0` |
@@ -42,6 +43,8 @@ does not imply that the tag or registry artifacts have already been published.
   storage.
 - `auki-session::Session` owns one recording timeline, its clocks, and logs.
 - `auki-domain::Domain` owns one native P2P node for one exact DDS Domain UUID.
+- `auki-auth` optionally turns native User/App credentials plus a stable
+  identity into validated authority for one selected Domain.
 - `auki-protocols` owns exact application protocol IDs, wire types, bounded
   framing, validation, and locked vectors; it owns no transport or handlers.
 - The host acquires DDS verification keys and a signed P2P credential, persists
@@ -54,16 +57,20 @@ select every exact inbound version with `ServedProtocols`; client operations
 remain available regardless of that selection. Compiling an `auki-protocols`
 feature means the wire contract is available, not that a handler is installed.
 
-The configured key owner is always `auki_p2p::Identity`. Restore its canonical
-protobuf private-key encoding, or for a wallet-backed host pass the 32-byte seed
-from `Wallet::derive_child("peer/v1")` to
-`Identity::from_ed25519_seed`. Never generate a replacement as fallback for
-missing or invalid persistent state: it will have a different Peer ID and will
-not match the signed credential.
+The configured key owner is always `auki_p2p::Identity`. Native hosts should
+use `Identity::load_or_create(path)`, which creates only when absent and rejects
+corrupt, unsafe, or noncanonical existing files without replacement. A
+wallet-backed host may instead pass the 32-byte seed from
+`Wallet::derive_child("peer/v1")` to `Identity::from_ed25519_seed`. Never mint a
+replacement as fallback for invalid persistent state: it will have a different
+Peer ID and will not match the signed credential.
 
-The SDK does not call DDS or DMS HTTP. Route discovery and authorization are
-separate: a configured or discovered address is only a dial hint; a valid
-same-Domain credential bound to the Noise Peer ID is authority.
+Core `auki-domain` and `auki-p2p` do not call DDS or DMS HTTP. Native User/App
+hosts may opt into `auki-auth` for the bounded API/DDS authority exchange;
+Robot/Compute hosts use product-owned machine adapters. Route discovery and
+authorization remain separate: a configured or discovered address is only a
+dial hint; a valid same-Domain credential bound to the Noise Peer ID is
+authority.
 
 ## Rust breaking changes
 

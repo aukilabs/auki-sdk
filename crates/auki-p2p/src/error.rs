@@ -6,6 +6,14 @@ pub enum Error {
     InvalidIdentityPrivateKey,
     #[error("libp2p identity private key must use Ed25519")]
     UnsupportedIdentityKeyType,
+    #[error("identity path must contain a regular file")]
+    IdentityFileNotRegular,
+    #[error("identity path must not be a symbolic link")]
+    IdentityFileSymlink,
+    #[error("identity file is {actual} bytes, exceeding the {maximum}-byte safety limit")]
+    IdentityFileTooLarge { actual: u64, maximum: u64 },
+    #[error("identity file permissions are {mode:o}; expected exactly 0o600")]
+    InsecureIdentityFilePermissions { mode: u32 },
     #[error("failed to sign libp2p identity proof: {0}")]
     IdentitySigning(String),
     #[error("invalid DDS verification key: {0}")]

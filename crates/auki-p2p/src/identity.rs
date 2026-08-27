@@ -11,6 +11,25 @@ pub struct Identity {
     peer_id: PeerId,
 }
 
+/// Narrow, cloneable capability for proving ownership of a pre-join Peer ID.
+///
+/// The handle deliberately exposes only the public identity material DDS needs
+/// and exact challenge signing. It cannot serialize or otherwise reveal the
+/// private key.
+#[derive(Clone)]
+pub struct PeerIdentityProof {
+    identity: Identity,
+}
+
+impl fmt::Debug for PeerIdentityProof {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PeerIdentityProof")
+            .field("peer_id", &self.identity.peer_id)
+            .finish_non_exhaustive()
+    }
+}
+
 impl fmt::Debug for Identity {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -87,6 +106,13 @@ impl Identity {
         self.keypair.public()
     }
 
+    /// Create the pre-join proof capability used by an external authority.
+    pub fn proof(&self) -> PeerIdentityProof {
+        PeerIdentityProof {
+            identity: self.clone(),
+        }
+    }
+
     /// Signs the exact challenge bytes supplied by DDS without hashing,
     /// prefixing, or otherwise transforming them first.
     pub(crate) fn sign_challenge(&self, challenge: &[u8]) -> Result<Vec<u8>> {
@@ -102,6 +128,21 @@ impl Identity {
     fn from_keypair(keypair: identity::Keypair) -> Self {
         let peer_id = keypair.public().to_peer_id();
         Self { keypair, peer_id }
+    }
+}
+
+impl PeerIdentityProof {
+    pub fn peer_id(&self) -> PeerId {
+        self.identity.peer_id()
+    }
+
+    pub fn public_key_protobuf(&self) -> Vec<u8> {
+        self.identity.public_key_protobuf()
+    }
+
+    /// Sign the exact challenge bytes supplied by DDS.
+    pub fn sign_challenge(&self, challenge: &[u8]) -> Result<Vec<u8>> {
+        self.identity.sign_challenge(challenge)
     }
 }
 
@@ -170,5 +211,19 @@ mod tests {
         assert!(debug.contains(&identity.peer_id().to_string()));
         assert!(debug.contains("[redacted]"));
         assert!(!debug.contains("171, 171"));
+    }
+
+    #[test]
+    fn proof_exposes_only_public_identity_and_exact_signing() {
+        let identity = Identity::from_ed25519_seed(&[0x42; 32]);
+        let proof = identity.proof();
+
+        assert_eq!(proof.peer_id(), identity.peer_id());
+        assert_eq!(proof.public_key_protobuf(), identity.public_key_protobuf());
+        let challenge = b"exact-dds-challenge";
+        let signature = proof.sign_challenge(challenge).unwrap();
+        assert!(identity.public_key().verify(challenge, &signature));
+        assert!(!identity.public_key().verify(b"other", &signature));
+        assert!(!format!("{proof:?}").contains("private"));
     }
 }

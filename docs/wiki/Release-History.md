@@ -27,6 +27,9 @@ for local Stage 1 evaluation.
   `/auki/auth/1/...` IDs; there is no legacy-wire fallback.
 - `ServedProtocols` defaults to none; hosts opt in to each exact inbound
   protocol version while client operations remain available independently.
+- Native Rust `auki-auth` prepares selected-Domain, Peer-ID-bound authority
+  from a trusted User email/password or App key/secret. Its dev deployment
+  proof remains part of the unreleased gate; routes/discovery stay separate.
 - `auki-domain-py==0.1.0` is paired exactly with
   `auki-session-py==0.1.0` from the same SDK build.
 - The diagnostic CLI provides a real two-process direct-TCP catalog proof and

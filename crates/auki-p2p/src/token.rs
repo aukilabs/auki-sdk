@@ -154,6 +154,27 @@ impl DdsVerificationKeys {
     pub fn generation(&self) -> u64 {
         self.generation
     }
+
+    /// Validate that `proposed` is a structurally valid successor to this key set.
+    ///
+    /// This applies the same generation, byte-exact refresh, and canonical-key
+    /// lineage rules as the live verifier without mutating either set or
+    /// enforcing the verifier's process-local overlap timer. A live
+    /// [`DdsTokenVerifier`] still rechecks that temporal overlap when the host
+    /// installs the returned set.
+    pub fn validate_successor(&self, proposed: &Self) -> Result<()> {
+        let (current, previous) = parse_key_set(self)?;
+        let (proposed_current, proposed_previous) = parse_key_set(proposed)?;
+        validate_key_successor(
+            self.generation,
+            &current,
+            previous.as_ref(),
+            proposed.generation,
+            &proposed_current,
+            proposed_previous.as_ref(),
+        )?;
+        Ok(())
+    }
 }
 
 impl std::fmt::Debug for DdsVerificationKeys {
@@ -187,6 +208,14 @@ struct VerificationKey {
     pem: Vec<u8>,
     canonical_public_key: Box<[u8]>,
     decoding: DecodingKey,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VerificationKeyTransition {
+    ExactRefresh,
+    GenerationAdvance,
+    RotateCurrent,
+    RetirePrevious,
 }
 
 impl DdsTokenVerifier {
@@ -228,6 +257,11 @@ impl DdsTokenVerifier {
         self.verify_at(token, unix_time_now(), Instant::now())
     }
 
+    /// Verify an owned credential without exposing its compact bearer bytes.
+    pub fn verify_credential(&self, credential: &SignedP2pCredential) -> Result<P2PAccessClaims> {
+        self.verify(credential.as_str())
+    }
+
     #[cfg(test)]
     pub(crate) fn make_stale_for_test(&self) {
         self.keys.write().last_refreshed_at =
@@ -239,55 +273,33 @@ impl DdsTokenVerifier {
         // therefore leaves the live generation untouched.
         let (current, previous) = parse_key_set(&keys)?;
         let mut live = self.keys.write();
-        if keys.generation < live.generation {
-            return Err(Error::StaleVerificationKeyGeneration {
-                current: live.generation,
-                proposed: keys.generation,
-            });
-        }
-
-        // Same-generation refresh is intentionally byte-exact per the frozen
-        // host contract. Canonical key identity below is used separately for
-        // duplicate detection and rotation lineage.
-        let same_current_bytes = current.pem == live.current.pem;
-        let same_previous_bytes =
-            previous.as_ref().map(|key| &key.pem) == live.previous.as_ref().map(|key| &key.pem);
-        if keys.generation == live.generation {
-            if !same_current_bytes || !same_previous_bytes {
-                return Err(Error::VerificationKeyGenerationConflict(keys.generation));
-            }
+        let transition = validate_key_successor(
+            live.generation,
+            &live.current,
+            live.previous.as_ref(),
+            keys.generation,
+            &current,
+            previous.as_ref(),
+        )?;
+        if transition == VerificationKeyTransition::ExactRefresh {
             live.last_refreshed_at = now;
             return Ok(());
         }
 
-        let same_current_key = current.canonical_public_key == live.current.canonical_public_key;
-        let same_previous_key = previous.as_ref().map(|key| &key.canonical_public_key)
-            == live.previous.as_ref().map(|key| &key.canonical_public_key);
-        if !same_current_key {
+        if transition == VerificationKeyTransition::RotateCurrent {
             if live
                 .previous_protected_until
                 .is_some_and(|deadline| now < deadline)
             {
                 return Err(Error::VerificationKeyOverlapActive);
-            }
-            if previous.as_ref().map(|key| &key.canonical_public_key)
-                != Some(&live.current.canonical_public_key)
-            {
-                return Err(Error::VerificationKeyRotationMissingPrevious);
             }
             live.previous_protected_until = Some(now + DDS_PREVIOUS_KEY_MIN_OVERLAP);
-        } else if !same_previous_key {
+        } else if transition == VerificationKeyTransition::RetirePrevious {
             if live
                 .previous_protected_until
                 .is_some_and(|deadline| now < deadline)
             {
                 return Err(Error::VerificationKeyOverlapActive);
-            }
-            // With an unchanged current key the only meaningful set change is
-            // retiring the previous key after its overlap. Adding or swapping
-            // an unrelated previous key creates an ambiguous trust history.
-            if previous.is_some() {
-                return Err(Error::VerificationKeyRotationMissingPrevious);
             }
             live.previous_protected_until = None;
         }
@@ -331,6 +343,58 @@ impl DdsTokenVerifier {
         validate_profile(&claims, wall_time_seconds)?;
         Ok(claims)
     }
+}
+
+fn validate_key_successor(
+    current_generation: u64,
+    current: &VerificationKey,
+    previous: Option<&VerificationKey>,
+    proposed_generation: u64,
+    proposed_current: &VerificationKey,
+    proposed_previous: Option<&VerificationKey>,
+) -> Result<VerificationKeyTransition> {
+    if proposed_generation < current_generation {
+        return Err(Error::StaleVerificationKeyGeneration {
+            current: current_generation,
+            proposed: proposed_generation,
+        });
+    }
+
+    // Same-generation refresh is intentionally byte-exact per the frozen host
+    // contract. Canonical key identity below is used separately for duplicate
+    // detection and rotation lineage.
+    let same_current_bytes = proposed_current.pem == current.pem;
+    let same_previous_bytes = proposed_previous.map(|key| &key.pem) == previous.map(|key| &key.pem);
+    if proposed_generation == current_generation {
+        if !same_current_bytes || !same_previous_bytes {
+            return Err(Error::VerificationKeyGenerationConflict(
+                proposed_generation,
+            ));
+        }
+        return Ok(VerificationKeyTransition::ExactRefresh);
+    }
+
+    let same_current_key = proposed_current.canonical_public_key == current.canonical_public_key;
+    let same_previous_key = proposed_previous.map(|key| &key.canonical_public_key)
+        == previous.map(|key| &key.canonical_public_key);
+    if !same_current_key {
+        if proposed_previous.map(|key| &key.canonical_public_key)
+            != Some(&current.canonical_public_key)
+        {
+            return Err(Error::VerificationKeyRotationMissingPrevious);
+        }
+        return Ok(VerificationKeyTransition::RotateCurrent);
+    }
+    if !same_previous_key {
+        // With an unchanged current key the only meaningful set change is
+        // retiring the previous key. Adding or swapping an unrelated previous
+        // key creates an ambiguous trust history.
+        if proposed_previous.is_some() {
+            return Err(Error::VerificationKeyRotationMissingPrevious);
+        }
+        return Ok(VerificationKeyTransition::RetirePrevious);
+    }
+    Ok(VerificationKeyTransition::GenerationAdvance)
 }
 
 fn parse_key_set(keys: &DdsVerificationKeys) -> Result<(VerificationKey, Option<VerificationKey>)> {
@@ -622,6 +686,35 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
 MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAxcARQLozLIqu/CFm6ub89EElhHX
 O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
 -----END PUBLIC KEY-----"#;
+
+    #[test]
+    fn structural_successor_validation_requires_canonical_rotation_lineage() {
+        let initial = DdsVerificationKeys::new(10, FIRST_PUBLIC_KEY.to_vec(), None);
+        let mut equivalent_first = FIRST_PUBLIC_KEY.to_vec();
+        equivalent_first.push(b'\n');
+        let rotated =
+            DdsVerificationKeys::new(11, SECOND_PUBLIC_KEY.to_vec(), Some(equivalent_first));
+        initial.validate_successor(&rotated).unwrap();
+
+        assert!(matches!(
+            initial.validate_successor(&DdsVerificationKeys::new(
+                11,
+                SECOND_PUBLIC_KEY.to_vec(),
+                None,
+            )),
+            Err(Error::VerificationKeyRotationMissingPrevious)
+        ));
+
+        // Structural validation deliberately has no process-local timer. The
+        // live verifier enforces that timer when this retirement is installed.
+        rotated
+            .validate_successor(&DdsVerificationKeys::new(
+                12,
+                SECOND_PUBLIC_KEY.to_vec(),
+                None,
+            ))
+            .unwrap();
+    }
 
     #[test]
     fn previous_key_cannot_retire_before_the_full_overlap() {

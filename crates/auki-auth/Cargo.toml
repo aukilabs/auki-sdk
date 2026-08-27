@@ -1,0 +1,35 @@
+[package]
+name = "auki-auth"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Native bounded API and DDS authority preparation for Auki P2P peers"
+readme = "README.md"
+
+[dependencies]
+async-trait = { workspace = true }
+auki-p2p = { path = "../auki-p2p" }
+base64 = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true }
+p256 = "0.13.2"
+reqwest = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
+uuid = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+auki-domain = { path = "../auki-domain" }
+auki-session = { path = "../auki-session" }
+jsonwebtoken = "9.3.0"
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }

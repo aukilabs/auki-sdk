@@ -1013,6 +1013,38 @@ async fn accessible_domain_preserves_null_organization() {
 }
 
 #[tokio::test]
+async fn accessible_domain_accepts_absent_legacy_display_metadata() {
+    let domain_id = Uuid::from_u128(0xd16);
+    let server = MockServer::start(vec![
+        service_response("app-dds-service"),
+        MockResponse::json(json!({
+            "domains": [{
+                "id": domain_id,
+                "name": "   ",
+                "description": " \t ",
+                "organization_id": null
+            }],
+            "total": 1,
+            "limit": 100,
+            "offset": 0
+        })),
+    ])
+    .await;
+    let session = client_for(&server)
+        .authenticate(Credentials::app("app-key", "app-secret"))
+        .await
+        .unwrap();
+
+    let domains = session.accessible_domains().await.unwrap();
+    assert_eq!(domains.len(), 1);
+    assert_eq!(domains[0].domain.id, domain_id);
+    assert_eq!(domains[0].domain.name, None);
+    assert_eq!(domains[0].domain.description, None);
+    assert_eq!(domains[0].domain.organization_id, None);
+    server.finish().await;
+}
+
+#[tokio::test]
 async fn unauthorized_dds_call_refreshes_user_and_retries_once() {
     let domain_id = Uuid::from_u128(0xd2);
     let organization_id = Uuid::from_u128(0xa2);

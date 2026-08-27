@@ -980,13 +980,11 @@ fn convert_domain(domain: AccessibleDomain) -> Result<DomainDescriptor> {
         .as_deref()
         .map(|value| canonical_uuid(value, DDS_ACCESSIBLE_DOMAINS))
         .transpose()?;
-    if domain.name.is_empty()
-        || domain.name.len() > MAX_DOMAIN_NAME_BYTES
-        || domain.name.trim() != domain.name
-    {
+    let name = domain.name.trim();
+    if domain.name.len() > MAX_DOMAIN_NAME_BYTES || (!name.is_empty() && name != domain.name) {
         return Err(Error::invalid_response(
             DDS_ACCESSIBLE_DOMAINS,
-            "Domain name is empty, oversized, or padded with whitespace",
+            "Domain name is oversized or padded with whitespace",
         ));
     }
     if domain.description.len() > MAX_DOMAIN_DESCRIPTION_BYTES {
@@ -995,10 +993,11 @@ fn convert_domain(domain: AccessibleDomain) -> Result<DomainDescriptor> {
             "Domain description is oversized",
         ));
     }
+    let description = domain.description.trim();
     Ok(DomainDescriptor {
         id,
-        name: Some(domain.name),
-        description: Some(domain.description),
+        name: (!name.is_empty()).then(|| name.to_owned()),
+        description: (!description.is_empty()).then(|| description.to_owned()),
         organization_id,
     })
 }

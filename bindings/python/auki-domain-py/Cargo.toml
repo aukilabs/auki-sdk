@@ -1,19 +1,17 @@
 [package]
 name = "auki-domain-py"
-version = "0.0.0"
+version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "PyO3 bindings for `auki-domain` — exposes ClusterManager and the post-#216 ResourceEntry catalog to Python daemons."
+description = "PyO3 bindings for the authenticated Auki Domain lifecycle and application protocols."
 
 [lib]
 # `cdylib` makes the crate build as a Python native extension; `rlib`
 # keeps it usable from Rust (`cargo test` against the in-tree crate,
 # which links Python via the `auto-initialize` dev-feature). Lib name
-# is `auki_domain` — same as the Python module name. Distinct from
-# `auki-network-py`'s `auki_network_py` so the two PyO3 wrappers can
-# both live in the workspace.
+# is `auki_domain` — the same as the Python module name.
 name = "auki_domain"
 crate-type = ["cdylib", "rlib"]
 
@@ -23,53 +21,29 @@ crate-type = ["cdylib", "rlib"]
 # is empty so `cargo test` can link Python (`auto-initialize`).
 default = []
 extension-module = ["pyo3/extension-module"]
+test-support = ["dep:auki-p2p", "dep:jsonwebtoken"]
 
 [dependencies]
 auki-datatypes = { path = "../../../crates/auki-datatypes" }
-# Renamed via `package =` so the upstream Rust crate's name doesn't
-# collide with our own lib name `auki_domain`.
 auki-domain-rs = { package = "auki-domain", path = "../../../crates/auki-domain", features = ["native_runtime"] }
-# Required for `create_cluster`'s daemon-friendly façade: builds the
-# swarm + DiscoveryClient internally from the Python kwargs.
-auki-network = { path = "../../../crates/auki-network", features = ["discovery_client", "swarm"] }
-# Cross-crate dep on auki-network-py's rlib so this crate can build
-# Python `stream_provider` callables and return `PyStreamSubscription`
-# from `open_*_stream` methods. The cargo lib-name split
-# (`auki_network_py` vs `auki_network`) keeps both directly dep-able
-# in one workspace.
-auki-network-py = { path = "../auki-network-py" }
-# `prost::Message` bound on `ClusterManager::open_stream<T>`.
-prost = "0.13"
-# `Wallet::from_seed` — the Python wrapper takes 32-byte seeds.
-auki-identity = { path = "../../../crates/auki-identity" }
-# `PeerId` parsing on the Python ↔ Rust seam.
-libp2p-identity = { version = "0.2", default-features = false, features = ["ed25519", "peerid", "serde"] }
-# `Multiaddr` parsing for the Python `multiaddrs` kwarg.
-multiaddr = "0.18"
-# JSON round-trip for the `to_json` / `from_json` Python methods.
-serde_json = "1"
-# serde for resource entry serialization
-serde = { version = "1", features = ["derive"] }
-# RegistryRef / LogRef types used in resource catalog manifest pointers.
+auki-logs-rs = { package = "auki-logs", path = "../../../crates/auki-logs" }
+auki-network = { path = "../../../crates/auki-network", features = ["protocol-codecs"] }
+auki-p2p = { path = "../../../crates/auki-p2p", optional = true }
 auki-registry = { path = "../../../crates/auki-registry" }
-# Detection cadence exposed by detection-log catalog rows.
-auki-manifests = { path = "../../../crates/auki-manifests" }
-# Process-wide tokio runtime that `block_on`s the async cluster
-# manager calls behind a sync Python surface. Multi-thread because
-# the `NetworkRuntime`'s driver task needs `Handle::try_current()`
-# to succeed.
-tokio = { version = "1", features = ["rt-multi-thread", "time", "macros"] }
-# Need to drive the swarm in `create_cluster` to wait for the
-# OS-chosen listen port to materialize before calling
-# `ClusterManager::create_cluster`. Same feature set as
-# `auki-network` so the dep graph collapses.
-libp2p = { version = "0.56", default-features = false, features = ["tokio", "tcp", "quic", "noise", "yamux", "macros"] }
-futures = "0.3"
-# `abi3-py38` builds a stable-ABI extension that works on Python 3.8+
-# without rebuilding per minor version.
+auki-session-rs = { package = "auki-session", path = "../../../crates/auki-session" }
+futures.workspace = true
+jsonwebtoken = { version = "9", optional = true }
+parking_lot.workspace = true
+prost = "0.13"
 pyo3 = { version = "0.22", features = ["abi3-py38"] }
+pyo3-async-runtimes = { version = "0.22", features = ["tokio-runtime"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio-util.workspace = true
+tracing.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
-auki-registry = { path = "../../../crates/auki-registry" }
 pyo3 = { version = "0.22", features = ["abi3-py38", "auto-initialize"] }
 tempfile = "3"

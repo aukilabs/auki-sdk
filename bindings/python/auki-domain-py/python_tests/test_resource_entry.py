@@ -90,6 +90,7 @@ DETECTION_LOG_DICT = {
     "head": {"kind": "rolling", "retention_ns": 5_000_000_000},
     "available": {"bytes": 250000, "entries": 150, "duration_ns": 5_000_000_000},
     "manifest": {
+        "instance_id": "yolo-head-left-30hz",
         "detector": {"peer_id": "galbot", "id": "yolo_v8", "hash": ZERO_HASH},
         "input_log": {"source_peer_id": "galbot", "resource_id": "head_left_rgb"},
         "input_sensor": {"peer_id": "galbot", "id": "head_left_rgb", "hash": ZERO_HASH},
@@ -98,6 +99,7 @@ DETECTION_LOG_DICT = {
             "id": "session/sdk_clock",
             "hash": ZERO_HASH,
         },
+        "cadence": {"kind": "every_frame"},
     },
 }
 
@@ -196,11 +198,13 @@ def test_from_dict_detection_log() -> None:
     assert entry.pose is None
 
     manifest = entry.manifest
+    assert manifest["instance_id"] == "yolo-head-left-30hz"
     assert manifest["detector"]["id"] == "yolo_v8"
     assert manifest["input_log"]["source_peer_id"] == "galbot"
     assert manifest["input_log"]["resource_id"] == "head_left_rgb"
     assert manifest["input_sensor"]["id"] == "head_left_rgb"
     assert manifest["clock"]["id"] == "session/sdk_clock"
+    assert manifest["cadence"] == {"kind": "every_frame"}
 
 
 # ─── Round-trip: from_dict → to_json → json.loads ────────────────────────────
@@ -254,8 +258,10 @@ def test_round_trip_detection_log() -> None:
     parsed = json.loads(entry.to_json())
 
     assert parsed["variant"] == "detection_log"
+    assert parsed["manifest"]["instance_id"] == "yolo-head-left-30hz"
     assert parsed["manifest"]["detector"]["id"] == "yolo_v8"
     assert parsed["manifest"]["input_log"]["resource_id"] == "head_left_rgb"
+    assert parsed["manifest"]["cadence"] == {"kind": "every_frame"}
 
 
 # ─── from_json ───────────────────────────────────────────────────────────────
@@ -299,7 +305,7 @@ def test_from_json_round_trip_is_stable() -> None:
     assert json.loads(second_str)["pose"]["writer_mode"] == "movable"
 
 
-# ─── Invalid input ───────────────────────────────────────────────────────────
+# ─── Input validation ────────────────────────────────────────────────────────
 
 
 def test_from_dict_bogus_variant_raises_value_error() -> None:
@@ -307,21 +313,24 @@ def test_from_dict_bogus_variant_raises_value_error() -> None:
 
     bad = dict(POSE_LOG_DICT)
     bad["variant"] = "bogus"
-    with pytest.raises(ValueError, match="invalid ResourceEntry dict"):
+    with pytest.raises(
+        ValueError,
+        match=r"invalid ResourceEntry dict:.*unknown variant",
+    ):
         auki_domain.ResourceEntry.from_dict(bad)
 
 
 def test_from_json_truncated_raises_value_error() -> None:
     import auki_domain
 
-    with pytest.raises(ValueError, match="invalid ResourceEntry JSON"):
+    with pytest.raises(ValueError, match=r"invalid ResourceEntry JSON:.*EOF"):
         auki_domain.ResourceEntry.from_json("{")
 
 
 def test_from_json_empty_raises_value_error() -> None:
     import auki_domain
 
-    with pytest.raises(ValueError, match="invalid ResourceEntry JSON"):
+    with pytest.raises(ValueError, match=r"invalid ResourceEntry JSON:.*EOF"):
         auki_domain.ResourceEntry.from_json("")
 
 
@@ -330,42 +339,42 @@ def test_from_dict_missing_required_field_raises_value_error() -> None:
 
     # Drop the required `available` block
     bad = {k: v for k, v in SENSOR_LOG_DICT.items() if k != "available"}
-    with pytest.raises(ValueError, match="invalid ResourceEntry dict"):
+    with pytest.raises(
+        ValueError,
+        match=r"invalid ResourceEntry dict:.*missing field.*available",
+    ):
         auki_domain.ResourceEntry.from_dict(bad)
 
 
-# ─── ClusterManager integration smoke ────────────────────────────────────────
+# ─── Domain provider surface smoke ───────────────────────────────────────────
 
 
 def test_set_resource_catalog_provider_accepts_constructed_entry() -> None:
-    """ClusterManager.set_resource_catalog_provider is callable with a
-    provider that returns Python-constructed ResourceEntry objects.
+    """The Domain provider APIs accept Python-constructed resource rows.
 
     We only verify that:
-    1. the method exists and accepts the callable without raising
-    2. the provider callable itself executes without the
-       "returned an item that is not a ResourceEntry" error path
+    1. pre-join and post-join provider methods exist; and
+    2. the provider itself returns the exact constructed row.
 
-    Full end-to-end fetch requires a live cluster; we don't have one in
-    this unit-test context. We test the binding surface, not the network.
+    The authenticated two-node test exercises callback invocation over the
+    network. This test intentionally stays local and synchronous.
     """
     import auki_domain
 
     entry = auki_domain.ResourceEntry.from_dict(POSE_LOG_DICT)
 
-    # Calling the provider callable directly should return a list with the entry
     provider = lambda: [entry]
     result = provider()
     assert len(result) == 1
     assert result[0] is entry
     assert result[0].variant == "pose_log"
 
-    # Verify ClusterManager exposes the method
-    assert hasattr(auki_domain.ClusterManager, "set_resource_catalog_provider")
+    assert hasattr(auki_domain.DomainBuilder, "resource_catalog_provider")
+    assert hasattr(auki_domain.Domain, "set_resource_catalog_provider")
 
 
 def test_resource_catalog_provider_roundtrip_multiple_variants() -> None:
-    """Provider callable returns entries of all four variants without error."""
+    """A Domain catalog provider can return all four v0.2 row variants."""
     import auki_domain
 
     entries = [

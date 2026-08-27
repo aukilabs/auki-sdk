@@ -37,13 +37,19 @@
 //! Python (specifically the ESL detector). Higher-level abstractions
 //! (`Session`, registry helpers) live elsewhere and grow independently.
 
-use std::ffi::CString;
+// PyO3 0.22 generates calls to unsafe helpers inside its generated unsafe
+// functions. Rust 2024 warns about those macro expansions until the binding
+// migrates to a newer PyO3 release.
+#![allow(unsafe_op_in_unsafe_fn)]
+// PyO3's generated method wrappers contain same-type `.into()` calls.
+#![allow(clippy::useless_conversion)]
+
 use std::path::PathBuf;
 use std::time::Duration;
 
 use pyo3::exceptions::{PyOSError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyCapsule, PyDict, PyModule};
+use pyo3::types::{PyBytes, PyDict, PyModule};
 
 // Renamed via `package =` in Cargo.toml so the upstream crate's name
 // doesn't collide with this crate's own lib name `auki_logs` (which is
@@ -78,11 +84,10 @@ impl LogPayload for RawBytes {
     }
 }
 
-/// Map an `auki_logs::Error` to the matching Python exception type.
-/// Same shape as `auki-network-py`: I/O → `OSError`, payload / format /
-/// manifest → `ValueError`. Keeps the exception type predictable per
-/// failure mode rather than forcing every caller to introspect a
-/// custom exception class.
+/// Map an `auki_logs::Error` to the matching Python exception type:
+/// I/O → `OSError`, payload / format / manifest → `ValueError`. Keeps
+/// the exception type predictable per failure mode rather than forcing
+/// every caller to introspect a custom exception class.
 fn err_to_py(e: RustError) -> PyErr {
     match e {
         RustError::Io(io) => PyOSError::new_err(io.to_string()),
@@ -96,14 +101,9 @@ fn map_err<T>(r: RustResult<T>) -> PyResult<T> {
     r.map_err(err_to_py)
 }
 
-/// Capsule name for retained stream source payloads exchanged with
-/// sibling PyO3 wrapper crates. Includes a version suffix so future ABI
-/// changes fail loudly on mismatch.
-pub const STREAM_SOURCE_CAPSULE_NAME: &str = "auki_logs_py::stream_source::v1";
-
 /// SDK-owned retained source metadata. `auki-logs-py` constructs this
-/// from a concrete log handle; `auki-network-py` consumes it through a
-/// named PyCapsule and owns the payload-kind dispatch.
+/// from a concrete log handle; `auki-domain-py` consumes its frozen
+/// public fields and owns the payload-kind dispatch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetainedStreamSource {
     pub root: PathBuf,
@@ -312,6 +312,11 @@ impl StreamSource {
     }
 
     #[getter]
+    fn resource_id(&self) -> &str {
+        &self.inner.resource_id
+    }
+
+    #[getter]
     fn sensor_id(&self) -> &str {
         &self.inner.sensor_id
     }
@@ -319,6 +324,26 @@ impl StreamSource {
     #[getter]
     fn sensor_hash(&self) -> &str {
         &self.inner.sensor_hash
+    }
+
+    #[getter]
+    fn map_peer_id(&self) -> &str {
+        &self.inner.map_peer_id
+    }
+
+    #[getter]
+    fn map_id(&self) -> &str {
+        &self.inner.map_id
+    }
+
+    #[getter]
+    fn map_hash(&self) -> &str {
+        &self.inner.map_hash
+    }
+
+    #[getter]
+    fn clock_peer_id(&self) -> &str {
+        &self.inner.clock_peer_id
     }
 
     #[getter]
@@ -344,15 +369,6 @@ impl StreamSource {
     #[getter]
     fn frame_hash(&self) -> &str {
         &self.inner.frame_hash
-    }
-
-    /// SDK-internal bridge consumed by `auki-network-py`.
-    fn _stream_source_capsule(&self, py: Python<'_>) -> PyResult<Py<PyCapsule>> {
-        let name =
-            CString::new(STREAM_SOURCE_CAPSULE_NAME).expect("static literal contains no nul");
-        let capsule =
-            PyCapsule::new_bound::<RetainedStreamSource>(py, self.inner.clone(), Some(name))?;
-        Ok(capsule.unbind())
     }
 
     fn __repr__(&self) -> String {
@@ -439,6 +455,7 @@ impl Log {
     /// returned source carries the manifest metadata needed by an
     /// authenticated Domain stream provider; the native SDK owns payload
     /// decoding and typed dispatch.
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (*, sensor_id, sensor_hash, clock_id, clock_hash, payload_kind, frame_id=None, frame_hash=None))]
     fn stream_source(
         &self,
@@ -475,6 +492,7 @@ impl Log {
 
     /// Build an SDK-owned retained Map Log source. Map identity and clock
     /// references are pinned into the stream manifest by `accept_source`.
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (*, resource_id, map_peer_id, map_id, map_hash, clock_peer_id, clock_id, clock_hash))]
     fn map_stream_source(
         &self,
@@ -663,9 +681,18 @@ mod tests {
             .unwrap();
 
         assert_eq!(source.inner.payload_kind, "map");
+        assert_eq!(source.inner.root, dir.path());
         assert_eq!(source.inner.resource_id, "voxel/world");
+        assert_eq!(source.inner.sensor_id, "");
+        assert_eq!(source.inner.sensor_hash, "");
+        assert_eq!(source.inner.map_peer_id, "peer-a");
+        assert_eq!(source.inner.map_id, "voxel/world");
         assert_eq!(source.inner.map_hash, "map-hash");
         assert_eq!(source.inner.clock_peer_id, "peer-a");
+        assert_eq!(source.inner.clock_id, "clock");
+        assert_eq!(source.inner.clock_hash, "clock-hash");
+        assert_eq!(source.inner.frame_id, "");
+        assert_eq!(source.inner.frame_hash, "");
     }
 
     /// Cross-encoder parity: `auki_datatypes::detection::DetectionFrame`

@@ -16,6 +16,13 @@
 //!   raise `NotImplementedError` with a clear message (the Rust side
 //!   returns `NotImplemented` on these paths)
 //!
+
+// PyO3 0.22 generates calls to unsafe helpers inside its generated unsafe
+// functions. Rust 2024 warns about those macro expansions until the binding
+// migrates to a newer PyO3 release.
+#![allow(unsafe_op_in_unsafe_fn)]
+// PyO3 0.22's generated wrappers contain same-type `.into()` calls.
+#![allow(clippy::useless_conversion)]
 //! Network lifecycle (resource catalogs and Domain join) is not in this
 //! package. The Python binding over the authenticated Rust `Domain` owner is
 //! migrated separately.
@@ -35,13 +42,14 @@
 //! as Python dicts / strings, not as pyclasses — same convention as
 //! `auki-manifests-py`.
 
+use std::ffi::CString;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use pyo3::exceptions::{PyNotImplementedError, PyOSError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyModule};
+use pyo3::types::{PyAny, PyCapsule, PyDict, PyModule};
 use serde_json::Value as JsonValue;
 
 // Bring auki-registry-py's lib (named `auki_registry`) into scope under a
@@ -51,6 +59,10 @@ use auki_registry as registry_py;
 use auki_manifests_rs as manifests;
 use auki_registry_rs as registry;
 use auki_session_rs as session;
+use auki_session_rs::{
+    PY_DOMAIN_PEER_CAPSULE_ABI_NAME as DOMAIN_PEER_CAPSULE_NAME,
+    PY_DOMAIN_SESSION_CAPSULE_ABI_NAME as DOMAIN_SESSION_CAPSULE_NAME,
+};
 
 // ─── JSON helpers ───────────────────────────────────────────────────────────
 
@@ -456,6 +468,7 @@ impl TimeTransformLogSpec {
     /// segment_duration_ns : int
     /// retention_ns : int
     #[new]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
         from_clock: &Bound<'_, PyAny>,
@@ -504,6 +517,7 @@ impl DetectionLogSpec {
     /// segment_duration_ns : int
     /// retention_ns : int
     #[new]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
         instance_id: String,
@@ -680,7 +694,7 @@ impl MaterializedLogHandle {
 /// ```
 #[pyclass]
 pub struct Peer {
-    inner: Arc<parking_lot::Mutex<session::Peer>>,
+    inner: Arc<session::Peer>,
 }
 
 #[pymethods]
@@ -696,7 +710,7 @@ impl Peer {
     #[new]
     fn new(peer_id: String, app_id: String) -> Self {
         Self {
-            inner: Arc::new(parking_lot::Mutex::new(session::Peer::new(peer_id, app_id))),
+            inner: Arc::new(session::Peer::new(peer_id, app_id)),
         }
     }
 
@@ -706,7 +720,7 @@ impl Peer {
     fn with_storage_root(slf: Py<Peer>, path: &str, py: Python<'_>) -> Py<Peer> {
         {
             let guard = slf.borrow(py);
-            guard.inner.lock().set_storage_root(PathBuf::from(path));
+            guard.inner.set_storage_root(PathBuf::from(path));
         }
         slf
     }
@@ -714,23 +728,19 @@ impl Peer {
     /// The peer identifier (e.g. device serial number).
     #[getter]
     fn peer_id(&self) -> String {
-        self.inner.lock().peer_id()
+        self.inner.peer_id()
     }
 
     /// The application identifier.
     #[getter]
     fn app_id(&self) -> String {
-        self.inner.lock().app_id()
+        self.inner.app_id()
     }
 
     /// The storage root path (defaults to `.`).
     #[getter]
     fn storage_root(&self) -> String {
-        self.inner
-            .lock()
-            .storage_root()
-            .to_string_lossy()
-            .into_owned()
+        self.inner.storage_root().to_string_lossy().into_owned()
     }
 
     /// Register a sensor, writing the entry to disk.
@@ -753,7 +763,6 @@ impl Peer {
         let sensor_body: registry::SensorBody = parse_py(py, body, "body")?;
         let r = self
             .inner
-            .lock()
             .register_sensor(sensor_id, sensor_body)
             .map_err(map_session_error)?;
         Ok(registry_py::RegistryRef {
@@ -780,7 +789,6 @@ impl Peer {
     ) -> PyResult<registry_py::RegistryRef> {
         let r = self
             .inner
-            .lock()
             .register_frame(frame_id, frame_def.clone().into_rust_frame_def())
             .map_err(map_session_error)?;
         Ok(registry_py::RegistryRef {
@@ -821,7 +829,6 @@ impl Peer {
         };
         let r = self
             .inner
-            .lock()
             .register_detector_with_inputs(
                 detector_id,
                 detector_body,
@@ -848,7 +855,6 @@ impl Peer {
         let inner = self.inner.clone();
         let r = py.allow_threads(|| {
             inner
-                .lock()
                 .register_device_model(&device_model_id, body)
                 .map_err(map_session_error)
         })?;
@@ -878,11 +884,10 @@ impl Peer {
         // Drop the Peer mutex across put_urdf_package; register_device_model
         // already drops the inner RwLock across write_device_model.
         let device_model_id = device_model_id.map(|s| s.to_string());
-        let package_root = package_root;
         let substitutions = parse_mesh_substitutions(mesh_substitutions)?;
         let inner = self.inner.clone();
         let r = py.allow_threads(|| {
-            let storage_root = inner.lock().storage_root();
+            let storage_root = inner.storage_root();
             let package = registry::put_urdf_package(
                 &storage_root,
                 &urdf_path,
@@ -895,7 +900,6 @@ impl Peer {
                 .as_deref()
                 .unwrap_or(package.device_model_id.as_str());
             inner
-                .lock()
                 .register_device_model(id, package.body)
                 .map_err(map_session_error)
         })?;
@@ -915,14 +919,15 @@ impl Peer {
     /// -------
     /// Session
     fn start_session(&self) -> PyResult<Session> {
-        let s = self
-            .inner
-            .lock()
-            .start_session()
-            .map_err(map_session_error)?;
-        Ok(Session {
-            inner: Arc::new(parking_lot::Mutex::new(s)),
-        })
+        let s = self.inner.start_session().map_err(map_session_error)?;
+        Ok(Session { inner: Arc::new(s) })
+    }
+
+    /// SDK-internal bridge consumed by `auki-domain-py`.
+    fn _domain_handle(&self, py: Python<'_>) -> PyResult<Py<PyCapsule>> {
+        let name = CString::new(DOMAIN_PEER_CAPSULE_NAME).expect("static literal contains no nul");
+        let capsule = PyCapsule::new_bound(py, Arc::clone(&self.inner), Some(name))?;
+        Ok(capsule.unbind())
     }
 }
 
@@ -970,7 +975,7 @@ impl Peer {
 /// layer (a `Domain` composes a `Peer` + `Session`), not on `Session`.
 #[pyclass]
 pub struct Session {
-    inner: Arc<parking_lot::Mutex<session::Session>>,
+    inner: Arc<session::Session>,
 }
 
 #[pymethods]
@@ -978,29 +983,25 @@ impl Session {
     /// The peer identifier (e.g. device serial number).
     #[getter]
     fn peer_id(&self) -> String {
-        self.inner.lock().peer_id()
+        self.inner.peer_id()
     }
 
     /// The application identifier.
     #[getter]
     fn app_id(&self) -> String {
-        self.inner.lock().app_id()
+        self.inner.app_id()
     }
 
     /// The ULID session identifier (unique per Session instance).
     #[getter]
     fn session_id(&self) -> String {
-        self.inner.lock().session_id()
+        self.inner.session_id()
     }
 
     /// The storage root path (defaults to `.`), read from the peer.
     #[getter]
     fn storage_root(&self) -> String {
-        self.inner
-            .lock()
-            .storage_root()
-            .to_string_lossy()
-            .into_owned()
+        self.inner.storage_root().to_string_lossy().into_owned()
     }
 
     // ─── Clock registration ───────────────────────────────────────────
@@ -1027,7 +1028,6 @@ impl Session {
         let clock_body: registry::ClockBody = parse_py(py, body, "body")?;
         let r = self
             .inner
-            .lock()
             .register_clock(clock_id, clock_body)
             .map_err(map_session_error)?;
         Ok(registry_py::RegistryRef {
@@ -1047,7 +1047,6 @@ impl Session {
     fn register_sensor_log(&self, spec: &SensorLogSpec) -> PyResult<SensorLogHandle> {
         let handle = self
             .inner
-            .lock()
             .register_sensor_log(spec.inner.clone())
             .map_err(map_session_error)?;
         Ok(SensorLogHandle {
@@ -1065,7 +1064,6 @@ impl Session {
     fn register_pose_log(&self, spec: &PoseLogSpec) -> PyResult<PoseLogHandle> {
         let handle = self
             .inner
-            .lock()
             .register_pose_log(spec.inner.clone())
             .map_err(map_session_error)?;
         Ok(PoseLogHandle {
@@ -1086,7 +1084,6 @@ impl Session {
     ) -> PyResult<TimeTransformLogHandle> {
         let handle = self
             .inner
-            .lock()
             .register_time_transform_log(spec.inner.clone())
             .map_err(map_session_error)?;
         Ok(TimeTransformLogHandle {
@@ -1104,7 +1101,6 @@ impl Session {
     fn register_detection_log(&self, spec: &DetectionLogSpec) -> PyResult<DetectionLogHandle> {
         let handle = self
             .inner
-            .lock()
             .register_detection_log(spec.inner.clone())
             .map_err(map_session_error)?;
         Ok(DetectionLogHandle {
@@ -1112,6 +1108,14 @@ impl Session {
             root: handle.root().to_string_lossy().into_owned(),
             log_ref_inner: handle.log_ref().clone(),
         })
+    }
+
+    /// SDK-internal bridge consumed by `auki-domain-py`.
+    fn _domain_handle(&self, py: Python<'_>) -> PyResult<Py<PyCapsule>> {
+        let name =
+            CString::new(DOMAIN_SESSION_CAPSULE_NAME).expect("static literal contains no nul");
+        let capsule = PyCapsule::new_bound(py, Arc::clone(&self.inner), Some(name))?;
+        Ok(capsule.unbind())
     }
 
     // ─── Materialization stubs ────────────────────────────────────────
@@ -1273,9 +1277,9 @@ mod tests {
     /// builder so tests can construct one inline).
     fn peer_at(tmp: &std::path::Path) -> Peer {
         Peer {
-            inner: Arc::new(parking_lot::Mutex::new(
+            inner: Arc::new(
                 session::Peer::new("galbot", "ctrl").with_storage_root(tmp.to_path_buf()),
-            )),
+            ),
         }
     }
 
@@ -1285,10 +1289,10 @@ mod tests {
             let tmp = tempfile::tempdir().unwrap();
             // start_session writes clock entries to disk, so root at a tempdir.
             let p = Peer {
-                inner: Arc::new(parking_lot::Mutex::new(
+                inner: Arc::new(
                     session::Peer::new("galbot", "galbot-ctrl")
                         .with_storage_root(tmp.path().to_path_buf()),
-                )),
+                ),
             };
             assert_eq!(p.peer_id(), "galbot");
             assert_eq!(p.app_id(), "galbot-ctrl");

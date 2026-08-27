@@ -1,141 +1,292 @@
 # auki-domain-py
 
-PyO3 bindings for [`auki-domain`](../../../crates/auki-domain) — the cluster
-lifecycle crate. Exposes the cluster membership document, the full
-`ClusterManager` lifecycle (create / join / bootstrap), the post-#216
-`ResourceEntry` catalog shape, and the `ReadFrom` / `StreamRequest` stream
-subscription types to Python daemons.
+PyO3 bindings for [`auki-domain`](../../../crates/auki-domain). The module owns
+one authenticated Auki Domain node and exposes its application protocols to
+Python.
 
-**Status:** Active — post-#216 schema (#230).
+The host application supplies:
 
-## Python module: `auki_domain`
+- a stable libp2p `Identity`;
+- a DDS Domain UUID;
+- DDS ES256 verification keys and a signed P2P credential for that identity;
+- listen addresses and explicit routes to peers, when needed; and
+- application providers such as the resource catalog.
 
-### Value types
+Credential acquisition is intentionally outside this package. The binding does
+not make hidden DDS HTTP requests. It verifies the supplied credential and
+fails closed when its peer identity, Domain UUID, signature, or expiry is
+invalid.
 
-| Python class | Role |
-|---|---|
-| `ClusterMember` | One peer row in `ClusterMembership` |
-| `ClusterMembership` | Cluster membership document (JSON round-trip) |
-| `DaemonInfo` | Daemon-supplied identity fields for `participant_info` |
-| `ParticipantInfo` | SDK-produced identity wire shape, exchanged over libp2p `/auki/info/0.0.1` (`.to_json()` for local/debug surfaces) |
-| `SensorEntry` | One row in a peer's sensor catalog |
-| `ResourceEntry` | Post-#216 resource catalog row. `variant` discriminates `sensor_log` \| `pose_log` \| `time_transform_log` \| `detection_log`. Nested blocks (`head`, `extent`, `available`, `sensor`, `pose`, `manifest`) returned as Python dicts. Construct via `ResourceEntry.from_dict(d)` or `ResourceEntry.from_json(s)` (see below). |
-| `MapLogResource` | Resource Catalog v0.4 Map Log row. Construct via `MapLogResource.from_dict(d)` or `MapLogResource.from_json(s)`. |
-| `MessageEvent` | One live opaque message with `resource_id`, authenticated `sender_peer_id`, `type`, `timestamp_ns`, and byte payload |
-| `MessageChannelResource` | Exact remote receiver identity discovered through Resource Catalog v0.3 |
-| `MessageChannelReceiver` | Blocking receiver returned by `ClusterManager.register_message_channel` |
-| `MessageChannelSender` | Persistent outbound handle opened from a discovered `MessageChannelResource` |
-| `ReadFrom` | Stream start position: `.latest()` / `.from_start()` / `.from_timestamp(ns)` |
-| `StreamRequest` | Consumer → Producer handshake: `resource_id`, `source_peer_id`, `from_` |
-| `ClusterTarget` | Policy enum for `ClusterManager.bootstrap` |
-| `StreamManifestBuilder` | Producer-side helper for building stream manifests |
+## Build locally
 
-### `ClusterManager`
+From the repository root:
 
-Daemon-side cluster handle. All constructors are synchronous (block on an
-internal multi-thread tokio runtime).
+```sh
+uv venv --python 3.12 .venv
+source .venv/bin/activate
+uv pip install maturin pytest
+maturin develop -m bindings/python/auki-session-py/Cargo.toml
+maturin develop -m bindings/python/auki-domain-py/Cargo.toml \
+  --features test-support
+python -m pytest bindings/python/auki-domain-py/python_tests
+```
 
-**Constructors (static methods):**
-- `bootstrap(target, wallet_seed, discovery_url, …)` — policy-driven; headless daemons use this
-- `create_cluster(wallet_seed, cluster_name, discovery_url, …)`
-- `create_cluster_with_relay_multiaddrs(…, relay_multiaddrs, …)`
-- `create_cluster_with_relay_reservation(…, relay_dial_multiaddr, relay_advertise_multiaddr, …)`
-- `join_cluster(wallet_seed, cluster_name, discovery_url, …)`
-- `list_clusters(discovery_url)` → `list[ClusterEntry]`
+The authenticated tests use the non-default `test-support` feature to create
+deterministic credentials. It embeds test-only signing material and must never
+be enabled in a release wheel. Build a normal local/release extension without
+that feature:
 
-**Stream methods:**
-- `open_stream(peer_id, resource_id)` — auto-dispatches by catalog variant and sensor kind, including non-spatial scalar Sensor Logs
-- `open_stream_with_request(peer_id, request: StreamRequest)` — full post-#216 control; resolves the payload kind by the request's `source_peer_id` + `resource_id`
-- `open_camera_stream / open_pointcloud_stream / open_joint_encoders_stream / open_audio_stream / open_pose_stream`
-- `open_map_stream(peer_id, resource, from_=ReadFrom.from_start())` — opens an exact discovered `MapLogResource` and validates the producer manifest
+```sh
+maturin develop -m bindings/python/auki-domain-py/Cargo.toml
+```
 
-**Catalog / registry:**
-- `fetch_resources_catalog(peer_id, variants=None)` → `list[ResourceEntry]`
-- `fetch_map_catalog(peer_id)` → `list[MapLogResource]`
-- `fetch_sensor_entry / fetch_clock_entry / fetch_frame_entry` → canonical JSON
+## Join an authenticated Domain
 
-**Live typed messaging:**
-- `register_message_channel(resource_id, capacity=64)` advertises a Resource
-  Catalog v0.3 message channel owned by this peer, tied to the SDK-declared
-  local session clock, and returns a `MessageChannelReceiver`.
-- `fetch_message_channels(peer_id)` returns the peer's exact v0.3
-  `MessageChannelResource` rows without falling back to the v0.2 catalog.
-- `open_message_channel(resource)` validates the discovered owner and clock,
-  then returns a persistent `MessageChannelSender`.
-- `sender.send(type, timestamp_ns, payload)` blocks until transport accepts the
-  event into the remote bounded receiver queue. That ACK is not application
-  acceptance; a delivery error is indeterminate and the same operation must
-  not be retried automatically. `sender.close()` closes the Python handle.
-- `receiver.recv()` blocks until a live `MessageEvent` arrives or returns
-  `None` after the channel closes.
-
-The binding preserves the Rust API's live, ephemeral semantics. It does not
-store, replay, retry, or interpret messages.
-
-## Constructing `ResourceEntry` from Python
-
-Use `ResourceEntry.from_dict(d)` or `ResourceEntry.from_json(s)` to mint
-catalog rows from Python — e.g. to feed into
-`ClusterManager.set_resource_catalog_provider`. The dict / JSON shape must
-match the `/auki/resources/0.2.0` wire format: a flat object with a `variant`
-discriminator field plus the common fields and variant-specific `manifest`
-block.
+`auki_session.Peer` owns the process peer and Session. `auki_domain.Domain`
+borrows both through their capsule bridge and keeps the Rust objects alive for
+the joined node.
 
 ```python
-from auki_domain import ResourceEntry
+import asyncio
+from pathlib import Path
 
-entry = ResourceEntry.from_dict({
-    "variant": "pose_log",
-    "source_peer_id": "galbot",
-    "writer_peer_id": "galbot",
-    "resource_id": "base_link->head_left_camera_color_optical_frame",
+import auki_domain
+import auki_session
+
+
+async def main() -> None:
+    # Persist these bytes and reuse them on restart. Generating a new identity
+    # produces a new PeerId and therefore requires a new signed credential.
+    identity = auki_domain.Identity.from_protobuf_encoding(
+        Path("robot-p2p-identity.protobuf").read_bytes()
+    )
+
+    peer = auki_session.Peer(identity.peer_id, "robot")
+    peer = peer.with_storage_root("./robot-session-data")
+    session = peer.start_session()
+
+    config = auki_domain.DomainConfig(
+        "de66fdf4-a830-4017-95dd-5741c30a6d0f",
+        identity,
+    )
+    config.with_listen_addresses(["/ip4/0.0.0.0/tcp/0"])
+
+    keys = auki_domain.DdsVerificationKeys(
+        7,
+        Path("dds-p2p-current-es256-public.pem").read_bytes(),
+        None,
+    )
+    credential = auki_domain.SignedP2pCredential(
+        Path("dds-p2p-credential.jwt").read_text().strip()
+    )
+
+    builder = auki_domain.Domain.builder(peer, session, config)
+    # Direct construction is equivalent:
+    # builder = auki_domain.DomainBuilder(peer, session, config)
+    builder.authority(keys, credential)
+    domain = await builder.join()
+
+    try:
+        print(domain.peer_id, domain.domain_id, domain.listen_addresses)
+        print(domain.status().state)  # "ready"
+    finally:
+        await domain.leave()
+
+
+asyncio.run(main())
+```
+
+Builder setters mutate the builder and return `None`; call them before
+`await builder.join()`. A builder is single-use. `Domain.leave()` is idempotent
+and should be awaited for deterministic shutdown.
+
+## Routes and authenticated peers
+
+Routes are explicit expected-PeerId-to-multiaddr hints. The remote peer still
+has to prove a valid credential for the same DDS Domain before any application
+protocol is served.
+
+```python
+routes = domain.routes()
+routes.replace(
+    remote_peer_id,
+    ["/dns4/relay.example.com/tcp/443/p2p/RELAY/p2p-circuit/p2p/REMOTE"],
+)
+
+rows = await domain.fetch_resources_catalog(remote_peer_id)
+print([row.resource_id for row in rows])
+
+for peer in domain.known_peers().snapshot():
+    print(peer.peer_id, peer.authenticated_until)
+```
+
+`known_peers()` contains peers that have completed authenticated protocol
+traffic. It is not a configured-route list. `domain.routes().snapshot()`
+returns the current route hints.
+
+Verification keys and the local credential can be rotated without replacing
+the node:
+
+```python
+authority = domain.authority()
+await authority.install_verification_keys(next_keys)
+await authority.install_credential(next_credential)
+```
+
+## Resource Catalog provider
+
+`ResourceEntry` mirrors the authenticated
+`/auki/auth/1/resources/0.2.0` wire row. Construct rows from a Python dict or a
+JSON string and register a callable that returns the catalog's current state.
+
+```python
+ZERO_HASH = "0" * 32
+
+camera = auki_domain.ResourceEntry.from_dict({
+    "variant": "sensor_log",
+    "source_peer_id": identity.peer_id,
+    "writer_peer_id": identity.peer_id,
+    "resource_id": "head_left_rgb",
     "state": "live",
     "head": {"kind": "rolling", "retention_ns": 5_000_000_000},
     "available": {"bytes": 0, "entries": 0, "duration_ns": 0},
-    "pose": {"writer_mode": "movable"},
+    "sensor": {
+        "kind": "camera",
+        "type": "rgb",
+        "sensor_id": "head_left_rgb",
+        "sensor_hash": "camera-registry-hash",
+    },
     "manifest": {
-        "from_frame": {"peer_id": "galbot", "id": "base_link",   "hash": "..."},
-        "to_frame":   {"peer_id": "galbot", "id": "head_left_camera_color_optical_frame", "hash": "..."},
-        "clock":      {"peer_id": "galbot", "id": "sdk_clock",   "hash": "..."},
-        "source":     {"kind": "manual"},
-        "expected_rate_hz": 10,
+        "clock": {
+            "peer_id": identity.peer_id,
+            "id": "session/sdk_clock",
+            "hash": ZERO_HASH,
+        },
+        "frame": None,
     },
 })
 
-# or from a JSON string:
-entry2 = ResourceEntry.from_json('{"variant": "pose_log", ...}')
+# Preferred when the provider is available before joining:
+builder.resource_catalog_provider(lambda: [camera])
+domain = await builder.join()
 
-# pass to ClusterManager:
-manager.set_resource_catalog_provider(lambda: [entry])
+# It can also be installed or replaced after joining:
+domain.set_resource_catalog_provider(lambda: [camera])
 ```
 
-`set_resource_catalog_provider` stores the callable, not the callable's return
-value. The callable is invoked for each inbound `/auki/resources/0.2.0` fetch,
-so Python producers can return a live catalog that changes as backing streams
-become ready or unavailable. Return only resources that can currently accept
-stream opens; omit unavailable resources and re-add them later with the same
-stable `resource_id`.
+The callback is invoked for each authenticated inbound fetch. Return only rows
+that can currently accept stream opens. Provider exceptions and values that
+are not `ResourceEntry` instances are logged and sampled as an empty catalog;
+they are never partially converted.
 
-All four variants (`sensor_log`, `pose_log`, `time_transform_log`,
-`detection_log`) are accepted. Serde discriminates by the `variant` field.
-Invalid input raises `ValueError`.
+All four v0.2 variants are supported: `sensor_log`, `pose_log`,
+`time_transform_log`, and `detection_log`. Invalid dicts and JSON raise
+`ValueError` with the underlying schema error.
 
-## Post-#216 schema changes
+## Live participant and stream providers
 
-The old `SensorStreamResource` / `TransformEdgeResource` / `PoseStreamResource`
-pyclasses from v0.0.52 are deleted. They are replaced by the single flat
-`ResourceEntry` type, which mirrors the `/auki/resources/0.2.0` wire shape.
+Participant metadata can be sampled on every authenticated info request. This
+keeps values such as `session_now_ns` live instead of freezing them at join:
 
-Cross-reference:
-- `ResourceEntry` shape: `docs/superpowers/specs/2026-05-27-216-schema-and-api-placement-design.md` §1
-- `StreamRequest` / `ReadFrom` shape: spec §5
-- Companion binding: [`auki-session-py`](../auki-session-py) owns the declarative
-  Session API (sensor/clock/frame registration, domain join/leave). These two
-  bindings are complementary, not exclusive.
+```python
+builder.participant_info_provider(lambda: auki_domain.ParticipantInfo(
+    "robot-app", "1.0.0", "robot", session.session_id,
+    "session-clock", clock_hash, session_now_ns(), identity.peer_id,
+))
+```
+
+Python can also publish every retained typed stream through the same owned
+Domain. The callback is synchronous; its source is an async iterator which
+runs on the caller's captured asyncio loop:
+
+```python
+async def camera_frames():
+    try:
+        while True:
+            frame, timestamp_ns = await next_frame()
+            yield auki_domain.StreamItem(
+                timestamp_ns=timestamp_ns,
+                payload=auki_domain.CameraFrame(frame),
+            )
+    finally:
+        await close_camera()
+
+def streams(requester_peer_id, request):
+    if request.resource_id != "head-camera":
+        return auki_domain.StreamDecision.decline(
+            auki_domain.DeclineReason.sensor_not_found()
+        )
+    manifest = auki_domain.StreamManifest(
+        sensor_id="head-camera",
+        sensor_hash=sensor_hash,
+        clock_id="session-clock",
+        clock_hash=clock_hash,
+    )
+    return auki_domain.StreamDecision.accept_camera(
+        manifest=manifest,
+        source=camera_frames(),
+    )
+
+builder.stream_provider(streams)
+```
+
+Dropping a consumer, cancelling an operation, or leaving the Domain cancels
+and closes active async sources. `Domain.leave()` waits for those bounded
+finalizers. `StreamDecision.accept_source(auki_logs.StreamSource)` preserves
+the retained-log publishing path without a cross-extension Rust capsule.
+
+## Main Python types
+
+| Python class | Role |
+|---|---|
+| `Identity` | Stable Ed25519 libp2p identity and PeerId |
+| `DomainConfig` | DDS Domain UUID, identity, listen addresses, and initial routes |
+| `DdsVerificationKeys` | Versioned current and optional previous DDS ES256 public keys |
+| `SignedP2pCredential` | Compact DDS-signed credential bound to Domain and PeerId |
+| `DomainBuilder` | Pre-join authority and application-provider configuration |
+| `Domain` | Joined node and application-protocol entry point |
+| `DomainAuthority` | Runtime key and credential rotation |
+| `DomainRoutes` | Explicit route replacement, removal, and snapshots |
+| `KnownPeers` | Snapshot and subscription APIs for authenticated peers |
+| `ResourceEntry` | Resource Catalog v0.2 row |
+| `MapLogResource` | Map Catalog row |
+| `MessageChannelResource` | Exact receiver identity for a live message channel |
+| `ReadFrom` / `StreamRequest` | Stream start position and open request |
+| `ParticipantInfo` | Authenticated application identity metadata |
+
+The `Domain` object also exposes resource, map, registry, blob, stream, and
+message-channel operations. Network and lifecycle operations return Python
+awaitables. Provider setters and local route mutations are synchronous.
+
+## Breaking migration from the Manager-era package
+
+| Removed surface | Stage 1 replacement |
+|---|---|
+| `ClusterManager`, `ClusterTarget`, membership, election, and Manager roles | `DomainBuilder` and one owned `Domain` |
+| Discovery-owned startup and synchronized topology | host-supplied `DomainRoutes`; `KnownPeers` reports mutually authenticated traffic only |
+| hidden DDS registration/token HTTP | host-fetched `DdsVerificationKeys` and `SignedP2pCredential` |
+| heartbeat-derived shared Domain time | application Session clocks and explicit timestamps |
+| `shutdown()` and implicit object teardown | bounded, awaitable `leave()`; cancellation and GC trigger the same native cleanup owner |
+| the prior `auki-network-py` runtime bridge | protocol types and producer/consumer stream APIs in `auki-domain-py` |
+
+`auki-domain-py==0.1.0` requires exactly `auki-session-py==0.1.0`. Their
+private Peer/Session capsule bridge contains Rust `Arc<T>` values and therefore
+must be built atomically from the same SDK commit, `Cargo.lock`, Rust toolchain,
+target, feature set, and allocator. The capsule ABI name is revised whenever
+that build contract changes; a mismatched wheel is rejected before its payload
+is read.
+
+Generic `Domain::protocols()` authoring remains a Rust-only extension surface
+in Stage 1. Python applications receive the bounded catalog, registry, blob,
+message, and typed-stream clients above; a future generic Python protocol
+author API must own its handler tasks and expose bounded byte reads rather than
+an unsafe raw-stream shortcut.
 
 ## Depends on
 
-- [`auki-domain`](../../../crates/auki-domain) — Rust crate it wraps
-- [`auki-network`](../../../crates/auki-network) — `ResourceEntry`, `StreamRequest`, `ReadFrom`
-- [`auki-network-py`](../auki-network-py) — shared stream types, `PyClusterEntry`, capsule bridge
-- [`auki-registry`](../../../crates/auki-registry) — `RegistryRef` used in manifest dict rendering
+- [`auki-domain`](../../../crates/auki-domain) for authenticated lifecycle and
+  protocol ownership;
+- [`auki-session`](../../../crates/auki-session) and
+  [`auki-session-py`](../auki-session-py) for the shared process peer and
+  Session; and
+- [`auki-network`](../../../crates/auki-network) for application wire codecs.

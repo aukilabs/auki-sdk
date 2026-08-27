@@ -17,7 +17,9 @@ log.flush()
 log.set_retention(retention_ns)
 log.manifest()                       # dict
 
-# Producer sources preserve replay + live log semantics in SDK streams.
+# Producer sources preserve replay + live log semantics in authenticated
+# Domain streams (`auki-domain-py`). Their identity fields are frozen and
+# readable by application adapters as well as the Domain binding.
 sensor_source = log.stream_source(...)  # payload_kind also accepts "scalar"
 map_source = log.map_stream_source(
     resource_id="voxel/world",
@@ -28,6 +30,8 @@ map_source = log.map_stream_source(
     clock_id="sdk_clock",
     clock_hash=clock_hash,
 )
+map_source.resource_id, map_source.map_peer_id, map_source.map_id
+map_source.map_hash, map_source.clock_peer_id
 
 reader = log.read()
 for entry in reader.entries():

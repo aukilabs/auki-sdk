@@ -4,12 +4,13 @@ build-backend = "maturin"
 
 [project]
 name = "auki-domain-py"
-version = "0.0.0"
-description = "PyO3 bindings for auki-domain's ClusterManager and producer stream-manifest helpers."
+version = "0.1.0"
+description = "Authenticated Auki Domain lifecycle and application protocol bindings."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Auki Labs Limited" }]
 requires-python = ">=3.8"
+dependencies = ["auki-session-py==0.1.0"]
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",

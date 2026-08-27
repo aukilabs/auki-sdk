@@ -25,7 +25,7 @@ crate-type = ["cdylib", "rlib"]
 # `auto-initialize` dev-feature) and `Python::with_gil` works out of
 # the box. Enabling `extension-module` would skip that link and the
 # test binary would fail to load — the two modes are mutually
-# exclusive. Same shape as `auki-network-py`.
+# exclusive. This matches the other SDK Python bindings.
 default = []
 extension-module = ["pyo3/extension-module"]
 
@@ -40,7 +40,7 @@ auki-logs-rs = { package = "auki-logs", path = "../../../crates/auki-logs" }
 # `manifest()`.
 serde_json = "1"
 # `abi3-py38` builds a stable-ABI extension that works on Python 3.8+
-# without rebuilding per minor version. Same as `auki-network-py`.
+# without rebuilding per minor version, matching `auki-domain-py`.
 pyo3 = { version = "0.22", features = ["abi3-py38"] }
 
 [dev-dependencies]

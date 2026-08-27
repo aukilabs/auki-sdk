@@ -39,6 +39,24 @@ pub use peer::{FrameDef, Peer, PeerRegistries};
 pub use registry_store::RegistryStore;
 pub use session::{Session, SessionLogs};
 
+/// Versioned private PyCapsule name used to pass an `Arc<Peer>` between the
+/// paired `auki-session-py` and `auki-domain-py` wheels.
+///
+/// This is not a stable application API. The exact name intentionally fences
+/// native extensions built from different SDK releases before either side
+/// reads the Rust payload.
+#[doc(hidden)]
+pub const PY_DOMAIN_PEER_CAPSULE_ABI_NAME: &str = "auki_sdk.python.peer.arc.sdk-0.1.0.p13.v1";
+
+/// Versioned private PyCapsule name used to pass an `Arc<Session>` between the
+/// paired `auki-session-py` and `auki-domain-py` wheels.
+///
+/// This is not a stable application API. The exact name intentionally fences
+/// native extensions built from different SDK releases before either side
+/// reads the Rust payload.
+#[doc(hidden)]
+pub const PY_DOMAIN_SESSION_CAPSULE_ABI_NAME: &str = "auki_sdk.python.session.arc.sdk-0.1.0.p13.v1";
+
 #[cfg(test)]
 mod tests {
     use super::*;

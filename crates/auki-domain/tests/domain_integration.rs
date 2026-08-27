@@ -33,6 +33,7 @@ use auki_registry::RegistryRef;
 use auki_session::Peer;
 use futures::StreamExt;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+use serde::Deserialize;
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -46,6 +47,34 @@ const TEST_DDS_PUBLIC_KEY: &[u8] = br#"-----BEGIN PUBLIC KEY-----
 MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
 8FKYQ5HDiJO0jg7CsFL0yIlK9dTW1wSZmwUX4REXM7LiuD1YWuXoNH1aqA==
 -----END PUBLIC KEY-----"#;
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthVectorFixture {
+    schema_version: u32,
+    domain_id: String,
+    wrong_domain_id: String,
+    subject_id: String,
+    cases: Vec<AuthVectorCase>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuthVectorCase {
+    name: String,
+    identity_seed_byte: u8,
+    credential_peer_seed_byte: u8,
+    credential_domain_id: String,
+    expired: bool,
+    expected_join: ExpectedJoin,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ExpectedJoin {
+    Ready,
+    Rejected,
+}
 
 #[derive(Clone)]
 struct CountingCatalog {
@@ -127,11 +156,20 @@ fn unix_time() -> u64 {
 }
 
 fn credential(peer_id: PeerId, domain_id: Uuid, issued_at: u64) -> SignedP2pCredential {
+    credential_with_subject(peer_id, domain_id, Uuid::new_v4(), issued_at)
+}
+
+fn credential_with_subject(
+    peer_id: PeerId,
+    domain_id: Uuid,
+    subject_id: Uuid,
+    issued_at: u64,
+) -> SignedP2pCredential {
     let claims = P2PAccessClaims {
         token_type: P2P_TOKEN_TYPE.into(),
         iss: P2P_TOKEN_ISSUER.into(),
         aud: vec![P2P_TOKEN_AUDIENCE.into()],
-        sub: Uuid::new_v4().to_string(),
+        sub: subject_id.to_string(),
         peer_type: None,
         peer_id: peer_id.to_string(),
         domain_ids: vec![domain_id.to_string()],
@@ -151,6 +189,17 @@ fn credential(peer_id: PeerId, domain_id: Uuid, issued_at: u64) -> SignedP2pCred
     )
     .unwrap();
     SignedP2pCredential::new(token).unwrap()
+}
+
+fn canonical_uuid(label: &str, value: &str) -> Uuid {
+    let parsed = Uuid::parse_str(value)
+        .unwrap_or_else(|error| panic!("shared auth fixture {label} must be a UUID: {error}"));
+    assert_eq!(
+        parsed.to_string(),
+        value,
+        "shared auth fixture {label} must be canonical lowercase UUID"
+    );
+    parsed
 }
 
 fn listener() -> Multiaddr {
@@ -241,6 +290,99 @@ async fn appeared(subscription: &mut KnownPeerSubscription, expected_peer: PeerI
     })
     .await
     .expect("authenticated peer must appear")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shared_auth_vectors_gate_public_domain_join() {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        let fixture: AuthVectorFixture =
+            serde_json::from_str(include_str!("fixtures/authenticated_domain_vectors.json"))
+                .expect("shared authenticated Domain vectors must decode");
+        assert_eq!(fixture.schema_version, 1);
+
+        let domain_id = canonical_uuid("domain_id", &fixture.domain_id);
+        let wrong_domain_id = canonical_uuid("wrong_domain_id", &fixture.wrong_domain_id);
+        let subject_id = canonical_uuid("subject_id", &fixture.subject_id);
+        assert_ne!(domain_id, wrong_domain_id);
+        assert_eq!(
+            fixture
+                .cases
+                .iter()
+                .map(|case| case.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "valid",
+                "wrong_credential_peer_id",
+                "wrong_dds_domain_uuid",
+                "literal_expired",
+            ]
+        );
+
+        let now = unix_time();
+        let mut ready = 0;
+        let mut rejected = 0;
+        for case in fixture.cases {
+            let local_identity = identity(case.identity_seed_byte);
+            let credential_peer = identity(case.credential_peer_seed_byte).peer_id();
+            let credential_domain = canonical_uuid(
+                &format!("{}.credential_domain_id", case.name),
+                &case.credential_domain_id,
+            );
+            let issued_at = if case.expired {
+                now.checked_sub(P2P_TOKEN_TTL.as_secs() + 1)
+                    .expect("test clock must be later than one token lifetime")
+            } else {
+                now
+            };
+            let credential =
+                credential_with_subject(credential_peer, credential_domain, subject_id, issued_at);
+
+            let app_root = tempfile::tempdir().unwrap();
+            let peer = Peer::new(
+                local_identity.peer_id().to_string(),
+                "shared-auth-vector-test",
+            )
+            .with_storage_root(app_root.path().to_path_buf());
+            let session = peer.start_session().unwrap();
+            let result = Domain::join(
+                &peer,
+                &session,
+                DomainConfig::new(domain_id, local_identity),
+                keys(),
+                credential,
+            )
+            .await;
+
+            match (case.expected_join, result) {
+                (ExpectedJoin::Ready, Ok(domain)) => {
+                    ready += 1;
+                    assert_eq!(domain.status(), DomainStatus::Ready, "{}", case.name);
+                    let status = domain.subscribe_status();
+                    domain.leave().await.unwrap();
+                    assert_eq!(*status.borrow(), DomainStatus::Stopped, "{}", case.name);
+                }
+                (ExpectedJoin::Rejected, Err(error)) => {
+                    rejected += 1;
+                    assert!(
+                        !error.to_string().is_empty(),
+                        "{} must report its fail-closed join error",
+                        case.name
+                    );
+                }
+                (ExpectedJoin::Ready, Err(error)) => {
+                    panic!("{} should join successfully: {error}", case.name)
+                }
+                (ExpectedJoin::Rejected, Ok(domain)) => {
+                    domain.leave().await.unwrap();
+                    panic!("{} unexpectedly joined", case.name)
+                }
+            }
+        }
+        assert_eq!(ready, 1);
+        assert_eq!(rejected, 3);
+    })
+    .await
+    .expect("shared authenticated Domain vectors must remain bounded");
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -43,8 +43,7 @@
 //! The previous wire used JSON-via-`serde_json`. Two pressures: (1)
 //! `Vec<u8>` rendered as JSON arrays-of-integers (~4× overhead), so
 //! point-cloud payloads had to carry a `base64_bytes` adapter; (2) the
-//! cross-language schema lived in two places (Rust hand-rolled structs
-//! + Python's hand-rolled mirror in `auki-network-py`).
+//! cross-language schema lived in two hand-maintained implementations.
 //!
 //! Protobuf addresses both: native binary fields drop the adapter, and the
 //! `.proto` file in [`auki-datatypes`](../../auki-datatypes/proto/stream.proto)

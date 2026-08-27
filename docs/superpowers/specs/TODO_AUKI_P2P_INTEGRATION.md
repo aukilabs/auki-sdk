@@ -2,7 +2,15 @@
 
 **Status:** Ready for implementation.
 
-**Last updated:** 2026-08-26.
+**Last updated:** 2026-08-27.
+
+**Ownership amendment:** D14 now makes the SDK canonical only for `auki-p2p`.
+Posemesh canonically owns `auki-p2p-dataset` and pins the SDK transport
+revision/version. The ordered prompts retain the actual migration history:
+P01 temporarily staged both source snapshots in SDK commit `7303f29`, P05
+temporarily made Posemesh consume both SDK copies in Posemesh commit `210037c`,
+and P15A records the final ownership correction. The resulting tree has one
+canonical source for each crate.
 
 **Locked decisions:**
 [`PLAN_AUKI_P2P_INTEGRATION.md`](./PLAN_AUKI_P2P_INTEGRATION.md).
@@ -43,8 +51,8 @@ own unless it explicitly says that two repositories must move together.
 Repository names below mean:
 
 - **SDK:** this `auki-sdk` repository; and
-- **Posemesh:** the sibling `posemesh/core` workspace that currently owns the
-  source copies of `auki-p2p` and `auki-p2p-dataset`.
+- **Posemesh:** the sibling `posemesh/core` workspace that canonically owns the
+  `auki-p2p-dataset` application protocol and consumes SDK `auki-p2p`.
 
 ## 2. Frozen implementation contracts
 
@@ -138,10 +146,9 @@ to their existing wire contracts.
 Stage 1 is complete when native Rust and Python use one Domain-owned
 authenticated node and:
 
-- `auki-sdk` is the canonical source of publishable `auki-p2p` and
-  `auki-p2p-dataset` crates;
-- Posemesh consumes those crates at one exact revision or pinned release and no
-  longer contains source copies;
+- `auki-sdk` is the canonical source of the publishable `auki-p2p` transport;
+- Posemesh canonically owns `auki-p2p-dataset`, consumes `auki-p2p` at one
+  exact revision or pinned release, and contains no copied transport source;
 - the retained info, resources, registries, blobs, message, and stream
   protocols use the D11 authenticated IDs and the D02 Domain-token rule;
 - `Domain`, `DomainBuilder`, `join`, `leave`, catalogs, registries, blobs,
@@ -184,7 +191,7 @@ This is a preflight, not a product-code commit.
 
 ---
 
-### P01 — Import the canonical P2P crates into `auki-sdk`
+### P01 — Import the P2P crates into `auki-sdk` for migration staging
 
 **Goal:** Move the already-tested implementation without changing its behavior.
 
@@ -193,7 +200,7 @@ This is a preflight, not a product-code commit.
 - `Cargo.toml`
 - `Cargo.lock`
 - `crates/auki-p2p/**` (new)
-- `crates/auki-p2p-dataset/**` (new)
+- `crates/auki-p2p-dataset/**` (new, temporary staging copy)
 
 **Work**
 
@@ -202,19 +209,22 @@ This is a preflight, not a product-code commit.
 - Add both crates to the SDK workspace and centralize their libp2p `0.56` family
   dependencies in the workspace manifest.
 - Preserve the exact `libp2p-stream` version paired with libp2p `0.56`.
-- Make the SDK copies publishable and give them SDK-owned package metadata.
+- Give both staging copies SDK package metadata. This does not settle final
+  ownership or authorize publishing the dataset package; P15A removes that
+  copy before the Stage 1 release.
 - Do not modify the Posemesh copies or switch any consumer in this prompt.
-- Do not fold either crate into `auki-domain`; both remain useful low-level
-  public crates.
+- Do not fold either crate into `auki-domain`; the dataset policy remains
+  separate while the transport becomes the reusable SDK layer.
 
 **Required proof**
 
 - All imported unit and integration tests pass unchanged.
-- Strict Clippy passes for both crates.
+- Strict Clippy passes for both staging crates.
 - A reviewable import diff identifies every intentional manifest-only change
   from the recorded Posemesh source revision.
 
-**Commit:** `feat(p2p): import authenticated runtime crates`
+**Historical commit:** SDK `7303f29` (`feat(p2p): import authenticated runtime
+crates`).
 
 ---
 
@@ -269,7 +279,7 @@ role/scope authorization from the transport boundary.
 - `crates/auki-p2p/src/transport.rs`
 - `crates/auki-p2p/src/runtime.rs`
 - `crates/auki-p2p/tests/authenticated_transport.rs`
-- `crates/auki-p2p-dataset/src/lib.rs`
+- `crates/auki-p2p-dataset/src/lib.rs` (temporary P01 staging copy)
 
 **Work**
 
@@ -354,10 +364,11 @@ authority into the Domain facade.
 
 ---
 
-### P05 — Switch Posemesh to the canonical SDK crates
+### P05 — Switch Posemesh to the staged SDK crates
 
-**Goal:** End source divergence before `auki-domain` starts building on the
-canonical implementation.
+**Goal:** End duplicate source divergence during the migration before
+`auki-domain` starts building on the canonical transport. P15A later establishes
+the final dataset ownership boundary.
 
 This is the first coordinated two-repository prompt.
 
@@ -374,14 +385,15 @@ This is the first coordinated two-repository prompt.
 - Update call sites for the role-neutral session API and identity changes.
 - Remove `posemesh/core/auki-p2p` and
   `posemesh/core/auki-p2p-dataset` only after all consumers compile against the
-  canonical crates.
+  staged SDK crates.
 - Keep the compute node's DMS relay booking coordinator. It selects/authorizes
   providers and constructs `RelayProvider`; the canonical `auki-p2p::Node`
   continues to perform the CRv2 reservation lifecycle.
 
 **Required proof**
 
-- Posemesh has no path or copied source dependency for either canonical crate.
+- At this migration point Posemesh has no path or copied source dependency for
+  either staged SDK crate.
 - The authenticated transport, real relay, dataset, compute-node relay booking,
   and relay-file end-to-end suites pass.
 - `rg` finds no second `pub struct Identity`, `pub struct Node`, or copied
@@ -391,7 +403,7 @@ This is the first coordinated two-repository prompt.
 **Commits**
 
 - SDK release/revision commit if needed.
-- Posemesh: `refactor(p2p): consume canonical auki-sdk crates`
+- Posemesh `210037c`: `refactor(p2p): consume canonical SDK runtime`.
 
 ---
 
@@ -742,6 +754,59 @@ This is a release checklist, not an architecture prompt.
 - [ ] Crate/package versions and MSRV are pinned and documented.
 - [ ] Prior Swift and browser package lines/tags remain retrievable before the
       native/Python breaking release is published.
+
+---
+
+### P15A — Apply the final dataset ownership correction
+
+**Ordering:** Review this amendment after the historical P15 gate commit
+`7941457`, but apply it before any Stage 1 tag or registry publication. Rerun
+the affected P15 gates after the correction. P16 and P17 remain separate,
+nonblocking platform stages.
+
+**Goal:** Keep reusable transport in the SDK and Posemesh product protocol
+policy in Posemesh, with exactly one canonical source of each crate.
+
+**SDK files**
+
+- `Cargo.toml`
+- `Cargo.lock`
+- `crates/auki-p2p-dataset/**` (remove the temporary staging copy)
+- `crates/auki-p2p/README.md`
+- D14, design, migration, release, and root documentation
+
+**SDK work**
+
+- Remove `auki-p2p-dataset` from the workspace, lockfile, package map, and SDK
+  release/version claims.
+- Delete the SDK dataset source only after its exact Posemesh snapshot is
+  safely present and verified byte-for-byte.
+- Keep `auki-p2p` as the SDK-owned, publishable low-level transport.
+- Keep the generic extension-boundary proof in SDK tests through current
+  `ApplicationProtocol` namespace vectors, authenticated stream tests, and the
+  restricted `DomainProtocols` registration/open surface.
+
+**Posemesh work**
+
+- Restore `core/auki-p2p-dataset` as the canonical dataset protocol source.
+- Make it depend on the exact SDK `auki-p2p` revision/version; do not restore a
+  copied transport source.
+- Keep immutable-file wire semantics, reference schema, Robot/Compute role
+  rules, relay eligibility, retry policy, and relay-file E2E ownership there.
+
+**Required proof**
+
+- The Posemesh snapshot is byte-identical before the SDK copy is removed.
+- SDK Cargo metadata contains `auki-p2p` but no `auki-p2p-dataset` package or
+  workspace member, and source/package searches show one canonical source of
+  each crate across the repositories.
+- Focused SDK format, locked check, transport/Domain/network tests, and strict
+  Clippy pass after deletion.
+- Posemesh dataset, compute/runner, and relay-file suites pass against the
+  exact SDK transport pin, including a circuit-only byte-identical live
+  transfer and graceful drain.
+- The Stage 1 `0.1.0` native/Python versions, Rust `1.89.0` MSRV, and prior-tag
+  Swift/browser guidance remain unchanged and truthful.
 
 ## 5. Later platform stages
 

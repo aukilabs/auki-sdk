@@ -26,9 +26,10 @@ for local Stage 1 evaluation.
   `auki-session-py==0.1.0` from the same SDK build.
 - The diagnostic CLI provides a real two-process direct-TCP catalog proof and
   fail-closed wrong-Domain/wrong-Peer/malformed-credential checks.
-- The active Cargo workspace pins Rust `1.89.0`; `auki-domain`, `auki-p2p`,
-  and `auki-p2p-dataset` are versioned `0.1.0`. Publish the P2P crate before
-  dataset, while Rust Domain is consumed from the coordinated source tag.
+- The active Cargo workspace pins Rust `1.89.0`; `auki-domain` and `auki-p2p`
+  are versioned `0.1.0`. Rust Domain is consumed from the coordinated source
+  tag, while the transport crate is published independently. Posemesh owns its
+  dataset application protocol and pins this transport revision/version.
 
 **Who's affected:** every native networking consumer. Upgrade a communicating
 Rust/Python group together; Swift and browser remain on their pinned prior lines

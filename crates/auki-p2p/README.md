@@ -30,4 +30,8 @@ The host application remains the composition root: it acquires and refreshes
 credentials, owns shutdown, constructs one `Node`/`DomainAuthority`/
 `RouteCatalog`, and gives those shared capabilities to each protocol crate.
 
-`auki-p2p-dataset` is the reference implementation of this pattern.
+The SDK's `ApplicationProtocol` vectors and authenticated Domain protocol tests
+prove this generic boundary without making a product protocol part of the
+transport crate. Posemesh's separately owned `auki-p2p-dataset` crate is one
+external consumer of the low-level API and pins the SDK transport revision or
+release it uses.

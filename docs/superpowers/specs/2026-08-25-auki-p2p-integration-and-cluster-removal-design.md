@@ -2,7 +2,7 @@
 
 **Status:** Approved migration design.
 
-**Date:** 2026-08-26.
+**Date:** 2026-08-26. Ownership boundary amended 2026-08-27.
 
 **Authoritative decisions:**
 [`PLAN_AUKI_P2P_INTEGRATION.md`](./PLAN_AUKI_P2P_INTEGRATION.md).
@@ -29,6 +29,10 @@ This is an internal migration of the SDK we already have:
 
 The detailed D01–D16 contracts in the plan supersede any ambiguity in this
 summary.
+
+The D14 amendment keeps reusable transport ownership in `auki-sdk` while
+leaving Posemesh's dataset application protocol, role policy, and relay-file
+release cadence canonical in Posemesh.
 
 ## Why this direction
 
@@ -206,8 +210,8 @@ Relay booking and browser reachability do not block the first direct-TCP slice.
 
 There are two supported layers:
 
-- standalone protocol crates use the low-level `auki-p2p::Node`, as
-  `auki-p2p-dataset` does; and
+- standalone protocol crates use the low-level `auki-p2p::Node`, as the
+  Posemesh-owned `auki-p2p-dataset` crate does; and
 - protocol crates hosted by a `Domain` use its restricted `DomainProtocols`
   handle.
 
@@ -248,17 +252,18 @@ consensus system, or symmetric clock algorithm.
 
 ## Canonical crates
 
-`auki-sdk` becomes the canonical source for publishable `auki-p2p` and
-`auki-p2p-dataset` crates. Posemesh consumes an exact revision and then a
-pinned release; its source copies are removed.
+`auki-sdk` becomes the canonical source for the publishable `auki-p2p`
+transport crate. Posemesh consumes an exact revision and then a pinned release,
+while remaining the canonical source for its `auki-p2p-dataset` application
+protocol. There is one source of each crate, not mirrored copies.
 
 The dependency direction is:
 
 ```text
-auki-p2p-dataset -> auki-p2p
-auki-domain      -> auki-p2p + retained protocol codecs/business crates
-bindings         -> auki-domain
-Posemesh         -> versioned auki-p2p crates
+SDK auki-domain             -> SDK auki-p2p + retained codecs/business crates
+SDK bindings                -> SDK auki-domain
+Posemesh auki-p2p-dataset   -> exact/versioned SDK auki-p2p
+Posemesh compute/runners    -> Posemesh dataset + SDK auki-p2p
 ```
 
 `auki-p2p` depends on neither `auki-domain` nor `auki-network`.

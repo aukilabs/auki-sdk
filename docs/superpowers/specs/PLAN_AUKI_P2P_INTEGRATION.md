@@ -9,7 +9,14 @@ ready.
 **Implementation ledger:**
 [`TODO_AUKI_P2P_INTEGRATION.md`](./TODO_AUKI_P2P_INTEGRATION.md).
 
-**Last updated:** 2026-08-26.
+**Last updated:** 2026-08-27.
+
+**Ownership amendment (2026-08-27):** D14 makes `auki-sdk` canonical only for
+the reusable `auki-p2p` transport. Posemesh canonically owns its
+`auki-p2p-dataset` application protocol and depends on an exact SDK transport
+revision/version. This supersedes the earlier plan to publish both crates from
+the SDK; it preserves one source of each crate without moving Posemesh product
+policy into the Domain release.
 
 Locked decisions in this plan refine and, where necessary, supersede the
 companion design. The companion design and implementation ledger have both been
@@ -72,7 +79,7 @@ proposal for preserving the current architecture.
 | `auki-domain-py` | Large Python `ClusterManager` facade plus catalogs, streams, messages, and registry access | Useful protocol APIs need a non-Manager owner and an explicit breaking-API plan. |
 | `auki-network-swift` | Public `NetworkRuntime`, Discovery, liveness, and typed streams | It exposes the layer we intend to replace, so Swift cannot be treated as a mechanical rename. |
 | Posemesh `auki-p2p` | Native DDS-authenticated runtime, exact routes, relay primitives, protocol supervision, and route catalog | Strong starting implementation, but its current credential and Domain assumptions are narrower than the SDK. |
-| Posemesh `auki-p2p-dataset` | First narrow application protocol built on `auki-p2p` | Reference pattern for authenticated protocol ownership, not a template that every protocol must copy verbatim. |
+| Posemesh `auki-p2p-dataset` | First narrow application protocol built on `auki-p2p`, including Robot/Compute and relay-route policy | Keep it canonical in Posemesh and make it consume the exact SDK transport revision/version. |
 
 The Auki SDK already depends on upstream libp2p `0.56`. The dependency upgrade
 is therefore not an open architectural question in this repository.
@@ -632,8 +639,8 @@ closure, reconnect, and subscriber lag recovery.
 **Decision:** Keep two simple public layers.
 
 1. `auki-p2p::Node` is the supported low-level API for standalone protocol
-   crates such as `auki-p2p-dataset` and for Posemesh applications that own
-   their node directly.
+   crates and for Posemesh applications, including its separately owned
+   dataset protocol, that own their node directly.
 2. `Domain::protocols()` returns a cloneable `DomainProtocols` handle for code
    that must add a protocol to the Domain-owned node.
 
@@ -664,9 +671,12 @@ method inside a central runtime loop, giving protocols credential access,
 restricting registration to Auki-owned crates, and inventing a plugin system
 before a second external protocol needs one.
 
-**Resolution proof:** `auki-p2p-dataset` plus one retained Domain protocol both
-serve and open authenticated streams, while compile-time/API inspection shows
-the Domain extension handle cannot read credentials or stop the node.
+**Resolution proof:** Generic `ApplicationProtocol` vectors exercise the
+low-level namespace and authenticated-stream boundary; retained Domain protocol
+tests register and open through `DomainProtocols`; compile-time/API inspection
+shows the Domain extension handle cannot read credentials or stop the node.
+Posemesh independently tests its dataset consumer against the exact SDK
+transport revision.
 
 ### D09 — Existing protocol disposition and authorization matrix
 
@@ -893,13 +903,13 @@ transport with invalid Domain authority.
 
 **Status:** LOCKED.
 
-**Decision:** `auki-sdk` becomes the canonical source repository for both
-`auki-p2p` and `auki-p2p-dataset`.
+**Decision:** `auki-sdk` is the canonical source repository for the reusable
+`auki-p2p` transport. Posemesh is the canonical source repository for its
+`auki-p2p-dataset` application protocol.
 
 ```text
+auki-sdk:
 auki-p2p                       (identity, auth, routes, transport, streams)
-    ↑
-auki-p2p-dataset               (independent reusable protocol)
 
 auki-network                   (temporary retained wire codecs/types only)
     ↑                         ↗
@@ -907,17 +917,22 @@ auki-domain  ─────────────── auki-p2p
     ↑
 language bindings / applications
 
-Posemesh ────────────────→ versioned auki-p2p crates
+Posemesh:
+auki-p2p-dataset ───────────→ exact/versioned SDK auki-p2p
+compute node / runners ─────→ auki-p2p-dataset + SDK auki-p2p
 ```
 
-- Add publishable `crates/auki-p2p` and `crates/auki-p2p-dataset` packages to
-  `auki-sdk`.
-- Posemesh temporarily consumes an exact Git revision, then a normal pinned
-  crate version after the first release.
-- Delete the Posemesh source copies as soon as that dependency switch lands;
-  fixes then happen only in `auki-sdk` and are consumed by version/revision.
+- Add the publishable `crates/auki-p2p` package to `auki-sdk`.
+- Posemesh temporarily consumes an exact SDK Git revision, then a normal pinned
+  `auki-p2p` crate version after the first release.
+- Keep `auki-p2p-dataset` only in Posemesh. Its immutable-file wire, reference
+  schema, Robot/Compute rule, relay eligibility, and retry policy remain
+  application ownership rather than SDK Domain policy.
+- Do not keep a copied dataset source in the SDK or a copied transport source
+  in Posemesh. Each crate has exactly one canonical repository.
 - `auki-p2p` depends on neither `auki-domain` nor `auki-network`.
-- `auki-p2p-dataset` depends only on `auki-p2p` plus its data dependencies.
+- Posemesh `auki-p2p-dataset` depends only on the pinned SDK `auki-p2p` plus its
+  data dependencies.
 - `auki-domain` owns Domain protocol handlers and depends on `auki-p2p`.
 
 Do not move every existing codec merely for architectural aesthetics.
@@ -933,14 +948,15 @@ separate key or derivation implementation and is removed in the following
 breaking release.
 
 **Rejected alternatives:** keeping canonical copies in two repositories,
+publishing a Posemesh-only dataset policy as part of the SDK Domain release,
 making `auki-p2p` depend on the Domain facade, moving each codec into a new
 crate, and retaining `auki-network` as a second runtime under a compatibility
 feature.
 
-**Resolution proof:** Package graphs in both repositories show one source of
-`auki-p2p`; Posemesh tests run against the pinned SDK revision/version; a source
-search finds no old swarm/runtime/allow-list owner in `auki-network` after
-cutover.
+**Resolution proof:** Package graphs show one SDK source of `auki-p2p` and one
+Posemesh source of `auki-p2p-dataset`; Posemesh transport, dataset, compute, and
+relay-file tests run against the pinned SDK revision/version; a source search
+finds no old swarm/runtime/allow-list owner in `auki-network` after cutover.
 
 ### D15 — Bindings and breaking releases
 

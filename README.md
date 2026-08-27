@@ -13,11 +13,14 @@ by every workspace package and checked at that exact toolchain before release.
 | Artifact | Stage 1 version/distribution |
 |---|---|
 | SDK source | coordinated Git tag `v0.1.0` after the release gate |
-| `auki-p2p` | crate `0.1.0`; publish before dependent crates |
-| `auki-p2p-dataset` | crate `0.1.0`; publish after `auki-p2p 0.1.0` |
+| `auki-p2p` | crate `0.1.0`; canonical transport published by this repository |
 | Rust `auki-domain` | crate version `0.1.0`, consumed from the coordinated Git tag in Stage 1 |
 | Python Domain/Session | exact paired wheels `auki-domain-py==0.1.0` and `auki-session-py==0.1.0` from one build |
 | Swift and browser | prior Manager-era source tag `v0.0.60`; not wire-compatible with Stage 1 |
+
+Posemesh canonically owns and versions its `auki-p2p-dataset` application
+protocol. That crate depends on an exact SDK `auki-p2p` revision or release; it
+is not part of this SDK workspace or release line.
 
 No `v0.1.0` tag or registry package is published by this source checkout.
 Publishing is a separate release action after the local gate; unsupported
@@ -95,7 +98,6 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 | [`auki-maps`](crates/auki-maps) | Deterministic voxel Map accumulation + renderer-neutral chunk updates | ✓ |
 | [`auki-mappers`](crates/auki-mappers) | SDK-native Map producers; point-cloud + pose voxel Mapper | ✓ |
 | [`auki-p2p`](crates/auki-p2p) | Authenticated libp2p runtime, stable identity, explicit direct/relay routes, relay reservations, and peer observations | ✓ |
-| [`auki-p2p-dataset`](crates/auki-p2p-dataset) | Authenticated content-addressed dataset transfer protocol | ✓ |
 | [`auki-network`](crates/auki-network) | Bounded authenticated-protocol codecs and plain networking/application types; no swarm owner | ✓ |
 | [`auki-session`](crates/auki-session) | Declarative app API: `Peer` (identity + registries) + `Session` (clocks + log registration); network-free | ✓ |
 | [`auki-domain`](crates/auki-domain) | Public authenticated `Domain` lifecycle over one DDS Domain UUID, with explicit authority/routes and retained catalogs, registries, blobs, messages, and streams | ✓ |

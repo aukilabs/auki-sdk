@@ -14,6 +14,7 @@ async-trait = { workspace = true }
 auki-auth = { path = "../auki-auth" }
 auki-domain = { path = "../auki-domain" }
 auki-p2p = { path = "../auki-p2p" }
+auki-session = { path = "../auki-session" }
 chrono = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }
@@ -27,7 +28,6 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-auki-session = { path = "../auki-session" }
 httpmock = "0.8.2"
 jsonwebtoken = "9.3.1"
 tempfile = { workspace = true }

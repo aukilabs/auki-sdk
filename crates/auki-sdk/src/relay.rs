@@ -34,6 +34,23 @@ pub(crate) enum RelayBookingMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RelayAuthorizationError;
 
+/// One exact credential revision and its pre-redacted HTTP representation.
+#[derive(Clone)]
+pub(crate) struct RelayAuthorizationSnapshot {
+    pub(crate) header: HeaderValue,
+    pub(crate) revision: u64,
+}
+
+impl fmt::Debug for RelayAuthorizationSnapshot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RelayAuthorizationSnapshot")
+            .field("header", &"[redacted]")
+            .field("revision", &self.revision)
+            .finish()
+    }
+}
+
 /// Supplies a complete, pre-redacted HTTP Authorization value.
 ///
 /// Implementations own credential renewal. Keeping this boundary at the
@@ -41,9 +58,12 @@ pub(crate) struct RelayAuthorizationError;
 /// returning raw bearer text.
 #[async_trait]
 pub(crate) trait RelayAuthorizationProvider: Send + Sync {
-    async fn authorization(&self) -> Result<HeaderValue, RelayAuthorizationError>;
+    async fn authorization(&self) -> Result<RelayAuthorizationSnapshot, RelayAuthorizationError>;
 
-    async fn refresh_after_unauthorized(&self) -> Result<(), RelayAuthorizationError>;
+    async fn refresh_after_unauthorized(
+        &self,
+        rejected_revision: u64,
+    ) -> Result<(), RelayAuthorizationError>;
 }
 
 /// Typed control-plane boundary owned by a relay coordinator.
@@ -136,14 +156,15 @@ impl RelayBookingClient {
                 .authorization()
                 .await
                 .map_err(|_| RelayBookingClientError::Authentication { operation })?;
-            if !valid_sensitive_bearer_header(&authorization) {
+            if !valid_sensitive_bearer_header(&authorization.header) {
                 return Err(RelayBookingClientError::Authentication { operation });
             }
+            let rejected_revision = authorization.revision;
 
             let mut request = self
                 .http
                 .request(method.clone(), url.clone())
-                .header(AUTHORIZATION, authorization)
+                .header(AUTHORIZATION, authorization.header)
                 .header(ACCEPT, HeaderValue::from_static("application/json"));
             if let Some(key) = idempotency_key {
                 request = request.header(IDEMPOTENCY_KEY.clone(), key.header_value());
@@ -165,7 +186,7 @@ impl RelayBookingClient {
             let raw = RawResponse::read(operation, response).await?;
             if raw.status == StatusCode::UNAUTHORIZED && attempt == 0 {
                 self.auth
-                    .refresh_after_unauthorized()
+                    .refresh_after_unauthorized(rejected_revision)
                     .await
                     .map_err(|_| RelayBookingClientError::Authentication { operation })?;
                 continue;
@@ -1257,11 +1278,19 @@ mod tests {
 
     #[async_trait]
     impl RelayAuthorizationProvider for StaticProvider {
-        async fn authorization(&self) -> Result<HeaderValue, RelayAuthorizationError> {
-            Ok(sensitive_authorization(self.0))
+        async fn authorization(
+            &self,
+        ) -> Result<RelayAuthorizationSnapshot, RelayAuthorizationError> {
+            Ok(RelayAuthorizationSnapshot {
+                header: sensitive_authorization(self.0),
+                revision: 1,
+            })
         }
 
-        async fn refresh_after_unauthorized(&self) -> Result<(), RelayAuthorizationError> {
+        async fn refresh_after_unauthorized(
+            &self,
+            _rejected_revision: u64,
+        ) -> Result<(), RelayAuthorizationError> {
             Ok(())
         }
     }
@@ -1283,15 +1312,27 @@ mod tests {
 
     #[async_trait]
     impl RelayAuthorizationProvider for RotatingProvider {
-        async fn authorization(&self) -> Result<HeaderValue, RelayAuthorizationError> {
+        async fn authorization(
+            &self,
+        ) -> Result<RelayAuthorizationSnapshot, RelayAuthorizationError> {
             let index = self.index.load(Ordering::SeqCst);
             self.tokens
                 .get(index)
-                .map(|token| sensitive_authorization(token))
+                .map(|token| RelayAuthorizationSnapshot {
+                    header: sensitive_authorization(token),
+                    revision: u64::try_from(index).unwrap() + 1,
+                })
                 .ok_or(RelayAuthorizationError)
         }
 
-        async fn refresh_after_unauthorized(&self) -> Result<(), RelayAuthorizationError> {
+        async fn refresh_after_unauthorized(
+            &self,
+            rejected_revision: u64,
+        ) -> Result<(), RelayAuthorizationError> {
+            let index = self.index.load(Ordering::SeqCst);
+            if rejected_revision != u64::try_from(index).unwrap() + 1 {
+                return Err(RelayAuthorizationError);
+            }
             self.index.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
@@ -1302,11 +1343,19 @@ mod tests {
 
     #[async_trait]
     impl RelayAuthorizationProvider for HeaderProvider {
-        async fn authorization(&self) -> Result<HeaderValue, RelayAuthorizationError> {
-            Ok(self.0.clone())
+        async fn authorization(
+            &self,
+        ) -> Result<RelayAuthorizationSnapshot, RelayAuthorizationError> {
+            Ok(RelayAuthorizationSnapshot {
+                header: self.0.clone(),
+                revision: 1,
+            })
         }
 
-        async fn refresh_after_unauthorized(&self) -> Result<(), RelayAuthorizationError> {
+        async fn refresh_after_unauthorized(
+            &self,
+            _rejected_revision: u64,
+        ) -> Result<(), RelayAuthorizationError> {
             Ok(())
         }
     }
@@ -1318,11 +1367,19 @@ mod tests {
 
     #[async_trait]
     impl RelayAuthorizationProvider for FailingRefreshProvider {
-        async fn authorization(&self) -> Result<HeaderValue, RelayAuthorizationError> {
-            Ok(sensitive_authorization("requester-refresh-secret"))
+        async fn authorization(
+            &self,
+        ) -> Result<RelayAuthorizationSnapshot, RelayAuthorizationError> {
+            Ok(RelayAuthorizationSnapshot {
+                header: sensitive_authorization("requester-refresh-secret"),
+                revision: 1,
+            })
         }
 
-        async fn refresh_after_unauthorized(&self) -> Result<(), RelayAuthorizationError> {
+        async fn refresh_after_unauthorized(
+            &self,
+            _rejected_revision: u64,
+        ) -> Result<(), RelayAuthorizationError> {
             self.refreshes.fetch_add(1, Ordering::SeqCst);
             Err(RelayAuthorizationError)
         }

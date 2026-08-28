@@ -342,6 +342,14 @@ impl Peer {
         Session::start(self.inner.clone())
     }
 
+    /// Return whether `session` was created by this exact peer instance.
+    ///
+    /// Comparing peer IDs is insufficient because two independent [`Peer`]
+    /// values may carry the same ID while owning different registries.
+    pub fn owns_session(&self, session: &Session) -> bool {
+        Arc::ptr_eq(&self.inner, &session.peer)
+    }
+
     /// A cheaply-cloneable read handle over this peer's registries, for
     /// `auki-domain` to resolve registry entries (e.g. a sensor's kind/type)
     /// while building the resource catalog. See [`PeerRegistries`].
@@ -419,6 +427,18 @@ mod tests {
         assert_eq!(p.peer_id(), "galbot");
         assert_eq!(p.app_id(), "galbot-ctrl");
         assert_eq!(p.storage_root(), tmp.path());
+    }
+
+    #[test]
+    fn peer_recognizes_only_sessions_from_the_same_instance() {
+        let tmp = tempdir().unwrap();
+        let peer = Peer::new("galbot", "galbot-ctrl").with_storage_root(tmp.path().join("peer"));
+        let session = peer.start_session().unwrap();
+        let lookalike =
+            Peer::new("galbot", "galbot-ctrl").with_storage_root(tmp.path().join("lookalike"));
+
+        assert!(peer.owns_session(&session));
+        assert!(!lookalike.owns_session(&session));
     }
 
     #[test]

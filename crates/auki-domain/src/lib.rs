@@ -61,6 +61,7 @@ pub use authenticated_runtime::{
         DomainProtocols, DomainRouteAttempt,
     },
     registries::RegistriesError,
+    relay_reservations::{DomainRelayError, DomainRelayReservations},
     resources_v2::ResourcesV2Error,
     resources_v3::ResourcesV3Error,
     resources_v4::ResourcesV4Error,

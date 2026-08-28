@@ -48,6 +48,7 @@ use crate::{
         peers::DomainPeers,
         protocols::DomainProtocols,
         registries::RegistriesError,
+        relay_reservations::DomainRelayReservations,
         resources_v2::ResourcesV2Error,
         resources_v3::ResourcesV3Error,
         resources_v4::ResourcesV4Error,
@@ -496,6 +497,12 @@ impl Domain {
     /// Restricted authenticated protocol extension surface.
     pub fn protocols(&self) -> DomainProtocols {
         self.runtime.protocols()
+    }
+
+    /// Restricted Circuit Relay v2 reservation capability for a
+    /// higher-level reachability coordinator.
+    pub fn relay_reservations(&self) -> DomainRelayReservations {
+        self.runtime.relay_reservations()
     }
 
     /// Exact application protocol IDs currently served by this Domain.

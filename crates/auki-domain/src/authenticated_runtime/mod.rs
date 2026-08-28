@@ -17,6 +17,7 @@ mod p11_tests;
 pub(crate) mod peers;
 pub(crate) mod protocols;
 pub(crate) mod registries;
+pub(crate) mod relay_reservations;
 pub(crate) mod resources_v2;
 pub(crate) mod resources_v3;
 pub(crate) mod resources_v4;
@@ -614,6 +615,10 @@ impl AuthenticatedDomain {
 
     pub(crate) fn protocols(&self) -> DomainProtocols {
         self.protocols.clone()
+    }
+
+    pub(crate) fn relay_reservations(&self) -> relay_reservations::DomainRelayReservations {
+        relay_reservations::DomainRelayReservations::new(Arc::clone(&self.access))
     }
 
     pub(crate) fn served_protocol_ids(&self) -> &[&'static str] {

@@ -11,15 +11,15 @@ use std::{
 };
 
 use auki_domain::{
-    Domain, DomainBuilder, DomainConfig, DomainRoutesError, DomainStatus, Identity, KnownPeer,
-    KnownPeerEvent, KnownPeerSubscription, MapCatalogProvider, MapLogResource,
+    Domain, DomainBuilder, DomainConfig, DomainRelayError, DomainRoutesError, DomainStatus,
+    Identity, KnownPeer, KnownPeerEvent, KnownPeerSubscription, MapCatalogProvider, MapLogResource,
     MessageChannelResource, Multiaddr, PeerId, ReadFrom, ResourceCatalogProvider, ResourcesRequest,
     ResourcesRequestV3, ServedProtocols, SignedP2pCredential, StreamRequest,
 };
 use auki_p2p::{
-    ApplicationProtocol, DdsTokenVerifier, DdsVerificationKeys, Node, P2P_TOKEN_AUDIENCE,
-    P2P_TOKEN_ISSUER, P2P_TOKEN_TTL, P2P_TOKEN_TYPE, P2PAccessClaims, SessionRequirements,
-    SignedApplicationMetadata,
+    ApplicationProtocol, DdsTokenVerifier, DdsVerificationKeys, ExpectedRelayLimits, Node,
+    P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_TTL, P2P_TOKEN_TYPE, P2PAccessClaims,
+    RelayProvider, SessionRequirements, SignedApplicationMetadata,
 };
 use auki_protocols::{
     catalog::v2::{
@@ -106,6 +106,7 @@ async fn retained_public_operations_are_reachable(
     let _ = domain.routes();
     let _ = domain.known_peers();
     let _ = domain.protocols();
+    let _ = domain.relay_reservations();
     let _ = domain.catalog();
     let _ = domain.set_resource_catalog_provider(resources);
     let _ = domain.set_map_catalog_provider(maps);
@@ -204,6 +205,18 @@ fn canonical_uuid(label: &str, value: &str) -> Uuid {
 
 fn listener() -> Multiaddr {
     Multiaddr::from_str("/ip4/127.0.0.1/tcp/0").unwrap()
+}
+
+fn relay_provider(seed: u8) -> RelayProvider {
+    let relay_peer = identity(seed).peer_id();
+    RelayProvider::new(
+        relay_peer,
+        [format!(
+            "/dns4/relay.dev.aukiverse.com/tcp/443/p2p/{relay_peer}"
+        )],
+        ExpectedRelayLimits::new(Duration::from_secs(60), 1024).unwrap(),
+    )
+    .unwrap()
 }
 
 fn tcp_port(address: &Multiaddr) -> u16 {
@@ -695,6 +708,8 @@ async fn public_domain_d16_vertical_slice_is_authenticated_and_owned() {
 
         let a_routes = a.routes();
         let b_routes = b.routes();
+        let a_relays = a.relay_reservations();
+        let b_relays = b.relay_reservations();
         let a_status = a.subscribe_status();
         let b_status = b.subscribe_status();
         b.leave().await.unwrap();
@@ -703,6 +718,14 @@ async fn public_domain_d16_vertical_slice_is_authenticated_and_owned() {
         assert_eq!(*b_status.borrow(), DomainStatus::Stopped);
         assert!(matches!(a_routes.snapshot(), Err(DomainRoutesError::Stopped)));
         assert!(matches!(b_routes.snapshot(), Err(DomainRoutesError::Stopped)));
+        assert!(matches!(
+            a_relays.start(relay_provider(251)).await,
+            Err(DomainRelayError::Stopped)
+        ));
+        assert!(matches!(
+            b_relays.start(relay_provider(252)).await,
+            Err(DomainRelayError::Stopped)
+        ));
         std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, a_port)).unwrap();
         std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, b_port)).unwrap();
     })

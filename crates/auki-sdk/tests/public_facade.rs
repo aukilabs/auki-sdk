@@ -11,8 +11,10 @@ use uuid::Uuid;
 
 fn assert_send_sync<T: Send + Sync>() {}
 
+const CUSTOM_PROTOCOL: &str = "/auki-p2p/example/1.0.0";
+
 fn register_custom_protocol(protocols: &AukiPeerProtocols) {
-    let spec = DomainProtocolSpec::new("/auki/example/1.0.0", 4, 4096).unwrap();
+    let spec = DomainProtocolSpec::new(CUSTOM_PROTOCOL, 4, 4096).unwrap();
     let _registration = protocols.register(spec, |stream: DomainProtocolStream| async move {
         let _remote: &AuthenticatedPeer = stream.remote_peer();
     });
@@ -26,6 +28,8 @@ fn facade_reexports_the_complete_safe_custom_protocol_surface() {
         .with_storage_root(storage.path().to_path_buf());
     let session: Session = peer.start_session().unwrap();
     assert!(peer.owns_session(&session));
+    DomainProtocolSpec::new(CUSTOM_PROTOCOL, 4, 4096)
+        .expect("documented custom protocol namespace must remain valid");
 
     let _register = register_custom_protocol as fn(&AukiPeerProtocols);
     let _prepared: Option<PreparedPeer> = None;

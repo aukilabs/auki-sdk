@@ -89,6 +89,9 @@ A new peer serves no built-in protocol by default. Select exact built-in
 versions with `AukiPeerConfig::with_served_protocols(...)`, or register a
 versioned product protocol through:
 
+Custom protocol IDs use `/auki-p2p/<application>/<version>`. The
+`/auki/auth/1/...` namespace identifies retained SDK protocols.
+
 ```rust
 let context = peer.protocol_context();
 let registration = context.protocols().register(spec, handler)?;

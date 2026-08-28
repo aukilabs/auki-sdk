@@ -67,7 +67,8 @@ use auki_sdk::{AukiPeer, AukiPeerConfig, DomainProtocolSpec, Identity, Multiaddr
 use futures::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
-const ECHO_PROTOCOL: &str = "/auki/example/echo/1.0.0";
+// Custom application protocols use /auki-p2p/<application>/<version>.
+const ECHO_PROTOCOL: &str = "/auki-p2p/example-echo/1.0.0";
 
 #[tokio::main]
 async fn main() -> Result<()> {

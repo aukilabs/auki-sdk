@@ -16,6 +16,7 @@ members = [
     "bindings/python/auki-manifests-py",
     "crates/auki-p2p",
     "crates/auki-auth",
+    "crates/auki-sdk",
     "crates/auki-protocols",
     "crates/auki-domain-relay",
     "bindings/swift/auki-identity-swift",

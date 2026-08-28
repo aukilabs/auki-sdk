@@ -72,7 +72,7 @@ pub enum ExternalAuthorityReplaceOutcome {
         /// Newly installed credential revision.
         credential_revision: u64,
     },
-    /// The credential was identical, so only its verification keys were refreshed.
+    /// The verified claims were equivalent, so only verification keys were refreshed.
     Unchanged {
         /// Existing credential revision, which did not advance.
         credential_revision: u64,

@@ -311,7 +311,7 @@ struct ValidatedAuthorityUpdate {
     authorization: HeaderValue,
     credential_expires_at: DateTime<Utc>,
     renew_at: Option<DateTime<Utc>>,
-    exact_credential: bool,
+    equivalent_credential: bool,
 }
 
 struct CurrentAuthority {
@@ -389,7 +389,7 @@ impl AuthorityInner {
         }
 
         self.require_running()?;
-        if validated.exact_credential {
+        if validated.equivalent_credential {
             let revision = self
                 .state
                 .read()
@@ -500,11 +500,14 @@ impl AuthorityInner {
             .credential
             .to_sensitive_bearer_header()
             .map_err(AuthoritySupervisorError::Credential)?;
-        let exact_credential = state
+        // ES256 may produce different compact signatures for the same claims.
+        // Authority is defined by the fully verified claims, so retain the
+        // installed bearer and revision when only the signature differs.
+        let equivalent_credential = state
             .current
             .as_ref()
-            .is_some_and(|current| current.authorization.as_bytes() == authorization.as_bytes());
-        if !exact_credential
+            .is_some_and(|current| current.claims == claims);
+        if !equivalent_credential
             && let Some(current) = &state.current
             && claims.iat <= current.claims.iat
         {
@@ -522,7 +525,7 @@ impl AuthorityInner {
             authorization,
             credential_expires_at: update.credential_expires_at,
             renew_at: update.renew_at,
-            exact_credential,
+            equivalent_credential,
         })
     }
 
@@ -1721,7 +1724,7 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
     }
 
     #[tokio::test]
-    async fn external_replacement_is_ordered_and_exact_duplicates_only_refresh_keys() {
+    async fn external_replacement_is_ordered_and_equivalent_credentials_only_refresh_keys() {
         let identity = identity();
         let peer_id = identity.peer_id();
         let domain_id = Uuid::new_v4();
@@ -1750,15 +1753,24 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
         );
 
         installer.clear_events();
+        let replacement_subject = Uuid::new_v4();
         let (replacement_credential, replacement_expiration) = signed_credential(
             peer_id,
             domain_id,
             issued_at + 1,
-            Uuid::new_v4(),
+            replacement_subject,
             ROTATED_DDS_PRIVATE_KEY,
         );
+        let (equivalent_credential, equivalent_expiration) = signed_credential(
+            peer_id,
+            domain_id,
+            issued_at + 1,
+            replacement_subject,
+            ROTATED_DDS_PRIVATE_KEY,
+        );
+        assert_ne!(replacement_credential, equivalent_credential);
+        assert_eq!(replacement_expiration, equivalent_expiration);
         let expected_header = replacement_credential.to_sensitive_bearer_header().unwrap();
-        let duplicate_credential = replacement_credential.clone();
         let replacement = external_update(
             domain_id,
             peer_id,
@@ -1790,23 +1802,21 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
                     domain_id,
                     peer_id,
                     rotated_keys(),
-                    duplicate_credential,
-                    replacement_expiration,
+                    equivalent_credential,
+                    equivalent_expiration,
                 ))
                 .await
                 .unwrap(),
             AuthorityInstallOutcome::Unchanged(2)
         );
         assert_eq!(installer.events(), vec![InstallEvent::VerificationKeys(1)]);
-        assert_eq!(
-            supervisor
-                .relay_authorization()
-                .authorization()
-                .await
-                .unwrap()
-                .revision,
-            2
-        );
+        let snapshot = supervisor
+            .relay_authorization()
+            .authorization()
+            .await
+            .unwrap();
+        assert_eq!(snapshot.revision, 2);
+        assert_eq!(snapshot.header.as_bytes(), expected_header.as_bytes());
         supervisor.shutdown().await;
     }
 
@@ -2188,20 +2198,36 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
         let peer_id = identity.peer_id();
         let domain_id = Uuid::new_v4();
         let issued_at = unix_time();
-        let (initial_credential, initial_expiration) = credential(peer_id, domain_id, issued_at);
-        let initial = external_update(
-            domain_id,
+        let initial_subject = Uuid::new_v4();
+        let (initial_credential, initial_expiration) = signed_credential(
             peer_id,
-            keys(),
-            initial_credential.clone(),
-            initial_expiration,
+            domain_id,
+            issued_at,
+            initial_subject,
+            TEST_DDS_PRIVATE_KEY,
         );
-        let duplicate_initial = external_update(
+        let (equivalent_credential, equivalent_expiration) = signed_credential(
+            peer_id,
+            domain_id,
+            issued_at,
+            initial_subject,
+            TEST_DDS_PRIVATE_KEY,
+        );
+        assert_ne!(initial_credential, equivalent_credential);
+        assert_eq!(initial_expiration, equivalent_expiration);
+        let initial = external_update(
             domain_id,
             peer_id,
             keys(),
             initial_credential,
             initial_expiration,
+        );
+        let equivalent_initial = external_update(
+            domain_id,
+            peer_id,
+            keys(),
+            equivalent_credential,
+            equivalent_expiration,
         );
         let installer = Arc::new(FakeInstaller::new(domain_id, peer_id));
         let shutdown = CancellationToken::new();
@@ -2232,7 +2258,7 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
         );
 
         assert_eq!(
-            handle.replace(duplicate_initial).await.unwrap(),
+            handle.replace(equivalent_initial).await.unwrap(),
             AuthorityInstallOutcome::Unchanged(1)
         );
         assert_eq!(*requests.requests.borrow(), Some(request));

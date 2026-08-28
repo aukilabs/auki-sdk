@@ -980,26 +980,24 @@ fn convert_domain(domain: AccessibleDomain) -> Result<DomainDescriptor> {
         .as_deref()
         .map(|value| canonical_uuid(value, DDS_ACCESSIBLE_DOMAINS))
         .transpose()?;
-    let name = domain.name.trim();
-    if domain.name.len() > MAX_DOMAIN_NAME_BYTES || (!name.is_empty() && name != domain.name) {
-        return Err(Error::invalid_response(
-            DDS_ACCESSIBLE_DOMAINS,
-            "Domain name is oversized or padded with whitespace",
-        ));
-    }
-    if domain.description.len() > MAX_DOMAIN_DESCRIPTION_BYTES {
-        return Err(Error::invalid_response(
-            DDS_ACCESSIBLE_DOMAINS,
-            "Domain description is oversized",
-        ));
-    }
-    let description = domain.description.trim();
+
+    // Names and descriptions are optional display metadata, never authority
+    // or selection keys. Legacy Domains can contain surrounding whitespace;
+    // normalize bounded values and discard unusable metadata without blocking
+    // an otherwise valid UUID-based Domain selection.
+    let name = bounded_display_metadata(&domain.name, MAX_DOMAIN_NAME_BYTES);
+    let description = bounded_display_metadata(&domain.description, MAX_DOMAIN_DESCRIPTION_BYTES);
     Ok(DomainDescriptor {
         id,
-        name: (!name.is_empty()).then(|| name.to_owned()),
-        description: (!description.is_empty()).then(|| description.to_owned()),
+        name,
+        description,
         organization_id,
     })
+}
+
+fn bounded_display_metadata(value: &str, max_bytes: usize) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && value.len() <= max_bytes).then(|| value.to_owned())
 }
 
 fn validate_challenge(response: &PeerChallengeResponse) -> Result<Vec<u8>> {

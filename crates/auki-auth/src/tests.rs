@@ -1046,6 +1046,57 @@ async fn accessible_domain_accepts_absent_legacy_display_metadata() {
 }
 
 #[tokio::test]
+async fn accessible_domain_normalizes_or_omits_legacy_display_metadata() {
+    let padded_domain_id = Uuid::from_u128(0xd17);
+    let oversized_domain_id = Uuid::from_u128(0xd18);
+    let oversized_name = "n".repeat(257);
+    let oversized_description = "d".repeat(4 * 1024 + 1);
+    let server = MockServer::start(vec![
+        service_response("app-dds-service"),
+        MockResponse::json(json!({
+            "domains": [
+                {
+                    "id": padded_domain_id,
+                    "name": "  Legacy Robotics Lab  ",
+                    "description": "\t Robot experiments \n",
+                    "organization_id": null
+                },
+                {
+                    "id": oversized_domain_id,
+                    "name": oversized_name,
+                    "description": oversized_description,
+                    "organization_id": null
+                }
+            ],
+            "total": 2,
+            "limit": 100,
+            "offset": 0
+        })),
+    ])
+    .await;
+    let session = client_for(&server)
+        .authenticate(Credentials::app("app-key", "app-secret"))
+        .await
+        .unwrap();
+
+    let domains = session.accessible_domains().await.unwrap();
+    assert_eq!(domains.len(), 2);
+    assert_eq!(domains[0].domain.id, padded_domain_id);
+    assert_eq!(
+        domains[0].domain.name.as_deref(),
+        Some("Legacy Robotics Lab")
+    );
+    assert_eq!(
+        domains[0].domain.description.as_deref(),
+        Some("Robot experiments")
+    );
+    assert_eq!(domains[1].domain.id, oversized_domain_id);
+    assert_eq!(domains[1].domain.name, None);
+    assert_eq!(domains[1].domain.description, None);
+    server.finish().await;
+}
+
+#[tokio::test]
 async fn unauthorized_dds_call_refreshes_user_and_retries_once() {
     let domain_id = Uuid::from_u128(0xd2);
     let organization_id = Uuid::from_u128(0xa2);

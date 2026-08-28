@@ -1,9 +1,15 @@
 use auki_sdk::{
     AukiPeer, AukiPeerAuthorityError, AukiPeerProtocolContext, AukiPeerProtocols,
     AukiPeerRelayError, AukiPeerShutdownError, AukiPeerStartError, AukiPeerStatus,
-    AuthenticatedPeer, AuthenticatedRouteStream, DomainProtocolError, DomainProtocolRegistration,
-    DomainProtocolSpec, DomainProtocolStream, Identity, Peer, PreparedPeer, Session,
+    AuthenticatedPeer, AuthenticatedRouteStream, DdsVerificationKeys, DomainProtocolError,
+    DomainProtocolRegistration, DomainProtocolSpec, DomainProtocolStream, ExternalAuthorityControl,
+    ExternalAuthorityRefreshRequest, ExternalAuthorityReplaceOutcome, ExternalAuthorityUpdate,
+    Identity, Peer, PreparedPeer, Session, SignedP2pCredential,
 };
+use chrono::{DateTime, Utc};
+use uuid::Uuid;
+
+fn assert_send_sync<T: Send + Sync>() {}
 
 fn register_custom_protocol(protocols: &AukiPeerProtocols) {
     let spec = DomainProtocolSpec::new("/auki/example/1.0.0", 4, 4096).unwrap();
@@ -28,6 +34,7 @@ fn facade_reexports_the_complete_safe_custom_protocol_surface() {
     let _stream: Option<AuthenticatedRouteStream> = None;
 
     let _start = AukiPeer::start;
+    let _start_external = AukiPeer::start_external;
     let _shutdown = AukiPeer::shutdown;
     let _status: fn(&AukiPeer) -> AukiPeerStatus = AukiPeer::status;
     let _context: fn(&AukiPeer) -> AukiPeerProtocolContext = AukiPeer::protocol_context;
@@ -35,4 +42,30 @@ fn facade_reexports_the_complete_safe_custom_protocol_surface() {
     let _shutdown_error: Option<AukiPeerShutdownError> = None;
     let _authority_error: Option<AukiPeerAuthorityError> = None;
     let _relay_error: Option<AukiPeerRelayError> = None;
+
+    let _external_update_new: fn(
+        Uuid,
+        auki_sdk::PeerId,
+        DdsVerificationKeys,
+        SignedP2pCredential,
+        DateTime<Utc>,
+    ) -> ExternalAuthorityUpdate = ExternalAuthorityUpdate::new;
+    let _external_domain: fn(&ExternalAuthorityUpdate) -> Uuid = ExternalAuthorityUpdate::domain_id;
+    let _external_peer: fn(&ExternalAuthorityUpdate) -> auki_sdk::PeerId =
+        ExternalAuthorityUpdate::peer_id;
+    let _external_key_generation: fn(&ExternalAuthorityUpdate) -> u64 =
+        ExternalAuthorityUpdate::verification_key_generation;
+    let _external_expiration: fn(&ExternalAuthorityUpdate) -> DateTime<Utc> =
+        ExternalAuthorityUpdate::credential_expires_at;
+    let _replace = ExternalAuthorityControl::replace;
+    let _next_refresh_request = ExternalAuthorityControl::next_refresh_request;
+    let _request_id: fn(&ExternalAuthorityRefreshRequest) -> u64 =
+        ExternalAuthorityRefreshRequest::request_id;
+    let _rejected_revision: fn(&ExternalAuthorityRefreshRequest) -> u64 =
+        ExternalAuthorityRefreshRequest::rejected_credential_revision;
+    let outcome = ExternalAuthorityReplaceOutcome::Replaced {
+        credential_revision: 7,
+    };
+    assert_eq!(outcome.credential_revision(), 7);
+    assert_send_sync::<ExternalAuthorityControl>();
 }

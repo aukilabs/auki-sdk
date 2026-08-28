@@ -1,12 +1,15 @@
 use std::{error::Error, fmt, future::pending, sync::Arc, time::Duration};
 
 use auki_auth::PreparedPeer;
-use auki_domain::{Domain, DomainConfig, DomainError, DomainPeers, DomainStatus};
-use auki_p2p::{Multiaddr, PeerId, RouteCatalog, RouteCatalogError, RouteCatalogStatus};
+use auki_domain::{Domain, DomainAuthority, DomainConfig, DomainError, DomainPeers, DomainStatus};
+use auki_p2p::{
+    DdsVerificationKeys, Multiaddr, PeerId, RouteCatalog, RouteCatalogError, RouteCatalogStatus,
+    SignedP2pCredential,
+};
 use auki_session::{Peer, Session, SessionError};
 use parking_lot::Mutex;
 use tokio::{
-    sync::watch,
+    sync::{Mutex as AsyncMutex, watch},
     task::{JoinError, JoinHandle},
 };
 use tokio_util::sync::CancellationToken;
@@ -15,7 +18,9 @@ use uuid::Uuid;
 
 use crate::{
     authority::{
-        AuthorityStatus, AuthoritySupervisor, AuthoritySupervisorConfig, AuthoritySupervisorError,
+        AuthorityInstallOutcome, AuthorityStatus, AuthoritySupervisor, AuthoritySupervisorConfig,
+        AuthoritySupervisorError, ExternalAuthorityHandle, ExternalAuthorityRefreshRequest,
+        ExternalAuthorityUpdate, ExternalRefreshRequests,
     },
     config::{AukiPeerConfig, AukiRelayConfig, AukiRelayMode},
     context::AukiPeerProtocolContext,
@@ -46,6 +51,98 @@ pub struct AukiPeerAuthorityError(AuthoritySupervisorError);
 impl From<AuthoritySupervisorError> for AukiPeerAuthorityError {
     fn from(error: AuthoritySupervisorError) -> Self {
         Self(error)
+    }
+}
+
+/// Sole host-side control plane for an externally managed authority source.
+///
+/// This value is intentionally not cloneable: it owns the only refresh-request
+/// stream for its [`AukiPeer`]. The replacement handle is weak, so retaining
+/// the control does not keep a stopped runtime alive.
+pub struct ExternalAuthorityControl {
+    handle: ExternalAuthorityHandle,
+    requests: AsyncMutex<ExternalRefreshRequests>,
+}
+
+/// Result of installing one externally supplied authority update.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExternalAuthorityReplaceOutcome {
+    /// A newer signed credential became the current authority revision.
+    Replaced {
+        /// Newly installed credential revision.
+        credential_revision: u64,
+    },
+    /// The credential was identical, so only its verification keys were refreshed.
+    Unchanged {
+        /// Existing credential revision, which did not advance.
+        credential_revision: u64,
+    },
+}
+
+impl ExternalAuthorityReplaceOutcome {
+    /// Current credential revision after the update was installed.
+    pub fn credential_revision(&self) -> u64 {
+        match *self {
+            Self::Replaced {
+                credential_revision,
+            }
+            | Self::Unchanged {
+                credential_revision,
+            } => credential_revision,
+        }
+    }
+}
+
+impl From<AuthorityInstallOutcome> for ExternalAuthorityReplaceOutcome {
+    fn from(outcome: AuthorityInstallOutcome) -> Self {
+        match outcome {
+            AuthorityInstallOutcome::Replaced(credential_revision) => Self::Replaced {
+                credential_revision,
+            },
+            AuthorityInstallOutcome::Unchanged(credential_revision) => Self::Unchanged {
+                credential_revision,
+            },
+        }
+    }
+}
+
+impl ExternalAuthorityControl {
+    fn new(handle: ExternalAuthorityHandle, requests: ExternalRefreshRequests) -> Self {
+        Self {
+            handle,
+            requests: AsyncMutex::new(requests),
+        }
+    }
+
+    /// Atomically validate and install a complete authority replacement.
+    ///
+    /// Domain and Peer bindings remain pinned to the initial update, and
+    /// verification keys are installed before the credential becomes current.
+    pub async fn replace(
+        &self,
+        update: ExternalAuthorityUpdate,
+    ) -> Result<ExternalAuthorityReplaceOutcome, AukiPeerAuthorityError> {
+        self.handle
+            .replace(update)
+            .await
+            .map(ExternalAuthorityReplaceOutcome::from)
+            .map_err(AukiPeerAuthorityError::from)
+    }
+
+    /// Wait for the next coalesced relay-authorization refresh request.
+    ///
+    /// Returns `None` after the associated runtime's authority supervisor has
+    /// stopped. The host decides how and when to obtain a replacement update.
+    pub async fn next_refresh_request(&self) -> Option<ExternalAuthorityRefreshRequest> {
+        self.requests.lock().await.recv().await
+    }
+}
+
+impl fmt::Debug for ExternalAuthorityControl {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExternalAuthorityControl")
+            .finish_non_exhaustive()
     }
 }
 
@@ -94,10 +191,10 @@ impl AukiPeerRelayError {
 #[derive(Debug, thiserror::Error)]
 pub enum AukiPeerStartError {
     /// The supplied identity is not the identity authorized by DDS.
-    #[error("prepared Peer ID {prepared} does not match identity Peer ID {identity}")]
+    #[error("authorized Peer ID {authorized} does not match identity Peer ID {identity}")]
     IdentityMismatch {
-        /// Peer ID bound into the prepared authority.
-        prepared: PeerId,
+        /// Peer ID bound into the supplied authority.
+        authorized: PeerId,
         /// Peer ID derived from the supplied stable identity.
         identity: PeerId,
     },
@@ -267,6 +364,77 @@ impl PeerStatusController {
     }
 }
 
+enum StartupAuthority {
+    Pull(PreparedPeer),
+    External(ExternalAuthorityUpdate),
+}
+
+impl StartupAuthority {
+    fn peer_id(&self) -> PeerId {
+        match self {
+            Self::Pull(prepared) => prepared.peer_id,
+            Self::External(update) => update.peer_id(),
+        }
+    }
+
+    fn domain_id(&self) -> Uuid {
+        match self {
+            Self::Pull(prepared) => prepared.domain.id,
+            Self::External(update) => update.domain_id(),
+        }
+    }
+
+    fn initial_domain_authority(&self) -> (DdsVerificationKeys, SignedP2pCredential) {
+        match self {
+            Self::Pull(prepared) => (
+                prepared.verification_keys.clone(),
+                prepared.initial_credential.clone(),
+            ),
+            Self::External(update) => (
+                update.verification_keys().clone(),
+                update.credential().clone(),
+            ),
+        }
+    }
+
+    async fn start_supervisor(
+        self,
+        authority: DomainAuthority,
+    ) -> Result<(AuthoritySupervisor, StartupAuthorityControl), AuthoritySupervisorError> {
+        let shutdown = CancellationToken::new();
+        match self {
+            Self::Pull(prepared) => AuthoritySupervisor::start_pull(
+                authority,
+                prepared,
+                AuthoritySupervisorConfig::default(),
+                &shutdown,
+            )
+            .await
+            .map(|supervisor| (supervisor, StartupAuthorityControl::Pull)),
+            Self::External(initial) => AuthoritySupervisor::start_external(
+                authority,
+                initial,
+                AuthoritySupervisorConfig::default(),
+                &shutdown,
+            )
+            .await
+            .map(|(supervisor, handle, requests)| {
+                (
+                    supervisor,
+                    StartupAuthorityControl::External(ExternalAuthorityControl::new(
+                        handle, requests,
+                    )),
+                )
+            }),
+        }
+    }
+}
+
+enum StartupAuthorityControl {
+    Pull,
+    External(ExternalAuthorityControl),
+}
+
 /// One owner of an authenticated Domain, authority renewal, and optional relay booking.
 ///
 /// At most one live `AukiPeer` in a process may own a given Peer ID. Reusing
@@ -301,14 +469,52 @@ impl AukiPeer {
         prepared: PreparedPeer,
         config: AukiPeerConfig,
     ) -> Result<Self, AukiPeerStartError> {
+        let (runtime, control) =
+            Self::start_with_authority(identity, StartupAuthority::Pull(prepared), config).await?;
+        match control {
+            StartupAuthorityControl::Pull => Ok(runtime),
+            StartupAuthorityControl::External(_) => {
+                unreachable!("pull startup never creates external authority control")
+            }
+        }
+    }
+
+    /// Join a peer whose complete authority updates are supplied by its host.
+    ///
+    /// The returned [`ExternalAuthorityControl`] is the sole replacement and
+    /// refresh-request control plane. It is withheld until the same Domain,
+    /// authority, and optional relay readiness gates as [`Self::start`] pass.
+    /// A relay authorization failure before then fails startup; the caller can
+    /// obtain fresh authority and retry with a new update.
+    pub async fn start_external(
+        identity: auki_p2p::Identity,
+        initial: ExternalAuthorityUpdate,
+        config: AukiPeerConfig,
+    ) -> Result<(Self, ExternalAuthorityControl), AukiPeerStartError> {
+        let (runtime, control) =
+            Self::start_with_authority(identity, StartupAuthority::External(initial), config)
+                .await?;
+        let StartupAuthorityControl::External(control) = control else {
+            unreachable!("external startup always creates external authority control")
+        };
+        Ok((runtime, control))
+    }
+
+    async fn start_with_authority(
+        identity: auki_p2p::Identity,
+        initial_authority: StartupAuthority,
+        config: AukiPeerConfig,
+    ) -> Result<(Self, StartupAuthorityControl), AukiPeerStartError> {
         let identity_peer_id = identity.peer_id();
-        if prepared.peer_id != identity_peer_id {
+        let authorized_peer_id = initial_authority.peer_id();
+        if authorized_peer_id != identity_peer_id {
             return Err(AukiPeerStartError::IdentityMismatch {
-                prepared: prepared.peer_id,
+                authorized: authorized_peer_id,
                 identity: identity_peer_id,
             });
         }
-        let domain_id = prepared.domain.id;
+        let domain_id = initial_authority.domain_id();
+        let (verification_keys, initial_credential) = initial_authority.initial_domain_authority();
         let peer = Peer::new(identity_peer_id.to_string(), config.app_id())
             .with_storage_root(config.storage_root().to_path_buf());
         let session = peer.start_session().map_err(AukiPeerStartError::Session)?;
@@ -328,29 +534,20 @@ impl AukiPeer {
                 .map_err(AukiPeerStartError::Domain)?;
         }
         let domain = Domain::builder(&peer, &session, domain_config)
-            .authority(
-                prepared.verification_keys.clone(),
-                prepared.initial_credential.clone(),
-            )
+            .authority(verification_keys, initial_credential)
             .served_protocols(config.served_protocols())
             .join()
             .await
             .map_err(AukiPeerStartError::Domain)?;
 
-        let authority = match AuthoritySupervisor::start_pull(
-            domain.authority(),
-            prepared,
-            AuthoritySupervisorConfig::default(),
-            &CancellationToken::new(),
-        )
-        .await
-        {
-            Ok(authority) => authority,
-            Err(error) => {
-                let _ = domain.leave().await;
-                return Err(AukiPeerStartError::Authority(error.into()));
-            }
-        };
+        let (authority, authority_control) =
+            match initial_authority.start_supervisor(domain.authority()).await {
+                Ok(started) => started,
+                Err(error) => {
+                    let _ = domain.leave().await;
+                    return Err(AukiPeerStartError::Authority(error.into()));
+                }
+            };
 
         // Create each receiver exactly once. The same receivers fence the
         // final startup decision and are then moved into the live monitor, so
@@ -456,21 +653,24 @@ impl AukiPeer {
             signals,
         ));
 
-        Ok(Self {
-            peer_id: identity_peer_id,
-            domain_id,
-            peer,
-            session,
-            domain: Some(domain),
-            authority: Some(authority),
-            relay,
-            route_catalog,
-            protocol_context,
-            status,
-            monitor_shutdown,
-            monitor: Some(monitor),
-            closed: false,
-        })
+        Ok((
+            Self {
+                peer_id: identity_peer_id,
+                domain_id,
+                peer,
+                session,
+                domain: Some(domain),
+                authority: Some(authority),
+                relay,
+                route_catalog,
+                protocol_context,
+                status,
+                monitor_shutdown,
+                monitor: Some(monitor),
+                closed: false,
+            },
+            authority_control,
+        ))
     }
 
     /// Stable local libp2p Peer ID.
@@ -854,11 +1054,23 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         }
     }
 
-    fn fixture(identity: &auki_p2p::Identity, domain_id: Uuid) -> PreparedPeer {
-        let issued_at = SystemTime::now()
+    fn unix_time() -> u64 {
+        SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
-            .as_secs();
+            .as_secs()
+    }
+
+    fn verification_keys() -> DdsVerificationKeys {
+        DdsVerificationKeys::new(0, TEST_DDS_PUBLIC_KEY.to_vec(), None)
+    }
+
+    fn signed_credential(
+        identity: &auki_p2p::Identity,
+        domain_id: Uuid,
+        issued_at: u64,
+        peer_type: &str,
+    ) -> (SignedP2pCredential, chrono::DateTime<Utc>, String) {
         let expiration = issued_at + P2P_TOKEN_TTL.as_secs();
         let claims = P2PAccessClaims {
             token_type: P2P_TOKEN_TYPE.into(),
@@ -866,7 +1078,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             aud: vec![P2P_TOKEN_AUDIENCE.into()],
             sub: Uuid::new_v4().to_string(),
             organization_id: None,
-            peer_type: Some("robot".into()),
+            peer_type: Some(peer_type.into()),
             peer_id: identity.peer_id().to_string(),
             domain_ids: vec![domain_id.to_string()],
             scopes: vec![P2P_TOKEN_SCOPE.into()],
@@ -875,25 +1087,65 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             nbf: None,
             exp: expiration,
         };
-        let credential = SignedP2pCredential::new(
-            encode(
-                &Header::new(Algorithm::ES256),
-                &claims,
-                &EncodingKey::from_ec_pem(TEST_DDS_PRIVATE_KEY).unwrap(),
-            )
-            .unwrap(),
+        let compact = encode(
+            &Header::new(Algorithm::ES256),
+            &claims,
+            &EncodingKey::from_ec_pem(TEST_DDS_PRIVATE_KEY).unwrap(),
         )
         .unwrap();
-        let expires_at = Utc.timestamp_opt(expiration as i64, 0).unwrap();
+        (
+            SignedP2pCredential::new(compact.clone()).unwrap(),
+            Utc.timestamp_opt(expiration as i64, 0).unwrap(),
+            compact,
+        )
+    }
+
+    fn fixture(identity: &auki_p2p::Identity, domain_id: Uuid) -> PreparedPeer {
+        let (credential, expires_at, _) =
+            signed_credential(identity, domain_id, unix_time(), "robot");
         PreparedPeer {
             domain: DomainDescriptor::assigned(domain_id),
             peer_id: identity.peer_id(),
             initial_credential: credential,
-            verification_keys: DdsVerificationKeys::new(0, TEST_DDS_PUBLIC_KEY.to_vec(), None),
+            verification_keys: verification_keys(),
             credential_expires_at: expires_at,
             renew_at: expires_at - chrono::Duration::minutes(1),
             renewal: AuthorityRenewal::new(NeverRenew),
         }
+    }
+
+    fn external_fixture(
+        identity: &auki_p2p::Identity,
+        domain_id: Uuid,
+        issued_at: u64,
+    ) -> (ExternalAuthorityUpdate, String) {
+        let (credential, expires_at, compact) =
+            signed_credential(identity, domain_id, issued_at, "compute");
+        (
+            ExternalAuthorityUpdate::new(
+                domain_id,
+                identity.peer_id(),
+                verification_keys(),
+                credential,
+                expires_at,
+            ),
+            compact,
+        )
+    }
+
+    fn external_update_from_compact(
+        identity: &auki_p2p::Identity,
+        domain_id: Uuid,
+        compact: String,
+        expires_at: chrono::DateTime<Utc>,
+    ) -> ExternalAuthorityUpdate {
+        ExternalAuthorityUpdate::new(
+            domain_id,
+            identity.peer_id(),
+            verification_keys(),
+            SignedP2pCredential::new(compact).unwrap(),
+            expires_at,
+        )
     }
 
     fn direct_config(storage: &TempDir) -> AukiPeerConfig {
@@ -955,6 +1207,175 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn external_direct_only_runtime_replaces_authority_and_shutdown_ends_control() {
+        let storage = tempfile::tempdir().unwrap();
+        let identity = auki_p2p::Identity::generate();
+        let peer_id = identity.peer_id();
+        let domain_id = Uuid::new_v4();
+        let issued_at = unix_time().saturating_sub(2);
+        let (initial, initial_compact) = external_fixture(&identity, domain_id, issued_at);
+        let initial_expiration = initial.credential_expires_at();
+
+        assert_eq!(initial.domain_id(), domain_id);
+        assert_eq!(initial.peer_id(), peer_id);
+        assert_eq!(initial.verification_key_generation(), 0);
+        let rendered = format!("{initial:?}");
+        assert!(rendered.contains("[redacted]"));
+        assert!(!rendered.contains(&initial_compact));
+        assert!(!rendered.contains("BEGIN PUBLIC KEY"));
+
+        let (runtime, control) =
+            AukiPeer::start_external(identity.clone(), initial, direct_config(&storage))
+                .await
+                .unwrap();
+        assert_eq!(runtime.status(), AukiPeerStatus::Ready);
+        assert_eq!(runtime.domain_id(), domain_id);
+        assert_eq!(
+            runtime
+                .protocol_context()
+                .authorization()
+                .current()
+                .unwrap()
+                .peer_type(),
+            Some("compute")
+        );
+
+        let (replacement, replacement_compact) =
+            external_fixture(&identity, domain_id, issued_at + 1);
+        let replacement_expiration = replacement.credential_expires_at();
+        let outcome = control.replace(replacement).await.unwrap();
+        assert_eq!(
+            outcome,
+            ExternalAuthorityReplaceOutcome::Replaced {
+                credential_revision: 2
+            }
+        );
+        assert_eq!(outcome.credential_revision(), 2);
+        assert_eq!(
+            runtime
+                .protocol_context()
+                .authorization()
+                .current()
+                .unwrap()
+                .credential_revision(),
+            2
+        );
+
+        let duplicate = external_update_from_compact(
+            &identity,
+            domain_id,
+            replacement_compact,
+            replacement_expiration,
+        );
+        assert_eq!(
+            control.replace(duplicate).await.unwrap(),
+            ExternalAuthorityReplaceOutcome::Unchanged {
+                credential_revision: 2
+            }
+        );
+
+        let control = Arc::new(control);
+        let waiting_control = Arc::clone(&control);
+        let waiting = tokio::spawn(async move { waiting_control.next_refresh_request().await });
+        tokio::task::yield_now().await;
+
+        runtime.shutdown().await.unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), waiting)
+                .await
+                .unwrap()
+                .unwrap(),
+            None
+        );
+        let stopped_update =
+            external_update_from_compact(&identity, domain_id, initial_compact, initial_expiration);
+        let stopped = control.replace(stopped_update).await.unwrap_err();
+        assert!(stopped.to_string().contains("stopped"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn external_refresh_request_requires_an_advancing_credential_revision() {
+        let storage = tempfile::tempdir().unwrap();
+        let identity = auki_p2p::Identity::generate();
+        let domain_id = Uuid::new_v4();
+        let issued_at = unix_time().saturating_sub(2);
+        let (initial, initial_compact) = external_fixture(&identity, domain_id, issued_at);
+        let initial_expiration = initial.credential_expires_at();
+        let (runtime, control) =
+            AukiPeer::start_external(identity.clone(), initial, direct_config(&storage))
+                .await
+                .unwrap();
+        let relay_authorization = runtime.authority.as_ref().unwrap().relay_authorization();
+        let refresh_authorization = relay_authorization.clone();
+        let refresh =
+            tokio::spawn(async move { refresh_authorization.refresh_after_unauthorized(1).await });
+
+        let request = tokio::time::timeout(Duration::from_secs(1), control.next_refresh_request())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(request.request_id(), 1);
+        assert_eq!(request.rejected_credential_revision(), 1);
+
+        let duplicate =
+            external_update_from_compact(&identity, domain_id, initial_compact, initial_expiration);
+        assert_eq!(
+            control.replace(duplicate).await.unwrap(),
+            ExternalAuthorityReplaceOutcome::Unchanged {
+                credential_revision: 1
+            }
+        );
+        tokio::task::yield_now().await;
+        assert!(!refresh.is_finished());
+
+        let (replacement, _) = external_fixture(&identity, domain_id, issued_at + 1);
+        assert_eq!(
+            control.replace(replacement).await.unwrap(),
+            ExternalAuthorityReplaceOutcome::Replaced {
+                credential_revision: 2
+            }
+        );
+        tokio::time::timeout(Duration::from_secs(1), refresh)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+
+        drop(control);
+        assert!(
+            tokio::time::timeout(
+                Duration::from_secs(1),
+                relay_authorization.refresh_after_unauthorized(2),
+            )
+            .await
+            .unwrap()
+            .is_err()
+        );
+        runtime.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dropping_external_runtime_wakes_the_refresh_request_stream() {
+        let storage = tempfile::tempdir().unwrap();
+        let identity = auki_p2p::Identity::generate();
+        let (initial, _) =
+            external_fixture(&identity, Uuid::new_v4(), unix_time().saturating_sub(1));
+        let (runtime, control) =
+            AukiPeer::start_external(identity, initial, direct_config(&storage))
+                .await
+                .unwrap();
+
+        drop(runtime);
+
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), control.next_refresh_request())
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn identity_mismatch_is_rejected_before_local_runtime_creation() {
         let storage = tempfile::tempdir().unwrap();
         let authorized_identity = auki_p2p::Identity::generate();
@@ -966,6 +1387,25 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             Ok(_) => panic!("a mismatched identity must not start"),
             Err(error) => error,
         };
+        assert!(matches!(
+            error,
+            AukiPeerStartError::IdentityMismatch { identity, .. } if identity == actual_peer
+        ));
+
+        let authorized_identity = auki_p2p::Identity::generate();
+        let (initial, _) = external_fixture(
+            &authorized_identity,
+            Uuid::new_v4(),
+            unix_time().saturating_sub(1),
+        );
+        let actual_identity = auki_p2p::Identity::generate();
+        let actual_peer = actual_identity.peer_id();
+        let error =
+            match AukiPeer::start_external(actual_identity, initial, direct_config(&storage)).await
+            {
+                Ok(_) => panic!("a mismatched external authority must not start"),
+                Err(error) => error,
+            };
         assert!(matches!(
             error,
             AukiPeerStartError::IdentityMismatch { identity, .. } if identity == actual_peer
@@ -1074,6 +1514,64 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         active.assert_calls_async(1).await;
         create.assert_calls_async(1).await;
         delete.assert_calls_async(0).await;
+    }
+
+    #[tokio::test]
+    async fn external_relay_startup_401_fails_at_the_bounded_refresh_deadline() {
+        let server = MockServer::start();
+        let unauthorized = server.mock(|when, then| {
+            when.method(GET).path("/relay-bookings/active");
+            then.status(401)
+                .header("cache-control", "no-store")
+                .header("content-type", "application/json")
+                .json_body(json!({
+                    "code": "unauthorized",
+                    "error": "startup authority was rejected"
+                }));
+        });
+
+        let storage = tempfile::tempdir().unwrap();
+        let identity = auki_p2p::Identity::generate();
+        let (initial, _) =
+            external_fixture(&identity, Uuid::new_v4(), unix_time().saturating_sub(1));
+        let config =
+            AukiPeerConfig::new(server.base_url(), "external-relay-401-test", storage.path())
+                .unwrap()
+                .with_relay(
+                    AukiRelayConfig::new(
+                        AukiRelayMode::Public,
+                        1,
+                        Duration::from_secs(86_400),
+                        Duration::from_secs(60),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+        let startup = tokio::spawn(AukiPeer::start_external(identity, initial, config));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if unauthorized.calls_async().await == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("startup must reach DMS before its external control is returned");
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert!(
+            !startup.is_finished(),
+            "the external refresh deadline must be pending after the 401"
+        );
+
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(11)).await;
+        let result = tokio::time::timeout(Duration::from_secs(2), startup)
+            .await
+            .expect("external relay startup must fail within its refresh deadline")
+            .unwrap();
+        assert!(matches!(result, Err(AukiPeerStartError::Relay(_))));
+        unauthorized.assert_calls_async(1).await;
     }
 
     #[test]

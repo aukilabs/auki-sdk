@@ -193,8 +193,12 @@ impl AuthorityInstaller for DomainAuthorityInstaller {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct ExternalAuthorityUpdate {
+/// Complete externally managed authority material for one fixed Domain and Peer.
+///
+/// Debug output and getters deliberately omit the signed credential and PEM
+/// verification-key material. Constructing an update transfers those secrets
+/// into the runtime's authority supervisor.
+pub struct ExternalAuthorityUpdate {
     domain_id: Uuid,
     peer_id: PeerId,
     verification_keys: DdsVerificationKeys,
@@ -203,7 +207,8 @@ pub(crate) struct ExternalAuthorityUpdate {
 }
 
 impl ExternalAuthorityUpdate {
-    pub(crate) fn new(
+    /// Construct one complete authority replacement envelope.
+    pub fn new(
         domain_id: Uuid,
         peer_id: PeerId,
         verification_keys: DdsVerificationKeys,
@@ -217,6 +222,34 @@ impl ExternalAuthorityUpdate {
             credential,
             credential_expires_at,
         }
+    }
+
+    /// Domain pinned by this update.
+    pub fn domain_id(&self) -> Uuid {
+        self.domain_id
+    }
+
+    /// Peer pinned by this update.
+    pub fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
+
+    /// Monotonic DDS verification-key generation carried by this update.
+    pub fn verification_key_generation(&self) -> u64 {
+        self.verification_keys.generation()
+    }
+
+    /// Literal signed-credential expiration carried by this update.
+    pub fn credential_expires_at(&self) -> DateTime<Utc> {
+        self.credential_expires_at
+    }
+
+    pub(crate) fn verification_keys(&self) -> &DdsVerificationKeys {
+        &self.verification_keys
+    }
+
+    pub(crate) fn credential(&self) -> &SignedP2pCredential {
+        &self.credential
     }
 }
 
@@ -298,7 +331,7 @@ struct AuthorityState {
 
 enum AuthorityMode {
     Pull(watch::Sender<Option<u64>>),
-    External(watch::Sender<Option<ExternalRefreshRequest>>),
+    External(watch::Sender<Option<ExternalAuthorityRefreshRequest>>),
 }
 
 struct AuthorityInner {
@@ -655,7 +688,7 @@ impl AuthorityInner {
                     })
                     .map_err(|_| AuthoritySupervisorError::RevisionExhausted)?;
                 requests
-                    .send(Some(ExternalRefreshRequest {
+                    .send(Some(ExternalAuthorityRefreshRequest {
                         request_id,
                         rejected_revision,
                     }))
@@ -979,19 +1012,32 @@ fn wall_remaining(deadline: DateTime<Utc>) -> Option<Duration> {
         .filter(|remaining| !remaining.is_zero())
 }
 
+/// Request for the external authority owner to replace a rejected credential.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ExternalRefreshRequest {
-    pub(crate) request_id: u64,
-    pub(crate) rejected_revision: u64,
+pub struct ExternalAuthorityRefreshRequest {
+    request_id: u64,
+    rejected_revision: u64,
+}
+
+impl ExternalAuthorityRefreshRequest {
+    /// Process-local identifier for this coalesced refresh request.
+    pub fn request_id(&self) -> u64 {
+        self.request_id
+    }
+
+    /// Credential revision rejected by the relay service.
+    pub fn rejected_credential_revision(&self) -> u64 {
+        self.rejected_revision
+    }
 }
 
 pub(crate) struct ExternalRefreshRequests {
-    requests: watch::Receiver<Option<ExternalRefreshRequest>>,
+    requests: watch::Receiver<Option<ExternalAuthorityRefreshRequest>>,
     shutdown: CancellationToken,
 }
 
 impl ExternalRefreshRequests {
-    pub(crate) async fn recv(&mut self) -> Option<ExternalRefreshRequest> {
+    pub(crate) async fn recv(&mut self) -> Option<ExternalAuthorityRefreshRequest> {
         loop {
             tokio::select! {
                 biased;
@@ -1712,6 +1758,7 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
             ROTATED_DDS_PRIVATE_KEY,
         );
         let expected_header = replacement_credential.to_sensitive_bearer_header().unwrap();
+        let duplicate_credential = replacement_credential.clone();
         let replacement = external_update(
             domain_id,
             peer_id,
@@ -1720,7 +1767,7 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
             replacement_expiration,
         );
         assert_eq!(
-            handle.replace(replacement.clone()).await.unwrap(),
+            handle.replace(replacement).await.unwrap(),
             AuthorityInstallOutcome::Replaced(2)
         );
         assert_eq!(
@@ -1738,7 +1785,16 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
 
         installer.clear_events();
         assert_eq!(
-            handle.replace(replacement).await.unwrap(),
+            handle
+                .replace(external_update(
+                    domain_id,
+                    peer_id,
+                    rotated_keys(),
+                    duplicate_credential,
+                    replacement_expiration,
+                ))
+                .await
+                .unwrap(),
             AuthorityInstallOutcome::Unchanged(2)
         );
         assert_eq!(installer.events(), vec![InstallEvent::VerificationKeys(1)]);
@@ -2137,6 +2193,13 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
             domain_id,
             peer_id,
             keys(),
+            initial_credential.clone(),
+            initial_expiration,
+        );
+        let duplicate_initial = external_update(
+            domain_id,
+            peer_id,
+            keys(),
             initial_credential,
             initial_expiration,
         );
@@ -2145,7 +2208,7 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
         let (supervisor, handle, mut requests) =
             AuthoritySupervisor::start_external_with_installer(
                 installer,
-                initial.clone(),
+                initial,
                 config(),
                 &shutdown,
             )
@@ -2169,7 +2232,7 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
         );
 
         assert_eq!(
-            handle.replace(initial).await.unwrap(),
+            handle.replace(duplicate_initial).await.unwrap(),
             AuthorityInstallOutcome::Unchanged(1)
         );
         assert_eq!(*requests.requests.borrow(), Some(request));

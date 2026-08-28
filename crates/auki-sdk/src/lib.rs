@@ -22,10 +22,12 @@ pub use auki_domain::{
     DomainProtocolStream, DomainRouteAttempt, ServedProtocols,
 };
 pub use auki_p2p::{
-    AuthenticatedPeer, AuthenticatedRouteStream, Identity, Multiaddr, P2PAccessClaims, PeerId,
-    RouteCatalogError, RouteCatalogStatus, RouteFence, RouteSnapshot,
+    AuthenticatedPeer, AuthenticatedRouteStream, DdsVerificationKeys, Identity, Multiaddr,
+    P2PAccessClaims, PeerId, RouteCatalogError, RouteCatalogStatus, RouteFence, RouteSnapshot,
+    SignedP2pCredential,
 };
 pub use auki_session::{Peer, Session};
+pub use authority::{ExternalAuthorityRefreshRequest, ExternalAuthorityUpdate};
 pub use authorization::{
     AukiPeerAuthorization, AukiPeerAuthorizationError, AukiPeerAuthorizationSnapshot,
 };
@@ -38,6 +40,7 @@ pub use context::{
     AukiPeerRoutesError,
 };
 pub use peer_runtime::{
-    AukiPeer, AukiPeerAuthorityError, AukiPeerRelayError, AukiPeerShutdownError, AukiPeerStartError,
+    AukiPeer, AukiPeerAuthorityError, AukiPeerRelayError, AukiPeerShutdownError,
+    AukiPeerStartError, ExternalAuthorityControl, ExternalAuthorityReplaceOutcome,
 };
 pub use status::{AukiPeerFailure, AukiPeerStatus};

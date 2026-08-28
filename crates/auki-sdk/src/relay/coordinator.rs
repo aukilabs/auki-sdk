@@ -4,7 +4,15 @@
 //! This module deliberately owns no authentication renewal, discovery,
 //! publication, or product-work gating policy.
 
-use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    future::Future,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use auki_domain::{DomainRelayError, DomainRelayReservations};
@@ -12,14 +20,16 @@ use auki_p2p::{
     ExpectedRelayLimits, Multiaddr, PeerId, RelayConfirmationRejection, RelayProvider,
     RelayReservationHandle, RelayReservationSnapshot, RelayTransportEvent,
 };
+use parking_lot::Mutex;
 use rand::Rng;
 use tokio::sync::broadcast;
 use tokio::{
+    runtime::Handle as RuntimeHandle,
     sync::{mpsc, oneshot, watch},
-    task::{JoinHandle, JoinSet},
+    task::JoinSet,
     time::Instant,
 };
-use tokio_util::sync::CancellationToken;
+use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tracing::warn;
 use uuid::Uuid;
 
@@ -227,9 +237,20 @@ pub(crate) trait RelayRouteRegistry: Send + Sync {
         authorized_until: chrono::DateTime<chrono::Utc>,
     ) -> Result<bool, String>;
     async fn tombstone(&self, fence: LocalRelayFence) -> Result<bool, String>;
+    fn fence_all(&self) -> Result<(), String>;
 }
 
 pub(crate) type SharedRouteRegistry = Arc<dyn RelayRouteRegistry>;
+
+static NEXT_LOCAL_RELAY_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+fn next_local_relay_generation() -> Result<u64, RelayCoordinatorError> {
+    NEXT_LOCAL_RELAY_GENERATION
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
+            generation.checked_add(1)
+        })
+        .map_err(|_| RelayCoordinatorError::LocalGenerationExhausted)
+}
 
 fn route_fence(fence: LocalRelayFence) -> auki_p2p::RouteFence {
     auki_p2p::RouteFence {
@@ -240,6 +261,129 @@ fn route_fence(fence: LocalRelayFence) -> auki_p2p::RouteFence {
     }
 }
 
+#[derive(Default)]
+struct FencedRouteState {
+    closed: bool,
+    owned: HashSet<LocalRelayFence>,
+}
+
+/// A permanent, coordinator-local publication fence around the shared route
+/// catalog.
+///
+/// The outer mutex is intentionally held across each synchronous catalog
+/// mutation. That makes publication and emergency fencing linearizable: a
+/// publication either commits before `fence_all` and is removed by it, or sees
+/// the closed bit and cannot commit. Exact owned fences ensure an old
+/// coordinator cannot remove direct routes or relay routes published by its
+/// replacement.
+struct FencedRouteCatalog {
+    catalog: auki_p2p::RouteCatalog,
+    state: Mutex<FencedRouteState>,
+}
+
+impl FencedRouteCatalog {
+    fn new(catalog: auki_p2p::RouteCatalog) -> Self {
+        Self {
+            catalog,
+            state: Mutex::new(FencedRouteState::default()),
+        }
+    }
+}
+
+#[async_trait]
+impl RelayRouteRegistry for FencedRouteCatalog {
+    async fn publish(&self, route: PublishedRelayRoute) -> Result<(), String> {
+        let mut state = self.state.lock();
+        if state.closed {
+            return Err("relay route registry is permanently fenced".to_string());
+        }
+        let fence = route.fence;
+        self.catalog
+            .publish_confirmed(auki_p2p::ConfirmedRoute {
+                fence: route_fence(fence),
+                relay_peer_id: route.relay_peer_id,
+                route: route.route,
+                limits: route.limits,
+                authorized_until: route.authorized_until,
+            })
+            .map_err(|error| error.to_string())?;
+        state.owned.insert(fence);
+        Ok(())
+    }
+
+    async fn refresh_authority(
+        &self,
+        fence: LocalRelayFence,
+        authorized_until: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, String> {
+        let mut state = self.state.lock();
+        if state.closed || !state.owned.contains(&fence) {
+            return Ok(false);
+        }
+        match self
+            .catalog
+            .refresh_authorization(route_fence(fence), authorized_until)
+        {
+            Ok(_) => Ok(true),
+            Err(
+                auki_p2p::RouteCatalogError::RouteNotFound
+                | auki_p2p::RouteCatalogError::StaleRouteFence,
+            ) => {
+                state.owned.remove(&fence);
+                Ok(false)
+            }
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    async fn tombstone(&self, fence: LocalRelayFence) -> Result<bool, String> {
+        let mut state = self.state.lock();
+        if !state.owned.contains(&fence) {
+            return Ok(false);
+        }
+        match self.catalog.tombstone(route_fence(fence)) {
+            Ok(_) => {
+                state.owned.remove(&fence);
+                Ok(true)
+            }
+            Err(
+                auki_p2p::RouteCatalogError::RouteNotFound
+                | auki_p2p::RouteCatalogError::StaleRouteFence,
+            ) => {
+                state.owned.remove(&fence);
+                Ok(false)
+            }
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn fence_all(&self) -> Result<(), String> {
+        let mut state = self.state.lock();
+        state.closed = true;
+        let fences: Vec<_> = state.owned.iter().copied().collect();
+        let mut first_error = None;
+        for fence in fences {
+            match self.catalog.tombstone(route_fence(fence)) {
+                Ok(_)
+                | Err(
+                    auki_p2p::RouteCatalogError::RouteNotFound
+                    | auki_p2p::RouteCatalogError::StaleRouteFence,
+                ) => {
+                    state.owned.remove(&fence);
+                }
+                Err(error) => {
+                    first_error.get_or_insert_with(|| error.to_string());
+                }
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+#[cfg(test)]
 #[async_trait]
 impl RelayRouteRegistry for auki_p2p::RouteCatalog {
     async fn publish(&self, route: PublishedRelayRoute) -> Result<(), String> {
@@ -279,6 +423,12 @@ impl RelayRouteRegistry for auki_p2p::RouteCatalog {
             Err(error) => Err(error.to_string()),
         }
     }
+
+    fn fence_all(&self) -> Result<(), String> {
+        self.tombstone_all()
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -309,10 +459,26 @@ pub(crate) enum RelayCoordinatorError {
     RouteRegistry(String),
     #[error("relay reservation cleanup did not complete: {0}")]
     ReservationCleanup(String),
+    #[error("the process-local relay generation space is exhausted")]
+    LocalGenerationExhausted,
     #[error("relay reservation event stream lagged by {0} events")]
     RelayEventLagged(u64),
     #[error("the Domain relay-reservation capability failed")]
     DomainRelay(#[from] DomainRelayError),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RelayCoordinatorShutdownOutcome {
+    Graceful,
+    ForcedAfterTimeout,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RelayCoordinatorShutdownError {
+    #[error("relay coordinator graceful shutdown failed")]
+    Graceful(#[source] RelayCoordinatorError),
+    #[error("relay coordinator forced cleanup failed")]
+    ForcedCleanup(#[source] RelayCoordinatorError),
 }
 
 impl RelayCoordinatorError {
@@ -338,7 +504,10 @@ impl RelayCoordinatorError {
 pub(crate) struct RelayBookingCoordinator {
     commands: mpsc::Sender<CoordinatorCommand>,
     health: watch::Receiver<bool>,
-    task: Option<JoinHandle<Result<(), RelayCoordinatorError>>>,
+    task: Option<AbortOnDropHandle<Result<(), RelayCoordinatorError>>>,
+    force_shutdown: CancellationToken,
+    routes: SharedRouteRegistry,
+    runtime: RuntimeHandle,
 }
 
 impl RelayBookingCoordinator {
@@ -351,7 +520,7 @@ impl RelayBookingCoordinator {
         Self::start_with_backends(
             api,
             Arc::new(DomainRelayReservationBackend::new(reservations)),
-            Arc::new(routes),
+            Arc::new(FencedRouteCatalog::new(routes)),
             config,
         )
         .await
@@ -423,14 +592,13 @@ impl RelayBookingCoordinator {
         let mut actor = CoordinatorActor {
             api,
             backend,
-            routes,
+            routes: Arc::clone(&routes),
             config: config.clone(),
             snapshot,
             slots: HashMap::new(),
             retiring: HashMap::new(),
             pending_relay_failures: HashMap::new(),
             detached_cleanups: JoinSet::new(),
-            next_generation: 1,
             command_rx,
             events: events.clone(),
             event_rx,
@@ -443,18 +611,19 @@ impl RelayBookingCoordinator {
         actor.schedule_renewal();
         actor.apply_current_snapshot().await?;
         actor.schedule_status_poll(false);
-        let task = tokio::spawn(async move {
-            let _health_guard = CoordinatorHealthGuard(health_tx);
-            let result = actor.run().await;
-            if result.is_err() {
-                let _ = actor.fence_control_plane().await;
-            }
-            result
-        });
+        let force_shutdown = CancellationToken::new();
+        let actor_force_shutdown = force_shutdown.clone();
+        let runtime = RuntimeHandle::current();
+        let task = AbortOnDropHandle::new(tokio::spawn(async move {
+            run_coordinator_actor(actor, health_tx, actor_force_shutdown).await
+        }));
         Ok(Self {
             commands,
             health,
             task: Some(task),
+            force_shutdown,
+            routes,
+            runtime,
         })
     }
 
@@ -467,6 +636,29 @@ impl RelayBookingCoordinator {
     pub(crate) async fn shutdown(
         mut self,
         delete_booking: bool,
+        graceful_timeout: Duration,
+    ) -> Result<RelayCoordinatorShutdownOutcome, RelayCoordinatorShutdownError> {
+        match tokio::time::timeout(graceful_timeout, self.request_stop_and_join(delete_booking))
+            .await
+        {
+            Ok(result) => {
+                result.map_err(RelayCoordinatorShutdownError::Graceful)?;
+                Ok(RelayCoordinatorShutdownOutcome::Graceful)
+            }
+            Err(_) => {
+                let _ = self.routes.fence_all();
+                self.force_shutdown.cancel();
+                self.join_actor()
+                    .await
+                    .map_err(RelayCoordinatorShutdownError::ForcedCleanup)?;
+                Ok(RelayCoordinatorShutdownOutcome::ForcedAfterTimeout)
+            }
+        }
+    }
+
+    async fn request_stop_and_join(
+        &mut self,
+        delete_booking: bool,
     ) -> Result<(), RelayCoordinatorError> {
         let (response, receiver) = oneshot::channel();
         let command_result = match self
@@ -477,14 +669,68 @@ impl RelayBookingCoordinator {
             })
             .await
         {
-            Ok(()) => receiver.await.map_err(|_| RelayCoordinatorError::Stopped)?,
+            Ok(()) => receiver
+                .await
+                .unwrap_or(Err(RelayCoordinatorError::Stopped)),
             Err(_) => Err(RelayCoordinatorError::Stopped),
         };
-        let task_result = match self.task.take() {
-            Some(task) => task.await.map_err(|_| RelayCoordinatorError::Stopped)?,
-            None => Ok(()),
-        };
+        let task_result = self.join_actor().await;
         task_result.and(command_result)
+    }
+
+    async fn join_actor(&mut self) -> Result<(), RelayCoordinatorError> {
+        let result = match self.task.as_mut() {
+            Some(task) => task.await.map_err(|_| RelayCoordinatorError::Stopped)?,
+            None => return Ok(()),
+        };
+        self.task.take();
+        result
+    }
+}
+
+impl Drop for RelayBookingCoordinator {
+    fn drop(&mut self) {
+        let _ = self.routes.fence_all();
+        self.force_shutdown.cancel();
+        if let Some(task) = self.task.take() {
+            // Async Drop cannot join the actor here. Keep one explicit owner
+            // that observes the bounded force-fence result instead of
+            // aborting a worker that may be the sole owner of a reservation
+            // handle or silently dropping the JoinHandle.
+            self.runtime.spawn(async move {
+                match task.await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        warn!(error = %error, "relay coordinator drop cleanup failed");
+                    }
+                    Err(error) => {
+                        warn!(error = %error, "relay coordinator drop cleanup task failed");
+                    }
+                }
+            });
+        }
+    }
+}
+
+async fn run_coordinator_actor(
+    mut actor: CoordinatorActor,
+    health: watch::Sender<bool>,
+    force_shutdown: CancellationToken,
+) -> Result<(), RelayCoordinatorError> {
+    let _health_guard = CoordinatorHealthGuard(health);
+    let run_result = {
+        let running = actor.run();
+        tokio::pin!(running);
+        tokio::select! {
+            biased;
+            _ = force_shutdown.cancelled() => None,
+            result = &mut running => Some(result),
+        }
+    };
+    actor.force_fence().await?;
+    match run_result {
+        None | Some(Ok(())) => Ok(()),
+        Some(Err(error)) => Err(error),
     }
 }
 
@@ -540,7 +786,7 @@ struct LocalSlot {
     authorized_until: chrono::DateTime<chrono::Utc>,
     state: LocalSlotState,
     cancel_retry: CancellationToken,
-    worker: Option<JoinHandle<Result<Option<RelayReservationHandle>, String>>>,
+    worker: Option<AbortOnDropHandle<Result<Option<RelayReservationHandle>, String>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -553,7 +799,7 @@ enum RetirementAction {
 struct RetiringSlot {
     local: LocalSlot,
     action: RetirementAction,
-    cleanup: JoinHandle<Result<(), String>>,
+    cleanup: AbortOnDropHandle<Result<(), String>>,
 }
 
 enum ChildEvent {
@@ -594,7 +840,6 @@ struct CoordinatorActor {
     retiring: HashMap<Uuid, RetiringSlot>,
     pending_relay_failures: HashMap<RelayReservationHandle, ReservationFailureReason>,
     detached_cleanups: JoinSet<Result<(), String>>,
-    next_generation: u64,
     command_rx: mpsc::Receiver<CoordinatorCommand>,
     events: mpsc::Sender<ChildEvent>,
     event_rx: mpsc::Receiver<ChildEvent>,
@@ -891,7 +1136,7 @@ impl CoordinatorActor {
                 Ok(provider) => provider,
                 Err(error) => {
                     warn!(slot_id = %slot_id, error = %error, "DMS relay provider metadata is invalid");
-                    let fence = self.next_fence(slot_id, assignment_id, reservation_epoch);
+                    let fence = self.next_fence(slot_id, assignment_id, reservation_epoch)?;
                     self.slots.insert(
                         slot_id,
                         LocalSlot {
@@ -921,7 +1166,7 @@ impl CoordinatorActor {
                     continue;
                 }
             };
-            let fence = self.next_fence(slot_id, assignment_id, reservation_epoch);
+            let fence = self.next_fence(slot_id, assignment_id, reservation_epoch)?;
             let cancel_retry = CancellationToken::new();
             self.slots.insert(
                 slot_id,
@@ -958,15 +1203,13 @@ impl CoordinatorActor {
         slot_id: Uuid,
         assignment_id: Uuid,
         reservation_epoch: Uuid,
-    ) -> LocalRelayFence {
-        let local_generation = self.next_generation;
-        self.next_generation = self.next_generation.saturating_add(1);
-        LocalRelayFence {
+    ) -> Result<LocalRelayFence, RelayCoordinatorError> {
+        Ok(LocalRelayFence {
             slot_id,
             assignment_id,
             reservation_epoch,
-            local_generation,
-        }
+            local_generation: next_local_relay_generation()?,
+        })
     }
 
     async fn handle_child_event(&mut self, event: ChildEvent) -> Result<(), RelayCoordinatorError> {
@@ -1267,10 +1510,7 @@ impl CoordinatorActor {
         fence: LocalRelayFence,
         action: RetirementAction,
     ) -> Result<(), RelayCoordinatorError> {
-        if let Some(retiring) = self.retiring.get_mut(&fence.slot_id) {
-            if retiring.local.fence == fence && action == RetirementAction::Remove {
-                retiring.action = RetirementAction::Remove;
-            }
+        if self.retirement_already_started(fence, action) {
             return Ok(());
         }
         let Some(current) = self.slots.get(&fence.slot_id) else {
@@ -1283,6 +1523,29 @@ impl CoordinatorActor {
             .tombstone(fence)
             .await
             .map_err(RelayCoordinatorError::RouteRegistry)?;
+        self.start_retirement_after_route_fence(fence, action);
+        Ok(())
+    }
+
+    fn retirement_already_started(
+        &mut self,
+        fence: LocalRelayFence,
+        action: RetirementAction,
+    ) -> bool {
+        if let Some(retiring) = self.retiring.get_mut(&fence.slot_id) {
+            if retiring.local.fence == fence && action == RetirementAction::Remove {
+                retiring.action = RetirementAction::Remove;
+            }
+            return true;
+        }
+        false
+    }
+
+    fn start_retirement_after_route_fence(
+        &mut self,
+        fence: LocalRelayFence,
+        action: RetirementAction,
+    ) {
         let mut local = self
             .slots
             .remove(&fence.slot_id)
@@ -1312,25 +1575,26 @@ impl CoordinatorActor {
             },
         );
         self.reset_expiry_timer();
-        Ok(())
     }
 
     async fn finish_retirement(
         &mut self,
         fence: LocalRelayFence,
     ) -> Result<(), RelayCoordinatorError> {
-        let Some(retiring) = self.retiring.remove(&fence.slot_id) else {
+        let Some(retiring) = self.retiring.get_mut(&fence.slot_id) else {
             return Ok(());
         };
         if retiring.local.fence != fence {
-            self.retiring.insert(fence.slot_id, retiring);
             return Ok(());
         }
-        retiring
-            .cleanup
+        (&mut retiring.cleanup)
             .await
             .map_err(|error| RelayCoordinatorError::ReservationCleanup(error.to_string()))?
             .map_err(RelayCoordinatorError::ReservationCleanup)?;
+        let retiring = self
+            .retiring
+            .remove(&fence.slot_id)
+            .expect("the completed retirement remains actor-owned");
 
         match retiring.action {
             RetirementAction::Reconcile => self.apply_current_snapshot().await?,
@@ -1358,10 +1622,44 @@ impl CoordinatorActor {
         for retiring in self.retiring.values_mut() {
             retiring.action = RetirementAction::Remove;
         }
-        let retirements = std::mem::take(&mut self.retiring);
+        self.drain_cleanup_tasks().await
+    }
+
+    async fn force_fence(&mut self) -> Result<(), RelayCoordinatorError> {
+        self.control_fenced = true;
+        self.event_rx.close();
+        let route_error = self.routes.fence_all().err();
+        let fences: Vec<_> = self.slots.values().map(|slot| slot.fence).collect();
+        for fence in fences {
+            if !self.retirement_already_started(fence, RetirementAction::Remove)
+                && self
+                    .slots
+                    .get(&fence.slot_id)
+                    .is_some_and(|slot| slot.fence == fence)
+            {
+                self.start_retirement_after_route_fence(fence, RetirementAction::Remove);
+            }
+        }
+        for retiring in self.retiring.values_mut() {
+            retiring.action = RetirementAction::Remove;
+        }
+        let cleanup = self.drain_cleanup_tasks().await;
+        if let Some(error) = route_error {
+            return Err(RelayCoordinatorError::RouteRegistry(error));
+        }
+        cleanup
+    }
+
+    async fn drain_cleanup_tasks(&mut self) -> Result<(), RelayCoordinatorError> {
         let mut first_error = None;
-        for (_, retiring) in retirements {
-            match retiring.cleanup.await {
+        let retirement_ids: Vec<_> = self.retiring.keys().copied().collect();
+        for slot_id in retirement_ids {
+            let result = match self.retiring.get_mut(&slot_id) {
+                Some(retiring) => (&mut retiring.cleanup).await,
+                None => continue,
+            };
+            self.retiring.remove(&slot_id);
+            match result {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
                     first_error.get_or_insert(error);
@@ -1384,6 +1682,7 @@ impl CoordinatorActor {
     }
 
     async fn stop(&mut self, delete_booking: bool) -> Result<(), RelayCoordinatorError> {
+        self.event_rx.close();
         self.remove_all_slots().await?;
         if delete_booking && !self.control_fenced {
             let started = Instant::now();
@@ -1419,6 +1718,7 @@ impl CoordinatorActor {
 
     async fn fence_control_plane(&mut self) -> Result<(), RelayCoordinatorError> {
         self.control_fenced = true;
+        self.event_rx.close();
         self.remove_all_slots().await
     }
 
@@ -1445,14 +1745,22 @@ impl CoordinatorActor {
             .slots
             .get_mut(&fence.slot_id)
             .filter(|slot| slot.fence == fence)
-            .and_then(|slot| slot.worker.take());
-        match worker {
+            .and_then(|slot| slot.worker.as_mut());
+        let result = match worker {
             Some(worker) => worker
                 .await
                 .map_err(|error| RelayCoordinatorError::ReservationCleanup(error.to_string()))?
                 .map_err(RelayCoordinatorError::ReservationCleanup),
             None => Ok(None),
+        };
+        if let Some(slot) = self
+            .slots
+            .get_mut(&fence.slot_id)
+            .filter(|slot| slot.fence == fence)
+        {
+            slot.worker.take();
         }
+        result
     }
 
     fn confirmed_fence_for_handle(
@@ -1528,6 +1836,23 @@ impl CoordinatorActor {
     }
 }
 
+impl Drop for CoordinatorActor {
+    fn drop(&mut self) {
+        self.control_fenced = true;
+        let _ = self.routes.fence_all();
+        for slot in self.slots.values_mut() {
+            slot.cancel_retry.cancel();
+            if let Some(worker) = &slot.worker {
+                worker.abort();
+            }
+        }
+        for retiring in self.retiring.values() {
+            retiring.cleanup.abort();
+        }
+        self.detached_cleanups.abort_all();
+    }
+}
+
 fn control_error_ends_authority(error: &RelayBookingClientError) -> bool {
     error.http_code().is_some_and(|code| {
         code.is_stale_requester_principal()
@@ -1559,11 +1884,11 @@ fn spawn_retirement_cleanup(
     backend: SharedReservationBackend,
     sender: mpsc::Sender<ChildEvent>,
     fence: LocalRelayFence,
-    worker: Option<JoinHandle<Result<Option<RelayReservationHandle>, String>>>,
+    worker: Option<AbortOnDropHandle<Result<Option<RelayReservationHandle>, String>>>,
     handle: Option<RelayReservationHandle>,
     timeout: Duration,
-) -> JoinHandle<Result<(), String>> {
-    tokio::spawn(async move {
+) -> AbortOnDropHandle<Result<(), String>> {
+    AbortOnDropHandle::new(tokio::spawn(async move {
         let result = async {
             let mut cleanup_error = None;
             let mut worker_handle = None;
@@ -1602,7 +1927,7 @@ fn spawn_retirement_cleanup(
         .await;
         let _ = sender.send(ChildEvent::CleanupComplete { fence }).await;
         result
-    })
+    }))
 }
 
 fn detached_cleanup_result(
@@ -1658,8 +1983,8 @@ fn spawn_reservation_worker(
     provider: RelayProvider,
     cancel_retry: CancellationToken,
     config: RelayCoordinatorConfig,
-) -> JoinHandle<Result<Option<RelayReservationHandle>, String>> {
-    tokio::spawn(async move {
+) -> AbortOnDropHandle<Result<Option<RelayReservationHandle>, String>> {
+    AbortOnDropHandle::new(tokio::spawn(async move {
         let started = Instant::now();
         let mut retry_ceiling = config.retry_min;
         loop {
@@ -1683,8 +2008,9 @@ fn spawn_reservation_worker(
 
             let attempt_backend = Arc::clone(&backend);
             let attempt_provider = provider.clone();
-            let mut attempt =
-                tokio::spawn(async move { attempt_backend.start(attempt_provider).await });
+            let mut attempt = AbortOnDropHandle::new(tokio::spawn(async move {
+                attempt_backend.start(attempt_provider).await
+            }));
             let joined = tokio::select! {
                 biased;
                 _ = cancel_retry.cancelled() => {
@@ -1860,7 +2186,7 @@ fn spawn_reservation_worker(
             }
             retry_ceiling = (retry_ceiling * 2).min(config.retry_max);
         }
-    })
+    }))
 }
 
 enum AbortedReservationStart {
@@ -1869,7 +2195,7 @@ enum AbortedReservationStart {
 }
 
 async fn abort_reservation_start(
-    attempt: JoinHandle<Result<RelayReservationHandle, ReservationAttemptFailure>>,
+    attempt: AbortOnDropHandle<Result<RelayReservationHandle, ReservationAttemptFailure>>,
 ) -> Result<AbortedReservationStart, String> {
     attempt.abort();
     match attempt.await {

@@ -1,10 +1,11 @@
 use std::{
     collections::VecDeque,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use auki_p2p::{RouteCatalog, RouteCatalogLimits};
 use parking_lot::Mutex;
+use tokio::sync::{Notify, Semaphore};
 
 use crate::relay::{
     CreateRelayBookingResponse, RelayBookingCreateDisposition, RelayLimits, RelaySlotSnapshot,
@@ -153,6 +154,77 @@ impl RelayBookingApi for ScriptedApi {
     }
 }
 
+struct BlockingActiveApi {
+    snapshot: RelayBookingSnapshot,
+    active_calls: AtomicUsize,
+    active_started: Notify,
+    active_release: Semaphore,
+    deletes: AtomicUsize,
+}
+
+impl BlockingActiveApi {
+    fn new(snapshot: RelayBookingSnapshot) -> Self {
+        Self {
+            snapshot,
+            active_calls: AtomicUsize::new(0),
+            active_started: Notify::new(),
+            active_release: Semaphore::new(0),
+            deletes: AtomicUsize::new(0),
+        }
+    }
+
+    async fn wait_until_blocked(&self) {
+        tokio::time::timeout(Duration::from_secs(1), self.active_started.notified())
+            .await
+            .expect("the actor entered its blocked active lookup");
+    }
+
+    fn release(&self) {
+        self.active_release.add_permits(1);
+    }
+}
+
+#[async_trait]
+impl RelayBookingApi for BlockingActiveApi {
+    async fn active(&self) -> ApiResult<Option<RelayBookingSnapshot>> {
+        let call = self.active_calls.fetch_add(1, Ordering::SeqCst);
+        if call != 0 {
+            self.active_started.notify_one();
+            self.active_release
+                .acquire()
+                .await
+                .expect("test active release semaphore remains open")
+                .forget();
+        }
+        Ok(Some(self.snapshot.clone()))
+    }
+
+    async fn create(
+        &self,
+        _idempotency_key: &RelayIdempotencyKey,
+        _request: &CreateRelayBookingRequest,
+    ) -> ApiResult<CreateRelayBookingResponse> {
+        panic!("the blocking API starts from an active booking")
+    }
+
+    async fn renew(&self, _booking_id: Uuid) -> ApiResult<RelayBookingSnapshot> {
+        panic!("the blocking API test must not reach renewal")
+    }
+
+    async fn report_reservation_failed(
+        &self,
+        _booking_id: Uuid,
+        _request: &ReservationFailedRequest,
+    ) -> ApiResult<RelayBookingSnapshot> {
+        panic!("the blocking API test must not report a reservation failure")
+    }
+
+    async fn delete(&self, _booking_id: Uuid) -> ApiResult<()> {
+        self.deletes.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
 struct PendingStartDrop<'a>(&'a AtomicUsize);
 
 impl Drop for PendingStartDrop<'_> {
@@ -275,6 +347,8 @@ impl RelayReservationBackend for StoppedSubscriptionBackend {
 struct RecordingRoutes {
     publications: AtomicUsize,
     tombstones: Mutex<Vec<LocalRelayFence>>,
+    fence_all_calls: AtomicUsize,
+    fail_tombstones: AtomicBool,
 }
 
 #[async_trait]
@@ -294,8 +368,16 @@ impl RelayRouteRegistry for RecordingRoutes {
     }
 
     async fn tombstone(&self, fence: LocalRelayFence) -> Result<bool, String> {
+        if self.fail_tombstones.load(Ordering::SeqCst) {
+            return Err("injected route tombstone failure".to_string());
+        }
         self.tombstones.lock().push(fence);
         Ok(true)
+    }
+
+    fn fence_all(&self) -> Result<(), String> {
+        self.fence_all_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(())
     }
 }
 
@@ -437,6 +519,101 @@ fn confirmed_local_route(
     }
 }
 
+#[tokio::test]
+async fn fenced_catalog_preserves_direct_routes_and_permanently_rejects_publication() {
+    let local_peer_id = PeerId::random();
+    let relay_peer_id = PeerId::random();
+    let direct_route = format!("/ip4/127.0.0.1/tcp/4001/p2p/{local_peer_id}")
+        .parse()
+        .expect("valid direct route");
+    let catalog = RouteCatalog::new(
+        local_peer_id,
+        vec![direct_route],
+        RouteCatalogLimits::new(3, 2),
+    )
+    .expect("route catalog");
+    let routes = FencedRouteCatalog::new(catalog.clone());
+    let fence = LocalRelayFence {
+        slot_id: Uuid::new_v4(),
+        assignment_id: Uuid::new_v4(),
+        reservation_epoch: Uuid::new_v4(),
+        local_generation: next_local_relay_generation().expect("available generation"),
+    };
+
+    routes
+        .publish(confirmed_local_route(fence, local_peer_id, relay_peer_id))
+        .await
+        .expect("owned relay route publishes");
+    routes.fence_all().expect("owned relay route is fenced");
+
+    let snapshot = catalog.snapshot().expect("route snapshot");
+    assert_eq!(snapshot.direct_routes.len(), 1);
+    assert!(snapshot.relay_routes.is_empty());
+    assert!(
+        routes
+            .publish(confirmed_local_route(fence, local_peer_id, relay_peer_id))
+            .await
+            .is_err(),
+        "a closed coordinator must never publish again"
+    );
+}
+
+#[tokio::test]
+async fn stale_coordinator_fence_cannot_remove_replacement_route() {
+    let local_peer_id = PeerId::random();
+    let relay_peer_id = PeerId::random();
+    let catalog = local_route_catalog(local_peer_id);
+    let old_routes = FencedRouteCatalog::new(catalog.clone());
+    let replacement_routes = FencedRouteCatalog::new(catalog.clone());
+    let slot_id = Uuid::new_v4();
+    let assignment_id = Uuid::new_v4();
+    let reservation_epoch = Uuid::new_v4();
+    let old_fence = LocalRelayFence {
+        slot_id,
+        assignment_id,
+        reservation_epoch,
+        local_generation: next_local_relay_generation().expect("available generation"),
+    };
+    let replacement_fence = LocalRelayFence {
+        slot_id,
+        assignment_id,
+        reservation_epoch,
+        local_generation: next_local_relay_generation().expect("available generation"),
+    };
+    assert_ne!(old_fence, replacement_fence);
+
+    old_routes
+        .publish(confirmed_local_route(
+            old_fence,
+            local_peer_id,
+            relay_peer_id,
+        ))
+        .await
+        .expect("old route publishes");
+    catalog
+        .tombstone(route_fence(old_fence))
+        .expect("old route is removed outside its stale owner");
+    replacement_routes
+        .publish(confirmed_local_route(
+            replacement_fence,
+            local_peer_id,
+            relay_peer_id,
+        ))
+        .await
+        .expect("replacement route publishes");
+
+    old_routes
+        .fence_all()
+        .expect("a stale exact fence is idempotent");
+
+    let snapshot = catalog.snapshot().expect("route snapshot");
+    assert_eq!(snapshot.relay_routes.len(), 1);
+    assert_eq!(
+        snapshot.relay_routes[0].fence,
+        route_fence(replacement_fence)
+    );
+}
+
 fn control_transport_error(operation: RelayOperation) -> RelayBookingClientError {
     RelayBookingClientError::Transport {
         operation,
@@ -466,7 +643,6 @@ fn actor_harness(
             retiring: HashMap::new(),
             pending_relay_failures: HashMap::new(),
             detached_cleanups: JoinSet::new(),
-            next_generation: 1,
             command_rx,
             events,
             event_rx,
@@ -716,6 +892,275 @@ async fn booking_delete_waits_for_owned_detached_cleanup() {
 }
 
 #[tokio::test]
+async fn coordinator_graceful_shutdown_drains_reservations_before_deleting_booking() {
+    let booking_id = Uuid::new_v4();
+    let snapshot = ready_snapshot(
+        booking_id,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        PeerId::random(),
+    );
+    let api = Arc::new(ScriptedApi::default());
+    api.push_active(Ok(Some(snapshot)));
+    let backend = Arc::new(PendingStartBackend::new());
+    let routes = Arc::new(RecordingRoutes::default());
+    let coordinator = RelayBookingCoordinator::start_with_backends(
+        api.clone(),
+        backend.clone(),
+        routes,
+        coordinator_config("graceful-delete"),
+    )
+    .await
+    .expect("coordinator starts");
+    wait_for_count(&backend.starts, 1).await;
+
+    let outcome = coordinator
+        .shutdown(true, Duration::from_secs(1))
+        .await
+        .expect("graceful shutdown succeeds");
+
+    assert_eq!(outcome, RelayCoordinatorShutdownOutcome::Graceful);
+    assert_eq!(backend.dropped_starts.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        api.calls().as_slice(),
+        [ApiCall::Active, ApiCall::Delete(observed)] if *observed == booking_id
+    ));
+}
+
+#[tokio::test]
+async fn failed_graceful_tombstone_still_force_fences_and_drains_local_work() {
+    let booking_id = Uuid::new_v4();
+    let snapshot = ready_snapshot(
+        booking_id,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        PeerId::random(),
+    );
+    let api = Arc::new(ScriptedApi::default());
+    api.push_active(Ok(Some(snapshot)));
+    let backend = Arc::new(PendingStartBackend::new());
+    let routes = Arc::new(RecordingRoutes::default());
+    let coordinator = RelayBookingCoordinator::start_with_backends(
+        api.clone(),
+        backend.clone(),
+        routes.clone(),
+        coordinator_config("failed-graceful-tombstone"),
+    )
+    .await
+    .expect("coordinator starts");
+    let mut health = coordinator.health();
+    wait_for_count(&backend.starts, 1).await;
+    routes.fail_tombstones.store(true, Ordering::SeqCst);
+
+    let error = coordinator
+        .shutdown(true, Duration::from_secs(1))
+        .await
+        .expect_err("the graceful route failure remains visible");
+
+    assert!(matches!(
+        error,
+        RelayCoordinatorShutdownError::Graceful(RelayCoordinatorError::RouteRegistry(_))
+    ));
+    assert!(health.is_failed());
+    assert_eq!(backend.dropped_starts.load(Ordering::SeqCst), 1);
+    assert!(routes.fence_all_calls.load(Ordering::SeqCst) >= 1);
+    assert!(matches!(api.calls().as_slice(), [ApiCall::Active]));
+    tokio::time::timeout(Duration::from_secs(1), health.failed())
+        .await
+        .expect("the failed actor is fully reaped");
+}
+
+#[tokio::test]
+async fn blocked_actor_forces_bounded_local_fencing_without_late_mutation() {
+    let booking_id = Uuid::new_v4();
+    let snapshot = ready_snapshot(
+        booking_id,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        PeerId::random(),
+    );
+    let api = Arc::new(BlockingActiveApi::new(snapshot));
+    let backend = Arc::new(PendingStartBackend::new());
+    let routes = Arc::new(RecordingRoutes::default());
+    let mut config = coordinator_config("blocked-actor-shutdown");
+    config.status_poll_interval = Duration::from_millis(10);
+    config.http_timeout = Duration::from_secs(5);
+    config.reservation_retry_budget = Duration::from_millis(100);
+    let coordinator = RelayBookingCoordinator::start_with_backends(
+        api.clone(),
+        backend.clone(),
+        routes.clone(),
+        config,
+    )
+    .await
+    .expect("coordinator starts");
+    let health = coordinator.health();
+    wait_for_count(&backend.starts, 1).await;
+    api.wait_until_blocked().await;
+
+    let outcome = coordinator
+        .shutdown(true, Duration::from_millis(20))
+        .await
+        .expect("forced local cleanup succeeds");
+
+    assert_eq!(outcome, RelayCoordinatorShutdownOutcome::ForcedAfterTimeout);
+    assert!(health.is_failed());
+    assert_eq!(backend.dropped_starts.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.cancellations.load(Ordering::SeqCst), 0);
+    assert_eq!(api.deletes.load(Ordering::SeqCst), 0);
+    assert!(routes.fence_all_calls.load(Ordering::SeqCst) >= 1);
+    let calls_after_shutdown = api.active_calls.load(Ordering::SeqCst);
+    api.release();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(
+        api.active_calls.load(Ordering::SeqCst),
+        calls_after_shutdown
+    );
+}
+
+#[tokio::test]
+async fn saturated_command_channel_forces_shutdown_instead_of_waiting_forever() {
+    let snapshot = queued_snapshot(Uuid::new_v4());
+    let api = Arc::new(BlockingActiveApi::new(snapshot));
+    let backend = Arc::new(PendingStartBackend::new());
+    let routes = Arc::new(RecordingRoutes::default());
+    let mut config = coordinator_config("blocked-command-shutdown");
+    config.status_poll_interval = Duration::from_millis(10);
+    config.http_timeout = Duration::from_secs(5);
+    let coordinator =
+        RelayBookingCoordinator::start_with_backends(api.clone(), backend, routes.clone(), config)
+            .await
+            .expect("coordinator starts");
+    api.wait_until_blocked().await;
+
+    let mut queued_responses = Vec::new();
+    for _ in 0..32 {
+        let (response, receiver) = oneshot::channel();
+        assert!(
+            coordinator
+                .commands
+                .try_send(CoordinatorCommand::Stop {
+                    delete_booking: false,
+                    response,
+                })
+                .is_ok(),
+            "the test fills the exact bounded command capacity"
+        );
+        queued_responses.push(receiver);
+    }
+
+    let outcome = coordinator
+        .shutdown(false, Duration::from_millis(20))
+        .await
+        .expect("forced shutdown succeeds with a saturated command queue");
+    assert_eq!(outcome, RelayCoordinatorShutdownOutcome::ForcedAfterTimeout);
+    assert!(routes.fence_all_calls.load(Ordering::SeqCst) >= 1);
+    for response in queued_responses {
+        assert!(response.await.is_err());
+    }
+    let calls_after_shutdown = api.active_calls.load(Ordering::SeqCst);
+    api.release();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(
+        api.active_calls.load(Ordering::SeqCst),
+        calls_after_shutdown
+    );
+}
+
+#[tokio::test]
+async fn dropping_a_blocked_coordinator_reaps_actor_and_nested_reservation_start() {
+    let snapshot = ready_snapshot(
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        PeerId::random(),
+    );
+    let api = Arc::new(BlockingActiveApi::new(snapshot));
+    let backend = Arc::new(PendingStartBackend::new());
+    let routes = Arc::new(RecordingRoutes::default());
+    let mut config = coordinator_config("drop-blocked-coordinator");
+    config.status_poll_interval = Duration::from_millis(10);
+    config.http_timeout = Duration::from_secs(5);
+    let coordinator = RelayBookingCoordinator::start_with_backends(
+        api.clone(),
+        backend.clone(),
+        routes.clone(),
+        config,
+    )
+    .await
+    .expect("coordinator starts");
+    let mut health = coordinator.health();
+    wait_for_count(&backend.starts, 1).await;
+    api.wait_until_blocked().await;
+
+    drop(coordinator);
+    assert!(routes.fence_all_calls.load(Ordering::SeqCst) >= 1);
+    tokio::time::timeout(Duration::from_secs(1), health.failed())
+        .await
+        .expect("aborted actor publishes terminal health");
+    wait_for_count(&backend.dropped_starts, 1).await;
+    let calls_after_drop = api.active_calls.load(Ordering::SeqCst);
+    api.release();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(api.active_calls.load(Ordering::SeqCst), calls_after_drop);
+}
+
+#[tokio::test]
+async fn cancelling_shutdown_future_reaps_owned_actor_without_late_backend_or_route_work() {
+    let snapshot = ready_snapshot(
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        PeerId::random(),
+    );
+    let api = Arc::new(BlockingActiveApi::new(snapshot));
+    let backend = Arc::new(PendingStartBackend::new());
+    let routes = Arc::new(RecordingRoutes::default());
+    let mut config = coordinator_config("cancel-shutdown-future");
+    config.status_poll_interval = Duration::from_millis(10);
+    config.http_timeout = Duration::from_secs(5);
+    let coordinator = RelayBookingCoordinator::start_with_backends(
+        api.clone(),
+        backend.clone(),
+        routes.clone(),
+        config,
+    )
+    .await
+    .expect("coordinator starts");
+    let mut health = coordinator.health();
+    wait_for_count(&backend.starts, 1).await;
+    api.wait_until_blocked().await;
+
+    let shutdown =
+        tokio::spawn(async move { coordinator.shutdown(true, Duration::from_secs(5)).await });
+    tokio::task::yield_now().await;
+    shutdown.abort();
+    assert!(
+        shutdown
+            .await
+            .expect_err("shutdown task is cancelled")
+            .is_cancelled()
+    );
+
+    assert!(routes.fence_all_calls.load(Ordering::SeqCst) >= 1);
+    tokio::time::timeout(Duration::from_secs(1), health.failed())
+        .await
+        .expect("the owned actor is not detached");
+    wait_for_count(&backend.dropped_starts, 1).await;
+    assert_eq!(routes.publications.load(Ordering::SeqCst), 0);
+    let calls_after_cancel = api.active_calls.load(Ordering::SeqCst);
+    api.release();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    assert_eq!(api.active_calls.load(Ordering::SeqCst), calls_after_cancel);
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn failed_owned_detached_cleanup_is_terminal_during_run() {
     let api = Arc::new(ScriptedApi::default());
     let backend = Arc::new(PendingStartBackend::new());
@@ -929,7 +1374,10 @@ async fn lost_create_response_is_recovered_by_active_lookup_without_duplicate_cr
         RelayBookingCoordinator::start_with_backends(api.clone(), backend, routes, config)
             .await
             .expect("active booking recovers the lost create response");
-    recovered.shutdown(false).await.expect("clean shutdown");
+    recovered
+        .shutdown(false, Duration::from_secs(1))
+        .await
+        .expect("clean shutdown");
 
     let calls = api.calls();
     assert_eq!(calls.len(), 3);
@@ -963,7 +1411,10 @@ async fn lost_create_retry_reuses_one_stable_idempotency_key() {
         RelayBookingCoordinator::start_with_backends(api.clone(), backend, routes, config)
             .await
             .expect("idempotent create replay");
-    recovered.shutdown(false).await.expect("clean shutdown");
+    recovered
+        .shutdown(false, Duration::from_secs(1))
+        .await
+        .expect("clean shutdown");
 
     let calls = api.calls();
     assert_eq!(calls.len(), 4);
@@ -1275,7 +1726,7 @@ async fn retiring_one_child_does_not_block_parent_renewal() {
             authorized_until: chrono::Utc::now() + chrono::Duration::minutes(2),
             state: LocalSlotState::Reserving(None),
             cancel_retry: CancellationToken::new(),
-            worker: Some(tokio::spawn(std::future::pending())),
+            worker: Some(AbortOnDropHandle::new(tokio::spawn(std::future::pending()))),
         },
     );
 

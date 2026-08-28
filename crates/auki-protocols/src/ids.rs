@@ -107,7 +107,7 @@ mod tests {
 
     #[test]
     fn protocol_extension_boundary_is_not_a_closed_sdk_allow_list() {
-        ApplicationProtocol::new("/auki-p2p/example/1.0.0")
-            .expect("third-party protocols use the generic authenticated boundary");
+        ApplicationProtocol::new("/posemesh/example/v1")
+            .expect("product-owned namespaces use the generic authenticated boundary");
     }
 }

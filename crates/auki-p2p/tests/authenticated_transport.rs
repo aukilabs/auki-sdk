@@ -39,7 +39,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAxcARQLozLIqu/CFm6ub89EElhHX
 O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
 -----END PUBLIC KEY-----"#;
 
-const TEST_PROTOCOL: &str = "/auki-p2p/test/0.1.0";
+const TEST_PROTOCOL: &str = "/product/authenticated-test/v1";
 type ClaimsMutation = Box<dyn Fn(&mut P2PAccessClaims)>;
 
 #[test]
@@ -557,24 +557,42 @@ async fn verifier_rotates_with_one_bounded_previous_key() {
 }
 
 #[test]
-fn application_protocol_accepts_sdk_and_posemesh_namespaces_only() {
+fn application_protocol_accepts_bounded_versioned_product_namespaces() {
     for valid in [
         "/auki/auth/1/resources/0.2.0",
         "/auki/auth/1/message/0.1.0",
         "/auki-p2p/dataset/0",
+        "/auki-p2p/nested/dataset/0",
+        "/join/v1",
+        "/posemesh/store/v1",
+        "/robot/telemetry/1.0.0",
+        "/vendor/product/live-feed/v2.1.0",
     ] {
         ApplicationProtocol::new(valid).unwrap();
     }
     for invalid in [
+        "posemesh/store/v1",
+        "/",
+        "/posemesh",
         "/auki/auth/2/resources/0.2.0",
+        "/auki/auth/1/nested/resources/0.2.0",
         "/auki/auth/1/resources/latest",
         "/auki/resources/0.2.0",
-        "/auki-p2p/dataset/latest",
-        "/auki-p2p/nested/dataset/0",
-        "/auki-p2p/Dataset/1",
-        "/auki-p2p/data\nset/1",
-        "/auki-p2p/dataset/1..0",
-        "/auki-p2p/dataset/1-",
+        "/auki/example/echo/1.0.0",
+        "/posemesh/store/latest",
+        "/posemesh/store/v",
+        "/posemesh/store/V1",
+        "/posemesh/store/vv1",
+        "/posemesh/store/v1/",
+        "/posemesh//store/v1",
+        "/Posemesh/store/v1",
+        "/1posemesh/store/v1",
+        "/-posemesh/store/v1",
+        "/pösemesh/store/v1",
+        "/posemesh/Store/v1",
+        "/posemesh/data\nset/v1",
+        "/posemesh/dataset/v1..0",
+        "/posemesh/dataset/v1-",
     ] {
         assert!(
             ApplicationProtocol::new(invalid).is_err(),
@@ -583,6 +601,26 @@ fn application_protocol_accepts_sdk_and_posemesh_namespaces_only() {
     }
     assert!(ApplicationProtocol::new(format!("/auki-p2p/{}/1", "a".repeat(65))).is_err());
     assert!(ApplicationProtocol::new(format!("/auki-p2p/dataset/{}", "1".repeat(33))).is_err());
+    let max_protocol = format!(
+        "/{}/{}/{}/{}/1",
+        "a".repeat(64),
+        "b".repeat(64),
+        "c".repeat(64),
+        "d".repeat(57)
+    );
+    assert_eq!(max_protocol.len(), 255);
+    ApplicationProtocol::new(max_protocol).unwrap();
+    let oversized_protocol = format!(
+        "/{}/{}/{}/{}/1",
+        "a".repeat(64),
+        "b".repeat(64),
+        "c".repeat(64),
+        "d".repeat(58)
+    );
+    assert_eq!(oversized_protocol.len(), 256);
+    assert!(ApplicationProtocol::new(oversized_protocol).is_err());
+    ApplicationProtocol::new(format!("/product/example/v{}", "1".repeat(31))).unwrap();
+    assert!(ApplicationProtocol::new(format!("/product/example/v{}", "1".repeat(32))).is_err());
     assert!(ApplicationProtocol::new(format!(
         "/auki/auth/1/{}/{}",
         "a".repeat(64),

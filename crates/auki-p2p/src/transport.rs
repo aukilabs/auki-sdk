@@ -60,6 +60,14 @@ struct Behaviour {
     targeted_streams: TargetedStreamBehaviour,
 }
 
+/// A bounded, explicitly versioned libp2p application protocol ID.
+///
+/// IDs use `/<name>[/<name>...]/<version>`. Name components are bounded
+/// lowercase ASCII identifiers; versions are bounded numeric components with
+/// an optional `v` prefix.
+///
+/// Product owners choose their own namespace. The top-level `/auki/`
+/// namespace is reserved for the authenticated SDK protocol family.
 #[derive(Clone, Debug)]
 pub struct ApplicationProtocol(StreamProtocol);
 
@@ -72,11 +80,6 @@ impl ApplicationProtocol {
             )));
         }
         let components: Vec<_> = value.split('/').collect();
-        let posemesh_application = components.len() == 4
-            && components[0].is_empty()
-            && components[1] == "auki-p2p"
-            && is_application_component(components[2])
-            && is_version_component(components.last().copied().unwrap_or_default());
         let sdk_application = components.len() == 6
             && components[0].is_empty()
             && components[1] == "auki"
@@ -84,9 +87,16 @@ impl ApplicationProtocol {
             && components[3] == "1"
             && is_application_component(components[4])
             && is_version_component(components[5]);
-        if !posemesh_application && !sdk_application {
+        let product_application = components.len() >= 3
+            && components[0].is_empty()
+            && components[1] != "auki"
+            && components[1..components.len() - 1]
+                .iter()
+                .all(|component| is_application_component(component))
+            && is_version_component(components.last().copied().unwrap_or_default());
+        if !sdk_application && !product_application {
             return Err(Error::InvalidProtocol(
-                "expected /auki/auth/1/<application>/<version> or /auki-p2p/<application>/<version>"
+                "expected a bounded /<namespace>/.../<version> ID; /auki/ is reserved for /auki/auth/1/<application>/<version>"
                     .into(),
             ));
         }
@@ -114,7 +124,7 @@ fn is_version_component(component: &str) -> bool {
     if component.is_empty() || component.len() > VERSION_COMPONENT_MAX_BYTES {
         return false;
     }
-    let bytes = component.as_bytes();
+    let bytes = component.strip_prefix('v').unwrap_or(component).as_bytes();
     bytes.first().is_some_and(u8::is_ascii_digit)
         && bytes.last().is_some_and(u8::is_ascii_digit)
         && bytes

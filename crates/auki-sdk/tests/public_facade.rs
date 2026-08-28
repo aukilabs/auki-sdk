@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 fn assert_send_sync<T: Send + Sync>() {}
 
-const CUSTOM_PROTOCOL: &str = "/auki-p2p/example/1.0.0";
+const CUSTOM_PROTOCOL: &str = "/example/echo/1.0.0";
 
 fn register_custom_protocol(protocols: &AukiPeerProtocols) {
     let spec = DomainProtocolSpec::new(CUSTOM_PROTOCOL, 4, 4096).unwrap();

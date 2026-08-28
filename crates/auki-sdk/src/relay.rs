@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{collections::HashSet, fmt, sync::Arc, time::Duration};
 use uuid::Uuid;
 
+pub(crate) mod coordinator;
+
 const RELAY_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RELAY_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 128;

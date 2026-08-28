@@ -11,13 +11,20 @@ readme = "README.md"
 
 [dependencies]
 async-trait = { workspace = true }
+auki-domain = { path = "../auki-domain" }
+auki-p2p = { path = "../auki-p2p" }
 chrono = { workspace = true }
+rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
+tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
 httpmock = "0.8.2"
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+parking_lot = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

@@ -89,8 +89,11 @@ A new peer serves no built-in protocol by default. Select exact built-in
 versions with `AukiPeerConfig::with_served_protocols(...)`, or register a
 versioned product protocol through:
 
-Custom protocol IDs use `/auki-p2p/<application>/<version>`. The
-`/auki/auth/1/...` namespace identifies retained SDK protocols.
+Product owners choose bounded, explicitly versioned IDs shaped like
+`/<name>[/<name>...]/<version>`; for example, `/posemesh/store/v1`. The
+top-level `/auki/` namespace is reserved; retained SDK protocols use
+`/auki/auth/1/...`.
+`/auki-p2p/dataset/0` remains a valid product protocol, not a required prefix.
 
 ```rust
 let context = peer.protocol_context();

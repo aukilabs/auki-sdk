@@ -41,6 +41,11 @@ credentials.
 
 ## Adding an application protocol
 
+Product protocol IDs use a bounded, explicitly versioned product-owned
+namespace, such as `/robot/telemetry/v1`. The top-level `/auki/` namespace is
+reserved; retained SDK protocols use `/auki/auth/1/...`. `/auki-p2p/...` is
+supported but is not a required prefix.
+
 The SDK's shared authenticated wire contracts live in the sibling
 [`auki-protocols`](../auki-protocols) crate. Product-specific protocols may use
 their own sibling crate, such as `auki-p2p-example`, and keep all protocol

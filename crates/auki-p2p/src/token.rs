@@ -5,6 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use http::HeaderValue;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use libp2p::PeerId;
 use p256::pkcs8::DecodePublicKey;
@@ -118,6 +119,29 @@ impl SignedP2pCredential {
             )));
         }
         Ok(Self { compact })
+    }
+
+    /// Render this credential only as a sensitive HTTP Bearer authorization value.
+    ///
+    /// The compact credential remains opaque: callers receive neither its raw
+    /// string nor a non-sensitive header representation.
+    pub fn to_sensitive_bearer_header(&self) -> Result<HeaderValue> {
+        if self.compact.is_empty() || !self.compact.bytes().all(|byte| byte.is_ascii_graphic()) {
+            return Err(Error::InvalidToken(
+                "encoded token cannot be represented as an HTTP Bearer credential".into(),
+            ));
+        }
+
+        let mut encoded = Vec::with_capacity("Bearer ".len() + self.compact.len());
+        encoded.extend_from_slice(b"Bearer ");
+        encoded.extend_from_slice(self.compact.as_bytes());
+        let mut value = HeaderValue::from_bytes(&encoded).map_err(|_| {
+            Error::InvalidToken(
+                "encoded token cannot be represented as an HTTP Bearer credential".into(),
+            )
+        })?;
+        value.set_sensitive(true);
+        Ok(value)
     }
 
     pub(crate) fn as_str(&self) -> &str {
@@ -696,6 +720,36 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
 MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAxcARQLozLIqu/CFm6ub89EElhHX
 O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
 -----END PUBLIC KEY-----"#;
+
+    #[test]
+    fn signed_credential_produces_exact_sensitive_bearer_header() {
+        const TOKEN: &str = "header.payload.signature-secret";
+        let credential = SignedP2pCredential::new(TOKEN).unwrap();
+
+        let header = credential.to_sensitive_bearer_header().unwrap();
+
+        assert_eq!(header.as_bytes(), b"Bearer header.payload.signature-secret");
+        assert!(header.is_sensitive());
+        assert!(!format!("{header:?}").contains(TOKEN));
+    }
+
+    #[test]
+    fn signed_credential_rejects_non_graphic_bearer_bytes_without_leaking_them() {
+        for malformed in [
+            "header.payload.signature secret-marker",
+            "header.payload.signature\nsecret-marker",
+            "header.payload.signature-secret-marker-\u{e9}",
+            "header.payload.signature-secret-marker-\u{7f}",
+        ] {
+            let credential = SignedP2pCredential::new(malformed).unwrap();
+            let error = credential.to_sensitive_bearer_header().unwrap_err();
+            let rendered = format!("{error:?} {error}");
+            assert!(!rendered.contains(malformed));
+            assert!(!rendered.contains("secret-marker"));
+        }
+
+        assert!(SignedP2pCredential::new("").is_err());
+    }
 
     #[test]
     fn structural_successor_validation_requires_canonical_rotation_lineage() {

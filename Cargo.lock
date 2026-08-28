@@ -606,6 +606,7 @@ dependencies = [
  "chrono",
  "futures",
  "hickory-resolver",
+ "http",
  "jsonwebtoken",
  "libc",
  "libp2p",

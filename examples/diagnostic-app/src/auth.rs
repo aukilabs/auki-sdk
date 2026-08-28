@@ -138,6 +138,7 @@ fn sign_demo_credential(
         iss: P2P_TOKEN_ISSUER.into(),
         aud: vec![P2P_TOKEN_AUDIENCE.into()],
         sub: "00000000-0000-4000-8000-000000000001".into(),
+        organization_id: None,
         peer_type: None,
         peer_id,
         domain_ids: vec![domain_id.to_string()],

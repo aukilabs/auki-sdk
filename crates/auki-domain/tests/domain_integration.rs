@@ -169,6 +169,7 @@ fn credential_with_subject(
         iss: P2P_TOKEN_ISSUER.into(),
         aud: vec![P2P_TOKEN_AUDIENCE.into()],
         sub: subject_id.to_string(),
+        organization_id: None,
         peer_type: None,
         peer_id: peer_id.to_string(),
         domain_ids: vec![domain_id.to_string()],

@@ -381,6 +381,7 @@ fn signed_peer_response_with_key(
         iss: P2P_TOKEN_ISSUER.to_owned(),
         aud: vec![P2P_TOKEN_AUDIENCE.to_owned()],
         sub: Uuid::from_u128(0xfeed).to_string(),
+        organization_id: None,
         peer_type: Some(principal_kind.to_owned()),
         peer_id: identity.peer_id().to_string(),
         domain_ids: vec![domain_id.to_string()],

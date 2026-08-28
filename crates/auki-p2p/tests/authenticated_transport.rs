@@ -227,6 +227,10 @@ fn verifier_enforces_the_exact_dds_claim_profile() {
             Box::new(|claims| claims.sub = "not-a-uuid".into()),
         ),
         (
+            "invalid organization",
+            Box::new(|claims| claims.organization_id = Some("not-a-uuid".into())),
+        ),
+        (
             "invalid peer id",
             Box::new(|claims| claims.peer_id = "not-a-peer".into()),
         ),
@@ -248,6 +252,12 @@ fn verifier_enforces_the_exact_dds_claim_profile() {
         (
             "noncanonical subject",
             Box::new(|claims| claims.sub = "550E8400-E29B-41D4-A716-446655440000".into()),
+        ),
+        (
+            "noncanonical organization",
+            Box::new(|claims| {
+                claims.organization_id = Some("550E8400-E29B-41D4-A716-446655440000".into())
+            }),
         ),
         (
             "noncanonical domain",
@@ -329,6 +339,15 @@ fn verifier_enforces_the_exact_dds_claim_profile() {
         PeerRole::Robot,
         vec![Uuid::new_v4().to_string()],
         now,
+    );
+    let mut organization_claims = valid_claims.clone();
+    organization_claims.organization_id = Some(Uuid::new_v4().to_string());
+    assert_eq!(
+        verifier
+            .verify(&sign(&organization_claims))
+            .unwrap()
+            .organization_id,
+        organization_claims.organization_id
     );
     let mut unknown_role = serde_json::to_value(&valid_claims).unwrap();
     unknown_role["peer_type"] = serde_json::json!("native_app");
@@ -1359,6 +1378,7 @@ fn claims(
         iss: P2P_TOKEN_ISSUER.into(),
         aud: vec![P2P_TOKEN_AUDIENCE.into()],
         sub: Uuid::new_v4().to_string(),
+        organization_id: None,
         peer_type: Some(role.to_string()),
         peer_id: peer_id.to_string(),
         domain_ids,

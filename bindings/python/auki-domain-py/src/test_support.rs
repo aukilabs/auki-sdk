@@ -74,6 +74,7 @@ fn test_authority(
         iss: P2P_TOKEN_ISSUER.into(),
         aud: vec![P2P_TOKEN_AUDIENCE.into()],
         sub: TEST_SUBJECT.into(),
+        organization_id: None,
         peer_type: None,
         peer_id: identity.inner.peer_id().to_string(),
         domain_ids: vec![domain_id.to_string()],

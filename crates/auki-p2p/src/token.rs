@@ -78,6 +78,13 @@ pub struct P2PAccessClaims {
     pub iss: String,
     pub aud: Vec<String>,
     pub sub: String,
+    /// Organization authority carried by newer DDS credentials.
+    ///
+    /// This remains optional during the rolling upgrade from the original
+    /// P2P token profile. Consumers that require organization-scoped policy
+    /// must reject credentials where it is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer_type: Option<String>,
     pub peer_id: String,
@@ -461,6 +468,9 @@ fn validate_profile(claims: &P2PAccessClaims, now: u64) -> Result<()> {
         ));
     }
     validate_canonical_uuid(&claims.sub, "subject must be a canonical UUID")?;
+    if let Some(organization_id) = &claims.organization_id {
+        validate_canonical_uuid(organization_id, "organization_id must be a canonical UUID")?;
+    }
     let peer_id = PeerId::from_str(&claims.peer_id)
         .map_err(|_| Error::InvalidToken("peer_id must be a libp2p Peer ID".into()))?;
     if peer_id.to_string() != claims.peer_id {

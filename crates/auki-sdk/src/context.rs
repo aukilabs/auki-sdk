@@ -206,7 +206,6 @@ pub struct AukiPeerProtocolContext {
 }
 
 impl AukiPeerProtocolContext {
-    #[allow(dead_code)] // Composed by the AukiPeer runtime in the next slice.
     pub(crate) fn new(
         domain_id: Uuid,
         peer_id: PeerId,
@@ -227,7 +226,6 @@ impl AukiPeerProtocolContext {
 
     /// Fence every cloned route, authorization, and protocol view before
     /// runtime cleanup.
-    #[allow(dead_code)] // Called by the AukiPeer runtime in the next slice.
     pub(crate) fn fence(&self) {
         self.lifecycle.fence();
     }

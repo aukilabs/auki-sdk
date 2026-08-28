@@ -6,7 +6,10 @@ use std::{
 };
 
 use auki_domain::ServedProtocols;
-use auki_p2p::{Multiaddr, PeerId, Protocol, canonicalize_circuit_route, validate_direct_route};
+use auki_p2p::{
+    Multiaddr, PeerId, Protocol, RouteCatalogLimits, canonicalize_circuit_route,
+    validate_direct_route,
+};
 use reqwest::Url;
 
 /// DMS HTTP base used by [`AukiPeerConfig::dev`].
@@ -367,9 +370,15 @@ impl AukiPeerConfig {
         self.relay
     }
 
-    #[allow(dead_code)] // Consumed by the AukiPeer runtime in the next slice.
     pub(crate) fn dms_base(&self) -> &Url {
         &self.dms_base_url
+    }
+
+    pub(crate) fn route_catalog_limits(&self) -> RouteCatalogLimits {
+        RouteCatalogLimits::new(
+            MAX_LOCAL_ROUTES,
+            self.relay.map_or(0, |relay| usize::from(relay.relay_count)),
+        )
     }
 }
 

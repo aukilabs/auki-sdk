@@ -1,7 +1,8 @@
 use auki_sdk::{
-    AukiPeerProtocols, AuthenticatedPeer, AuthenticatedRouteStream, DomainProtocolError,
-    DomainProtocolRegistration, DomainProtocolSpec, DomainProtocolStream, Identity, Peer,
-    PreparedPeer, Session,
+    AukiPeer, AukiPeerAuthorityError, AukiPeerProtocolContext, AukiPeerProtocols,
+    AukiPeerRelayError, AukiPeerShutdownError, AukiPeerStartError, AukiPeerStatus,
+    AuthenticatedPeer, AuthenticatedRouteStream, DomainProtocolError, DomainProtocolRegistration,
+    DomainProtocolSpec, DomainProtocolStream, Identity, Peer, PreparedPeer, Session,
 };
 
 fn register_custom_protocol(protocols: &AukiPeerProtocols) {
@@ -25,4 +26,13 @@ fn facade_reexports_the_complete_safe_custom_protocol_surface() {
     let _registration: Option<DomainProtocolRegistration> = None;
     let _error: Option<DomainProtocolError> = None;
     let _stream: Option<AuthenticatedRouteStream> = None;
+
+    let _start = AukiPeer::start;
+    let _shutdown = AukiPeer::shutdown;
+    let _status: fn(&AukiPeer) -> AukiPeerStatus = AukiPeer::status;
+    let _context: fn(&AukiPeer) -> AukiPeerProtocolContext = AukiPeer::protocol_context;
+    let _start_error: Option<AukiPeerStartError> = None;
+    let _shutdown_error: Option<AukiPeerShutdownError> = None;
+    let _authority_error: Option<AukiPeerAuthorityError> = None;
+    let _relay_error: Option<AukiPeerRelayError> = None;
 }

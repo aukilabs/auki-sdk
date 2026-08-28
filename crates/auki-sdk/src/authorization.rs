@@ -19,7 +19,6 @@ pub struct AukiPeerAuthorizationSnapshot {
 }
 
 impl AukiPeerAuthorizationSnapshot {
-    #[allow(dead_code)] // Produced by the AuthoritySupervisor adapter in the next slice.
     pub(crate) fn new(
         credential_revision: u64,
         expires_at: DateTime<Utc>,

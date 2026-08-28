@@ -25,8 +25,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::relay::{
-    RelayAuthorizationError, RelayAuthorizationProvider, RelayAuthorizationSnapshot,
+use crate::{
+    authorization::{
+        AukiPeerAuthorizationError, AukiPeerAuthorizationSnapshot, AuthorizationSnapshotSource,
+    },
+    relay::{RelayAuthorizationError, RelayAuthorizationProvider, RelayAuthorizationSnapshot},
 };
 
 #[derive(Clone, Debug)]
@@ -559,6 +562,37 @@ impl AuthorityInner {
         }
     }
 
+    fn public_authorization_snapshot(
+        &self,
+    ) -> Result<AukiPeerAuthorizationSnapshot, AukiPeerAuthorizationError> {
+        self.expire_if_due();
+        let snapshot = {
+            let state = self.state.read();
+            if state.stopped {
+                return Err(AukiPeerAuthorizationError::Stopped);
+            }
+            let Some(current) = state.current.as_ref() else {
+                return Err(AukiPeerAuthorizationError::Unavailable);
+            };
+            if !current.available {
+                return Err(if current.credential_expires_at <= Utc::now() {
+                    AukiPeerAuthorizationError::Expired
+                } else {
+                    AukiPeerAuthorizationError::Unavailable
+                });
+            }
+            AukiPeerAuthorizationSnapshot::new(
+                current.credential_revision,
+                current.credential_expires_at,
+                current.claims.clone(),
+            )
+        };
+        self.expire_if_due();
+        let state = self.state.read();
+        validate_public_snapshot_fence(&state, snapshot.credential_revision(), Utc::now())?;
+        Ok(snapshot)
+    }
+
     fn refresh_deadline(
         &self,
         rejected_revision: u64,
@@ -886,6 +920,29 @@ impl AuthorityInner {
     }
 }
 
+fn validate_public_snapshot_fence(
+    state: &AuthorityState,
+    snapshot_revision: u64,
+    now: DateTime<Utc>,
+) -> Result<(), AukiPeerAuthorizationError> {
+    if state.stopped {
+        return Err(AukiPeerAuthorizationError::Stopped);
+    }
+    let Some(current) = state.current.as_ref() else {
+        return Err(AukiPeerAuthorizationError::Unavailable);
+    };
+    if current.credential_revision != snapshot_revision {
+        return Err(AukiPeerAuthorizationError::Unavailable);
+    }
+    if current.credential_expires_at <= now {
+        return Err(AukiPeerAuthorizationError::Expired);
+    }
+    if !current.available {
+        return Err(AukiPeerAuthorizationError::Unavailable);
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 struct PullSchedule {
     credential_revision: u64,
@@ -994,6 +1051,19 @@ impl RelayAuthorizationProvider for AuthorityRelayAuthorization {
             .refresh_after_unauthorized(rejected_revision)
             .await
             .map_err(|_| RelayAuthorizationError)
+    }
+}
+
+struct AuthorityPublicAuthorization {
+    inner: Weak<AuthorityInner>,
+}
+
+impl AuthorizationSnapshotSource for AuthorityPublicAuthorization {
+    fn current(&self) -> Result<AukiPeerAuthorizationSnapshot, AukiPeerAuthorizationError> {
+        self.inner
+            .upgrade()
+            .ok_or(AukiPeerAuthorizationError::Stopped)?
+            .public_authorization_snapshot()
     }
 }
 
@@ -1122,6 +1192,12 @@ impl AuthoritySupervisor {
 
     pub(crate) fn relay_authorization(&self) -> Arc<dyn RelayAuthorizationProvider> {
         Arc::new(AuthorityRelayAuthorization {
+            inner: Arc::downgrade(&self.inner),
+        })
+    }
+
+    pub(crate) fn public_authorization(&self) -> Arc<dyn AuthorizationSnapshotSource> {
+        Arc::new(AuthorityPublicAuthorization {
             inner: Arc::downgrade(&self.inner),
         })
     }
@@ -1487,6 +1563,76 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
             retry_initial: Duration::from_millis(20),
             retry_max: Duration::from_millis(50),
         }
+    }
+
+    fn current_authority_for_public_fence(
+        credential_revision: u64,
+        credential_expires_at: DateTime<Utc>,
+        available: bool,
+    ) -> CurrentAuthority {
+        let mut authorization = HeaderValue::from_static("Bearer public-fence-test");
+        authorization.set_sensitive(true);
+        CurrentAuthority {
+            credential_revision,
+            claims: P2PAccessClaims {
+                token_type: P2P_TOKEN_TYPE.into(),
+                iss: P2P_TOKEN_ISSUER.into(),
+                aud: vec![P2P_TOKEN_AUDIENCE.into()],
+                sub: Uuid::new_v4().to_string(),
+                organization_id: None,
+                peer_type: Some("robot".into()),
+                peer_id: identity().peer_id().to_string(),
+                domain_ids: vec![Uuid::new_v4().to_string()],
+                scopes: vec![P2P_TOKEN_SCOPE.into()],
+                application: None,
+                iat: unix_time(),
+                nbf: None,
+                exp: u64::MAX,
+            },
+            authorization,
+            credential_expires_at,
+            renew_at: None,
+            available,
+        }
+    }
+
+    #[test]
+    fn public_snapshot_second_fence_classifies_stop_replacement_and_expiry_exactly() {
+        let now = Utc::now();
+        let future = now + chrono::Duration::minutes(5);
+        let stopped = AuthorityState {
+            stopped: true,
+            installed_keys: None,
+            current: Some(current_authority_for_public_fence(1, future, true)),
+        };
+        assert_eq!(
+            validate_public_snapshot_fence(&stopped, 1, now),
+            Err(AukiPeerAuthorizationError::Stopped)
+        );
+
+        let replaced = AuthorityState {
+            stopped: false,
+            installed_keys: None,
+            current: Some(current_authority_for_public_fence(2, future, true)),
+        };
+        assert_eq!(
+            validate_public_snapshot_fence(&replaced, 1, now),
+            Err(AukiPeerAuthorizationError::Unavailable)
+        );
+
+        let expired = AuthorityState {
+            stopped: false,
+            installed_keys: None,
+            current: Some(current_authority_for_public_fence(
+                1,
+                now - chrono::Duration::seconds(1),
+                false,
+            )),
+        };
+        assert_eq!(
+            validate_public_snapshot_fence(&expired, 1, now),
+            Err(AukiPeerAuthorizationError::Expired)
+        );
     }
 
     fn prepared(

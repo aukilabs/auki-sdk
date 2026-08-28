@@ -44,8 +44,8 @@ rust-version = "1.89"
 
 [dependencies]
 anyhow = "1"
-auki-auth = { git = "https://github.com/aukilabs/auki-sdk", rev = "027a1c76224079036fef7f4e3d4c8353a0001bd0" }
-auki-sdk = { git = "https://github.com/aukilabs/auki-sdk", rev = "027a1c76224079036fef7f4e3d4c8353a0001bd0" }
+auki-auth = { git = "https://github.com/aukilabs/auki-sdk", rev = "9da1029292bd2c17a22892272af3700fee4e5a6a" }
+auki-sdk = { git = "https://github.com/aukilabs/auki-sdk", rev = "9da1029292bd2c17a22892272af3700fee4e5a6a" }
 futures = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
 uuid = "1"

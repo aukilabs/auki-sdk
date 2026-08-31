@@ -25,12 +25,13 @@ Build the package with:
 wasm-pack build examples/portable-echo/web --target web --out-dir pkg-web --dev
 ```
 
-## Live browser/native proof
+## Live direction proof
 
-The protected smoke test starts the browser as the echo server, then runs the
-native adapter as its client through the relay advertised by DMS. It verifies
-the exact payload, both authenticated Peer IDs, relayed transport, and clean
-shutdown on each side.
+The protected smoke test starts two ephemeral peers in separate tabs, proves
+browser A to browser B and browser B to browser A, then runs the native adapter
+as a client to browser A. It verifies exact payloads, authenticated Peer IDs,
+relayed transport, and clean shutdown on every side. Browser-to-native is added
+after the native facade exposes its confirmed WSS reachability.
 
 Install its local tooling once:
 

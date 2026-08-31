@@ -24,13 +24,17 @@ const credentials = requiredCredentials();
 const childEnvironment = sanitizedEnvironment(process.env);
 clearSensitiveEnvironment(process.env);
 const { chromium } = await import("playwright");
-const message = "hello from one shared Rust protocol";
+const nativeMessage = "hello from one shared Rust protocol";
 let staticServer;
 let browser;
-let page;
+let browserContext;
+let firstPage;
+let secondPage;
 let native;
 let nativeStateDir;
-let browserPeerStarted = false;
+let browserStartups = [];
+let firstPeerStarted = false;
+let secondPeerStarted = false;
 
 try {
   await buildWasmPackage(childEnvironment);
@@ -45,42 +49,72 @@ try {
     launchOptions.channel = childEnvironment.AUKI_PLAYWRIGHT_CHANNEL;
   }
   browser = await chromium.launch(launchOptions);
-  page = await browser.newPage();
-  await page.goto(`http://127.0.0.1:${address.port}/`, {
-    waitUntil: "load",
-  });
-  await page.waitForFunction(() => typeof globalThis.echoHarness?.start === "function");
+  browserContext = await browser.newContext();
+  firstPage = await browserContext.newPage();
+  secondPage = await browserContext.newPage();
+  await Promise.all([
+    firstPage.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: "load" }),
+    secondPage.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: "load" }),
+  ]);
+  await Promise.all([
+    firstPage.waitForFunction(() => typeof globalThis.echoHarness?.start === "function"),
+    secondPage.waitForFunction(() => typeof globalThis.echoHarness?.start === "function"),
+  ]);
 
-  const browserPeer = await withTimeout(
-    page.evaluate(
-      async ({ email, password, domainId }) =>
-        globalThis.echoHarness.start({ email, password, domainId }),
-      credentials,
-    ),
+  browserStartups = [
+    startBrowserPeer(firstPage, credentials).then((peer) => {
+      firstPeerStarted = true;
+      return peer;
+    }),
+    startBrowserPeer(secondPage, credentials).then((peer) => {
+      secondPeerStarted = true;
+      return peer;
+    }),
+  ];
+  const startupResults = await withTimeout(
+    Promise.allSettled(browserStartups),
     START_TIMEOUT_MS,
-    "starting the browser peer",
+    "starting two browser peers",
   );
-  browserPeerStarted = true;
-  assert.equal(browserPeer.domainId, credentials.domainId);
-  assert(browserPeer.wssRoute.includes("/wss/"));
-  assert(browserPeer.tcpRoute, "the selected relay did not advertise a TCP route");
+  const [firstPeer, secondPeer] = requireStartedPeers(startupResults);
+  assert.notEqual(firstPeer.peerId, secondPeer.peerId);
+  assertBrowserPeer(firstPeer, credentials.domainId);
+  assertBrowserPeer(secondPeer, credentials.domainId);
+  assert.equal(relayBase(firstPeer.wssRoute), relayBase(secondPeer.wssRoute));
+
+  await proveBrowserEcho(
+    firstPage,
+    firstPeer,
+    secondPage,
+    secondPeer,
+    "hello from browser A",
+  );
+  await proveBrowserEcho(
+    secondPage,
+    secondPeer,
+    firstPage,
+    firstPeer,
+    "hello from browser B",
+  );
+
+  assert(firstPeer.tcpRoute, "the selected relay did not advertise a TCP route");
   assert(
-    browserPeer.tcpRoute.endsWith(`/p2p-circuit/p2p/${browserPeer.peerId}`),
+    firstPeer.tcpRoute.endsWith(`/p2p-circuit/p2p/${firstPeer.peerId}`),
     "the browser TCP route does not target its Peer ID",
   );
 
   const serve = withTimeout(
-    page.evaluate(() => globalThis.echoHarness.serveOnce()),
+    firstPage.evaluate(() => globalThis.echoHarness.serveOnce()),
     ECHO_TIMEOUT_MS,
     "serving the browser echo request",
   );
   native = runNativeClient({
     binary: nativeBinary,
-    browserPeerId: browserPeer.peerId,
-    browserRoute: browserPeer.tcpRoute,
+    browserPeerId: firstPeer.peerId,
+    browserRoute: firstPeer.tcpRoute,
     environment: childEnvironment,
     stateDir: nativeStateDir,
-    message,
+    message: nativeMessage,
   });
   const nativeCompletion = withTimeout(
     native.result,
@@ -88,21 +122,25 @@ try {
     "waiting for the native peer to stop",
   );
   const [receipt, nativeResult] = await Promise.all([serve, nativeCompletion]);
-  assertNativeSucceeded(nativeResult, browserPeer.peerId, message.length);
+  assertNativeSucceeded(nativeResult, firstPeer.peerId, nativeMessage.length);
 
   const nativePeerId = extractRequiredLine(nativeResult.stdout, "PEER_ID");
   assert.equal(receipt.remotePeerId, nativePeerId);
-  assert.equal(Buffer.from(receipt.payload).toString("utf8"), message);
+  assert.equal(Buffer.from(receipt.payload).toString("utf8"), nativeMessage);
 
   await withTimeout(
-    page.evaluate(() => globalThis.echoHarness.shutdown()),
+    Promise.all([
+      firstPage.evaluate(() => globalThis.echoHarness.shutdown()),
+      secondPage.evaluate(() => globalThis.echoHarness.shutdown()),
+    ]),
     START_TIMEOUT_MS,
-    "shutting down the browser peer",
+    "shutting down the browser peers",
   );
-  browserPeerStarted = false;
+  firstPeerStarted = false;
+  secondPeerStarted = false;
 
   console.log(
-    `BROWSER_NATIVE_ECHO_OK browser_peer=${browserPeer.peerId} native_peer=${nativePeerId} bytes=${message.length}`,
+    `PORTABLE_ECHO_MATRIX_OK browser_a=${firstPeer.peerId} browser_b=${secondPeer.peerId} native=${nativePeerId} directions=browser-a-to-browser-b,browser-b-to-browser-a,native-to-browser-a`,
   );
 } catch (error) {
   throw redactError(error, credentials);
@@ -110,11 +148,23 @@ try {
   if (native) {
     await terminateChild(native.child);
   }
-  if (page && browserPeerStarted) {
+  await withTimeout(
+    Promise.allSettled(browserStartups),
+    CLEANUP_TIMEOUT_MS,
+    "settling browser peer startup before cleanup",
+  ).catch(() => {});
+  if (firstPage && firstPeerStarted) {
     await withTimeout(
-      page.evaluate(() => globalThis.echoHarness.shutdown()),
+      firstPage.evaluate(() => globalThis.echoHarness.shutdown()),
       CLEANUP_TIMEOUT_MS,
-      "cleaning up the browser peer",
+      "cleaning up browser peer A",
+    ).catch(() => {});
+  }
+  if (secondPage && secondPeerStarted) {
+    await withTimeout(
+      secondPage.evaluate(() => globalThis.echoHarness.shutdown()),
+      CLEANUP_TIMEOUT_MS,
+      "cleaning up browser peer B",
     ).catch(() => {});
   }
   if (browser) {
@@ -140,6 +190,58 @@ function requiredCredentials() {
     password: process.env.AUKI_PASSWORD,
     domainId: process.env.AUKI_DOMAIN_ID,
   };
+}
+
+async function startBrowserPeer(page, input) {
+  return page.evaluate(
+    async ({ email, password, domainId }) =>
+      globalThis.echoHarness.start({ email, password, domainId }),
+    input,
+  );
+}
+
+function requireStartedPeers(results) {
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure) {
+    throw failure.reason;
+  }
+  return results.map((result) => result.value);
+}
+
+function assertBrowserPeer(peer, expectedDomainId) {
+  assert.equal(peer.domainId, expectedDomainId);
+  assert.equal(peer.protocol, "/example/echo/1.0.0");
+  assert(peer.wssRoute.includes("/wss/"));
+  assert(
+    peer.wssRoute.endsWith(`/p2p-circuit/p2p/${peer.peerId}`),
+    "the browser WSS route does not target its Peer ID",
+  );
+}
+
+function relayBase(route) {
+  const base = route.replace(/\/p2p-circuit\/p2p\/[^/]+$/, "");
+  assert.notEqual(base, route, "browser route is missing its circuit target");
+  return base;
+}
+
+async function proveBrowserEcho(senderPage, sender, receiverPage, receiver, message) {
+  const payload = Array.from(Buffer.from(message));
+  const result = await withTimeout(
+    Promise.all([
+      receiverPage.evaluate(() => globalThis.echoHarness.serveOnce()),
+      senderPage.evaluate(
+        ({ peer, bytes }) => globalThis.echoHarness.sendEcho({ ...peer, payload: bytes }),
+        { peer: receiver, bytes: payload },
+      ),
+    ]),
+    ECHO_TIMEOUT_MS,
+    `echoing ${sender.peerId} to ${receiver.peerId}`,
+  );
+  const [served, echoed] = result;
+  assert.equal(served.remotePeerId, sender.peerId);
+  assert.deepEqual(served.payload, payload);
+  assert.equal(echoed.remotePeerId, receiver.peerId);
+  assert.deepEqual(echoed.payload, payload);
 }
 
 function sanitizedEnvironment(source) {

@@ -699,6 +699,7 @@ name = "auki-protocols"
 version = "0.1.0"
 dependencies = [
  "auki-datatypes",
+ "auki-hash",
  "auki-jcs",
  "auki-manifests",
  "auki-p2p",

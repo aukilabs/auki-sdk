@@ -17,6 +17,17 @@ use futures::{AsyncReadExt, AsyncWriteExt};
 use prost::Message;
 use thiserror::Error;
 
+#[cfg(feature = "blob-endpoint")]
+mod endpoint;
+
+#[cfg(feature = "blob-endpoint")]
+pub use endpoint::{
+    BlobClient, BlobEndpoint, BlobEndpointError, BlobFetchReceipt, BlobOperation, BlobProvider,
+    BlobProviderError, BlobProviderFuture, CLOSE_TIMEOUT, FETCH_TIMEOUT,
+    MAX_CONCURRENCY as ENDPOINT_MAX_CONCURRENCY, OPEN_TIMEOUT, ProvidedBlobChunk, ROUND_TIMEOUT,
+    protocol_spec,
+};
+
 /// Exact authenticated blob 0.1.0 protocol identifier.
 pub const ID: &str = crate::ids::BLOBS_V0_1_0;
 

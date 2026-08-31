@@ -36,6 +36,13 @@ registry = [
     "dep:serde_json",
     "dep:thiserror",
 ]
+registry-endpoint = [
+    "registry",
+    "dep:auki-hash",
+    "dep:auki-registry",
+    "dep:auki-sdk",
+    "dep:futures-timer",
+]
 blob = [
     "dep:auki-datatypes",
     "dep:auki-registry",
@@ -44,6 +51,7 @@ blob = [
     "dep:serde",
     "dep:thiserror",
 ]
+blob-endpoint = ["blob", "dep:auki-sdk", "dep:futures-timer"]
 message = [
     "dep:auki-datatypes",
     "dep:auki-registry",
@@ -62,6 +70,7 @@ stream = [
 
 [dependencies]
 auki-datatypes = { path = "../auki-datatypes", optional = true }
+auki-hash = { path = "../auki-hash", optional = true }
 auki-jcs = { path = "../auki-jcs", optional = true }
 auki-manifests = { path = "../auki-manifests", optional = true }
 auki-registry = { path = "../auki-registry", optional = true }

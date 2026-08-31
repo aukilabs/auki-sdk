@@ -1,0 +1,16 @@
+{
+  "name": "@aukilabs/portable-echo-web-smoke",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:wasm": "wasm-pack build . --target web --out-dir pkg-web --dev -- --locked",
+    "smoke:dev": "node scripts/smoke_browser_native_echo.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Auki portable echo browser peer</title>
+  </head>
+  <body>
+    <main id="status">loading portable echo</main>
+    <script type="module">
+      import init, {
+        BrowserEchoServer,
+      } from "/pkg-web/auki_portable_echo_web.js";
+
+      const initialized = init();
+      let server;
+
+      globalThis.echoHarness = Object.freeze({
+        async start({ email, password, domainId }) {
+          await initialized;
+          if (server) {
+            throw new Error("browser echo server is already running");
+          }
+          server = await BrowserEchoServer.startDev(email, password, domainId);
+          document.querySelector("#status").textContent = "ready";
+          return {
+            peerId: server.peerId,
+            domainId: server.domainId,
+            wssRoute: server.wssRoute,
+            tcpRoute: server.tcpRoute,
+          };
+        },
+
+        async serveOnce() {
+          if (!server) {
+            throw new Error("browser echo server is not running");
+          }
+          const receipt = await server.serveOnce();
+          try {
+            return {
+              remotePeerId: receipt.remotePeerId,
+              payload: Array.from(receipt.payload),
+            };
+          } finally {
+            receipt.free();
+          }
+        },
+
+        async shutdown() {
+          const running = server;
+          server = undefined;
+          if (!running) {
+            return;
+          }
+          try {
+            await running.shutdown();
+          } finally {
+            running.free();
+            document.querySelector("#status").textContent = "stopped";
+          }
+        },
+      });
+    </script>
+  </body>
+</html>

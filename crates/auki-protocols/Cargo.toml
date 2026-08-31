@@ -30,6 +30,7 @@ catalog = [
     "dep:serde_json",
     "dep:thiserror",
 ]
+catalog-endpoint = ["catalog", "dep:auki-sdk", "dep:futures-timer"]
 registry = [
     "dep:futures",
     "dep:serde",

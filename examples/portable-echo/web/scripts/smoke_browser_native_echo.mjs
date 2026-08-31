@@ -25,6 +25,7 @@ const childEnvironment = sanitizedEnvironment(process.env);
 clearSensitiveEnvironment(process.env);
 const { chromium } = await import("playwright");
 const nativeMessage = "hello from one shared Rust protocol";
+const browserToNativeMessage = "hello back from browser A";
 let staticServer;
 let browser;
 let browserContext;
@@ -116,17 +117,75 @@ try {
     stateDir: nativeStateDir,
     message: nativeMessage,
   });
-  const nativeCompletion = withTimeout(
-    native.result,
+  const nativeWaiting = waitForChildOutput(
+    native,
+    /^WAITING_FOR_PEER$/m,
     ECHO_TIMEOUT_MS,
-    "waiting for the native peer to stop",
+    "waiting for the native peer to become bidirectional",
   );
-  const [receipt, nativeResult] = await Promise.all([serve, nativeCompletion]);
-  assertNativeSucceeded(nativeResult, firstPeer.peerId, nativeMessage.length);
+  const [receipt, nativeOutput] = await Promise.all([serve, nativeWaiting]);
+  assertNativeEchoOutput(nativeOutput, firstPeer.peerId, nativeMessage.length);
 
-  const nativePeerId = extractRequiredLine(nativeResult.stdout, "PEER_ID");
+  const nativePeerId = extractRequiredLine(nativeOutput, "PEER_ID");
+  const nativeTcpRoute = extractRequiredLine(nativeOutput, "RELAY_ROUTE");
+  const nativeWssRoute = extractRequiredLine(nativeOutput, "RELAY_WSS_ROUTE");
+  const nativePeerCard = JSON.parse(extractRequiredLine(nativeOutput, "PEER_CARD"));
+  assert.equal(nativePeerCard.version, 1);
+  assert.equal(nativePeerCard.domainId, credentials.domainId);
+  assert.equal(nativePeerCard.peerId, nativePeerId);
+  assert.deepEqual(nativePeerCard.protocols, [firstPeer.protocol]);
+  assert.deepEqual(nativePeerCard.routes, {
+    tcp: nativeTcpRoute,
+    wss: nativeWssRoute,
+  });
+  assert(nativeWssRoute.includes("/wss/"));
+  assert(
+    nativeWssRoute.endsWith(`/p2p-circuit/p2p/${nativePeerId}`),
+    "the native WSS route does not target its Peer ID",
+  );
+  assert.equal(relayBase(nativeWssRoute), relayBase(firstPeer.wssRoute));
   assert.equal(receipt.remotePeerId, nativePeerId);
   assert.equal(Buffer.from(receipt.payload).toString("utf8"), nativeMessage);
+
+  const browserToNativePayload = Array.from(Buffer.from(browserToNativeMessage));
+  const browserReceipt = await withTimeout(
+    firstPage.evaluate(
+      ({ domainId, peerId, protocol, payload }) =>
+        globalThis.echoHarness.sendEcho({ domainId, peerId, protocol, payload }),
+      {
+        domainId: nativePeerCard.domainId,
+        peerId: nativePeerCard.peerId,
+        protocol: nativePeerCard.protocols[0],
+        payload: browserToNativePayload,
+      },
+    ),
+    ECHO_TIMEOUT_MS,
+    "echoing browser A to the native peer",
+  );
+  assert.equal(browserReceipt.remotePeerId, nativePeerId);
+  assert.deepEqual(browserReceipt.payload, browserToNativePayload);
+  await waitForChildOutput(
+    native,
+    new RegExp(
+      `^ECHO_SERVED remote_peer=${firstPeer.peerId} bytes=${browserToNativeMessage.length}$`,
+      "m",
+    ),
+    ECHO_TIMEOUT_MS,
+    "waiting for the native peer to report the browser echo",
+  );
+
+  native.child.kill("SIGINT");
+  const nativeResult = await withTimeout(
+    native.result,
+    CLEANUP_TIMEOUT_MS,
+    "stopping the native peer",
+  );
+  assertNativeSucceeded(
+    nativeResult,
+    firstPeer.peerId,
+    nativeMessage.length,
+    browserToNativeMessage.length,
+  );
 
   await withTimeout(
     Promise.all([
@@ -140,7 +199,7 @@ try {
   secondPeerStarted = false;
 
   console.log(
-    `PORTABLE_ECHO_MATRIX_OK browser_a=${firstPeer.peerId} browser_b=${secondPeer.peerId} native=${nativePeerId} directions=browser-a-to-browser-b,browser-b-to-browser-a,native-to-browser-a`,
+    `PORTABLE_ECHO_MATRIX_OK browser_a=${firstPeer.peerId} browser_b=${secondPeer.peerId} native=${nativePeerId} directions=browser-a-to-browser-b,browser-b-to-browser-a,native-to-browser-a,browser-a-to-native`,
   );
 } catch (error) {
   throw redactError(error, credentials);
@@ -381,6 +440,7 @@ function runNativeClient({
         AUKI_PASSWORD: credentials.password,
         AUKI_DOMAIN_ID: credentials.domainId,
         AUKI_ECHO_MESSAGE: message,
+        AUKI_KEEP_RUNNING: "1",
         AUKI_REMOTE_PEER_ID: browserPeerId,
         AUKI_REMOTE_ROUTE: browserRoute,
         AUKI_STATE_DIR: stateDir,
@@ -407,7 +467,7 @@ function runNativeClient({
       }),
     );
   });
-  return { child, result };
+  return { child, result, stdout };
 }
 
 function boundedOutput() {
@@ -445,20 +505,74 @@ function boundedOutput() {
   };
 }
 
-function assertNativeSucceeded(result, browserPeerId, expectedBytes) {
+function assertNativeEchoOutput(output, browserPeerId, expectedBytes) {
+  const echo = output.match(/^ECHO_OK remote_peer=(\S+) relayed=(\S+) bytes=(\d+)$/m);
+  assert(echo, `native peer did not report ECHO_OK\n${output}`);
+  assert.equal(echo[1], browserPeerId);
+  assert.equal(echo[2], "true");
+  assert.equal(Number(echo[3]), expectedBytes);
+}
+
+function assertNativeSucceeded(
+  result,
+  browserPeerId,
+  outboundBytes,
+  inboundBytes,
+) {
   if (result.code !== 0) {
     throw new Error(
       `native peer exited with code ${result.code} signal ${result.signal ?? "none"}\n${result.stdout}\n${result.stderr}`,
     );
   }
   assert.match(result.stdout, /^STOPPED$/m);
-  const echo = result.stdout.match(
-    /^ECHO_OK remote_peer=(\S+) relayed=(\S+) bytes=(\d+)$/m,
+  assertNativeEchoOutput(result.stdout, browserPeerId, outboundBytes);
+  const served = result.stdout.match(
+    /^ECHO_SERVED remote_peer=(\S+) bytes=(\d+)$/m,
   );
-  assert(echo, `native peer did not report ECHO_OK\n${result.stdout}`);
-  assert.equal(echo[1], browserPeerId);
-  assert.equal(echo[2], "true");
-  assert.equal(Number(echo[3]), expectedBytes);
+  assert(served, `native peer did not report ECHO_SERVED\n${result.stdout}`);
+  assert.equal(served[1], browserPeerId);
+  assert.equal(Number(served[2]), inboundBytes);
+}
+
+function waitForChildOutput(nativeProcess, pattern, timeoutMs, description) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      nativeProcess.child.stdout.off("data", inspect);
+      nativeProcess.child.off("close", closed);
+    };
+    const finish = (operation) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      operation();
+    };
+    const inspect = () => {
+      const output = nativeProcess.stdout.toString();
+      if (pattern.test(output)) {
+        finish(() => resolve(output));
+      }
+    };
+    const closed = (code, signal) => {
+      const output = nativeProcess.stdout.toString();
+      finish(() =>
+        reject(
+          new Error(
+            `${description}: native peer exited first (code=${code}, signal=${signal ?? "none"})\n${output}`,
+          ),
+        ),
+      );
+    };
+    const timer = setTimeout(() => {
+      finish(() => reject(new Error(`${description} timed out after ${timeoutMs}ms`)));
+    }, timeoutMs);
+    nativeProcess.child.stdout.on("data", inspect);
+    nativeProcess.child.once("close", closed);
+    inspect();
+  });
 }
 
 function extractRequiredLine(output, name) {

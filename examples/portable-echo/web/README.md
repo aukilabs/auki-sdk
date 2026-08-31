@@ -55,11 +55,11 @@ npm run build
 
 ## Live direction proof
 
-The protected smoke test starts two ephemeral peers in separate tabs, proves
-browser A to browser B and browser B to browser A, then runs the native adapter
-as a client to browser A. It verifies exact payloads, authenticated Peer IDs,
-relayed transport, and clean shutdown on every side. Browser-to-native is added
-after the native facade exposes its confirmed WSS reachability.
+The protected smoke test starts two ephemeral peers in separate tabs and one
+native peer. It proves browser A to browser B, browser B to browser A, native to
+browser A, and browser A back to the same native peer. It verifies exact
+payloads, authenticated Peer IDs, confirmed TCP/WSS relay reachability, and
+clean shutdown on every side.
 
 Install Chromium for the protected smoke once if it is not already available:
 

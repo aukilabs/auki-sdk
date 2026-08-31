@@ -1,13 +1,18 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    future::pending,
+    sync::{Arc, Mutex},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use auki_p2p::{
-    ApplicationProtocol, DdsTokenVerifier, DdsVerificationKeys, DomainAuthority, Error, ExactRoute,
-    Identity, Node, NodeObservationEvent, NodeObservationStatus, P2PAccessClaims,
-    P2pCredentialError, PeerDisappearanceReason, PeerRole, ProtocolSpec, SessionRequirements,
-    SignedApplicationMetadata, SignedP2pCredential, DOMAIN_SERVER_MAX_DOMAINS, P2P_TOKEN_AUDIENCE,
-    P2P_TOKEN_CLOCK_SKEW, P2P_TOKEN_ISSUER, P2P_TOKEN_MAX_APPLICATION_NAME_BYTES,
-    P2P_TOKEN_MAX_APPLICATION_VERSION_BYTES, P2P_TOKEN_MAX_PEER_TYPE_BYTES, P2P_TOKEN_MAX_SCOPES,
-    P2P_TOKEN_MAX_SCOPE_BYTES, P2P_TOKEN_SCOPE, P2P_TOKEN_TTL, P2P_TOKEN_TYPE,
+    ApplicationProtocol, ApplicationProtocolSpec, DdsTokenVerifier, DdsVerificationKeys,
+    DomainAuthority, Error, ExactRoute, Identity, Node, NodeObservationEvent,
+    NodeObservationStatus, P2PAccessClaims, P2pCredentialError, PeerDisappearanceReason, PeerRole,
+    SessionRequirements, SignedApplicationMetadata, SignedP2pCredential, DOMAIN_SERVER_MAX_DOMAINS,
+    P2P_TOKEN_AUDIENCE, P2P_TOKEN_CLOCK_SKEW, P2P_TOKEN_ISSUER,
+    P2P_TOKEN_MAX_APPLICATION_NAME_BYTES, P2P_TOKEN_MAX_APPLICATION_VERSION_BYTES,
+    P2P_TOKEN_MAX_PEER_TYPE_BYTES, P2P_TOKEN_MAX_SCOPES, P2P_TOKEN_MAX_SCOPE_BYTES,
+    P2P_TOKEN_SCOPE, P2P_TOKEN_TTL, P2P_TOKEN_TYPE,
 };
 use futures::io::{AsyncReadExt, AsyncWriteExt};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
@@ -851,19 +856,23 @@ async fn one_runtime_supervises_multiple_independent_authenticated_protocols() {
         ("/auki-p2p/runtime-alpha/1", b"alpha".as_slice()),
         ("/auki-p2p/runtime-beta/1", b"beta".as_slice()),
     ] {
-        let spec = ProtocolSpec::new(
-            ApplicationProtocol::new(name).unwrap(),
-            SessionRequirements::new(&domain_id).unwrap(),
-        );
+        let spec = ApplicationProtocolSpec::new(ApplicationProtocol::new(name).unwrap(), 64, 1_024)
+            .unwrap();
         servers.push(
             robot
-                .serve(spec, &shutdown, move |mut stream| async move {
-                    let mut request = [0_u8; 1];
-                    stream.read_exact(&mut request).await.unwrap();
-                    assert_eq!(request, [1]);
-                    stream.write_all(response).await.unwrap();
-                    stream.flush().await.unwrap();
-                })
+                .serve(
+                    spec,
+                    SessionRequirements::new(&domain_id).unwrap(),
+                    &shutdown,
+                    move |mut stream| async move {
+                        assert_eq!(stream.max_frame_bytes(), 1_024);
+                        let mut request = [0_u8; 1];
+                        stream.read_exact(&mut request).await.unwrap();
+                        assert_eq!(request, [1]);
+                        stream.write_all(response).await.unwrap();
+                        stream.flush().await.unwrap();
+                    },
+                )
                 .unwrap(),
         );
     }
@@ -894,6 +903,84 @@ async fn one_runtime_supervises_multiple_independent_authenticated_protocols() {
     for server in servers {
         server.shutdown().await.unwrap();
     }
+    robot.shutdown().await.unwrap();
+    compute.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn managed_protocol_server_preserves_registration_and_shutdown_barriers() {
+    struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+
+    let domain_id = Uuid::new_v4().to_string();
+    let robot = listening_node();
+    let compute = listening_node();
+    install_current_token(&robot, PeerRole::Robot, vec![domain_id.clone()]).await;
+    install_current_token(&compute, PeerRole::Compute, vec![domain_id.clone()]).await;
+    let robot_peer_id = robot.peer_id();
+    let robot_address = listen_address(&robot).await;
+    let protocol = ApplicationProtocol::new("/example/managed/1.0.0").unwrap();
+    let spec = ApplicationProtocolSpec::new(protocol.clone(), 1, 2_048).unwrap();
+    let requirements = SessionRequirements::new(&domain_id).unwrap();
+    let shutdown = CancellationToken::new();
+    let (started_sender, started_receiver) = tokio::sync::oneshot::channel();
+    let (dropped_sender, mut dropped_receiver) = tokio::sync::oneshot::channel();
+    let started_sender = Arc::new(Mutex::new(Some(started_sender)));
+    let dropped_sender = Arc::new(Mutex::new(Some(dropped_sender)));
+    let server = robot
+        .serve(spec.clone(), requirements.clone(), &shutdown, {
+            let started_sender = Arc::clone(&started_sender);
+            let dropped_sender = Arc::clone(&dropped_sender);
+            move |stream| {
+                let started_sender = Arc::clone(&started_sender);
+                let dropped_sender = Arc::clone(&dropped_sender);
+                async move {
+                    let _stream = stream;
+                    let _drop_signal = DropSignal(dropped_sender.lock().unwrap().take());
+                    if let Some(sender) = started_sender.lock().unwrap().take() {
+                        let _ = sender.send(());
+                    }
+                    pending::<()>().await;
+                }
+            }
+        })
+        .unwrap();
+
+    assert!(matches!(
+        robot.serve(spec, requirements, &shutdown, |_| async {}),
+        Err(Error::ProtocolAlreadyRegistered)
+    ));
+
+    let client = compute
+        .open_exact_route(
+            robot_peer_id,
+            ExactRoute::Direct(robot_address),
+            protocol,
+            SessionRequirements::new(&domain_id)
+                .unwrap()
+                .with_expected_remote_peer_id(robot_peer_id),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), started_receiver)
+        .await
+        .expect("managed handler did not start")
+        .unwrap();
+
+    server.shutdown().await.unwrap();
+    assert!(
+        dropped_receiver.try_recv().is_ok(),
+        "server shutdown returned before the active handler was dropped"
+    );
+
+    client.close().await.unwrap();
     robot.shutdown().await.unwrap();
     compute.shutdown().await.unwrap();
 }

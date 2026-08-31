@@ -63,9 +63,10 @@ The SDK's shared authenticated wire contracts live in the sibling
 their own sibling crate, such as `auki-p2p-example`, and keep all protocol
 messages and policy there. The protocol crate should:
 
-1. Define one versioned `ApplicationProtocol` and its inbound
-   `SessionRequirements`.
-2. Start its inbound endpoint with `Node::serve(ProtocolSpec, ...)`.
+1. Define one versioned `ApplicationProtocol`, its portable
+   `ApplicationProtocolSpec`, and the runtime's inbound `SessionRequirements`.
+2. Start its inbound endpoint with `Node::serve(...)`; handlers receive an
+   `AuthenticatedApplicationStream` carrying the declared frame bound.
 3. Open outbound connections with `Node::open_exact_route(...)`; never expose a
    raw `Node` or token to business logic.
 4. Consume a shared `RouteCatalog` when it needs advertised direct or relay

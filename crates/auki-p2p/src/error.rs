@@ -92,6 +92,9 @@ pub enum Error {
     #[cfg(not(target_arch = "wasm32"))]
     #[error("authenticated application protocol task failed")]
     ProtocolTask(#[source] tokio::task::JoinError),
+    #[cfg(target_arch = "wasm32")]
+    #[error("authenticated application protocol server stopped before its shutdown barrier")]
+    ApplicationProtocolServerStopped,
     #[error("failed to listen on {address}: {reason}")]
     Listen { address: String, reason: String },
     #[error("failed to open libp2p stream: {0}")]

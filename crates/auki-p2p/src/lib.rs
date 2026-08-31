@@ -47,7 +47,10 @@ mod token;
 #[cfg(not(target_arch = "wasm32"))]
 mod transport;
 
-pub use application_protocol::ApplicationProtocol;
+pub use application_protocol::{
+    ApplicationProtocol, ApplicationProtocolSpec, AuthenticatedApplicationStream,
+    APPLICATION_PROTOCOL_MAX_CONCURRENCY, APPLICATION_PROTOCOL_MAX_FRAME_BYTES,
+};
 pub use authenticated_stream::AuthenticatedStream;
 pub use authentication::{AuthenticatedPeer, SessionRequirements};
 #[cfg(not(target_arch = "wasm32"))]
@@ -57,8 +60,8 @@ pub use authority_update::PeerAuthorityUpdate;
 pub use browser_authority::BrowserAuthority;
 #[cfg(target_arch = "wasm32")]
 pub use browser_transport::{
-    BrowserAuthenticatedRouteStream, BrowserIncomingAuthenticatedStreams, BrowserNode,
-    BrowserNodeExit, BrowserRelayRoute,
+    ApplicationProtocolServer, BrowserAuthenticatedRouteStream,
+    BrowserIncomingAuthenticatedStreams, BrowserNode, BrowserNodeExit, BrowserRelayRoute,
 };
 pub use error::{Error, Result};
 pub use identity::{Identity, PeerIdentityProof};
@@ -82,7 +85,7 @@ pub use routing::{
     RouteCatalogStatus, RouteFence, RouteSnapshot,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use runtime::{AuthenticatedRouteStream, ExactRoute, ProtocolServer, ProtocolSpec};
+pub use runtime::{ApplicationProtocolServer, AuthenticatedRouteStream, ExactRoute};
 pub use targeted_stream::TargetedStreamError;
 pub use token::{
     DdsTokenVerifier, DdsVerificationKeys, P2PAccessClaims, PeerRole, SignedApplicationMetadata,

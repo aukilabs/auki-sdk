@@ -7,6 +7,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     error::Error as StdError,
+    future::Future,
     pin::Pin,
     rc::Rc,
     task::{Context, Poll},
@@ -17,8 +18,9 @@ use async_channel::{Receiver, Sender};
 use chrono::{DateTime, Utc};
 use futures::{
     channel::oneshot,
-    future::{poll_fn, FutureExt, Shared},
+    future::{join_all, poll_fn, FutureExt, Shared},
     io::{AsyncRead, AsyncWrite},
+    stream::FuturesUnordered,
     Stream as FuturesStream, StreamExt,
 };
 use libp2p::{
@@ -31,6 +33,7 @@ use libp2p::{
     websocket_websys, yamux, Multiaddr, PeerId, Stream, Swarm, SwarmBuilder,
 };
 use libp2p_stream::{Behaviour as StreamBehaviour, IncomingStreams};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use wasm_bindgen_futures::spawn_local;
 
@@ -44,7 +47,8 @@ use crate::{
     },
     relay_client, source_admission,
     targeted_stream::{TargetedStreamBehaviour, TargetedStreamControl},
-    ApplicationProtocol, AuthenticatedStream, Error, Identity, PeerAuthorityUpdate, Result,
+    ApplicationProtocol, ApplicationProtocolSpec, AuthenticatedApplicationStream,
+    AuthenticatedStream, Error, Identity, PeerAuthorityUpdate, Result,
 };
 
 const COMMAND_CAPACITY: usize = 16;
@@ -64,11 +68,42 @@ struct BrowserBehaviour {
 /// while the caller handles an earlier result.
 pub struct BrowserIncomingAuthenticatedStreams {
     results: Receiver<Result<AuthenticatedStream>>,
+    completed: Shared<oneshot::Receiver<()>>,
 }
 
 impl BrowserIncomingAuthenticatedStreams {
     pub async fn accept(&mut self) -> Option<Result<AuthenticatedStream>> {
         self.results.recv().await.ok()
+    }
+
+    async fn shutdown(self) {
+        self.results.close();
+        let _ = self.completed.await;
+    }
+}
+
+/// Supervised browser-local application protocol host.
+///
+/// Dropping the handle requests cancellation. [`Self::shutdown`] additionally
+/// waits until the accept loop and every active local handler have stopped.
+pub struct ApplicationProtocolServer {
+    stop: CancellationToken,
+    completed: Shared<oneshot::Receiver<()>>,
+}
+
+impl ApplicationProtocolServer {
+    pub async fn shutdown(self) -> Result<()> {
+        self.stop.cancel();
+        self.completed
+            .clone()
+            .await
+            .map_err(|_| Error::ApplicationProtocolServerStopped)
+    }
+}
+
+impl Drop for ApplicationProtocolServer {
+    fn drop(&mut self) {
+        self.stop.cancel();
     }
 }
 
@@ -323,40 +358,76 @@ impl BrowserNode {
         &self,
         protocol: ApplicationProtocol,
     ) -> Result<BrowserIncomingAuthenticatedStreams> {
+        let requirements = SessionRequirements::new(self.domain_id().to_string())?;
+        self.accept_with_requirements(protocol, requirements)
+    }
+
+    fn accept_with_requirements(
+        &self,
+        protocol: ApplicationProtocol,
+        requirements: SessionRequirements,
+    ) -> Result<BrowserIncomingAuthenticatedStreams> {
         let mut streams = self.streams.clone();
         let incoming = streams
             .accept(protocol.stream_protocol())
             .map_err(|_| Error::ProtocolAlreadyRegistered)?;
-        let requirements = SessionRequirements::new(self.domain_id().to_string())?;
         let (pending_sender, pending_receiver) =
             async_channel::bounded(INCOMING_AUTH_QUEUE_CAPACITY);
         let (result_sender, results) = async_channel::bounded(INCOMING_AUTH_QUEUE_CAPACITY);
-
-        let pump_results = result_sender.clone();
-        spawn_local(async move {
-            pump_incoming_streams(incoming, pending_sender, pump_results).await;
-        });
-        for _ in 0..INCOMING_AUTH_CONCURRENCY {
-            let pending = pending_receiver.clone();
-            let results = result_sender.clone();
-            let authority = self.authority.clone();
-            let requirements = requirements.clone();
-            let local_peer_id = self.peer_id;
-            spawn_local(async move {
+        let pump = pump_incoming_streams(incoming, pending_sender, result_sender.clone());
+        let workers = (0..INCOMING_AUTH_CONCURRENCY)
+            .map(|_| {
                 authenticate_incoming_streams(
-                    pending,
-                    results,
-                    local_peer_id,
-                    authority,
-                    requirements,
+                    pending_receiver.clone(),
+                    result_sender.clone(),
+                    self.peer_id,
+                    self.authority.clone(),
+                    requirements.clone(),
                 )
-                .await;
-            });
-        }
+            })
+            .collect::<Vec<_>>();
         drop(pending_receiver);
         drop(result_sender);
+        let (completed_sender, completed_receiver) = oneshot::channel();
+        spawn_local(async move {
+            let _ = futures::join!(pump, join_all(workers));
+            let _ = completed_sender.send(());
+        });
 
-        Ok(BrowserIncomingAuthenticatedStreams { results })
+        Ok(BrowserIncomingAuthenticatedStreams {
+            results,
+            completed: completed_receiver.shared(),
+        })
+    }
+
+    /// Register and supervise one authenticated application protocol on the
+    /// browser's local executor.
+    ///
+    /// Handlers are deliberately local rather than `Send`; concurrency and
+    /// frame bounds come from the same portable spec used by native peers.
+    pub fn serve<H, F>(
+        &self,
+        spec: ApplicationProtocolSpec,
+        requirements: SessionRequirements,
+        shutdown: &CancellationToken,
+        handler: H,
+    ) -> Result<ApplicationProtocolServer>
+    where
+        H: Fn(AuthenticatedApplicationStream) -> F + 'static,
+        F: Future<Output = ()> + 'static,
+    {
+        let incoming = self.accept_with_requirements(spec.protocol().clone(), requirements)?;
+        let stop = shutdown.child_token();
+        let task_stop = stop.clone();
+        let (completed_sender, completed_receiver) = oneshot::channel();
+        spawn_local(async move {
+            run_application_protocol_server(incoming, spec, task_stop, Rc::new(handler)).await;
+            let _ = completed_sender.send(());
+        });
+        Ok(ApplicationProtocolServer {
+            stop,
+            completed: completed_receiver.shared(),
+        })
     }
 
     /// Establish the node's one WSS relay reservation and wait until both the
@@ -538,6 +609,84 @@ impl BrowserNode {
             commands: self.commands.clone(),
             _local_only: Rc::clone(&self._local_only),
         }
+    }
+}
+
+enum ApplicationProtocolHostEvent {
+    Cancelled,
+    HandlerCompleted,
+    IncomingClosed,
+    SessionRejected,
+    Accepted(Box<AuthenticatedStream>),
+}
+
+async fn run_application_protocol_server<H, F>(
+    mut incoming: BrowserIncomingAuthenticatedStreams,
+    spec: ApplicationProtocolSpec,
+    stop: CancellationToken,
+    handler: Rc<H>,
+) where
+    H: Fn(AuthenticatedApplicationStream) -> F + 'static,
+    F: Future<Output = ()> + 'static,
+{
+    let mut handlers = FuturesUnordered::new();
+    loop {
+        let has_handlers = !handlers.is_empty();
+        let has_capacity = handlers.len() < spec.max_concurrency();
+        let event = match (has_handlers, has_capacity) {
+            (false, _) => {
+                let cancelled = stop.cancelled().fuse();
+                let accepted = incoming.accept().fuse();
+                futures::pin_mut!(cancelled, accepted);
+                futures::select_biased! {
+                    () = cancelled => ApplicationProtocolHostEvent::Cancelled,
+                    accepted = accepted => application_protocol_host_event(accepted),
+                }
+            }
+            (true, false) => {
+                let cancelled = stop.cancelled().fuse();
+                let completed = handlers.next().fuse();
+                futures::pin_mut!(cancelled, completed);
+                futures::select_biased! {
+                    () = cancelled => ApplicationProtocolHostEvent::Cancelled,
+                    _ = completed => ApplicationProtocolHostEvent::HandlerCompleted,
+                }
+            }
+            (true, true) => {
+                let cancelled = stop.cancelled().fuse();
+                let completed = handlers.next().fuse();
+                let accepted = incoming.accept().fuse();
+                futures::pin_mut!(cancelled, completed, accepted);
+                futures::select_biased! {
+                    () = cancelled => ApplicationProtocolHostEvent::Cancelled,
+                    _ = completed => ApplicationProtocolHostEvent::HandlerCompleted,
+                    accepted = accepted => application_protocol_host_event(accepted),
+                }
+            }
+        };
+        match event {
+            ApplicationProtocolHostEvent::Cancelled => break,
+            ApplicationProtocolHostEvent::HandlerCompleted => {}
+            ApplicationProtocolHostEvent::IncomingClosed => break,
+            ApplicationProtocolHostEvent::SessionRejected => {}
+            ApplicationProtocolHostEvent::Accepted(stream) => {
+                let handler = Rc::clone(&handler);
+                let stream = AuthenticatedApplicationStream::new(*stream, spec.max_frame_bytes());
+                handlers.push(async move { handler(stream).await }.boxed_local());
+            }
+        }
+    }
+    drop(handlers);
+    incoming.shutdown().await;
+}
+
+fn application_protocol_host_event(
+    accepted: Option<Result<AuthenticatedStream>>,
+) -> ApplicationProtocolHostEvent {
+    match accepted {
+        None => ApplicationProtocolHostEvent::IncomingClosed,
+        Some(Err(_)) => ApplicationProtocolHostEvent::SessionRejected,
+        Some(Ok(stream)) => ApplicationProtocolHostEvent::Accepted(Box::new(stream)),
     }
 }
 

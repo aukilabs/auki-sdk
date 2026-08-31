@@ -10,8 +10,9 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    ApplicationProtocol, AuthenticatedStream, Error, Multiaddr, Node, PeerId, Protocol,
-    RelayRouteHandle, Result, SessionRequirements,
+    ApplicationProtocol, ApplicationProtocolSpec, AuthenticatedApplicationStream,
+    AuthenticatedStream, Error, Multiaddr, Node, PeerId, Protocol, RelayRouteHandle, Result,
+    SessionRequirements,
 };
 
 /// One explicitly selected direct or circuit route.
@@ -231,41 +232,13 @@ impl Node {
     }
 }
 
-/// Versioned inbound application protocol plus its mutual-auth policy.
-#[derive(Clone, Debug)]
-pub struct ProtocolSpec {
-    protocol: ApplicationProtocol,
-    requirements: SessionRequirements,
-    max_concurrency: usize,
-}
-
-impl ProtocolSpec {
-    pub fn new(protocol: ApplicationProtocol, requirements: SessionRequirements) -> Self {
-        Self {
-            protocol,
-            requirements,
-            max_concurrency: 64,
-        }
-    }
-
-    pub fn with_max_concurrency(mut self, maximum: usize) -> Result<Self> {
-        if maximum == 0 {
-            return Err(Error::InvalidProtocol(
-                "protocol concurrency must be positive".to_string(),
-            ));
-        }
-        self.max_concurrency = maximum;
-        Ok(self)
-    }
-}
-
 /// Supervised inbound protocol task owned by the shared P2P runtime.
-pub struct ProtocolServer {
+pub struct ApplicationProtocolServer {
     stop: CancellationToken,
     task: Option<JoinHandle<()>>,
 }
 
-impl ProtocolServer {
+impl ApplicationProtocolServer {
     pub async fn shutdown(mut self) -> Result<()> {
         self.stop.cancel();
         if let Some(task) = self.task.take() {
@@ -275,7 +248,7 @@ impl ProtocolServer {
     }
 }
 
-impl Drop for ProtocolServer {
+impl Drop for ApplicationProtocolServer {
     fn drop(&mut self) {
         self.stop.cancel();
         if let Some(task) = self.task.take() {
@@ -288,18 +261,21 @@ impl Node {
     /// Register and supervise one authenticated inbound application protocol.
     pub fn serve<H, F>(
         &self,
-        spec: ProtocolSpec,
+        spec: ApplicationProtocolSpec,
+        requirements: SessionRequirements,
         shutdown: &CancellationToken,
         handler: H,
-    ) -> Result<ProtocolServer>
+    ) -> Result<ApplicationProtocolServer>
     where
-        H: Fn(AuthenticatedStream) -> F + Send + Sync + 'static,
+        H: Fn(AuthenticatedApplicationStream) -> F + Send + Sync + 'static,
         F: Future<Output = ()> + Send + 'static,
     {
-        let mut incoming = self.accept(spec.protocol, spec.requirements)?;
+        let mut incoming = self.accept(spec.protocol().clone(), requirements)?;
         let stop = shutdown.child_token();
         let task_stop = stop.clone();
         let handler = Arc::new(handler);
+        let max_concurrency = spec.max_concurrency();
+        let max_frame_bytes = spec.max_frame_bytes();
         let task = tokio::spawn(async move {
             let mut handlers = JoinSet::new();
             loop {
@@ -311,7 +287,7 @@ impl Node {
                             tracing::warn!(%error, "authenticated application protocol handler failed");
                         }
                     }
-                    accepted = incoming.accept(), if handlers.len() < spec.max_concurrency => {
+                    accepted = incoming.accept(), if handlers.len() < max_concurrency => {
                         let Some(accepted) = accepted else { break; };
                         let stream = match accepted {
                             Ok(stream) => stream,
@@ -321,14 +297,17 @@ impl Node {
                             }
                         };
                         let handler = Arc::clone(&handler);
-                        handlers.spawn(async move { handler(stream).await });
+                        handlers.spawn(async move {
+                            handler(AuthenticatedApplicationStream::new(stream, max_frame_bytes))
+                                .await
+                        });
                     }
                 }
             }
             handlers.abort_all();
             while handlers.join_next().await.is_some() {}
         });
-        Ok(ProtocolServer {
+        Ok(ApplicationProtocolServer {
             stop,
             task: Some(task),
         })

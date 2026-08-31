@@ -22,6 +22,7 @@ p256 = "0.13.2"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio-util = { workspace = true, features = ["rt"] }
 uuid = { workspace = true }
 web-time = { workspace = true }
 
@@ -31,7 +32,6 @@ libp2p = { workspace = true, features = ["tokio", "macros", "noise", "tcp", "yam
 libp2p-stream = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
-tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 zeroize = { workspace = true }
 

@@ -114,7 +114,7 @@ impl AukiPeerProtocols {
     }
 
     pub(crate) async fn shutdown_all(&self) -> Result<(), AukiProtocolError> {
-        self.inner.lifecycle.stop();
+        self.begin_shutdown();
         let servers = self
             .inner
             .registrations
@@ -125,8 +125,12 @@ impl AukiPeerProtocols {
         shutdown_servers(servers).await
     }
 
-    pub(crate) fn abort_all(&self) {
+    pub(crate) fn begin_shutdown(&self) {
         self.inner.lifecycle.stop();
+    }
+
+    pub(crate) fn abort_all(&self) {
+        self.begin_shutdown();
         let servers = self
             .inner
             .registrations
@@ -286,5 +290,18 @@ mod tests {
                 .is_none()
         );
         assert!(dropped.get());
+    }
+
+    #[wasm_bindgen_test]
+    fn protocol_lifecycle_stop_is_synchronous_and_idempotent() {
+        let lifecycle = ProtocolLifecycle::new();
+        assert!(lifecycle.is_running());
+        assert!(!lifecycle.token().is_cancelled());
+
+        lifecycle.stop();
+        lifecycle.stop();
+
+        assert!(!lifecycle.is_running());
+        assert!(lifecycle.token().is_cancelled());
     }
 }

@@ -237,8 +237,9 @@ mod facade {
                 .borrow_mut()
                 .take()
                 .ok_or_else(|| js_failure("Auki peer is stopped"))?;
+            let shutdown = peer.shutdown();
             Ok(future_to_promise(async move {
-                peer.shutdown()
+                shutdown
                     .await
                     .map_err(|error| js_context("shut down browser Peer", error))?;
                 Ok(JsValue::UNDEFINED)

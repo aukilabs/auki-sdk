@@ -14,9 +14,26 @@ use js_sys::{Error as JsError, Promise};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
+#[derive(Default)]
+struct CloseBarrier {
+    promise: RefCell<Option<Promise>>,
+}
+
+impl CloseBarrier {
+    fn get_or_start(&self, start: impl FnOnce() -> Promise) -> Promise {
+        if let Some(closing) = self.promise.borrow().clone() {
+            return closing;
+        }
+        let closing = start();
+        self.promise.borrow_mut().replace(closing.clone());
+        closing
+    }
+}
+
 #[wasm_bindgen]
 pub struct AukiEcho {
     endpoint: RefCell<Option<EchoEndpoint>>,
+    closing: CloseBarrier,
     client: EchoClient,
     events: EchoEventReceiver,
 }
@@ -34,6 +51,7 @@ impl AukiEcho {
         let events = endpoint.events();
         Ok(Self {
             endpoint: RefCell::new(Some(endpoint)),
+            closing: CloseBarrier::default(),
             client,
             events,
         })
@@ -94,15 +112,17 @@ impl AukiEcho {
     /// Stop inbound serving and resolve after every admitted handler is gone.
     #[wasm_bindgen(unchecked_return_type = "Promise<void>")]
     pub fn close(&self) -> Promise {
-        let endpoint = self.endpoint.borrow_mut().take();
-        future_to_promise(async move {
-            if let Some(endpoint) = endpoint {
-                endpoint
-                    .close()
-                    .await
-                    .map_err(|error| js_context("close portable echo", error))?;
-            }
-            Ok(JsValue::UNDEFINED)
+        self.closing.get_or_start(|| {
+            let endpoint = self.endpoint.borrow_mut().take();
+            future_to_promise(async move {
+                if let Some(endpoint) = endpoint {
+                    endpoint
+                        .close()
+                        .await
+                        .map_err(|error| js_context("close portable echo", error))?;
+                }
+                Ok(JsValue::UNDEFINED)
+            })
         })
     }
 }
@@ -132,4 +152,36 @@ fn js_context(context: &'static str, error: impl Display) -> JsValue {
 
 fn js_error(message: impl AsRef<str>) -> JsValue {
     JsError::new(message.as_ref()).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::Cell, rc::Rc};
+
+    use js_sys::Object;
+    use wasm_bindgen_futures::JsFuture;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    use super::*;
+
+    #[wasm_bindgen_test(async)]
+    async fn close_barrier_reuses_and_replays_one_rejected_promise() {
+        let starts = Rc::new(Cell::new(0));
+        let barrier = CloseBarrier::default();
+        let first = barrier.get_or_start({
+            let starts = Rc::clone(&starts);
+            move || {
+                starts.set(starts.get() + 1);
+                Promise::reject(&js_error("cleanup failed"))
+            }
+        });
+        let concurrent = barrier.get_or_start(|| Promise::resolve(&JsValue::UNDEFINED));
+        assert!(Object::is(first.as_ref(), concurrent.as_ref()));
+        assert!(JsFuture::from(first).await.is_err());
+
+        let replay = barrier.get_or_start(|| Promise::resolve(&JsValue::UNDEFINED));
+        assert!(Object::is(concurrent.as_ref(), replay.as_ref()));
+        assert!(JsFuture::from(replay).await.is_err());
+        assert_eq!(starts.get(), 1);
+    }
 }

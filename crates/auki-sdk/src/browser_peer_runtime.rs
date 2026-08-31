@@ -253,21 +253,30 @@ impl AukiPeer {
     ///
     /// Protocol handlers stop before the relay booking, authority, and browser
     /// transport are torn down. The owner is consumed so successful return is
-    /// the cleanup barrier.
-    pub async fn shutdown(mut self) -> Result<(), AukiPeerShutdownError> {
-        let protocol_failure = self.protocols.shutdown_all().await.err();
-        let relay_failure = match self.relay.stop().await {
-            SupervisorExit::Failed { reason } => Some(reason),
-            SupervisorExit::Shutdown | SupervisorExit::OwnersDropped | SupervisorExit::Node(_) => {
-                None
+    /// the cleanup barrier. Calling this method fences new protocol work before
+    /// it returns the cleanup future.
+    #[allow(clippy::manual_async_fn)]
+    pub fn shutdown(
+        mut self,
+    ) -> impl std::future::Future<Output = Result<(), AukiPeerShutdownError>> {
+        // This fence deliberately runs while constructing the future. Retained
+        // protocol handles must reject new work even if cleanup is not polled yet.
+        self.protocols.begin_shutdown();
+        async move {
+            let protocol_failure = self.protocols.shutdown_all().await.err();
+            let relay_failure = match self.relay.stop().await {
+                SupervisorExit::Failed { reason } => Some(reason),
+                SupervisorExit::Shutdown
+                | SupervisorExit::OwnersDropped
+                | SupervisorExit::Node(_) => None,
+            };
+            self.closed = true;
+            match (protocol_failure, relay_failure) {
+                (None, None) => Ok(()),
+                (protocols, relay) => Err(AukiPeerError::Shutdown {
+                    details: shutdown_details(protocols, relay),
+                }),
             }
-        };
-        self.closed = true;
-        match (protocol_failure, relay_failure) {
-            (None, None) => Ok(()),
-            (protocols, relay) => Err(AukiPeerError::Shutdown {
-                details: shutdown_details(protocols, relay),
-            }),
         }
     }
 }

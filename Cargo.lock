@@ -613,7 +613,6 @@ dependencies = [
  "auki-hash",
  "auki-jcs",
  "auki-layout",
- "auki-logs",
  "quick-xml",
  "serde",
  "serde_json",
@@ -655,11 +654,8 @@ version = "0.0.0"
 dependencies = [
  "auki-datatypes",
  "auki-registry",
- "ciborium",
  "futures",
- "prost",
  "r2r",
- "serde",
  "tokio",
 ]
 
@@ -680,7 +676,6 @@ dependencies = [
  "parking_lot",
  "rand 0.8.6",
  "reqwest",
- "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
@@ -708,15 +703,12 @@ name = "auki-session"
 version = "0.0.0"
 dependencies = [
  "auki-datatypes",
- "auki-hash",
- "auki-identity",
  "auki-jcs",
  "auki-logs",
  "auki-manifests",
  "auki-mappers",
  "auki-maps",
  "auki-registry",
- "auki-time",
  "futures",
  "parking_lot",
  "serde",

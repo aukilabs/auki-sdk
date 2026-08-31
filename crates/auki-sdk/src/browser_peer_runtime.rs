@@ -116,7 +116,7 @@ impl AukiPeer {
             credential_expires_at,
         );
         let node = Rc::new(BrowserNode::start(identity, initial_update).await?);
-        let authority = Arc::new(AuthorityManager::new(
+        let authority = Arc::new(AuthoritySupervisor::new(
             node.authority(),
             renewal,
             CurrentAuthority {
@@ -433,7 +433,7 @@ async fn confirm_ready_relay(
 async fn cleanup_startup(
     node: &BrowserNode,
     client: &RelayBookingClient,
-    authority: &AuthorityManager,
+    authority: &AuthoritySupervisor,
     known_booking_id: Option<Uuid>,
 ) {
     let _ = node.shutdown().await;
@@ -443,7 +443,7 @@ async fn cleanup_startup(
     authority.stop().await;
 }
 
-struct AuthorityManager {
+struct AuthoritySupervisor {
     authority: BrowserAuthority,
     cancellation: CancellationToken,
     state: Mutex<AuthorityState>,
@@ -470,7 +470,7 @@ struct PendingAuthority {
     expires_at: DateTime<Utc>,
 }
 
-impl AuthorityManager {
+impl AuthoritySupervisor {
     fn new(
         authority: BrowserAuthority,
         renewal: AuthorityRenewal,
@@ -488,10 +488,10 @@ impl AuthorityManager {
         }
     }
 
-    async fn maintain(&self) -> Result<(), AuthorityManagerError> {
+    async fn maintain(&self) -> Result<(), AuthoritySupervisorError> {
         let mut state = self.state.lock().await;
         if state.stopped {
-            return Err(AuthorityManagerError::Stopped);
+            return Err(AuthoritySupervisorError::Stopped);
         }
         let now = Utc::now();
         if state.pending.is_none() && now < state.current.renew_at {
@@ -510,21 +510,24 @@ impl AuthorityManager {
     async fn renew_after_unauthorized(
         &self,
         rejected_revision: u64,
-    ) -> Result<(), AuthorityManagerError> {
+    ) -> Result<(), AuthoritySupervisorError> {
         let mut state = self.state.lock().await;
         if state.stopped {
-            return Err(AuthorityManagerError::Stopped);
+            return Err(AuthoritySupervisorError::Stopped);
         }
         if state.current.revision > rejected_revision {
             return Ok(());
         }
         if state.current.revision != rejected_revision {
-            return Err(AuthorityManagerError::StaleRevision);
+            return Err(AuthoritySupervisorError::StaleRevision);
         }
         self.renew_locked(&mut state).await
     }
 
-    async fn renew_locked(&self, state: &mut AuthorityState) -> Result<(), AuthorityManagerError> {
+    async fn renew_locked(
+        &self,
+        state: &mut AuthorityState,
+    ) -> Result<(), AuthoritySupervisorError> {
         if state.pending.is_none() {
             let renewed = state
                 .renewal
@@ -552,7 +555,7 @@ impl AuthorityManager {
             .current
             .revision
             .checked_add(1)
-            .ok_or(AuthorityManagerError::RevisionExhausted)?;
+            .ok_or(AuthoritySupervisorError::RevisionExhausted)?;
         self.authority.replace(&pending.update).await?;
         let pending = state
             .pending
@@ -586,7 +589,7 @@ impl AuthorityManager {
 }
 
 #[async_trait(?Send)]
-impl RelayAuthorizationProvider for AuthorityManager {
+impl RelayAuthorizationProvider for AuthoritySupervisor {
     async fn authorization(&self) -> Result<RelayAuthorizationSnapshot, RelayAuthorizationError> {
         self.maintain().await.map_err(|error| {
             warn!(error = %error, "browser authority maintenance before DMS request failed");
@@ -616,7 +619,7 @@ impl RelayAuthorizationProvider for AuthorityManager {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum AuthorityManagerError {
+enum AuthoritySupervisorError {
     #[error("authority renewal failed: {0}")]
     Renewal(#[from] auki_auth::Error),
     #[error("authority installation failed: {0}")]
@@ -632,13 +635,13 @@ enum AuthorityManagerError {
 struct RelaySupervisor {
     stop: async_channel::Sender<()>,
     stopped: Shared<oneshot::Receiver<SupervisorExit>>,
-    authority: Arc<AuthorityManager>,
+    authority: Arc<AuthoritySupervisor>,
 }
 
 impl RelaySupervisor {
     fn start(
         client: RelayBookingClient,
-        authority: Arc<AuthorityManager>,
+        authority: Arc<AuthoritySupervisor>,
         node: Rc<BrowserNode>,
         protocols: AukiPeerProtocols,
         ready: ReadyRelay,
@@ -727,7 +730,7 @@ enum SupervisionEnd {
 
 async fn supervise_relay(
     client: &RelayBookingClient,
-    authority: Arc<AuthorityManager>,
+    authority: Arc<AuthoritySupervisor>,
     node: Rc<BrowserNode>,
     mut pinned: ReadyRelay,
     policy: AukiRelayConfig,
@@ -769,7 +772,7 @@ async fn supervise_relay(
 
 async fn relay_iteration(
     client: &RelayBookingClient,
-    authority: &AuthorityManager,
+    authority: &AuthoritySupervisor,
     pinned: &mut ReadyRelay,
     next_renew: &mut DateTime<Utc>,
     next_poll: &mut DateTime<Utc>,
@@ -860,7 +863,7 @@ fn ensure_relay_usable(ready: &ReadyRelay, now: DateTime<Utc>) -> Result<(), Sup
 async fn finish_supervision(
     end: SupervisionEnd,
     client: &RelayBookingClient,
-    authority: &AuthorityManager,
+    authority: &AuthoritySupervisor,
     node: &BrowserNode,
     booking_id: Uuid,
 ) -> SupervisorExit {
@@ -925,7 +928,7 @@ fn chrono_duration(duration: Duration) -> chrono::Duration {
 #[derive(Debug, thiserror::Error)]
 enum SupervisorError {
     #[error("browser authority ended: {0}")]
-    Authority(#[from] AuthorityManagerError),
+    Authority(#[from] AuthoritySupervisorError),
     #[error("DMS relay operation failed: {0}")]
     Relay(#[from] RelayBookingClientError),
     #[error("DMS relay snapshot failed validation: {0}")]

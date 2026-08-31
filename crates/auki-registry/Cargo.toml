@@ -19,5 +19,4 @@ quick-xml = "0.37"
 thiserror = "1"
 
 [dev-dependencies]
-auki-logs = { path = "../auki-logs" }
 tempfile = "3"

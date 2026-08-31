@@ -50,7 +50,6 @@ blob = [
     "dep:auki-registry",
     "dep:futures",
     "dep:prost",
-    "dep:serde",
     "dep:thiserror",
 ]
 blob-endpoint = ["blob", "dep:auki-sdk", "dep:futures-timer"]

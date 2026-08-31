@@ -5,6 +5,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use futures::StreamExt;
 use reqwest::{
     Client, Method, StatusCode, Url,
     header::{
@@ -77,7 +78,8 @@ impl fmt::Debug for RelayAuthorizationSnapshot {
 /// Implementations own credential renewal. Keeping this boundary at the
 /// `HeaderValue` level prevents the relay client from ever rendering or
 /// returning raw bearer text.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait RelayAuthorizationProvider: Send + Sync {
     async fn authorization(&self) -> Result<RelayAuthorizationSnapshot, RelayAuthorizationError>;
 
@@ -88,7 +90,8 @@ pub trait RelayAuthorizationProvider: Send + Sync {
 }
 
 /// Typed control-plane boundary owned by a relay coordinator.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait RelayBookingApi: Send + Sync {
     async fn active(&self) -> Result<Option<RelayBookingSnapshot>, RelayBookingClientError>;
 
@@ -135,10 +138,12 @@ impl RelayBookingClient {
         {
             return Err(RelayBookingClientError::InvalidConfiguration);
         }
-        let http = Client::builder()
+        let builder = Client::builder();
+        #[cfg(not(target_arch = "wasm32"))]
+        let builder = builder
             .use_rustls_tls()
-            .timeout(RELAY_HTTP_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
+            .redirect(reqwest::redirect::Policy::none());
+        let http = builder
             .build()
             .map_err(|_| RelayBookingClientError::InvalidConfiguration)?;
         Ok(Self { base, http, auth })
@@ -185,6 +190,7 @@ impl RelayBookingClient {
             let mut request = self
                 .http
                 .request(method.clone(), url.clone())
+                .timeout(RELAY_HTTP_TIMEOUT)
                 .header(AUTHORIZATION, authorization.header)
                 .header(ACCEPT, HeaderValue::from_static("application/json"));
             if let Some(key) = idempotency_key {
@@ -204,6 +210,7 @@ impl RelayBookingClient {
                         operation,
                         timeout: error.is_timeout(),
                     })?;
+            require_exact_response_url(operation, &url, response.url())?;
             let raw = RawResponse::read(operation, response).await?;
             if raw.status == StatusCode::UNAUTHORIZED && attempt == 0 {
                 self.auth
@@ -218,6 +225,20 @@ impl RelayBookingClient {
     }
 }
 
+fn require_exact_response_url(
+    operation: RelayOperation,
+    requested: &Url,
+    observed: &Url,
+) -> Result<(), RelayBookingClientError> {
+    if observed != requested {
+        return Err(RelayBookingClientError::InvalidResponse {
+            operation,
+            reason: "response URL differs from the requested endpoint",
+        });
+    }
+    Ok(())
+}
+
 fn valid_sensitive_bearer_header(value: &HeaderValue) -> bool {
     const PREFIX: &[u8] = b"Bearer ";
     let bytes = value.as_bytes();
@@ -229,7 +250,8 @@ fn valid_sensitive_bearer_header(value: &HeaderValue) -> bool {
             .all(|byte| byte.is_ascii_graphic())
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl RelayBookingApi for RelayBookingClient {
     async fn active(&self) -> Result<Option<RelayBookingSnapshot>, RelayBookingClientError> {
         let operation = RelayOperation::Active;
@@ -404,7 +426,7 @@ struct RawResponse {
 impl RawResponse {
     async fn read(
         operation: RelayOperation,
-        mut response: reqwest::Response,
+        response: reqwest::Response,
     ) -> Result<Self, RelayBookingClientError> {
         require_no_store(operation, response.headers())?;
         if response
@@ -416,15 +438,12 @@ impl RawResponse {
         let status = response.status();
         let headers = response.headers().clone();
         let mut body = Vec::new();
-        while let Some(chunk) =
-            response
-                .chunk()
-                .await
-                .map_err(|error| RelayBookingClientError::Transport {
-                    operation,
-                    timeout: error.is_timeout(),
-                })?
-        {
+        let mut chunks = response.bytes_stream();
+        while let Some(chunk) = chunks.next().await {
+            let chunk = chunk.map_err(|error| RelayBookingClientError::Transport {
+                operation,
+                timeout: error.is_timeout(),
+            })?;
             let new_length = body
                 .len()
                 .checked_add(chunk.len())
@@ -1486,6 +1505,21 @@ mod tests {
             .header("cache-control", "no-store")
             .header("content-type", "application/json")
             .json_body(body)
+    }
+
+    #[test]
+    fn rejects_a_browser_followed_response_url() {
+        let requested = Url::parse("https://dms.example.com/relay-bookings/active").unwrap();
+        let redirected = Url::parse("https://other.example.com/steal").unwrap();
+
+        assert!(require_exact_response_url(RelayOperation::Active, &requested, &requested).is_ok());
+        assert!(matches!(
+            require_exact_response_url(RelayOperation::Active, &requested, &redirected),
+            Err(RelayBookingClientError::InvalidResponse {
+                operation: RelayOperation::Active,
+                reason: "response URL differs from the requested endpoint"
+            })
+        ));
     }
 
     #[tokio::test]

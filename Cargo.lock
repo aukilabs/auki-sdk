@@ -328,36 +328,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "auki-domain"
-version = "0.1.0"
-dependencies = [
- "auki-datatypes",
- "auki-hash",
- "auki-layout",
- "auki-manifests",
- "auki-p2p",
- "auki-protocols",
- "auki-registry",
- "auki-session",
- "chrono",
- "futures",
- "hex",
- "jsonwebtoken 9.3.1",
- "libp2p",
- "libp2p-stream",
- "parking_lot",
- "prost",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "auki-geometry"
 version = "0.0.0"
 dependencies = [

@@ -849,10 +849,10 @@ impl Drop for AukiPeer {
                 .is_err();
         drop(self.authority.take());
         self.protocols.abort_all();
-        if let Some(node) = self.node.take() {
-            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                runtime.spawn(async move { node.shutdown_now().await });
-            }
+        if let Some(node) = self.node.take()
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            runtime.spawn(async move { node.shutdown_now().await });
         }
         if route_cleanup_failed {
             warn!("AukiPeer drop could not completely clear its local route catalog");

@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Native bounded API and DDS authority preparation for Auki P2P peers"
+description = "Bounded API and DDS authority preparation for Auki P2P peers"
 readme = "README.md"
 
 [dependencies]
@@ -15,6 +15,7 @@ auki-p2p = { path = "../auki-p2p" }
 base64 = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
+futures-timer = { workspace = true }
 hex = { workspace = true }
 p256 = "0.13.2"
 reqwest = { workspace = true }
@@ -22,7 +23,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["macros", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
 uuid = { workspace = true }
 zeroize = { workspace = true }

@@ -5,6 +5,10 @@ authenticated P2P peer. It handles API/DDS HTTP, accessible-Domain selection,
 proof of the peer's stable libp2p identity, verification keys, and the signed
 Domain credential.
 
+The same user authentication and authority preparation compile for native Rust
+and browser Wasm. App credentials remain restricted to trusted native or
+backend applications because an App secret must never ship to a browser.
+
 It deliberately does not discover peers, resolve routes, contact DMS, book a
 relay, join a Domain, or spawn a renewal task. The host remains the composition
 root for those operations.

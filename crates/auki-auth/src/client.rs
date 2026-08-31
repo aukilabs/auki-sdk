@@ -8,12 +8,18 @@ use auki_p2p::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration as ChronoDuration, TimeZone, Utc};
-use futures::StreamExt;
+use futures::{
+    StreamExt,
+    future::{Either, select},
+    pin_mut,
+};
+use futures_timer::Delay;
 use p256::pkcs8::{DecodePublicKey, EncodePublicKey};
+#[cfg(not(target_arch = "wasm32"))]
+use reqwest::redirect::Policy;
 use reqwest::{
     Client as HttpClient, RequestBuilder, Url,
     header::{ACCEPT, CONTENT_TYPE},
-    redirect::Policy,
 };
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
@@ -21,10 +27,12 @@ use tokio::sync::{Mutex, MutexGuard};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::AppCredentials;
 use crate::{
-    AppCredentials, AuthorityRenewal, AuthorityRenewalProvider, Credentials, DomainChoice,
-    DomainDescriptor, DomainSelection, Error, PeerAuthorityProvider, PreparedPeer, PrincipalKind,
-    RenewedAuthority, Result, SecretString, UserPassword,
+    AuthorityRenewal, AuthorityRenewalProvider, Credentials, DomainChoice, DomainDescriptor,
+    DomainSelection, Error, PeerAuthorityProvider, PreparedPeer, PrincipalKind, RenewedAuthority,
+    Result, SecretString, UserPassword,
     wire::{
         AccessibleDomain, AccessibleDomainsResponse, ApiTokenResponse, LoginRequest,
         PeerChallengeRequest, PeerChallengeResponse, PeerVerifyRequest, PeerVerifyResponse,
@@ -42,7 +50,9 @@ const DDS_VERIFICATION_KEYS: &str = "DDS /service/p2p-verification-keys";
 
 const MAX_EMAIL_BYTES: usize = 320;
 const MAX_PASSWORD_BYTES: usize = 1024;
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_APP_KEY_BYTES: usize = 256;
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_APP_SECRET_BYTES: usize = 1024;
 const ACCESSIBLE_DOMAINS_PAGE_SIZE: usize = 100;
 const MAX_ACCESSIBLE_DOMAIN_RESULTS: usize = 1_024;
@@ -143,7 +153,10 @@ struct SessionInner {
 }
 
 enum PrincipalState {
-    User { refresh_token: SecretString },
+    User {
+        refresh_token: SecretString,
+    },
+    #[cfg(not(target_arch = "wasm32"))]
     App(AppCredentials),
 }
 
@@ -156,6 +169,7 @@ impl SessionState {
     fn gateway_mac(&self) -> Option<&str> {
         match &self.principal {
             PrincipalState::User { .. } => None,
+            #[cfg(not(target_arch = "wasm32"))]
             PrincipalState::App(credentials) => credentials.gateway_mac.as_deref(),
         }
     }
@@ -178,14 +192,7 @@ impl AuthClient {
 
     pub fn with_limits(environment: AuthEnvironment, limits: AuthLimits) -> Result<Self> {
         validate_limits(limits)?;
-        let http = HttpClient::builder()
-            .no_proxy()
-            .connect_timeout(limits.connect_timeout)
-            .timeout(limits.request_timeout)
-            .redirect(Policy::none())
-            .user_agent(concat!("auki-auth/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .map_err(|_| Error::InvalidConfiguration("failed to construct bounded HTTP client"))?;
+        let http = build_http_client(limits)?;
         Ok(Self {
             inner: Arc::new(ClientInner {
                 environment,
@@ -222,6 +229,7 @@ impl AuthClient {
                     dds_service_bearer,
                 }
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Credentials::AppCredentials(credentials) => {
                 validate_app_credentials(&credentials)?;
                 let dds_service_bearer = self
@@ -298,6 +306,7 @@ impl AuthClient {
         validated_token(response.access_token, API_SERVICE_TOKEN)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     async fn exchange_app_service_token(
         &self,
         credentials: &AppCredentials,
@@ -334,6 +343,7 @@ impl AuthClient {
                 // Keep the former DDS bearer until its replacement is complete.
                 state.dds_service_bearer = dds_service_bearer;
             }
+            #[cfg(not(target_arch = "wasm32"))]
             PrincipalState::App(credentials) => {
                 let dds_service_bearer = self
                     .exchange_app_service_token(credentials, cancellation)
@@ -416,10 +426,19 @@ impl AuthClient {
             })
         };
 
-        tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => Err(Error::Cancelled { endpoint }),
-            result = operation => result,
+        let timeout = Delay::new(self.inner.limits.request_timeout);
+        pin_mut!(operation, timeout);
+        let bounded = async {
+            match select(operation, timeout).await {
+                Either::Left((result, _)) => result,
+                Either::Right(((), _)) => Err(Error::RequestTimedOut { endpoint }),
+            }
+        };
+        let cancelled = cancellation.cancelled();
+        pin_mut!(bounded, cancelled);
+        match select(cancelled, bounded).await {
+            Either::Left(((), _)) => Err(Error::Cancelled { endpoint }),
+            Either::Right((result, _)) => result,
         }
     }
 
@@ -438,6 +457,20 @@ impl AuthClient {
             .join(relative)
             .expect("validated base URL joins bounded DDS path")
     }
+}
+
+fn build_http_client(_limits: AuthLimits) -> Result<HttpClient> {
+    let builder = HttpClient::builder();
+    #[cfg(not(target_arch = "wasm32"))]
+    let builder = builder
+        .no_proxy()
+        .connect_timeout(_limits.connect_timeout)
+        .timeout(_limits.request_timeout)
+        .user_agent(concat!("auki-auth/", env!("CARGO_PKG_VERSION")))
+        .redirect(Policy::none());
+    builder
+        .build()
+        .map_err(|_| Error::InvalidConfiguration("failed to construct bounded HTTP client"))
 }
 
 impl AuthSession {
@@ -732,7 +765,8 @@ impl AuthSession {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl PeerAuthorityProvider for AuthSession {
     async fn accessible_domains(&self) -> Result<Vec<DomainChoice>> {
         AuthSession::accessible_domains(self).await
@@ -769,7 +803,8 @@ struct SessionRenewal {
     version: Mutex<RenewalVersion>,
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl AuthorityRenewalProvider for SessionRenewal {
     async fn renew_authority(&self, cancellation: &CancellationToken) -> Result<RenewedAuthority> {
         let mut current = tokio::select! {
@@ -876,6 +911,7 @@ fn validate_user_credentials(credentials: &UserPassword) -> Result<()> {
     validate_secret(&credentials.password, MAX_PASSWORD_BYTES, "password")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn validate_app_credentials(credentials: &AppCredentials) -> Result<()> {
     if credentials.access_key.is_empty()
         || credentials.access_key.len() > MAX_APP_KEY_BYTES

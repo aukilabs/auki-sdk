@@ -1,4 +1,4 @@
-//! Native credential-to-authority preparation for an Auki P2P peer.
+//! Credential-to-authority preparation for an Auki P2P peer.
 //!
 //! This crate authenticates users or trusted applications through the Auki
 //! API, asks DDS which Domains that principal may enter, proves ownership of a
@@ -73,10 +73,12 @@ mod wire;
 pub use client::{AuthClient, AuthEnvironment, AuthLimits, AuthSession};
 pub use error::{Error, Result};
 pub use secret::SecretString;
+#[cfg(not(target_arch = "wasm32"))]
+pub use types::AppCredentials;
 pub use types::{
-    AppCredentials, AuthorityRenewal, AuthorityRenewalProvider, Credentials, DomainChoice,
-    DomainDescriptor, DomainSelection, PeerAuthorityProvider, PreparedPeer, PrincipalKind,
-    RenewedAuthority, UserPassword,
+    AuthorityRenewal, AuthorityRenewalProvider, Credentials, DomainChoice, DomainDescriptor,
+    DomainSelection, PeerAuthorityProvider, PreparedPeer, PrincipalKind, RenewedAuthority,
+    UserPassword,
 };
 
 #[cfg(test)]

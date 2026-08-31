@@ -6,7 +6,9 @@ use chrono::{DateTime, Utc};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{Error, Result, SecretString};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::Error;
+use crate::{Result, SecretString};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PrincipalKind {
@@ -49,12 +51,14 @@ impl fmt::Debug for UserPassword {
 }
 
 /// Trusted native/headless app credentials retained for bounded re-exchange.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct AppCredentials {
     pub(crate) access_key: String,
     pub(crate) secret: SecretString,
     pub(crate) gateway_mac: Option<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl AppCredentials {
     pub fn new(access_key: impl Into<String>, secret: impl Into<SecretString>) -> Self {
         Self {
@@ -71,6 +75,7 @@ impl AppCredentials {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl fmt::Debug for AppCredentials {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -84,6 +89,7 @@ impl fmt::Debug for AppCredentials {
 
 pub enum Credentials {
     UserPassword(UserPassword),
+    #[cfg(not(target_arch = "wasm32"))]
     AppCredentials(AppCredentials),
 }
 
@@ -92,6 +98,7 @@ impl Credentials {
         Self::UserPassword(UserPassword::new(email, password))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn app(access_key: impl Into<String>, secret: impl Into<SecretString>) -> Self {
         Self::AppCredentials(AppCredentials::new(access_key, secret))
     }
@@ -99,6 +106,7 @@ impl Credentials {
     pub const fn principal_kind(&self) -> PrincipalKind {
         match self {
             Self::UserPassword(_) => PrincipalKind::User,
+            #[cfg(not(target_arch = "wasm32"))]
             Self::AppCredentials(_) => PrincipalKind::App,
         }
     }
@@ -180,7 +188,8 @@ pub struct RenewedAuthority {
     pub renew_at: DateTime<Utc>,
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait PeerAuthorityProvider: Send + Sync {
     async fn accessible_domains(&self) -> Result<Vec<DomainChoice>>;
 
@@ -192,7 +201,8 @@ pub trait PeerAuthorityProvider: Send + Sync {
 }
 
 /// Pluggable explicit renewal operation. It never spawns or schedules work.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait AuthorityRenewalProvider: Send + Sync {
     async fn renew_authority(&self, cancellation: &CancellationToken) -> Result<RenewedAuthority>;
 }
@@ -235,6 +245,7 @@ impl fmt::Debug for AuthorityRenewal {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn normalize_gateway_mac(value: &str) -> Result<String> {
     if value.len() != 17 {
         return Err(Error::InvalidInput {

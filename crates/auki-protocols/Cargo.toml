@@ -87,6 +87,8 @@ thiserror = { version = "2", optional = true }
 [dev-dependencies]
 auki-p2p = { path = "../auki-p2p" }
 futures = "0.3"
+hex = { workspace = true }
+jsonwebtoken = "9.3.0"
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
@@ -99,3 +101,8 @@ required-features = ["catalog", "stream"]
 name = "locked_json"
 path = "tests/locked_json.rs"
 required-features = ["catalog", "stream"]
+
+[[test]]
+name = "stage1_release_vector"
+path = "tests/stage1_release_vector.rs"
+required-features = ["catalog"]

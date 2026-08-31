@@ -631,6 +631,8 @@ dependencies = [
  "auki-sdk",
  "futures",
  "futures-timer",
+ "hex",
+ "jsonwebtoken 9.3.1",
  "libp2p-identity",
  "prost",
  "serde",

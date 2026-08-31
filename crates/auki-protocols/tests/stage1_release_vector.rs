@@ -1,12 +1,11 @@
 //! Cross-repository Stage 1 release vector.
 //!
 //! Posemesh carries the same JSON bytes and independently checks the identity,
-//! signed DDS claims, authentication frame, and resource payload. This side
-//! additionally round-trips the retained v0.2 codec.
+//! signed DDS claims, authentication frame, and resource payload. This test
+//! additionally round-trips the retained v0.2 wire contract.
 
-use auki_domain::Identity;
 use auki_p2p::{
-    P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_TTL, P2P_TOKEN_TYPE, P2PAccessClaims,
+    Identity, P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_TTL, P2P_TOKEN_TYPE, P2PAccessClaims,
 };
 use auki_protocols::catalog::v2::{
     ID as RESOURCES_V0_2_0, ResourcesRequest, ResourcesResponse, read_resources_request,

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use auki_auth::{AuthorityRenewal, PreparedPeer};
 use auki_p2p::{
     BrowserAuthority, BrowserNode, BrowserNodeExit, Identity, Multiaddr, PeerAuthorityUpdate,
-    PeerId, Protocol, RelayBaseTransport, RelayReservationError,
+    PeerId, RelayBaseTransport, RelayReservationError,
 };
 use auki_relay_booking::{
     CreateRelayBookingRequest, RelayAuthorizationError, RelayAuthorizationProvider,
@@ -64,16 +64,6 @@ impl AukiPeerReachability {
     /// Exact TCP circuit route suitable for a native Peer, when advertised by DMS.
     pub fn tcp(&self) -> Option<&Multiaddr> {
         self.tcp.as_ref()
-    }
-
-    /// Exact circuit route to another Peer through this Peer's
-    /// DMS-confirmed WSS relay.
-    pub(crate) fn wss_route_to(&self, peer_id: PeerId) -> Multiaddr {
-        let mut route = self.wss.clone();
-        let target = route.pop();
-        debug_assert!(matches!(target, Some(Protocol::P2p(_))));
-        route.push(Protocol::P2p(peer_id));
-        route
     }
 }
 
@@ -197,12 +187,12 @@ impl AukiPeer {
             }
         };
         let reachability = AukiPeerReachability { wss, tcp };
-        let protocols =
-            AukiPeerProtocols::new(Rc::clone(&node), node.domain_id(), reachability.clone());
+        let protocols = AukiPeerProtocols::new(Rc::clone(&node), node.domain_id());
         let relay = RelaySupervisor::start(
             relay_client,
             Arc::clone(&authority),
             Rc::clone(&node),
+            protocols.clone(),
             ready,
             relay_policy,
         );
@@ -626,6 +616,7 @@ impl RelaySupervisor {
         client: RelayBookingClient,
         authority: Arc<AuthorityManager>,
         node: Rc<BrowserNode>,
+        protocols: AukiPeerProtocols,
         ready: ReadyRelay,
         policy: AukiRelayConfig,
     ) -> Self {
@@ -643,6 +634,9 @@ impl RelaySupervisor {
                 stop_receiver,
             )
             .await;
+            if matches!(&end, SupervisionEnd::Node(_) | SupervisionEnd::Failed(_)) {
+                protocols.abort_all();
+            }
             task_authority.cancel_renewal();
             let status = finish_supervision(end, &client, &task_authority, &node, booking_id).await;
             let _ = stopped_sender.send(status);

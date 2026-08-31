@@ -631,14 +631,17 @@ fn canonicalize_peer_routes(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_arch = "wasm32"))]
     use std::str::FromStr;
 
     use super::*;
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn addr(value: impl AsRef<str>) -> Multiaddr {
         Multiaddr::from_str(value.as_ref()).expect("test multiaddr must parse")
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn peer(seed: u64) -> PeerId {
         let mut encoded = [0_u8; 34];
         encoded[1] = 32;
@@ -658,6 +661,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn direct_only_is_the_explicit_relay_opt_out() {
         let config = AukiPeerConfig::dev().direct_only();
         assert!(!config.relay_required());
@@ -702,6 +706,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn listener_addresses_are_deduplicated_and_stably_sorted() {
         let first = addr("/ip4/127.0.0.1/tcp/4002");
         let second = addr("/ip4/127.0.0.1/tcp/4001");
@@ -715,6 +720,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn listener_address_count_is_bounded_before_deduplication() {
         let addresses =
             (0..=MAX_LISTEN_ADDRESSES).map(|port| addr(format!("/ip4/127.0.0.1/tcp/{port}")));
@@ -728,6 +734,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn advertised_routes_require_nonzero_direct_tcp_addresses() {
         let expected_peer = peer(7);
         let valid = addr(format!("/dns4/robot.example/tcp/4001/p2p/{expected_peer}"));
@@ -751,6 +758,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn initial_routes_are_canonical_direct_first_and_replaceable() {
         let target = peer(11);
         let relay = peer(12);
@@ -776,6 +784,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn initial_routes_reject_wrong_target_and_bound_raw_input() {
         let target = peer(21);
         let other = peer(22);
@@ -796,6 +805,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn relay_policy_preserves_supported_robot_deployment_choices() {
         let relay = AukiRelayConfig::new(
             AukiRelayMode::Dedicated,
@@ -859,6 +869,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
     fn local_direct_and_required_relay_routes_share_one_capacity() {
         let sixteen_direct = (1..=16)
             .map(|port| addr(format!("/ip4/127.0.0.1/tcp/{port}")))

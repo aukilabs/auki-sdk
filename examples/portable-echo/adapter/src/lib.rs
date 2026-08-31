@@ -101,7 +101,8 @@ impl EchoEndpoint {
         self.events.clone()
     }
 
-    /// Send one echo through the routes configured on the owning Auki peer.
+    /// Send one echo through the routes configured on the owning native Auki peer.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn send(
         &self,
         remote_peer_id: PeerId,

@@ -3,21 +3,20 @@ use std::{
     collections::HashMap,
     future::Future,
     rc::{Rc, Weak},
+    time::Duration,
 };
 
 use auki_p2p::{
     ApplicationProtocol, ApplicationProtocolServer, BrowserAuthenticatedRouteStream, BrowserNode,
-    Multiaddr, PeerId, SessionRequirements, TargetedStreamError,
+    Multiaddr, PeerId, SessionRequirements,
 };
 use futures::{FutureExt, pin_mut};
+use futures_timer::Delay;
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    browser_peer_runtime::AukiPeerReachability,
-    protocol_contract::{
-        AukiProtocolError, AukiProtocolRouteAttempt, AukiProtocolSpec, AukiProtocolStream,
-    },
-};
+use crate::protocol_contract::{AukiProtocolError, AukiProtocolSpec, AukiProtocolStream};
+
+const PROTOCOL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct AukiPeerProtocols {
@@ -25,16 +24,11 @@ pub struct AukiPeerProtocols {
 }
 
 impl AukiPeerProtocols {
-    pub(crate) fn new(
-        node: Rc<BrowserNode>,
-        domain_id: uuid::Uuid,
-        reachability: AukiPeerReachability,
-    ) -> Self {
+    pub(crate) fn new(node: Rc<BrowserNode>, domain_id: uuid::Uuid) -> Self {
         Self {
             inner: Rc::new(ProtocolRuntime {
                 node,
                 domain_id,
-                reachability,
                 lifecycle: ProtocolLifecycle::new(),
                 registrations: RefCell::new(HashMap::new()),
                 next_generation: Cell::new(1),
@@ -94,40 +88,6 @@ impl AukiPeerProtocols {
         })
     }
 
-    /// Open the selected protocol through this browser's confirmed relay.
-    pub async fn open(
-        &self,
-        expected_peer: PeerId,
-        protocol_id: impl Into<String>,
-    ) -> Result<BrowserAuthenticatedRouteStream, AukiProtocolError> {
-        let protocol_id = protocol_id.into();
-        let route = self.inner.reachability.wss_route_to(expected_peer);
-        match self
-            .open_exact_protocol(expected_peer, route.clone(), protocol_id.clone())
-            .await
-        {
-            Ok(stream) => Ok(stream),
-            Err(AukiProtocolError::P2p(error)) => {
-                let unsupported_protocol = matches!(
-                    &error,
-                    auki_p2p::Error::TargetedStream(
-                        TargetedStreamError::UnsupportedProtocol { .. }
-                    )
-                );
-                Err(AukiProtocolError::AllRoutesFailed {
-                    peer_id: Box::new(expected_peer),
-                    protocol_id,
-                    attempts: vec![AukiProtocolRouteAttempt {
-                        route,
-                        error: error.to_string(),
-                        unsupported_protocol,
-                    }],
-                })
-            }
-            Err(error) => Err(error),
-        }
-    }
-
     /// Open the selected protocol through one exact advertised WSS circuit.
     pub async fn open_exact(
         &self,
@@ -135,20 +95,11 @@ impl AukiPeerProtocols {
         route: Multiaddr,
         protocol_id: impl Into<String>,
     ) -> Result<BrowserAuthenticatedRouteStream, AukiProtocolError> {
-        self.open_exact_protocol(expected_peer, route, protocol_id.into())
-            .await
-    }
-
-    async fn open_exact_protocol(
-        &self,
-        expected_peer: PeerId,
-        route: Multiaddr,
-        protocol_id: String,
-    ) -> Result<BrowserAuthenticatedRouteStream, AukiProtocolError> {
         if !self.inner.lifecycle.is_running() {
             return Err(AukiProtocolError::Stopped);
         }
-        let protocol = ApplicationProtocol::new(protocol_id).map_err(AukiProtocolError::P2p)?;
+        let protocol =
+            ApplicationProtocol::new(protocol_id.into()).map_err(AukiProtocolError::P2p)?;
         let opening = self
             .inner
             .node
@@ -171,6 +122,26 @@ impl AukiPeerProtocols {
             .drain()
             .filter_map(|(_, entry)| entry.server.borrow_mut().take())
             .collect::<Vec<_>>();
+        shutdown_servers(servers).await
+    }
+
+    pub(crate) fn abort_all(&self) {
+        self.inner.lifecycle.stop();
+        let servers = self
+            .inner
+            .registrations
+            .borrow_mut()
+            .drain()
+            .filter_map(|(_, entry)| entry.server.borrow_mut().take())
+            .collect::<Vec<_>>();
+        drop(servers);
+    }
+}
+
+async fn shutdown_servers(
+    servers: Vec<ApplicationProtocolServer>,
+) -> Result<(), AukiProtocolError> {
+    let shutdown = async move {
         let mut first_error = None;
         for server in servers {
             if let Err(error) = server.shutdown().await {
@@ -181,11 +152,22 @@ impl AukiPeerProtocols {
             Some(error) => Err(error),
             None => Ok(()),
         }
-    }
+    };
+    cleanup_before_deadline(shutdown, PROTOCOL_SHUTDOWN_TIMEOUT)
+        .await
+        .unwrap_or(Err(AukiProtocolError::CleanupTimeout))
+}
 
-    pub(crate) fn abort_all(&self) {
-        self.inner.lifecycle.stop();
-        self.inner.registrations.borrow_mut().clear();
+async fn cleanup_before_deadline<T>(
+    cleanup: impl Future<Output = T>,
+    timeout: Duration,
+) -> Option<T> {
+    let cleanup = cleanup.fuse();
+    let timeout = Delay::new(timeout).fuse();
+    pin_mut!(cleanup, timeout);
+    futures::select_biased! {
+        result = cleanup => Some(result),
+        () = timeout => None,
     }
 }
 
@@ -223,7 +205,6 @@ impl ProtocolLifecycle {
 struct ProtocolRuntime {
     node: Rc<BrowserNode>,
     domain_id: uuid::Uuid,
-    reachability: AukiPeerReachability,
     lifecycle: ProtocolLifecycle,
     registrations: RefCell<HashMap<String, Rc<ProtocolEntry>>>,
     next_generation: Cell<u64>,
@@ -248,7 +229,7 @@ impl AukiProtocolRegistration {
         let server = self.take_server();
         self.closed = true;
         match server {
-            Some(server) => server.shutdown().await.map_err(AukiProtocolError::P2p),
+            Some(server) => shutdown_servers(vec![server]).await,
             None => Ok(()),
         }
     }
@@ -272,5 +253,38 @@ impl Drop for AukiProtocolRegistration {
         if !self.closed {
             drop(self.take_server());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    struct DropProbe(Rc<Cell<bool>>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.set(true);
+        }
+    }
+
+    #[wasm_bindgen_test(async)]
+    async fn cleanup_deadline_drops_pending_cleanup() {
+        let dropped = Rc::new(Cell::new(false));
+        let cleanup = {
+            let dropped = Rc::clone(&dropped);
+            async move {
+                let _probe = DropProbe(dropped);
+                futures::future::pending::<()>().await;
+            }
+        };
+
+        assert!(
+            cleanup_before_deadline(cleanup, Duration::ZERO)
+                .await
+                .is_none()
+        );
+        assert!(dropped.get());
     }
 }

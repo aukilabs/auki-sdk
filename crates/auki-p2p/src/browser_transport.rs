@@ -18,7 +18,7 @@ use async_channel::{Receiver, Sender};
 use chrono::{DateTime, Utc};
 use futures::{
     channel::oneshot,
-    future::{join_all, poll_fn, FutureExt, Shared},
+    future::{join_all, poll_fn, AbortHandle, Abortable, FutureExt, Shared},
     io::{AsyncRead, AsyncWrite},
     stream::FuturesUnordered,
     Stream as FuturesStream, StreamExt,
@@ -69,6 +69,7 @@ struct BrowserBehaviour {
 pub struct BrowserIncomingAuthenticatedStreams {
     results: Receiver<Result<AuthenticatedStream>>,
     completed: Shared<oneshot::Receiver<()>>,
+    abort: AbortHandle,
 }
 
 impl BrowserIncomingAuthenticatedStreams {
@@ -78,7 +79,13 @@ impl BrowserIncomingAuthenticatedStreams {
 
     async fn shutdown(self) {
         self.results.close();
-        let _ = self.completed.await;
+        let _ = self.completed.clone().await;
+    }
+}
+
+impl Drop for BrowserIncomingAuthenticatedStreams {
+    fn drop(&mut self) {
+        self.abort.abort();
     }
 }
 
@@ -89,6 +96,7 @@ impl BrowserIncomingAuthenticatedStreams {
 pub struct ApplicationProtocolServer {
     stop: CancellationToken,
     completed: Shared<oneshot::Receiver<()>>,
+    abort: AbortHandle,
 }
 
 impl ApplicationProtocolServer {
@@ -104,6 +112,7 @@ impl ApplicationProtocolServer {
 impl Drop for ApplicationProtocolServer {
     fn drop(&mut self) {
         self.stop.cancel();
+        self.abort.abort();
     }
 }
 
@@ -395,15 +404,20 @@ impl BrowserNode {
             .collect::<Vec<_>>();
         drop(pending_receiver);
         drop(result_sender);
+        let (abort, abort_registration) = AbortHandle::new_pair();
         let (completed_sender, completed_receiver) = oneshot::channel();
         spawn_local(async move {
-            let _ = futures::join!(pump, join_all(workers));
+            let workers = async move {
+                let _ = futures::join!(pump, join_all(workers));
+            };
+            let _ = Abortable::new(workers, abort_registration).await;
             let _ = completed_sender.send(());
         });
 
         Ok(BrowserIncomingAuthenticatedStreams {
             results,
             completed: completed_receiver.shared(),
+            abort,
         })
     }
 
@@ -426,14 +440,18 @@ impl BrowserNode {
         let incoming = self.accept_with_requirements(spec.protocol().clone(), requirements)?;
         let stop = shutdown.child_token();
         let task_stop = stop.clone();
+        let (abort, abort_registration) = AbortHandle::new_pair();
         let (completed_sender, completed_receiver) = oneshot::channel();
         spawn_local(async move {
-            run_application_protocol_server(incoming, spec, task_stop, Rc::new(handler)).await;
+            let server =
+                run_application_protocol_server(incoming, spec, task_stop, Rc::new(handler));
+            let _ = Abortable::new(server, abort_registration).await;
             let _ = completed_sender.send(());
         });
         Ok(ApplicationProtocolServer {
             stop,
             completed: completed_receiver.shared(),
+            abort,
         })
     }
 
@@ -1769,6 +1787,51 @@ mod tests {
             }
             _ => panic!("pending exact-route drop scheduled an unexpected command"),
         }
+    }
+
+    #[wasm_bindgen_test(async)]
+    async fn dropping_protocol_owners_aborts_their_local_tasks() {
+        let (incoming_abort, incoming_registration) = AbortHandle::new_pair();
+        let (result_sender, results) = async_channel::bounded(1);
+        let observed_results = results.clone();
+        let (incoming_completed_sender, incoming_completed_receiver) = oneshot::channel();
+        let incoming_completed = incoming_completed_receiver.shared();
+        spawn_local(async move {
+            let work = async move {
+                let _result_sender = result_sender;
+                futures::future::pending::<()>().await;
+            };
+            let _ = Abortable::new(work, incoming_registration).await;
+            let _ = incoming_completed_sender.send(());
+        });
+        drop(BrowserIncomingAuthenticatedStreams {
+            results,
+            completed: incoming_completed.clone(),
+            abort: incoming_abort,
+        });
+        incoming_completed
+            .await
+            .expect("aborted incoming task reports completion");
+        assert!(observed_results.recv().await.is_err());
+
+        let (server_abort, server_registration) = AbortHandle::new_pair();
+        let (server_completed_sender, server_completed_receiver) = oneshot::channel();
+        let server_completed = server_completed_receiver.shared();
+        spawn_local(async move {
+            let _ = Abortable::new(futures::future::pending::<()>(), server_registration).await;
+            let _ = server_completed_sender.send(());
+        });
+        let stop = CancellationToken::new();
+        let observed_stop = stop.clone();
+        drop(ApplicationProtocolServer {
+            stop,
+            completed: server_completed.clone(),
+            abort: server_abort,
+        });
+        assert!(observed_stop.is_cancelled());
+        server_completed
+            .await
+            .expect("aborted server task reports completion");
     }
 }
 

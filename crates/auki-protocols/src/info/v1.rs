@@ -1,6 +1,6 @@
 //! Payload codec for authenticated participant information.
 //!
-//! Domain peers use this shape to render each other in operator UIs. The
+//! Authenticated peers use this shape to render each other in operator UIs. The
 //! authenticated transport supplies exact Domain scope and peer identity;
 //! [`AuthenticatedParticipantInfo`] contains only application/session
 //! metadata.
@@ -19,14 +19,15 @@
 //!
 //! ## Trust boundary
 //!
-//! The codec does not authorize callers. `auki-domain` registers it with
-//! `auki-p2p` using Domain-scoped session requirements.
+//! The codec does not authorize callers. `InfoEndpoint` mounts it on
+//! `AukiPeer`; the application-owned Provider decides what metadata an
+//! authenticated requester may receive.
 //!
 //! ## Wire format
 //!
 //! Length-prefixed protobuf, same framing as the other Hagall
 //! protocols. [`MAX_INFO_FRAME_BYTES`] caps each side at 64 KiB —
-//! `ParticipantInfo` is well under 1 KiB; the cap is defense
+//! `AuthenticatedParticipantInfo` is well under 1 KiB; the cap is defense
 //! against malformed senders.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
@@ -40,7 +41,7 @@ pub use auki_datatypes::info::{InfoRequest, InfoResponse};
 /// Exact authenticated participant-info 1.0.0 protocol identifier.
 pub const ID: &str = "/auki/auth/1/info/1.0.0";
 
-/// Cap on a single framed message. 64 KiB — `ParticipantInfo` is
+/// Cap on a single framed message. 64 KiB — `AuthenticatedParticipantInfo` is
 /// under 1 KiB at demo scale; the cap is defense against malformed
 /// senders.
 pub const MAX_INFO_FRAME_BYTES: u32 = 64 * 1024;
@@ -49,7 +50,7 @@ pub const MAX_INFO_FRAME_BYTES: u32 = 64 * 1024;
 ///
 /// Authentication supplies exact Domain scope and authority. This payload is
 /// diagnostic application/session metadata only, so it intentionally has no
-/// Manager, membership, authorization-role, or route fields.
+/// membership, authorization-role, or route fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AuthenticatedParticipantInfo {

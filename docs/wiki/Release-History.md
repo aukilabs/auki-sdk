@@ -10,43 +10,36 @@ Each entry summarizes what changed, who's affected, and any migration notes. The
 
 ---
 
-## Unreleased v0.1.0 — authenticated Domain Stage 1
+## Unreleased v0.1.0 — authenticated AukiPeer runtime
 
-**Status:** source-complete migration guidance; the Stage 1 release gate and
-coordinated tag are still pending. Do not substitute a Manager-era v0.0.x tag
-for local Stage 1 evaluation.
+**Status:** the source migration is in progress; the coordinated release tag
+and package publication are still pending.
 
-- Native Rust and Python share one owned `auki-domain::Domain` runtime with
-  host-supplied DDS authority, listeners, and exact-peer routes.
-- Manager, membership, election, heartbeat, hidden Domain time, Discovery-owned
-  startup, `NetworkRuntime`, and `auki-network-py` are removed from this line.
-- The `auki-network` crate is removed. `auki-p2p` owns canonical identity and
-  transport, `auki-protocols` owns exact wire contracts, and `auki-domain` owns
-  hosting policy and protocol tasks.
-- Retained application protocols negotiate only authenticated
-  `/auki/auth/1/...` IDs; there is no legacy-wire fallback.
-- `ServedProtocols` defaults to none; hosts opt in to each exact inbound
-  protocol version while client operations remain available independently.
-- Native Rust `auki-auth` prepares selected-Domain, Peer-ID-bound authority
-  from a trusted User email/password or App key/secret. Its dev deployment
-  proof remains part of the unreleased gate; routes/discovery stay separate.
-- `auki-domain-py==0.1.0` is paired exactly with
-  `auki-session-py==0.1.0` from the same SDK build.
-- The diagnostic CLI provides a real two-process direct-TCP catalog proof and
-  fail-closed wrong-Domain/wrong-Peer/malformed-credential checks.
-- The active Cargo workspace pins Rust `1.89.0`; `auki-domain`,
-  `auki-protocols`, and `auki-p2p` are versioned `0.1.0`. Rust Domain and its
-  wire-contract crate are consumed from the coordinated source tag, while the
-  transport crate is published independently. Posemesh owns its dataset
-  application protocol and pins this transport revision/version.
+- `auki_sdk::AukiPeer` is the single high-level networking runtime for native
+  Rust and Web/Wasm. The old Manager, `auki-network`, and `auki-domain`
+  runtimes are removed.
+- `auki-auth` prepares renewable, Domain-scoped authority for User or trusted
+  native App credentials. Robot and Compute hosts can supply externally
+  managed authority through `AukiPeer::start_external`.
+- Relay-backed reachability is the native default and mandatory in browsers.
+  Native direct-only operation is explicit; one live runtime per persisted
+  Peer ID is supported.
+- `auki-protocols` exposes compile-time opt-in wire families with explicit
+  outbound Clients and inbound Endpoints. Current endpoints do not negotiate
+  hidden legacy fallbacks; Catalog v2 remains only where its locked row shape
+  is embedded by Catalog v3.
+- One portable echo protocol now proves browser/browser and both native/Web
+  directions without duplicating its Rust wire conversation.
+- Python retains local data-model bindings and Swift retains a Wallet binding.
+  Their canonical high-level `AukiPeer` facades remain follow-up work.
+- Discovery and remote-route publication remain application-owned. Relay
+  allocation provides reachability, not peer discovery.
 
-**Who's affected:** every native networking consumer. Upgrade a communicating
-Rust/Python group together. The Manager-era Swift network and browser sources
-are deleted from HEAD and remain available only at `v0.0.60` until their later
-external authenticated-engine migrations.
+**Who's affected:** every networking consumer. Upgrade communicating peers
+together; this is intentionally not a compatibility runtime for v0.0.x.
 
 **Migration:** follow the
-[authenticated Domain migration guide](https://github.com/aukilabs/auki-sdk/blob/develop/docs/authenticated-domain-migration.md).
+[AukiPeer migration guide](https://github.com/aukilabs/auki-sdk/blob/develop/docs/authenticated-domain-migration.md).
 
 ---
 
@@ -214,7 +207,7 @@ this tag.
 
 **Released:** 2026-05-21 · [`git show v0.0.50`](https://github.com/aukilabs/auki-sdk/releases/tag/v0.0.50)
 
-- **[#161](https://github.com/aukilabs/auki-sdk/pull/161)** Heartbeat-driven domain clock sync. Heartbeats now carry NTP-style timing observations; each peer computes a `ClockTransformEstimate` against the Manager and composes with the Manager-announced domain clock to produce a live `DomainClockEstimate`. (See [The Five Questions § Temporal](The-Five-Questions#temporal--when-did-this-happen) for the live-vs-recorded distinction.)
+- **[#161](https://github.com/aukilabs/auki-sdk/pull/161)** Heartbeat-driven domain clock sync. Heartbeats now carry NTP-style timing observations; each peer computes a `ClockTransformEstimate` against the Manager and composes with the Manager-announced domain clock to produce a live `DomainClockEstimate`. (See [The Five Questions § Temporal](The-Five-Questions#temporal--when-is-this) for the live-vs-recorded distinction.)
 - **[#162 / #158](https://github.com/aukilabs/auki-sdk/pull/158)** Diagnostic app and diagnostic-flash timestamp logging.
 - **[#156](https://github.com/aukilabs/auki-sdk/pull/156)** Python bindings relocated under `bindings/python/` (away from sibling crate dirs). Cargo paths and import paths updated.
 - **[#155](https://github.com/aukilabs/auki-sdk/pull/155)** Retained stream source bridge.

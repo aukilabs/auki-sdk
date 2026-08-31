@@ -8,8 +8,10 @@
 //!
 //! Producer sidecars can now do the complete registry dance in Python:
 //! write a `FrameRegistryEntry`, use its returned hash in a spatial
-//! `SensorRegistryEntry`, write that sensor entry, then hand the two
-//! hashes to `auki_domain.StreamManifestBuilder.from_registry(...)`.
+//! `SensorRegistryEntry`, write that sensor entry, then pin both hashes in a
+//! log manifest or `auki-session-py` registration. Native Rust can project the
+//! resulting Session through the opt-in Catalog and Stream endpoints; the
+//! canonical Python `AukiPeer` facade is pending.
 //!
 //! ## RegistryRef / LogRef
 //!

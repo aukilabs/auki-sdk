@@ -6,7 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Transport-neutral wire contracts for authenticated Auki application protocols."
+description = "Opt-in wire contracts and portable AukiPeer protocol APIs."
+readme = "README.md"
 
 [features]
 default = []

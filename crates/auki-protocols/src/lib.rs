@@ -1,9 +1,11 @@
-//! Transport-neutral wire contracts for authenticated Auki protocols.
+//! Opt-in wire contracts and portable `auki_sdk::AukiPeer` protocol APIs.
 //!
 //! Every protocol family is compile-time opt-in and the default feature set is
 //! empty. Exact wire versions are explicit in module paths, for example
-//! `catalog::v3` and `stream::v2`. Hosting, registration, authorization,
-//! providers, and task lifecycle belong to the runtime using this crate.
+//! `catalog::v3` and `stream::v2`. Wire features expose bounded codecs;
+//! `*-endpoint` features add Clients and inbound Endpoints, plus Provider
+//! traits where the protocol delegates data or policy. Applications still own
+//! authorization policy and endpoint lifecycle.
 
 #![forbid(unsafe_code)]
 

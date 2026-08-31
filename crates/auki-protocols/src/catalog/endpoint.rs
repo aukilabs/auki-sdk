@@ -1,8 +1,8 @@
-//! Cross-platform Auki peer endpoint for the retained Resource Catalog protocols.
+//! Cross-platform Auki peer endpoint for Resource Catalog v3 and v4.
 //!
 //! Catalog v3 advertises sensor, pose, time-transform, detection, and live
 //! message-channel resources. Catalog v4 advertises Map Logs. Version 0.2
-//! remains a wire-only compatibility contract.
+//! remains a wire-only codec because v3 embeds its established log-row shape.
 
 #![forbid(unsafe_code)]
 

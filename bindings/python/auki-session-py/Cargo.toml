@@ -36,7 +36,7 @@ auki-registry-rs = { package = "auki-registry", path = "../../../crates/auki-reg
 auki-registry-py = { path = "../auki-registry-py" }
 # Re-used for PoseSource / PoseWriterMode / TimeTransformSource Rust types.
 auki-manifests-rs = { package = "auki-manifests", path = "../../../crates/auki-manifests" }
-# ResourceEntry → serde_json serialization for catalog().
+# JSON conversion helpers for Python dictionaries and enum values.
 serde_json = "1"
 # JSON serialization helpers.
 serde = { version = "1", features = ["derive"] }

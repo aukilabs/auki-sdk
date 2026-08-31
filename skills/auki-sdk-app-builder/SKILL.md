@@ -24,25 +24,26 @@ revision disagree, inspect that revision's public exports, tests, and examples.
 - `auki_sdk::AukiPeer` is the canonical networking facade for new Rust and Web
   applications. It owns one authenticated Peer ID in one DDS Domain, authority
   supervision, P2P transport, DMS relay allocation, routes, protocol hosting,
-  lifecycle status, fencing, and ordered shutdown.
+  lifecycle fencing, and ordered shutdown. Native exposes readiness status;
+  Web exposes a terminal lifecycle observer.
 - `auki_session::Peer` is the long-lived local recording owner. Register
   peer-level frames, sensors, detectors, maps, device models, and URDF packages
   there.
 - `auki_session::Session` is one recording timeline created with
   `Peer::start_session()`. It owns session clocks and sensor, pose,
   time-transform, detection, and map logs.
-- `auki_protocols` contains retained transport-neutral SDK wire contracts. It
-  does not mount handlers or provide an `AukiPeer` endpoint.
+- `auki_protocols` contains transport-neutral SDK wire contracts and opt-in
+  portable `Endpoint` / cloneable `Client` implementations for each supported
+  family. Compiling a wire feature does not mount its endpoint.
 - `auki_geometry` owns convention conversion, transform composition and
   inversion, and pose/matrix spatial math.
 
 `auki_session::Peer` and `auki_sdk::AukiPeer` have different ownership roles
 even when a product associates them with the same participant.
 
-The retained Rust `auki_domain::Domain` and Python Domain binding are
-compatibility/low-level surfaces for existing consumers. Do not make them the
-default architecture for a new application. Python and Swift do not yet have
-the canonical high-level `AukiPeer` facade.
+The legacy Manager and Rust/Python `Domain` runtimes are removed. Use an old tag
+only to understand or migrate historical consumers. Python and Swift do not yet
+have the canonical high-level `AukiPeer` facade.
 
 ## Start an authenticated peer
 
@@ -77,8 +78,8 @@ outbound-only peers need neither. Browser peers have no direct-only mode.
   TCP from native Rust and WSS from a browser.
 - A route is an untrusted location hint. The authenticated stream must still
   prove the expected Peer ID and selected Domain.
-- The SDK exposes confirmed local routes and authenticated peer observations;
-  `known_peers()` is not an authorization roster.
+- Native Rust exposes confirmed local routes and authenticated peer
+  observations; `known_peers()` is not an authorization roster.
 - Automatic remote-peer discovery and route publication are not available yet.
   Obtain remote Peer IDs and routes from configuration, a product control
   plane, or an explicit application exchange.
@@ -91,7 +92,12 @@ Applications should mount an existing product endpoint through
 `peer.protocols()`, use its small typed API, and keep the endpoint alive while
 serving. A peer serves no product protocol merely because wire types compile or
 a client method exists. Close mounted endpoints before `peer.shutdown()` and
-monitor peer status for terminal failure.
+monitor the native status or Web lifecycle observer for terminal failure.
+
+For SDK resource discovery, Catalog v3 is the live general endpoint. It carries
+unchanged v2-shaped sensor, pose, time-transform, and detection rows plus v3
+message-channel rows. Catalog v2 remains a compatibility wire schema; Map Logs
+use Catalog v4.
 
 When authoring a protocol, use one product-owned Rust crate with two focused
 modules:
@@ -114,12 +120,12 @@ Do not put product endpoints in `auki_protocols` or generic application glue in
 ## Web behavior
 
 The current Web/Wasm facade supports User authentication through
-`AukiUserSession`, accessible-Domain selection, and `AukiPeer` startup. Each
-start creates a fresh in-memory identity and mandatory confirmed WSS relay;
-reload or restart therefore produces a new Peer ID. Web applications use exact
-WSS routes, mount portable Rust endpoints through thin Wasm bindings, and close
-endpoints before shutting down the peer. They do not accept App credentials or
-persist credentials or identity.
+`auki-sdk-web::AukiUserSession`, accessible-Domain selection, and `AukiPeer`
+startup. Each start creates a fresh in-memory identity and mandatory confirmed
+WSS relay; reload or restart therefore produces a new Peer ID. Web applications
+use exact WSS routes, mount portable Rust endpoints through thin Wasm bindings,
+and close endpoints before shutting down the peer. They do not accept App
+credentials or persist credentials or identity.
 
 ## Recording and spatial data
 
@@ -159,15 +165,14 @@ Stop and inspect the SDK before adding:
 
 - a second P2P runtime, authentication handshake, relay booker, renewal loop, or
   reconnect owner beside `AukiPeer`;
-- authorization based on routes, discovery data, cached metadata, or
-  `known_peers()`;
+- authorization based on routes, discovery data, cached metadata, or native
+  `known_peers()` observations;
 - an assumption that discovery, route publication, or inbound protocols happen
   automatically;
 - separate native and Web implementations of one wire protocol;
 - a custom catalog, registry/hash format, payload wrapper, clock model, or
   spatial math already represented by the SDK; or
-- new-app networking built around Manager semantics or the compatibility
-  `Domain` facade.
+- new-app networking built around removed Manager or `Domain` semantics.
 
 If the SDK genuinely lacks a capability, state the gap precisely and isolate the
 smallest app-side adapter behind a narrow interface. Do not create a competing

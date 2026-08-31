@@ -1,71 +1,31 @@
-# Author one portable Auki protocol crate
+# Author a portable Auki protocol
 
-Put one versioned wire contract and its small `AukiPeer` endpoint in one Rust
-crate. Native and Web hosts then depend on that crate and stay small.
+Keep one immutable wire contract and its small `AukiPeer` integration in one
+Rust crate. Native and Web hosts should consume that same crate; platform code
+should not reimplement the conversation.
 
-The reference is
-[`examples/portable-echo`](../../examples/portable-echo/README.md):
+[`examples/portable-echo`](../../examples/portable-echo/README.md) is the
+smallest complete reference.
+
+## Recommended shape
 
 ```text
 my-protocol/
 ├── Cargo.toml
 ├── src/
-│   ├── lib.rs       private modules and the small public API
-│   ├── wire.rs      ID, types, bounded codec, conversation
-│   └── endpoint.rs  mount, dial, deadlines, cleanup, events
+│   ├── lib.rs
+│   ├── wire.rs       ID, messages, bounded codec, conversation
+│   └── endpoint.rs   Client, Endpoint, Provider, deadlines, cleanup
 └── tests/
     └── locked_wire.rs
 ```
 
-`wire.rs` stays transport-neutral. `endpoint.rs` connects it to the canonical
-cross-target `AukiPeer` surface. These are private implementation modules in
-one product-owned package and release, not separate crates applications must
+These are modules in one crate, not separate packages an application must
 assemble.
 
-That crate can live in the product repository or in this workspace's example
-or protocol area. Product-specific endpoints do not belong in the generic
-`crates/auki-protocols` package, which retains SDK-owned wire contracts.
+## Assign one immutable ID
 
-## Ownership at a glance
-
-| Owner | Writes and decides |
-| --- | --- |
-| Protocol author | Exact ID, wire types, framing, bounds, conversation, endpoint API, deadlines, cleanup, events, contract tests |
-| Application developer | Credentials, Domain, native identity path, protocol opt-in, peer-information source, product policy, UI |
-| SDK runtime | Authority renewal, relay booking, confirmed routes, mutual authentication, exact-route validation, fencing, shutdown |
-
-Authentication is not application authorization. A peer authenticated in the
-same Domain is not automatically allowed to drive a robot or invoke every
-capability; the product still enforces that policy.
-
-## 1. Create one crate with two private modules
-
-Keep `lib.rs` boring:
-
-```rust
-mod endpoint;
-mod wire;
-
-pub use endpoint::{MyEndpoint, MyError, protocol_spec};
-pub use wire::{PROTOCOL_ID, Request, Response};
-```
-
-The crate as a whole depends on `auki-sdk` because its endpoint mounts on
-`AukiPeer`. The wire module itself should not depend on authentication, Tokio,
-libp2p, `auki-sdk`, wasm-bindgen, browser APIs, credentials, UI, or persistence.
-Its client and server functions accept a portable asynchronous duplex stream,
-so the same conversation runs on native and Wasm.
-
-Compare the reference modules:
-
-- [`src/wire.rs`](../../examples/portable-echo/src/wire.rs)
-- [`src/endpoint.rs`](../../examples/portable-echo/src/endpoint.rs)
-- [`src/lib.rs`](../../examples/portable-echo/src/lib.rs)
-
-## 2. Assign one immutable protocol ID
-
-Product IDs use `/<namespace>[/<name>...]/<version>`, with lower-case ASCII
-name components and a numeric version, for example:
+Product IDs use `/<namespace>[/<name>...]/<version>`:
 
 ```text
 /my-product/robot-state/1.0.0
@@ -74,134 +34,180 @@ name components and a numeric version, for example:
 The top-level `/auki/` namespace is reserved for SDK-owned protocols. Product
 protocols do not need an `/auki-p2p/` prefix.
 
-Treat the complete ID as immutable wire identity:
+Change the ID when any observable wire property becomes incompatible:
 
-- Never assign two codecs or conversations to the same ID.
-- Change the ID when framing, schema, bounds, ordering, or observable semantics
-  become incompatible.
-- Mount multiple exact IDs explicitly only when a transition genuinely needs
-  multiple versions.
+- framing or encoding;
+- request/response ordering;
+- message schema;
+- size or round bounds; or
+- success and failure semantics.
 
-The Cargo version is distribution metadata. It may advance for a compatible
-implementation fix without changing the wire ID.
+The Cargo package version and protocol ID solve different problems. A bug fix
+may change the package version without changing the wire.
 
-## 3. Implement and lock the wire contract
+## Keep wire code transport-neutral
 
-A portable wire module normally exposes bounded client and server
-conversations:
+The wire module owns:
 
-```rust
+- the exact protocol ID;
+- request, response, and event types;
+- fixed byte and round limits;
+- portable async read/write functions; and
+- validation before allocation or application delivery.
+
+```rust,ignore
 pub const PROTOCOL_ID: &str = "/my-product/robot-state/1.0.0";
-pub const MAX_FRAME_BYTES: usize = 64 * 1024;
+pub const MAX_FRAME_BYTES: u32 = 64 * 1024;
 
-pub async fn run_client<S>(stream: &mut S, request: Request) -> Result<Response, Error>
+pub async fn run_client<S>(
+    stream: &mut S,
+    request: Request,
+) -> Result<Response, WireError>
 where
     S: futures::AsyncRead + futures::AsyncWrite + Unpin,
 {
-    // Encode one bounded request, read one bounded response, validate it.
+    // Write one bounded request and validate one bounded response.
 }
 
-pub async fn run_server<S>(stream: &mut S) -> Result<AcceptedRequest, Error>
+pub async fn run_server<S>(stream: &mut S) -> Result<Accepted, WireError>
 where
     S: futures::AsyncRead + futures::AsyncWrite + Unpin,
 {
-    // Read one bounded request and perform the exact server conversation.
+    // Read, validate, and answer the exact conversation.
 }
 ```
 
-Lock the exact ID and representative encoded bytes. Prove the conversation and
-reject empty, malformed, mismatched, and oversized input before unbounded
-allocation. The echo vectors live in
-[`tests/locked_wire.rs`](../../examples/portable-echo/tests/locked_wire.rs).
+Do not put credentials, DDS/DMS clients, libp2p setup, wasm-bindgen, UI, or
+filesystem policy in this module.
 
-## 4. Add the endpoint in the same crate
+Lock the ID and representative encoded bytes. Test empty, malformed,
+mismatched, truncated, oversized, and out-of-order input.
 
-The endpoint declares the same bound enforced by the wire codec:
+## Split outbound Client from inbound Endpoint
 
-```rust
-pub fn protocol_spec() -> Result<AukiProtocolSpec, AukiProtocolError> {
-    let max_frame_bytes = u32::try_from(MAX_FRAME_BYTES)
-        .expect("protocol frame bound must fit in u32");
-    AukiProtocolSpec::new(PROTOCOL_ID, MAX_CONCURRENCY, max_frame_bytes)
+The public runtime API should be boring:
+
+- `MyClient` is cloneable and performs outbound operations.
+- `MyEndpoint` owns inbound registration and close.
+- `MyProvider` supplies data or admission decisions to inbound handlers.
+
+```rust,ignore
+pub const MY_MAX_CONCURRENCY: usize = 16;
+
+pub fn my_protocol_spec() -> Result<AukiProtocolSpec, AukiProtocolError> {
+    AukiProtocolSpec::new(PROTOCOL_ID, MY_MAX_CONCURRENCY, MAX_FRAME_BYTES)
 }
 ```
 
-`AukiProtocolSpec` accepts a frame bound from 1 byte through 64 MiB, the
-underlying authenticated transport limit. The SDK records that host requirement
-but cannot infer or enforce an application's framing. The wire codec must
-independently reject frames above the same or a smaller bound.
+Use prefixed spec and bound names in shared crates. Generic names such as
+`protocol_spec` are reasonable only when the crate contains exactly one
+protocol and cannot collide.
 
-The endpoint owns:
+### Client
 
-- the registration returned by `peer.protocols().register(...)`;
-- calls to the shared `run_server` and `run_client` conversation;
-- bounded open, exchange, and close deadlines;
-- stream cleanup on success, failure, and cancellation; and
-- the small result or event API applications need.
+The Client stores `AukiPeerProtocols` and exposes:
 
-Copy the production-shaped
-[`EchoEndpoint`](../../examples/portable-echo/src/endpoint.rs), not its product
-name. It compiles unchanged for native and Wasm.
+- configured-route methods on native Rust when useful; and
+- exact-route methods for the portable native/Web surface.
 
-## 5. Mount and dial from an application
+```rust,ignore
+#[derive(Clone)]
+pub struct MyClient {
+    protocols: AukiPeerProtocols,
+}
 
-Mounting is explicit opt-in:
+impl MyClient {
+    pub fn new(protocols: AukiPeerProtocols) -> Self {
+        Self { protocols }
+    }
 
-```rust
-let endpoint = MyEndpoint::mount(peer.protocols())?;
-```
-
-Keep the endpoint alive while serving. A client-only peer does not need to
-mount an inbound handler if the protocol crate exposes a separate client.
-
-Use the remote peer's complete advertised route for portable dialing:
-
-```rust
-let response = endpoint
-    .send_exact(expected_peer_id, advertised_route, request)
-    .await?;
-```
-
-Native peers normally consume a TCP route. Browser peers consume a WSS route.
-The route is an untrusted location hint: the SDK still mutually authenticates
-the expected Peer ID in the exact selected Domain.
-
-A native endpoint may also expose configured-route dialing when a product
-maintains a route catalog. Exact-route dialing remains the cross-platform
-reference because it does not assume two peers use the same relay.
-
-## 6. Share support and routes explicitly
-
-`0.1` has no automatic peer discovery or route publication. An application
-may exchange a small record through configuration, a product control plane, or
-manual copy and paste:
-
-```json
-{
-  "domainId": "<selected Domain UUID>",
-  "peerId": "<expected Peer ID>",
-  "protocols": ["/my-product/robot-state/1.0.0"],
-  "routes": {
-    "tcp": "<confirmed native route>",
-    "wss": "<confirmed browser route>"
-  }
+    pub async fn request_exact(
+        &self,
+        expected_peer: PeerId,
+        route: Multiaddr,
+        request: Request,
+    ) -> Result<Response, MyError> {
+        let mut stream = self
+            .protocols
+            .open_exact(expected_peer, route, PROTOCOL_ID)
+            .await?;
+        // Apply deadlines, run the wire client, and close the stream.
+    }
 }
 ```
 
-Include only routes the peer actually received. Native applications read
-confirmed routes from `peer.protocol_context().routes()`. The Web facade
-exposes `wssRoute` and an optional `tcpRoute`.
+The route is an untrusted hint. `open_exact` authenticates the expected Peer ID
+inside the running peer's Domain before the wire conversation begins.
 
-This JSON is illustrative product data, not a stable SDK `PeerCard`, a
-discovery record, or authority. Receiving it never grants permission.
+### Provider
 
-## 7. Close in ownership order
+Pass the verified requester to application policy:
 
-The endpoint is owned above the peer, so close it first. Capture results so
-each cleanup barrier is attempted even if an earlier operation fails:
+```rust,ignore
+pub trait MyProvider {
+    fn respond(
+        &self,
+        requester: &AuthenticatedPeer,
+        request: Request,
+    ) -> Response;
+}
+```
 
-```rust
-let operation = run_with(&endpoint).await;
+Native Provider traits normally require `Send + Sync + 'static`. Browser
+providers may be executor-local and use `Rc`; keep this target difference
+inside the endpoint module.
+
+Authentication is not authorization. Being in the same Domain does not
+automatically permit a command or robot capability.
+
+### Endpoint
+
+The Endpoint registers the exact spec, runs bounded inbound handlers, and owns
+registration shutdown:
+
+```rust,ignore
+let registration = protocols.register(my_protocol_spec()?, move |mut stream| {
+    let provider = provider.clone();
+    async move {
+        let requester = stream.remote_peer().clone();
+        // Deadline + bounded wire server + provider + close.
+    }
+})?;
+```
+
+Keep outbound operations on `MyClient`. An Endpoint may expose `client()` as a
+convenience, but it should not duplicate every Client method.
+
+## Make limits real
+
+`AukiProtocolSpec` records the handler concurrency and frame requirement. The
+wire codec must independently enforce its own frame bound; the transport cannot
+infer application framing.
+
+Define fixed deadlines for:
+
+- opening a stream;
+- each request/response or streaming phase;
+- provider work where it is asynchronous; and
+- stream and endpoint cleanup.
+
+Bound queues and multi-round conversations. Treat cancellation as a normal
+lifecycle event and never return partial data that failed final validation.
+
+## Mount explicitly
+
+```rust,ignore
+let endpoint = MyEndpoint::mount(peer.protocols(), provider)?;
+let client = MyClient::new(peer.protocols());
+```
+
+A client-only application constructs only the Client. A server mounts only the
+versions it intends to serve.
+
+Close in ownership order and attempt all barriers:
+
+```rust,ignore
+let operation = run_product(&client).await;
 let endpoint_cleanup = endpoint.close().await;
 let peer_cleanup = peer.shutdown().await;
 
@@ -210,27 +216,40 @@ endpoint_cleanup?;
 peer_cleanup?;
 ```
 
-The [native reference](../../examples/portable-echo/native/src/main.rs) keeps
-the endpoint and peer cleanup at their respective ownership levels while using
-this same result-capture pattern.
+## Share peer information explicitly
 
-## 8. Test and release one package
+The SDK does not yet discover peers or publish their routes. Applications
+currently exchange Domain ID, expected Peer ID, protocol IDs, and complete TCP
+or WSS routes through configuration, a product control plane, or a manual peer
+card.
 
-Before another product depends on the protocol:
+Do not bake discovery into the protocol crate. Do not treat a received route as
+authority.
 
-- freeze the ID, wire description, bounds, and golden vectors;
-- review the wire and endpoint modules in the same release;
-- prove at least one native/native exchange; and
-- when Web is supported, prove browser/browser and both native/Web directions.
+## Where the crate belongs
 
-The reference's complete package gates are:
+SDK-wide protocol families live in `crates/auki-protocols` behind separate wire
+and endpoint features. Product-specific protocols should usually live with the
+product and pin the SDK revision they use.
+
+When adding an SDK-owned version:
+
+- add a wire feature with no runtime dependency;
+- add a separate `*-endpoint` feature that includes `auki-sdk`;
+- retain an older codec only while a current data format or consumer still
+  requires it, and never mount fallback implicitly; and
+- add native and `wasm32-unknown-unknown` checks.
+
+## Release gate
+
+Before another application depends on the protocol:
 
 ```sh
-cargo test --locked -p auki-portable-echo
-cargo clippy --locked -p auki-portable-echo --all-targets -- -D warnings
-cargo check --locked -p auki-portable-echo --target wasm32-unknown-unknown
+cargo test --locked -p my-protocol
+cargo clippy --locked -p my-protocol --all-targets -- -D warnings
+cargo check --locked -p my-protocol --target wasm32-unknown-unknown
 ```
 
-The reference uses `publish = false` because it is a repository example. A
-product can publish its one protocol crate or consume an exact Git revision.
-Publishing code is separate from future automatic publication of peer routes.
+Also prove native/native traffic and, when Web is supported, browser/browser
+plus both native/Web directions. Review the wire and endpoint modules as one
+release.

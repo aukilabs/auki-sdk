@@ -2,13 +2,15 @@
 //!
 //! A `Session` is created via [`crate::Peer::start_session`]. It owns the
 //! `session_id`, the session clock registry (monotonic + UTC clocks minted at
-//! start), and the live logs (sensor · pose · time · detection). Peer-level
-//! identity and the sensor / frame / detector registries are read live through
-//! the shared [`PeerInner`] handle rather than copied.
+//! start), and the live logs (sensor · pose · time · detection · map).
+//! Peer-level identity and the sensor / frame / detector / map / device-model
+//! registries are read live through the shared [`PeerInner`] handle rather
+//! than copied.
 //!
-//! `Session` has no network dependencies. Authenticated network lifecycle and
-//! catalog serving live in `auki-domain`'s `Domain`, which composes a `&Peer`
-//! + a `&Session`. See #274 (D1, D2, D3, D7).
+//! `Session` has no network dependencies. Native applications may project an
+//! exact `&Peer` + `&Session` through
+//! `auki_protocols::session_adapter::SessionProtocolProvider`, then mount the
+//! desired Catalog and Stream endpoints on `AukiPeer`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -206,9 +208,10 @@ impl Session {
             .is_some_and(|entry| entry.hash() == clock.hash)
     }
 
-    /// A cheaply-cloneable read handle over this session's live logs, for
-    /// `auki-domain` to build the resource catalog without owning the
-    /// `Session`. See [`SessionLogs`].
+    /// A cheaply-cloneable read handle over this session's live logs.
+    ///
+    /// Protocol adapters can build catalog snapshots and stream sources
+    /// without owning the [`Session`]. See [`SessionLogs`].
     pub fn logs(&self) -> SessionLogs {
         SessionLogs {
             inner: self.inner.clone(),
@@ -636,10 +639,10 @@ impl Session {
 
 /// A cheaply-cloneable read handle over a [`Session`]'s live logs.
 ///
-/// Obtained via [`Session::logs`]. `auki-domain` holds one to serve the
-/// resource catalog on inbound `/auki/auth/1/resources/*` requests without owning
-/// the `Session`. Each accessor takes a brief read lock and returns a
-/// snapshot of the current handles.
+/// Obtained via [`Session::logs`]. Protocol adapters retain this handle to
+/// sample current catalog rows or open stream sources without owning the
+/// [`Session`]. Each accessor takes a brief read lock and returns a snapshot of
+/// the current handles.
 #[derive(Clone)]
 pub struct SessionLogs {
     inner: Arc<RwLock<SessionInner>>,

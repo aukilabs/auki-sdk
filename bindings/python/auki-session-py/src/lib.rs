@@ -23,9 +23,9 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 // PyO3 0.22's generated wrappers contain same-type `.into()` calls.
 #![allow(clippy::useless_conversion)]
-//! Network lifecycle (resource catalogs and Domain join) is not in this
-//! package. The Python binding over the authenticated Rust `Domain` owner is
-//! migrated separately.
+//! Authenticated networking and live protocol endpoints are not in this
+//! package. The canonical Rust owner is `auki_sdk::AukiPeer`; its Python facade
+//! is pending.
 //!
 //! ## Type sharing
 //!
@@ -250,7 +250,7 @@ impl HeadSpec {
 
 // ─── FrameDef pyclass ────────────────────────────────────────────────────────
 
-/// Coordinate frame preset. Used with `Session.register_frame`.
+/// Coordinate frame preset. Used with `Peer.register_frame`.
 ///
 /// Use one of the four named classmethods:
 /// - `FrameDef.ros_body()` — REP-103 body frame
@@ -959,8 +959,9 @@ impl Peer {
 /// handle = session.register_sensor_log(spec)
 /// ```
 ///
-/// Catalog serving and authenticated network lifecycle live in the domain
-/// layer (a `Domain` composes a `Peer` + `Session`), not on `Session`.
+/// Catalog serving and authenticated networking do not live on `Session`.
+/// Native Rust may adapt a `Peer` + `Session` into Catalog and Stream providers
+/// mounted on `auki_sdk::AukiPeer`; the Python peer facade is pending.
 #[pyclass]
 pub struct Session {
     inner: Arc<session::Session>,

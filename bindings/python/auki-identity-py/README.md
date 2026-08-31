@@ -18,10 +18,12 @@ seed_back = wallet.seed()                              # round-trip the seed byt
 mac_id  = auki_identity.app_instance.derive()         # MAC-derived per-machine id
 ```
 
-For an authenticated Domain, construct its canonical `auki_p2p::Identity`
-through the Domain binding with
-`auki_domain.Identity.from_ed25519_seed(peer_seed)`. Its `peer_id` must equal
-the value above. Treat both wallet and peer seeds as private keys.
+Native Rust constructs the canonical network identity with
+`auki_sdk::Identity::from_ed25519_seed(peer_seed)` before authorizing and
+starting an `AukiPeer`. Its Peer ID must equal `peer.peer_id()` above. A
+canonical Python `AukiPeer` facade is pending, so this binding currently
+provides identity material to trusted native host adapters rather than starting
+networking itself. Treat both wallet and peer seeds as private keys.
 
 ## Depends on
 

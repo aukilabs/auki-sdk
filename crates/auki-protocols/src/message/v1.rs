@@ -1,9 +1,9 @@
 //! Transport-independent framing for `/auki/auth/1/message/0.1.0` payloads.
 //!
-//! The authenticated Domain runtime uses this codec for persistent typed-message
-//! substreams.
-//! Authentication, stream ownership, queueing, and handler lifecycle remain
-//! runtime concerns; this module owns only bounded wire bytes.
+//! `MessageEndpoint` mounts this codec on `AukiPeer` for
+//! persistent typed-message substreams. Authentication, stream ownership,
+//! queueing, and handler lifecycle remain endpoint concerns; this module owns
+//! only bounded wire bytes.
 
 pub use auki_datatypes::message::Message;
 use auki_registry::RegistryRef;

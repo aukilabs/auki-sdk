@@ -8,7 +8,15 @@ It is also **not** an identity surface. Bounded participant diagnostics are
 exchanged only after mutual authentication over
 `/auki/auth/1/info/1.0.0` — see [Identity](#identity-not-served-here) below.
 
-> **Status — HTTP frozen at SDK release v0.0.23.** This is the terminal HTTP revision of the Control API. It remains an operator-facing trusted-LAN contract, separate from authenticated Domain P2P. Any future P2P control protocol must use the authenticated Domain protocol-extension boundary; this document reserves no unauthenticated protocol IDs. No new HTTP endpoints will be added; existing endpoints stay maintained — with one removal: `GET /api/info` is gone from the contract entirely ([#293](https://github.com/aukilabs/auki-sdk/issues/293)), because identity is authenticated-P2P-only.
+> **Status — HTTP frozen at SDK release v0.0.23.** This is the terminal HTTP
+> revision of the Control API. It remains an operator-facing trusted-LAN
+> contract, separate from authenticated Auki P2P. Any future P2P control
+> surface must be an explicit, versioned protocol Endpoint mounted on
+> `AukiPeer`; this document reserves no unauthenticated protocol IDs. No new
+> HTTP endpoints will be added; existing endpoints stay maintained — with one
+> removal: `GET /api/info` is gone from the contract entirely
+> ([#293](https://github.com/aukilabs/auki-sdk/issues/293)), because identity is
+> authenticated-P2P-only.
 
 ## Conformance
 
@@ -39,7 +47,7 @@ participant metadata over unauthenticated HTTP leaked identity and session
 metadata to any LAN client. An app MAY still expose a local identity endpoint
 for its own UI (Park's browser-facing `/api/info` is one) — such endpoints are
 app-local, operator-facing/debug surfaces, never a cross-app contract, and
-never a source of authenticated Domain peer identity.
+never a source of authenticated Auki peer identity.
 
 **No canonical clock.** The SDK does not assume UTC, monotonic, or any other specific clock as canonical for the API. Every timestamp is paired with an explicit clock identity (e.g. a log's `clock_id` + `clock_hash`); cross-clock conversion is what the [TimeTransform Log](../crates/auki-time/README.md) and `convert_time` exist for. Apps that treat UTC as canonical do so by *convention* — they configure a TimeTransform between their session clock and a UTC clock and consumers walk it via `convert_time`.
 
@@ -117,7 +125,10 @@ The four corners of the `(retention_ns, duration_ns)` plane:
 - `400 Bad Request`, `application/json`: `{ "error": "<message>" }` — malformed body, negative `retention_ns` / `duration_ns`, unknown `sensor_id`.
 - `409 Conflict`, `application/json`: `{ "error": "sensor_hash mismatch" }` — `sensor_id` is bound but at a different `sensor_hash` than the request specified. The daemon does not silently accept the live binding's hash — schema drift is the request's job to resolve.
 
-The response shape on `201` is `{"sensor_log_id"}` only. Clients that want the full per-log fields (clock identifiers, `started_at_ns`, etc.) follow up with [`GET /api/sensor_logs?session_id=current`](#get-apisensor_logs) or [`GET /api/sensor_logs/<id>`](#get-apisensor_logsid)-style filtering.
+The response shape on `201` is `{"sensor_log_id"}` only. Clients that want the
+full per-log fields (clock identifiers, `started_at_ns`, etc.) follow up with
+[`GET /api/sensor_logs?session_id=current`](#get-apisensor_logs) and select the
+returned `sensor_log_id` client-side.
 
 ### `GET /api/sensor_logs`
 

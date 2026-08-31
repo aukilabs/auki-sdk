@@ -2,17 +2,18 @@
 //!
 //! This crate exposes three narrowly owned operations:
 //!
-//! 1. [`load_or_mint_seed`] — wraps `auki_identity::load_or_mint_seed`
+//! 1. `load_or_mint_seed` — wraps `auki_identity::load_or_mint_seed`
 //!    for persistent peer-key material across daemon restarts.
-//! 2. [`Wallet`] (with `from_seed` + `derive_child` + `peer_id`) —
+//! 2. `Wallet` (with `from_seed` + `derive_child` + `peer_id`) —
 //!    wraps `auki_identity::Wallet` and constructs the canonical
 //!    `auki_p2p::Identity` from the explicitly derived wallet child.
 //! 3. `app_instance::derive` — wraps
 //!    `auki_identity::app_instance::derive` for the per-machine
-//!    identifier carried in `ParticipantInfo.app_instance`.
+//!    identifier carried in `AuthenticatedParticipantInfo.app_instance`.
 //!
-//! Network and Domain lifecycle belong to `auki-domain-py`. This crate stays
-//! data-only: pure synchronous functions with no GIL-around-await bridge.
+//! Authenticated networking belongs to the canonical `auki_sdk::AukiPeer`
+//! facade, whose Python binding is pending. This crate stays data-only: pure
+//! synchronous functions with no GIL-around-await bridge.
 //!
 //! See [`bindings/python/auki-identity-py/README.md`](../README.md) for the
 //! Python-side surface and install instructions.
@@ -69,7 +70,7 @@ fn map_seed_error(e: SeedError) -> PyErr {
 
 // ─── Wallet ──────────────────────────────────────────────────────────────────
 
-/// An ed25519 wallet keypair. Construct with [`Wallet.from_seed`].
+/// An ed25519 wallet keypair. Construct with `Wallet.from_seed`.
 ///
 /// The Rust-side wallet holds secret material; treat instances as
 /// sensitive. The Python wrapper exposes only the operations Boosterapp
@@ -176,7 +177,7 @@ impl Wallet {
     /// peer = wallet.derive_child("peer/v1")
     /// peer_seed = peer.seed()
     /// peer_id = peer.peer_id()
-    /// # Supply peer_seed to the authenticated Domain binding/host adapter.
+    /// # Supply peer_seed to a trusted native AukiPeer host adapter.
     /// # Its canonical P2P Identity must have this same peer_id.
     /// ```
     ///
@@ -198,7 +199,7 @@ impl Wallet {
 
 /// `auki_identity.app_instance.derive()` — per-machine identifier
 /// (12 lowercase hex chars, no separators) used as the
-/// `ParticipantInfo.app_instance` field.
+/// `AuthenticatedParticipantInfo.app_instance` field.
 ///
 /// Wraps `auki_identity::app_instance::derive`. Recipe: first
 /// non-loopback IEEE-administered MAC (skipping locally-administered

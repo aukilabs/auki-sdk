@@ -1,16 +1,21 @@
 # Auki SDK Wiki
 
-The Auki SDK is the on-device implementation of the Auki spatial-computing protocol. A node running the SDK can answer five questions about itself and its peers: **who am I**, **where did this happen**, **when did this happen**, **how do I talk to you**, **how do I compensate you**.
+The Auki SDK provides Rust-first building blocks for local robotics data and
+authenticated peer-to-peer applications. Its networking facade is
+`AukiPeer`; applications opt into exact protocol clients and endpoints. Its
+recording model remains network-free until an application explicitly connects
+the two.
 
-This wiki has two audiences. Pick the one that fits.
+Pick the path that matches what you are doing.
 
 ## [📦 For SDK Consumers](For-SDK-Consumers)
 
-Building a product on top of the Auki SDK — Booster, Park, Galbot integrations, custom robot data planes. Start here for quickstart, recipes, and the concept primers you need to think about peer-owned data correctly.
+Build a product, run an existing protocol, or record and serve peer-owned data.
 
 ## [🏗️ Design + Architecture](Design-and-Architecture)
 
-Reading the source to understand how the SDK works under the hood. Start here for the architecture overview, glossary, crate map, design specs index, and release history.
+Understand the ownership boundaries, protocol model, crate map, and release
+history.
 
 ## Related repository docs
 

@@ -1,217 +1,159 @@
 # Migrate Manager-era networking to AukiPeer
 
-Stage 1 removes the Manager and cluster runtime. The canonical replacement for
-new native Rust and Web applications is `AukiPeer`: one authenticated Peer ID
-inside one exact DDS Domain, with explicit application protocols.
+The current SDK has one application networking model: an `AukiPeer` is one
+authenticated Peer ID inside one exact DDS Domain, with explicitly mounted
+protocol endpoints.
 
-This is a wire break. There is no legacy protocol fallback or compatibility
-switch. Upgrade a communicating group together. The removed Manager-era Rust,
-Python, Swift, and browser sources remain available at tag `v0.0.60`, but they
-cannot join the authenticated `0.1` runtime.
+This is a wire and lifecycle break. There is no Manager, cluster bootstrap,
+implicit protocol bundle, or compatibility runtime in the current workspace.
+Upgrade communicating peers together.
 
-## Choose the migration target
+## Choose the target
 
-| Consumer | Stage 1 target |
+| Host | Current path |
 | --- | --- |
-| Native Rust User or trusted App | `auki_sdk::AukiPeer::start` — canonical |
-| Web User | `AukiUserSession` plus ephemeral `AukiPeer` — canonical |
-| Robot or Compute host with product-managed authority | `AukiPeer::start_external` — canonical |
-| Existing Rust code using retained catalog, registry, blob, message, or stream APIs | `auki-domain` may remain as a low-level compatibility bridge |
-| Existing Python networking | `auki-domain-py` is a compatibility bridge until a Python `AukiPeer` facade exists |
-| Swift/iOS networking | canonical `AukiPeer` facade pending; do not revive Manager semantics |
+| Native Rust User | `auki-auth` User credentials → `PreparedPeer` → `AukiPeer::start` |
+| Trusted native/headless App | App credentials → `PreparedPeer` → `AukiPeer::start` |
+| Robot or Compute product | product-managed authority → `AukiPeer::start_external` |
+| Web browser | `AukiUserSession` → selected Domain → ephemeral relay-backed peer |
+| Python | canonical peer facade pending |
+| Swift/iOS | canonical peer facade pending |
 
-`auki-session::Peer` and `Session` remain the network-free recording and data
-model. They are not substitutes for the P2P runtime.
+`auki-session::Peer` and `Session` remain the network-free recording model.
+They do not authenticate or join a Domain.
 
-The coordinated source line is `0.1.0` with Rust MSRV `1.89.0`. This checkout
-does not imply that the Git tag, registry crates, wheels, Web package, or Swift
-facade have been published. Consume one reviewed SDK revision until those
-artifacts are released.
+## Replace the old ownership model
 
-## The canonical ownership model
+An application now supplies:
 
-An ordinary application supplies:
+- credentials or externally managed authority;
+- one selected Domain UUID;
+- a persistent native identity path, or an intentional ephemeral identity;
+- the exact protocols it serves;
+- product authorization policy; and
+- the expected remote Peer ID and route until discovery exists.
 
-- User credentials or trusted native App credentials;
-- one selected accessible Domain;
-- a persistent native identity path;
-- the exact product protocols it mounts;
-- the expected remote Peer ID and complete compatible route; and
-- product authorization policy.
+The SDK owns:
 
-`auki-auth` converts credentials and an identity proof into a validated
-`PreparedPeer`. `AukiPeer` then owns renewable authority, authenticated
-transport, DMS relay booking, confirmed routes, protocol hosting, peer
-observations, fencing, and bounded shutdown.
+- authority renewal and expiry fencing;
+- mutually authenticated transport;
+- default DMS relay booking and renewal;
+- route validation and exact-peer dialing;
+- protocol registration and handler lifecycle; and
+- bounded shutdown.
 
-Robot and Compute products supply externally managed authority instead. They
-still use the same `AukiPeer` runtime for networking; product code retains task,
-capability, safety, and heartbeat policy.
+## Concept map
 
-`auki-p2p` is the lower transport layer. Most applications should not assemble
-its node, authority, route catalog, and relay lifecycle themselves.
-
-## Rust migration map
-
-| Manager-era concept | Canonical replacement |
+| Old assumption | Current replacement |
 | --- | --- |
-| `ClusterManager`, `NetworkRuntime` | one `AukiPeer` |
-| cluster create, join, or bootstrap | authenticate, select a Domain, authorize a stable identity, then `AukiPeer::start` |
-| `ClusterTarget` or Discovery URL | expected Peer ID plus an exact TCP or WSS route |
-| Manager or leader authority | product capability/JWT policy over authenticated peers |
-| membership roster and roles | removed; peer observations are connectivity, never authorization |
-| implicit built-in product protocols | one explicitly mounted, versioned product protocol crate |
-| Manager-owned catalog, registry, blob, message, or stream methods | product endpoint on `AukiPeer`, or retained `auki-domain` temporarily while that protocol is ported |
-| heartbeat-derived Domain time | explicit clock metadata and recorded TimeTransform Logs |
-| implicit or detached shutdown | close mounted endpoints, then await `peer.shutdown()` |
+| one Manager or leader | no topology authority; DDS credentials authenticate each peer |
+| cluster roster grants access | application policy over `AuthenticatedPeer` |
+| bootstrap discovers members | authentication starts one peer; discovery is separate |
+| route knowledge implies trust | routes are untrusted dial hints |
+| built-in protocols always run | mount exact `Endpoint`s explicitly |
+| one object handles inbound and outbound operations | `Endpoint` serves; `Client` calls |
+| network-derived Domain time | explicit Clock Registry entries and TimeTransform Logs |
+| implicit shutdown | close endpoints, then await `AukiPeer::shutdown` |
 
-The native shape is intentionally mechanical:
+A DDS Domain remains the physical-space and authority concept. It is not a
+runtime class or peer collection.
 
-```rust
+## Native Rust shape
+
+```rust,ignore
 let identity = Identity::load_or_create(identity_file)?;
-let session = AuthClient::new(AuthEnvironment::dev())?
+let auth = AuthClient::new(environment)?
     .authenticate(Credentials::user_password(email, password))
     .await?;
-let prepared = session
+let prepared = auth
     .authorize_peer(DomainSelection::new(domain_id), &identity.proof())
     .await?;
 let peer = AukiPeer::start(identity, prepared, AukiPeerConfig::dev()).await?;
 
-let operation = async {
-    let endpoint = MyEndpoint::mount(peer.protocols())?;
-    let product_result = run_product(&endpoint).await;
-    let endpoint_cleanup = endpoint.close().await;
+let provider = MyProvider::new();
+let endpoint = MyEndpoint::mount(peer.protocols(), provider)?;
+let client = MyClient::new(peer.protocols());
 
-    product_result?;
-    endpoint_cleanup?;
-    Ok::<_, anyhow::Error>(())
-}
-.await;
-
+let operation = run_product(&client).await;
+let endpoint_cleanup = endpoint.close().await;
 let peer_cleanup = peer.shutdown().await;
+
 operation?;
+endpoint_cleanup?;
 peer_cleanup?;
 ```
 
-Mounting and product work are captured before peer cleanup, so a mount failure
-still shuts the peer down and a product failure still closes its endpoint
-first. See
-[Build with an existing protocol](p2p/getting-started.md) for the complete
-failure-safe pattern.
+Capture all three results so a product failure does not skip endpoint or peer
+cleanup.
 
-One persisted native identity belongs to one live runtime. Sequential restart
-is supported; simultaneous processes or pods using the same Peer ID are not.
+## Move protocol logic, not application policy
+
+For every application protocol:
+
+1. assign one immutable, versioned protocol ID;
+2. keep bounded wire types and codec portable;
+3. expose a cloneable outbound `Client`;
+4. expose an inbound/lifecycle `Endpoint` using an application Provider;
+5. pass `AuthenticatedPeer` to policy decisions; and
+6. lock representative encoded bytes and failure cases.
+
+SDK-owned protocol families already follow this shape in `auki-protocols`.
+Catalog v2 is wire-only because v3 embeds its locked row shape; Registry begins
+at v3. Mount current endpoints explicitly rather than assuming fallback.
+
+For local recorded data, compose:
+
+- `SessionProtocolProvider` with `CatalogEndpoint` and `StreamEndpoint`;
+- `FsRegistryProvider` with `RegistryEndpoint`; and
+- `FsBlobProvider` with `BlobEndpoint`.
+
+These adapters are mechanical. Wrap or replace them when product authorization
+must filter an authenticated caller.
+
+## Robot and Compute hosts
+
+Use `AukiPeer::start_external` when the product already obtains and refreshes
+machine authority. The product sends complete authority updates and responds
+to refresh requests. It keeps task, capability, heartbeat, and safety policy;
+the SDK keeps relay, routes, protocol hosting, fencing, and shutdown.
+
+Do not duplicate relay allocation or route validation in the product runtime.
 
 ## Web migration
 
-The current Web/Wasm facade is supported source, not the deleted Manager-era
-browser stack. Its model is deliberately narrow:
+The Web facade authenticates a User, lists accessible Domains, and starts an
+ephemeral Peer ID. Browser startup requires one confirmed WSS relay route.
+Protocol adapters remain Rust code compiled into the same Wasm module.
 
-1. `AukiUserSession` authenticates a User and lists accessible Domains.
-2. The application explicitly selects one Domain.
-3. `startPeer` creates a fresh in-memory identity and waits for one relay.
-4. The application mounts a Rust protocol endpoint through a thin Wasm binding.
-5. Browser dialing uses the remote peer's exact WSS route.
-6. The endpoint closes before `AukiPeer.shutdown()`.
-
-Each start creates a new Peer ID. The browser does not persist peer identity or
-credentials, does not accept App secrets, and has no direct-only mode in `0.1`.
-Reloading therefore requires sharing the new Peer ID and route.
-
-## Robot and Compute migration
-
-Use `AukiPeer::start_external` when a product already obtains and refreshes
-machine authority. The product provides each complete
-`ExternalAuthorityUpdate` and responds to refresh requests. The SDK still owns
-the authenticated transport, relay allocation and renewal, route validation,
-protocol surface, fencing, and shutdown.
-
-This split keeps product policy outside the generic SDK without duplicating
-relay or route machinery in Posemesh or another host.
+The browser does not accept App secrets or persist identity in the first
+iteration. A reload therefore produces a new Peer ID and route.
 
 ## Reachability and discovery
 
-Relay-backed reachability is the native default and the Web requirement.
-Startup returns only after a confirmed relay route is available.
+Relay-backed reachability is the normal native mode and mandatory Web mode. A
+native application can explicitly choose direct-only operation. An inbound
+direct peer needs a listener and a dialable route that the application shares.
 
-A native host may explicitly choose `AukiPeerConfig::direct_only()`. That mode
-makes no DMS booking calls and may have zero listeners and advertised routes
-for outbound-only operation. A direct-only peer that must accept inbound
-connections needs a listener plus a dialable route shared through
-configuration, manual exchange, or a product control plane. Configure an
-advertised direct route only when the application publishes it from the SDK's
-local route catalog.
+The SDK does not yet discover peers or publish routes. Exchange a small record
+containing Domain ID, Peer ID, supported protocols, and complete TCP/WSS routes
+through configuration, a product control plane, or a manual peer card.
 
-Neither mode performs automatic peer discovery or route publication. The
-application currently receives a remote Peer ID, Domain ID, supported protocol
-IDs, and complete route through configuration, manual exchange, or its product
-control plane. A route is only an untrusted dial hint: the remote still has to
-authenticate the expected Peer ID in the selected Domain.
-
-`known_peers()` is a post-authentication connectivity observation. It is not a
-membership roster, authorization source, discovery service, or route catalog.
-
-## Compatibility appendix: retained Domain
-
-`auki-domain` remains available for existing native consumers of the retained
-resource catalog, registry, blob, message, and typed-stream protocols. It is a
-low-level authenticated Domain owner, not the new application facade and not a
-new Manager.
-
-On this path, the host still supplies:
-
-- one persistent `auki_p2p::Identity`;
-- DDS verification keys and a signed credential for that exact Peer ID and
-  Domain;
-- any listeners and explicit remote routes;
-- selected inbound `ServedProtocols`; and
-- authority rotation and lifecycle policy.
-
-The core `auki-domain` path does not authenticate Users or Apps, call DMS, book
-a relay, renew credentials, discover peers, or publish routes. It serves no
-built-in inbound protocol unless the host selects one. The identity,
-`auki-session::Peer`, `Session`, and signed credential must resolve to the same
-Peer ID, and shutdown ends with `domain.leave().await`.
-
-Python currently exposes this same compatibility owner through
-[`auki-domain-py`](../bindings/python/auki-domain-py/README.md). It is not yet a
-Python `AukiPeer` facade. `auki-domain-py==0.1.0` must be built and distributed
-with the exact matching `auki-session-py==0.1.0` wheel from the same commit,
-lockfile, Rust toolchain, target, features, and allocator because their private
-capsule crosses the Rust ABI boundary.
-
-Do not run a retained `Domain` and an `AukiPeer` concurrently with the same
-identity. Migrate one networking owner at a time.
-
-## Prove the migration
-
-The offline protocol contract is a useful first check:
-
-```sh
-cargo test --locked -p auki-portable-echo
-```
-
-That command does not prove a network exchange. Follow the credentialed
-[two-terminal guide](p2p/getting-started.md) to authenticate two native peers
-in one Domain and exchange through their confirmed routes. Then use the
-[protected direction matrix](../examples/portable-echo/web/README.md#run-the-protected-direction-proof)
-to prove browser-to-browser in both directions, native-to-browser, and
-browser-to-native.
+On native Rust, `known_peers()` only reports successful authenticated
+connectivity. It is not discovery or authorization.
 
 ## Migration checklist
 
-1. Choose `AukiPeer` unless a retained low-level protocol forces a temporary
-   Domain compatibility bridge.
-2. Persist one native identity and authorize its exact Peer ID for one Domain.
-3. Replace Manager bootstrap with `AukiPeer::start` or `start_external`.
-4. Put each product wire contract and endpoint in one explicitly versioned
-   protocol crate, then mount only the protocols this peer serves.
-5. Replace discovery targets with an expected Peer ID and exact compatible
-   route until discovery and publication exist.
-6. Keep capability, task, safety, and application authorization in the product;
-   never infer it from routes or peer observations.
-7. Replace Manager time with explicit clock lineage and recorded transforms.
-8. Close protocol endpoints before shutting down the peer, and attempt both
-   barriers when an operation fails.
-9. Test wrong-Peer, wrong-Domain, expired, missing, and rotated authority: none
-   may expose application data.
+1. Persist one native identity and run one live owner of that Peer ID.
+2. Authenticate and select one explicit Domain.
+3. Start `AukiPeer` through prepared or external authority.
+4. Mount only the exact protocol endpoints the product serves.
+5. Move outbound calls to protocol Clients.
+6. Keep commands, capabilities, and safety policy in the product.
+7. Replace implicit time with named clocks and recorded transforms.
+8. Exchange Peer IDs and routes explicitly until discovery ships.
+9. Close endpoints before the peer and attempt every cleanup barrier.
+10. Test wrong Peer ID, wrong Domain, expiry, rotation, malformed frames, and
+    unavailable relay behavior.
+
+Use the [P2P guide](p2p/README.md) for the current architecture and the
+[portable echo walkthrough](p2p/getting-started.md) for an end-to-end proof.

@@ -1,7 +1,7 @@
 //! End-to-end smoke for the post-#274 Peer / Session API (no network).
 //!
-//! Catalog / wire-equivalence assertions live in `auki-domain` now that
-//! catalog building moved there (#274 step 6/7).
+//! Networking adapters and wire-equivalence assertions live in
+//! `auki-protocols`; this test keeps the recording model network-free.
 
 use std::time::Duration;
 use tempfile::tempdir;

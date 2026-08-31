@@ -102,8 +102,9 @@ fn map_err<T>(r: RustResult<T>) -> PyResult<T> {
 }
 
 /// SDK-owned retained source metadata. `auki-logs-py` constructs this
-/// from a concrete log handle; `auki-domain-py` consumes its frozen
-/// public fields and owns the payload-kind dispatch.
+/// from a concrete log handle. A future Python adapter to the canonical
+/// `AukiPeer` Stream endpoint can consume its frozen public fields and own the
+/// payload-kind dispatch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetainedStreamSource {
     pub root: PathBuf,
@@ -294,10 +295,10 @@ pub struct Log {
     root: PathBuf,
 }
 
-/// Retained source produced by `Log.stream_source(...)`. The authenticated
-/// Domain binding or an application adapter can pass it to the SDK stream
-/// provider; the bridge carries source metadata across PyO3 extension-module
-/// boundaries without relying on pyclass type identity.
+/// Retained source produced by `Log.stream_source(...)`. An application or
+/// future Python `AukiPeer` adapter can pass it to an SDK Stream provider; the
+/// bridge carries source metadata across PyO3 extension-module boundaries
+/// without relying on pyclass type identity.
 #[pyclass(module = "auki_logs", frozen)]
 #[derive(Clone)]
 pub struct StreamSource {
@@ -453,8 +454,8 @@ impl Log {
 
     /// Build an SDK-owned retained stream source from this log. The
     /// returned source carries the manifest metadata needed by an
-    /// authenticated Domain stream provider; the native SDK owns payload
-    /// decoding and typed dispatch.
+    /// authenticated Stream endpoint adapter; native Rust currently owns
+    /// payload decoding and typed dispatch.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (*, sensor_id, sensor_hash, clock_id, clock_hash, payload_kind, frame_id=None, frame_hash=None))]
     fn stream_source(

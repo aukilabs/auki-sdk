@@ -20,9 +20,10 @@ pub type LogSnapshot<T> = (
 pub struct SensorLogHandle {
     pub resource_id: String,
     pub log_ref: LogRef,
-    /// Full manifest. Public so `auki-domain` can build catalog rows; the
-    /// sensor kind/type are derived from the peer's sensor registry at
-    /// catalog-build time, not stored here. See #274 (D3).
+    /// Full manifest used by local readers and protocol adapters.
+    ///
+    /// Sensor kind/type are resolved from the peer's Sensor Registry when a
+    /// catalog row is projected; they are not duplicated here.
     pub manifest: SensorLogManifest,
     /// Head window spec, used for catalog row production.
     pub head_spec: HeadSpec,

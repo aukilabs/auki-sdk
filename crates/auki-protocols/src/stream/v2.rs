@@ -62,9 +62,9 @@
 //!
 //! ## Trust boundary
 //!
-//! This codec makes no admission decision. `auki-p2p` verifies the peer's
-//! Domain access token before `auki-domain` dispatches a stream request to an
-//! application provider.
+//! This codec makes no admission decision. `AukiPeer` authenticates the remote
+//! peer before `StreamEndpoint` dispatches a request to the
+//! application Provider.
 
 use futures::{AsyncReadExt, AsyncWriteExt};
 use prost::Message;

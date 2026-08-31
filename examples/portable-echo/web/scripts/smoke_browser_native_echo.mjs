@@ -81,7 +81,6 @@ try {
   assert.notEqual(firstPeer.peerId, secondPeer.peerId);
   assertBrowserPeer(firstPeer, credentials.domainId);
   assertBrowserPeer(secondPeer, credentials.domainId);
-  assert.equal(relayBase(firstPeer.wssRoute), relayBase(secondPeer.wssRoute));
 
   await proveBrowserEcho(
     firstPage,
@@ -143,19 +142,19 @@ try {
     nativeWssRoute.endsWith(`/p2p-circuit/p2p/${nativePeerId}`),
     "the native WSS route does not target its Peer ID",
   );
-  assert.equal(relayBase(nativeWssRoute), relayBase(firstPeer.wssRoute));
   assert.equal(receipt.remotePeerId, nativePeerId);
   assert.equal(Buffer.from(receipt.payload).toString("utf8"), nativeMessage);
 
   const browserToNativePayload = Array.from(Buffer.from(browserToNativeMessage));
   const browserReceipt = await withTimeout(
     firstPage.evaluate(
-      ({ domainId, peerId, protocol, payload }) =>
-        globalThis.echoHarness.sendEcho({ domainId, peerId, protocol, payload }),
+      ({ domainId, peerId, protocol, wssRoute, payload }) =>
+        globalThis.echoHarness.sendEcho({ domainId, peerId, protocol, wssRoute, payload }),
       {
         domainId: nativePeerCard.domainId,
         peerId: nativePeerCard.peerId,
         protocol: nativePeerCard.protocols[0],
+        wssRoute: nativePeerCard.routes.wss,
         payload: browserToNativePayload,
       },
     ),
@@ -275,12 +274,6 @@ function assertBrowserPeer(peer, expectedDomainId) {
     peer.wssRoute.endsWith(`/p2p-circuit/p2p/${peer.peerId}`),
     "the browser WSS route does not target its Peer ID",
   );
-}
-
-function relayBase(route) {
-  const base = route.replace(/\/p2p-circuit\/p2p\/[^/]+$/, "");
-  assert.notEqual(base, route, "browser route is missing its circuit target");
-  return base;
 }
 
 async function proveBrowserEcho(senderPage, sender, receiverPage, receiver, message) {

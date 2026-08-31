@@ -52,8 +52,8 @@ pub use authorization::{
 };
 #[cfg(target_arch = "wasm32")]
 pub use browser_peer_runtime::{
-    AukiPeer, AukiPeerError, AukiPeerExit, AukiPeerReachability, AukiPeerRoute,
-    AukiPeerShutdownError, AukiPeerStartError,
+    AukiPeer, AukiPeerError, AukiPeerExit, AukiPeerReachability, AukiPeerShutdownError,
+    AukiPeerStartError,
 };
 #[cfg(target_arch = "wasm32")]
 pub use browser_protocols::{AukiPeerProtocols, AukiProtocolRegistration};

@@ -694,15 +694,10 @@ dependencies = [
 name = "auki-portable-echo-web"
 version = "0.1.0"
 dependencies = [
- "auki-auth",
- "auki-p2p",
- "auki-portable-echo-protocol",
+ "auki-portable-echo-adapter",
+ "auki-sdk",
  "auki-sdk-web",
- "futures",
- "futures-timer",
  "js-sys",
- "tokio-util",
- "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
 ]
@@ -832,9 +827,12 @@ dependencies = [
 name = "auki-sdk-web"
 version = "0.1.0"
 dependencies = [
- "auki-p2p",
+ "auki-auth",
  "auki-sdk",
+ "js-sys",
  "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]

@@ -1,23 +1,23 @@
 # Portable echo — Web/Wasm adapter
 
-This example mounts the same Rust echo protocol used by the native example on
-an authenticated browser peer. JavaScript sees a small `BrowserUserSession`
-and `BrowserEchoPeer`;
-credentials, DDS authority, relay booking, libp2p, authenticated streams, and
-echo framing stay inside Rust/Wasm.
+This example mounts the same Rust echo adapter used by the native example on
+an authenticated browser peer. JavaScript composes the generic
+`AukiUserSession` and `AukiPeer` facade with the tiny `AukiEcho` protocol
+binding. Credentials, DDS authority, relay booking, libp2p, authenticated
+streams, deadlines, cleanup, and echo framing stay inside Rust/Wasm.
 
 The browser Peer ID is intentionally ephemeral in v0.1. Log in with
-`BrowserUserSession.loginDev(...)`, list the accessible Domains, and call
+`AukiUserSession.loginDev(...)`, list the accessible Domains, and call
 `startPeer(...)` only after the developer has selected one. Every start creates
 a fresh identity and relay route. Reloading the page therefore creates a new
 peer.
 
 The peer can serve and initiate the exact `/example/echo/1.0.0` protocol. Its
-`tcpRoute` is suitable for the existing native example, while `wssRoute` is
-available to another browser peer. Every outbound exchange connects one exact
-route, authenticates, runs the shared Rust client, and closes the stream and
-route. This manual v0.1 demo accepts only peers using the same DMS-confirmed
-relay; trusted multi-relay discovery remains separate work.
+`tcpRoute` is suitable for the native example, while `wssRoute` is suitable for
+another browser peer. Every outbound exchange uses the exact WSS route from
+the remote peer card, so peers selected onto different DMS relays can connect.
+The shared adapter authenticates the stream, runs the Rust protocol, and owns
+bounded cleanup. Trusted discovery from only a Peer ID remains separate work.
 
 ## Run the Peer Playground
 
@@ -42,8 +42,8 @@ npm run dev
 ```
 
 Open the printed localhost URL in two tabs. In each tab, log in, select the
-same Domain, and start a peer. Paste the other tab's public Peer Card (or only
-its Peer ID), enter a message, and send. Use **Stop peer** before closing a tab
+same Domain, and start a peer. Paste the other tab's complete public Peer Card,
+enter a message, and send. Use **Stop peer** before closing a tab
 so the relay booking is released cleanly. The page never writes credentials or
 the ephemeral Peer ID to browser storage.
 

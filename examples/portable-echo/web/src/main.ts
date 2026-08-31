@@ -1,7 +1,4 @@
-import init, {
-  BrowserEchoPeer,
-  BrowserUserSession,
-} from "../pkg-web/auki_portable_echo_web.js";
+import init, { AukiEcho, AukiPeer, AukiUserSession } from "../pkg-web/auki_portable_echo_web.js";
 import "./style.css";
 
 const PEER_CARD_VERSION = 1;
@@ -27,9 +24,8 @@ interface PeerCard {
 }
 
 interface EchoTarget {
-  domainId: string;
   peerId: string;
-  protocol: string;
+  wssRoute: string;
 }
 
 type EventDirection = "inbound" | "outbound" | "system";
@@ -57,8 +53,9 @@ const ui = {
   eventLog: element<HTMLOListElement>("event-log"),
 };
 
-let userSession: BrowserUserSession | undefined;
-let runningPeer: BrowserEchoPeer | undefined;
+let userSession: AukiUserSession | undefined;
+let runningPeer: AukiPeer | undefined;
+let runningEcho: AukiEcho | undefined;
 let localCard: PeerCard | undefined;
 let lifecycleGeneration = 0;
 let peerStartup: Promise<void> | undefined;
@@ -108,10 +105,10 @@ async function login(): Promise<void> {
   setLoginBusy(true);
   setStatus("Authenticating and loading accessible Domains…", "busy");
   const generation = lifecycleGeneration;
-  let authenticated: BrowserUserSession | undefined;
+  let authenticated: AukiUserSession | undefined;
   try {
     ui.password.value = "";
-    authenticated = await BrowserUserSession.loginDev(email, password);
+    authenticated = await AukiUserSession.loginDev(email, password);
     if (generation !== lifecycleGeneration) {
       return;
     }
@@ -142,7 +139,7 @@ async function login(): Promise<void> {
   }
 }
 
-async function readDomains(session: BrowserUserSession): Promise<DomainOption[]> {
+async function readDomains(session: AukiUserSession): Promise<DomainOption[]> {
   const bindings = await session.accessibleDomains();
   const domains: DomainOption[] = [];
   for (const binding of bindings) {
@@ -187,7 +184,7 @@ function beginPeerStartup(): Promise<void> {
 
 async function startSelectedPeer(generation: number): Promise<void> {
   const session = userSession;
-  if (!session || runningPeer) {
+  if (!session || runningPeer || runningEcho) {
     return;
   }
   const domainId = ui.domainSelect.value;
@@ -198,24 +195,31 @@ async function startSelectedPeer(generation: number): Promise<void> {
 
   setPanelBusy(ui.domainPanel, true);
   setStatus("Authorizing a fresh Peer ID and acquiring its relay…", "busy");
-  let started: BrowserEchoPeer | undefined;
+  let startedPeer: AukiPeer | undefined;
+  let startedEcho: AukiEcho | undefined;
   try {
     const peer = await session.startPeer(domainId);
-    started = peer;
+    startedPeer = peer;
+    const echo = new AukiEcho(peer);
+    startedEcho = echo;
     if (generation !== lifecycleGeneration) {
       if (userSession === session) {
         userSession = undefined;
       }
       session.free();
       await peer.shutdown().catch(() => {});
+      echo.free();
       peer.free();
-      started = undefined;
+      startedPeer = undefined;
+      startedEcho = undefined;
       return;
     }
     runningPeer = peer;
-    localCard = peerCard(peer);
+    runningEcho = echo;
+    localCard = peerCard(peer, echo);
     renderPeer(localCard);
-    started = undefined;
+    startedPeer = undefined;
+    startedEcho = undefined;
     userSession = undefined;
     session.free();
     ui.domainPanel.hidden = true;
@@ -226,9 +230,9 @@ async function startSelectedPeer(generation: number): Promise<void> {
     ui.stopPeer.disabled = false;
     setPanelBusy(ui.connectPanel, false);
     ui.remotePeer.focus();
-    setStatus("Peer ready. Share its card or connect to another Peer ID.", "ready");
+    setStatus("Peer ready. Share its card to connect from another peer.", "ready");
     const receiveLoopGeneration = ++receiveGeneration;
-    const task = receiveEchoes(peer, receiveLoopGeneration);
+    const task = receiveEchoes(peer, echo, receiveLoopGeneration);
     receiveTask = task;
     void task
       .finally(() => {
@@ -238,9 +242,10 @@ async function startSelectedPeer(generation: number): Promise<void> {
       })
       .catch(() => {});
   } catch (error) {
-    if (started) {
-      await started.shutdown().catch(() => {});
-      started.free();
+    if (startedPeer) {
+      await startedPeer.shutdown().catch(() => {});
+      startedEcho?.free();
+      startedPeer.free();
     }
     if (generation !== lifecycleGeneration) {
       if (userSession === session) {
@@ -254,7 +259,7 @@ async function startSelectedPeer(generation: number): Promise<void> {
   }
 }
 
-function peerCard(peer: BrowserEchoPeer): PeerCard {
+function peerCard(peer: AukiPeer, echo: AukiEcho): PeerCard {
   const routes: PeerCard["routes"] = { wss: peer.wssRoute };
   if (peer.tcpRoute) {
     routes.tcp = peer.tcpRoute;
@@ -263,7 +268,7 @@ function peerCard(peer: BrowserEchoPeer): PeerCard {
     version: PEER_CARD_VERSION,
     domainId: peer.domainId,
     peerId: peer.peerId,
-    protocols: [peer.protocol],
+    protocols: [echo.protocol],
     routes,
   };
 }
@@ -304,8 +309,9 @@ async function sendEcho(): Promise<void> {
 
 async function sendOneEcho(): Promise<void> {
   const peer = runningPeer;
+  const echo = runningEcho;
   const card = localCard;
-  if (!peer || !card) {
+  if (!peer || !echo || !card) {
     return;
   }
   const message = ui.message.value;
@@ -325,14 +331,13 @@ async function sendOneEcho(): Promise<void> {
   setPanelBusy(ui.connectPanel, true);
   setStatus(`Opening an authenticated echo stream to ${target.peerId}…`, "busy");
   try {
-    const receipt = await peer.sendEcho(
-      target.domainId,
+    const receipt = await echo.sendExact(
       target.peerId,
-      target.protocol,
+      target.wssRoute,
       textEncoder.encode(message),
     );
     try {
-      if (runningPeer !== peer) {
+      if (runningPeer !== peer || runningEcho !== echo) {
         return;
       }
       appendEvent("outbound", receipt.remotePeerId, textDecoder.decode(receipt.payload));
@@ -342,11 +347,11 @@ async function sendOneEcho(): Promise<void> {
     ui.message.value = "";
     setStatus("Echo response validated and the route was closed.", "ready");
   } catch (error) {
-    if (runningPeer === peer) {
+    if (runningPeer === peer && runningEcho === echo) {
       setStatus(`Echo failed: ${errorMessage(error)}`, "error");
     }
   } finally {
-    if (runningPeer === peer) {
+    if (runningPeer === peer && runningEcho === echo) {
       setPanelBusy(ui.connectPanel, false);
     }
   }
@@ -355,14 +360,7 @@ async function sendOneEcho(): Promise<void> {
 function parseTarget(raw: string, local: PeerCard): EchoTarget {
   const input = raw.trim();
   if (!input) {
-    throw new Error("paste a Peer ID or Peer Card");
-  }
-  if (!input.startsWith("{")) {
-    return {
-      domainId: local.domainId,
-      peerId: input,
-      protocol: local.protocols[0],
-    };
+    throw new Error("paste a Peer Card");
   }
 
   const candidate: unknown = JSON.parse(input);
@@ -372,23 +370,28 @@ function parseTarget(raw: string, local: PeerCard): EchoTarget {
   if (typeof candidate.domainId !== "string" || typeof candidate.peerId !== "string") {
     throw new Error("Peer Card requires domainId and peerId strings");
   }
+  if (candidate.domainId !== local.domainId) {
+    throw new Error("Peer Card belongs to a different Domain");
+  }
   if (!Array.isArray(candidate.protocols) || !candidate.protocols.includes(local.protocols[0])) {
     throw new Error(`Peer Card does not advertise ${local.protocols[0]}`);
   }
+  if (!isRecord(candidate.routes) || typeof candidate.routes.wss !== "string") {
+    throw new Error("Peer Card requires a WSS route");
+  }
   return {
-    domainId: candidate.domainId,
     peerId: candidate.peerId,
-    protocol: local.protocols[0],
+    wssRoute: candidate.routes.wss,
   };
 }
 
-async function receiveEchoes(peer: BrowserEchoPeer, generation: number): Promise<void> {
+async function receiveEchoes(peer: AukiPeer, echo: AukiEcho, generation: number): Promise<void> {
   let consecutiveFailures = 0;
-  while (isActive(peer, generation)) {
+  while (isActive(peer, echo, generation)) {
     try {
-      const receipt = await peer.serveOnce();
+      const receipt = await echo.nextServed();
       try {
-        if (!isActive(peer, generation)) {
+        if (!isActive(peer, echo, generation)) {
           return;
         }
         appendEvent("inbound", receipt.remotePeerId, textDecoder.decode(receipt.payload));
@@ -397,7 +400,7 @@ async function receiveEchoes(peer: BrowserEchoPeer, generation: number): Promise
       }
       consecutiveFailures = 0;
     } catch (error) {
-      if (!isActive(peer, generation)) {
+      if (!isActive(peer, echo, generation)) {
         return;
       }
       consecutiveFailures += 1;
@@ -411,16 +414,18 @@ async function receiveEchoes(peer: BrowserEchoPeer, generation: number): Promise
   }
 }
 
-function isActive(peer: BrowserEchoPeer, generation: number): boolean {
-  return runningPeer === peer && receiveGeneration === generation;
+function isActive(peer: AukiPeer, echo: AukiEcho, generation: number): boolean {
+  return runningPeer === peer && runningEcho === echo && receiveGeneration === generation;
 }
 
 async function stopPeer(): Promise<void> {
   const peer = runningPeer;
-  if (!peer) {
+  const echo = runningEcho;
+  if (!peer || !echo) {
     return;
   }
   runningPeer = undefined;
+  runningEcho = undefined;
   localCard = undefined;
   receiveGeneration += 1;
   const pendingReceive = receiveTask;
@@ -437,6 +442,7 @@ async function stopPeer(): Promise<void> {
       ...(pendingReceive ? [pendingReceive] : []),
       ...activeSends,
     ]);
+    echo.free();
     peer.free();
     resetToLogin();
   }
@@ -468,8 +474,10 @@ function releasePageResources(): void {
     session?.free();
   }
   const peer = runningPeer;
+  const echo = runningEcho;
   runningPeer = undefined;
-  if (peer) {
+  runningEcho = undefined;
+  if (peer && echo) {
     const pending = [
       ...(receiveTask ? [receiveTask] : []),
       ...activeSends,
@@ -478,7 +486,10 @@ function releasePageResources(): void {
       .shutdown()
       .catch(() => {})
       .then(() => Promise.allSettled(pending))
-      .finally(() => peer.free());
+      .finally(() => {
+        echo.free();
+        peer.free();
+      });
   }
 }
 

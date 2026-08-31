@@ -1,13 +1,19 @@
 # auki-sdk-web
 
-Temporary compatibility bridge for the current Rust/Wasm example.
+Generic Rust/Wasm composition for authenticated Auki browser peers.
 
-The canonical `auki-sdk` crate owns browser authority renewal, mandatory WSS
-relay booking, the authenticated peer runtime, managed application protocols,
-exact-route streams, and ordered shutdown. New Rust/Wasm code should use its
-`AukiPeer`, `AukiPeerConfig`, `AukiPeerProtocols`, and `AukiProtocolSpec`
-surface directly. This bridge only keeps the existing portable-echo app
-building until its application adapter moves to that surface.
+JavaScript uses `AukiUserSession` to authenticate a User, list accessible
+Domains, and start an ephemeral `AukiPeer`. A browser peer always acquires a
+relay before startup completes and exposes its confirmed WSS and optional TCP
+circuit routes as public peer-card data. `AukiPeer.shutdown()` is the awaited
+cleanup barrier.
 
-App access keys and secrets are deliberately unsupported in the browser. Use
-User authentication or short-lived authority issued by a trusted backend.
+Protocol implementations stay in Rust. An application-specific adapter
+compiled into the same Wasm module obtains `AukiPeerProtocols` through the
+Rust-only `AukiPeer::protocols()` method. Live Rust handles cannot be shared
+between independently instantiated Wasm modules.
+
+Browser identities are intentionally in-memory. This crate does not persist
+Peer IDs, expose raw transport streams, reconnect automatically, or accept app
+access keys and secrets. A trusted backend can issue short-lived authority for
+non-User browser flows later.

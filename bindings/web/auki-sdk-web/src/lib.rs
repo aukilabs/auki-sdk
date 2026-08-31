@@ -1,138 +1,231 @@
-//! Temporary Web binding bridge to the canonical `auki-sdk` browser facade.
+//! Generic Rust/Wasm composition for one authenticated Auki browser peer.
 //!
-//! Generic peer, relay, authority, and protocol mechanics live in
-//! `crates/auki-sdk`; this crate exists only until the application-specific
-//! Wasm adapter adopts those canonical names directly.
+//! JavaScript owns authentication, explicit Domain selection, peer startup,
+//! public routing data, and ordered shutdown. Rust protocol adapters compiled
+//! into the same Wasm module obtain the canonical [`auki_sdk::AukiPeerProtocols`]
+//! handle without exposing transport streams to JavaScript.
 
-pub use auki_sdk::{
-    AukiPeerConfig as AukiWebPeerConfig, AukiPeerConfigError as AukiWebPeerConfigError,
-    DEV_DMS_BASE_URL,
-};
+#![forbid(unsafe_code)]
 
 #[cfg(target_arch = "wasm32")]
-mod bridge {
-    use std::cell::RefCell;
+mod facade {
+    use std::{cell::RefCell, fmt::Display};
 
-    use auki_p2p::{
-        ApplicationProtocol, AuthenticatedStream, BrowserIncomingAuthenticatedStreams, Identity,
-        PeerId,
+    use auki_auth::{
+        AuthClient, AuthEnvironment, AuthSession, Credentials, DomainDescriptor, DomainSelection,
     };
-    use auki_sdk::{AukiPeer, PreparedPeer};
+    use auki_sdk::{AukiPeer as SdkPeer, AukiPeerConfig, AukiPeerProtocols, Identity};
+    use js_sys::{Array, Error as JsError};
+    use uuid::Uuid;
+    use wasm_bindgen::prelude::*;
 
-    pub use auki_sdk::{
-        AukiPeerError as AukiWebPeerError, AukiPeerExit as AukiWebPeerExit,
-        AukiPeerReachability as AukiWebReachability, AukiPeerRoute as AukiWebRoute,
-    };
-
-    use crate::AukiWebPeerConfig;
-
-    /// Short-lived bridge for the current Web example.
-    pub struct AukiWebPeer {
-        inner: RefCell<Option<AukiPeer>>,
-        peer_id: PeerId,
-        domain_id: uuid::Uuid,
-        reachability: AukiWebReachability,
+    /// Authenticated User session used to inspect Domains and start peers.
+    #[wasm_bindgen]
+    pub struct AukiUserSession {
+        auth: AuthSession,
+        peer_config: AukiPeerConfig,
     }
 
-    impl AukiWebPeer {
-        pub async fn start(
-            identity: Identity,
-            prepared: PreparedPeer,
-            config: AukiWebPeerConfig,
-        ) -> Result<Self, AukiWebPeerError> {
-            let peer = AukiPeer::start(identity, prepared, config).await?;
-            Ok(Self {
-                peer_id: peer.peer_id(),
-                domain_id: peer.domain_id(),
-                reachability: peer.reachability().clone(),
+    #[wasm_bindgen]
+    impl AukiUserSession {
+        /// Authenticate against the shared development environment.
+        #[wasm_bindgen(js_name = loginDev)]
+        pub async fn login_dev(
+            email: String,
+            password: String,
+        ) -> Result<AukiUserSession, JsValue> {
+            Self::login(
+                AuthEnvironment::dev(),
+                AukiPeerConfig::dev(),
+                email,
+                password,
+            )
+            .await
+        }
+
+        /// Authenticate against exact API, DDS, and DMS HTTP bases.
+        #[wasm_bindgen(js_name = loginWithEnvironment)]
+        pub async fn login_with_environment(
+            api_base_url: String,
+            dds_base_url: String,
+            dms_base_url: String,
+            email: String,
+            password: String,
+        ) -> Result<AukiUserSession, JsValue> {
+            let environment = AuthEnvironment::new(api_base_url, dds_base_url)
+                .map_err(|error| js_context("configure authentication", error))?;
+            let peer_config = AukiPeerConfig::new(dms_base_url)
+                .map_err(|error| js_context("configure DMS", error))?;
+            Self::login(environment, peer_config, email, password).await
+        }
+
+        /// Public descriptors for every Domain this User can select.
+        #[wasm_bindgen(js_name = accessibleDomains, unchecked_return_type = "AukiDomain[]")]
+        pub async fn accessible_domains(&self) -> Result<Array, JsValue> {
+            let choices = self
+                .auth
+                .accessible_domains()
+                .await
+                .map_err(|error| js_context("list accessible Domains", error))?;
+            let domains = Array::new();
+            for choice in choices {
+                domains.push(&AukiDomain::from(choice.domain).into());
+            }
+            Ok(domains)
+        }
+
+        /// Authorize a fresh in-memory identity and start its mandatory relay.
+        #[wasm_bindgen(js_name = startPeer)]
+        pub async fn start_peer(&self, domain_id: String) -> Result<AukiPeer, JsValue> {
+            let domain_id =
+                Uuid::parse_str(&domain_id).map_err(|_| js_failure("Domain ID must be a UUID"))?;
+            let identity = Identity::generate();
+            let prepared = self
+                .auth
+                .authorize_peer(DomainSelection::new(domain_id), &identity.proof())
+                .await
+                .map_err(|error| js_context("authorize browser Peer", error))?;
+            let peer = SdkPeer::start(identity, prepared, self.peer_config.clone())
+                .await
+                .map_err(|error| js_context("start relay-backed browser Peer", error))?;
+            Ok(AukiPeer::new(peer))
+        }
+    }
+
+    impl AukiUserSession {
+        async fn login(
+            environment: AuthEnvironment,
+            peer_config: AukiPeerConfig,
+            email: String,
+            password: String,
+        ) -> Result<Self, JsValue> {
+            let client = AuthClient::new(environment)
+                .map_err(|error| js_context("configure authentication", error))?;
+            let auth = client
+                .authenticate(Credentials::user_password(email, password))
+                .await
+                .map_err(|error| js_context("authenticate User", error))?;
+            Ok(Self { auth, peer_config })
+        }
+    }
+
+    /// One public Domain choice returned by DDS.
+    #[wasm_bindgen]
+    pub struct AukiDomain {
+        id: String,
+        name: Option<String>,
+        description: Option<String>,
+        organization_id: Option<String>,
+    }
+
+    impl From<DomainDescriptor> for AukiDomain {
+        fn from(domain: DomainDescriptor) -> Self {
+            Self {
+                id: domain.id.to_string(),
+                name: domain.name,
+                description: domain.description,
+                organization_id: domain.organization_id.map(|id| id.to_string()),
+            }
+        }
+    }
+
+    #[wasm_bindgen]
+    impl AukiDomain {
+        #[wasm_bindgen(getter)]
+        pub fn id(&self) -> String {
+            self.id.clone()
+        }
+
+        #[wasm_bindgen(getter)]
+        pub fn name(&self) -> Option<String> {
+            self.name.clone()
+        }
+
+        #[wasm_bindgen(getter)]
+        pub fn description(&self) -> Option<String> {
+            self.description.clone()
+        }
+
+        #[wasm_bindgen(getter, js_name = organizationId)]
+        pub fn organization_id(&self) -> Option<String> {
+            self.organization_id.clone()
+        }
+    }
+
+    /// One ephemeral relay-backed browser peer.
+    #[wasm_bindgen]
+    pub struct AukiPeer {
+        inner: RefCell<Option<SdkPeer>>,
+        peer_id: String,
+        domain_id: String,
+        wss_route: String,
+        tcp_route: Option<String>,
+    }
+
+    impl AukiPeer {
+        fn new(peer: SdkPeer) -> Self {
+            Self {
+                peer_id: peer.peer_id().to_string(),
+                domain_id: peer.domain_id().to_string(),
+                wss_route: peer.reachability().wss().to_string(),
+                tcp_route: peer.reachability().tcp().map(ToString::to_string),
                 inner: RefCell::new(Some(peer)),
-            })
+            }
         }
 
-        pub fn peer_id(&self) -> PeerId {
-            self.peer_id
+        /// Canonical protocol surface for Rust adapters in this Wasm module.
+        pub fn protocols(&self) -> Option<AukiPeerProtocols> {
+            self.inner.borrow().as_ref().map(SdkPeer::protocols)
+        }
+    }
+
+    #[wasm_bindgen]
+    impl AukiPeer {
+        /// Session-scoped libp2p Peer ID. Reloading intentionally changes it.
+        #[wasm_bindgen(getter, js_name = peerId)]
+        pub fn peer_id(&self) -> String {
+            self.peer_id.clone()
         }
 
-        pub fn domain_id(&self) -> uuid::Uuid {
-            self.domain_id
+        /// DDS Domain selected during explicit User authorization.
+        #[wasm_bindgen(getter, js_name = domainId)]
+        pub fn domain_id(&self) -> String {
+            self.domain_id.clone()
         }
 
-        pub fn reachability(&self) -> &AukiWebReachability {
-            &self.reachability
+        /// Confirmed browser-compatible circuit route.
+        #[wasm_bindgen(getter, js_name = wssRoute)]
+        pub fn wss_route(&self) -> String {
+            self.wss_route.clone()
         }
 
-        pub fn accept(
-            &self,
-            protocol: ApplicationProtocol,
-        ) -> Result<BrowserIncomingAuthenticatedStreams, AukiWebPeerError> {
-            self.inner
-                .borrow()
-                .as_ref()
-                .ok_or(AukiWebPeerError::Stopped)?
-                .accept(protocol)
+        /// Confirmed native-compatible circuit route, when advertised.
+        #[wasm_bindgen(getter, js_name = tcpRoute)]
+        pub fn tcp_route(&self) -> Option<String> {
+            self.tcp_route.clone()
         }
 
-        pub async fn connect(
-            &self,
-            expected_peer: PeerId,
-        ) -> Result<AukiWebRoute, AukiWebPeerError> {
-            let peer = self.take_peer()?;
-            let result = peer.connect(expected_peer).await;
-            self.put_peer(peer);
-            result
-        }
-
-        pub async fn open(
-            &self,
-            route: &AukiWebRoute,
-            protocol: ApplicationProtocol,
-        ) -> Result<AuthenticatedStream, AukiWebPeerError> {
-            let peer = self.take_peer()?;
-            let result = peer.open(route, protocol).await;
-            self.put_peer(peer);
-            result
-        }
-
-        pub async fn close_route(&self, route: &AukiWebRoute) -> Result<(), AukiWebPeerError> {
-            let peer = self.take_peer()?;
-            let result = peer.close_route(route).await;
-            self.put_peer(peer);
-            result
-        }
-
-        pub async fn wait_stopped(&self) -> AukiWebPeerExit {
-            let Ok(peer) = self.take_peer() else {
-                return AukiWebPeerExit::SupervisorStopped;
-            };
-            let status = peer.wait_stopped().await;
-            self.put_peer(peer);
-            status
-        }
-
-        pub async fn shutdown(&self) -> Result<(), AukiWebPeerError> {
+        /// Stop protocols, release the relay booking, and stop the transport.
+        pub async fn shutdown(&self) -> Result<(), JsValue> {
             let peer = self
                 .inner
                 .borrow_mut()
                 .take()
-                .ok_or(AukiWebPeerError::Stopped)?;
-            peer.shutdown().await
+                .ok_or_else(|| js_failure("Auki peer is stopped"))?;
+            peer.shutdown()
+                .await
+                .map_err(|error| js_context("shut down browser Peer", error))
         }
+    }
 
-        fn take_peer(&self) -> Result<AukiPeer, AukiWebPeerError> {
-            self.inner
-                .borrow_mut()
-                .take()
-                .ok_or(AukiWebPeerError::Stopped)
-        }
+    fn js_context(context: &'static str, error: impl Display) -> JsValue {
+        JsError::new(&format!("{context}: {error}")).into()
+    }
 
-        fn put_peer(&self, peer: AukiPeer) {
-            let replaced = self.inner.borrow_mut().replace(peer);
-            debug_assert!(replaced.is_none());
-        }
+    fn js_failure(message: &'static str) -> JsValue {
+        JsError::new(message).into()
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use bridge::{
-    AukiWebPeer, AukiWebPeerError, AukiWebPeerExit, AukiWebReachability, AukiWebRoute,
-};
+pub use facade::{AukiDomain, AukiPeer, AukiUserSession};

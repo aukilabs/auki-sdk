@@ -3,9 +3,8 @@ use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use auki_auth::{AuthorityRenewal, PreparedPeer};
 use auki_p2p::{
-    ApplicationProtocol, AuthenticatedStream, BrowserAuthority,
-    BrowserIncomingAuthenticatedStreams, BrowserNode, BrowserNodeExit, BrowserRelayRoute, Identity,
-    Multiaddr, PeerAuthorityUpdate, PeerId, Protocol, RelayBaseTransport, RelayReservationError,
+    BrowserAuthority, BrowserNode, BrowserNodeExit, Identity, Multiaddr, PeerAuthorityUpdate,
+    PeerId, Protocol, RelayBaseTransport, RelayReservationError,
 };
 use auki_relay_booking::{
     CreateRelayBookingRequest, RelayAuthorizationError, RelayAuthorizationProvider,
@@ -69,35 +68,12 @@ impl AukiPeerReachability {
 
     /// Exact circuit route to another Peer through this Peer's
     /// DMS-confirmed WSS relay.
-    pub fn wss_route_to(&self, peer_id: PeerId) -> Multiaddr {
+    pub(crate) fn wss_route_to(&self, peer_id: PeerId) -> Multiaddr {
         let mut route = self.wss.clone();
         let target = route.pop();
         debug_assert!(matches!(target, Some(Protocol::P2p(_))));
         route.push(Protocol::P2p(peer_id));
         route
-    }
-}
-
-/// One source-admitted, exact browser circuit pinned to a remote Peer.
-pub struct AukiPeerRoute {
-    inner: BrowserRelayRoute,
-}
-
-impl AukiPeerRoute {
-    pub fn relay_peer_id(&self) -> PeerId {
-        self.inner.relay_peer_id()
-    }
-
-    pub fn target_peer_id(&self) -> PeerId {
-        self.inner.target_peer_id()
-    }
-
-    pub fn route(&self) -> &Multiaddr {
-        self.inner.route()
-    }
-
-    pub fn admission_expires_at(&self) -> DateTime<Utc> {
-        self.inner.admission_expires_at()
     }
 }
 
@@ -257,37 +233,6 @@ impl AukiPeer {
         self.protocols.clone()
     }
 
-    pub fn accept(
-        &self,
-        protocol: ApplicationProtocol,
-    ) -> Result<BrowserIncomingAuthenticatedStreams, AukiPeerError> {
-        Ok(self.node.accept(protocol)?)
-    }
-
-    /// Source-admit and pin one exact circuit to a remote Peer through this
-    /// Peer's DMS-confirmed WSS relay.
-    ///
-    /// Trusted multi-relay discovery is deliberately outside the v0.1
-    /// facade; callers provide only the expected target Peer ID.
-    pub async fn connect(&self, expected_peer: PeerId) -> Result<AukiPeerRoute, AukiPeerError> {
-        let route = self.reachability.wss_route_to(expected_peer);
-        let route = self.node.connect_relayed(expected_peer, route).await?;
-        Ok(AukiPeerRoute { inner: route })
-    }
-
-    /// Open one exact opted-in protocol and complete mutual DDS authentication.
-    pub async fn open(
-        &self,
-        route: &AukiPeerRoute,
-        protocol: ApplicationProtocol,
-    ) -> Result<AuthenticatedStream, AukiPeerError> {
-        Ok(self.node.open_relayed(&route.inner, protocol).await?)
-    }
-
-    pub async fn close_route(&self, route: &AukiPeerRoute) -> Result<(), AukiPeerError> {
-        Ok(self.node.close_relay_route(&route.inner).await?)
-    }
-
     /// Wait until either the browser swarm or its authority/booking supervisor stops.
     pub async fn wait_stopped(&self) -> AukiPeerExit {
         match self.relay.wait_stopped().await {
@@ -339,8 +284,6 @@ pub enum AukiPeerExit {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AukiPeerError {
-    #[error("the browser Auki peer has stopped")]
-    Stopped,
     #[error("authorized Peer ID {authorized} does not match identity Peer ID {identity}")]
     IdentityMismatch {
         identity: String,

@@ -14,14 +14,9 @@ readme = "README.md"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-auki-auth = { path = "../../../crates/auki-auth" }
-auki-p2p = { path = "../../../crates/auki-p2p" }
-auki-portable-echo-protocol = { path = "../protocol" }
+auki-portable-echo-adapter = { path = "../adapter" }
+auki-sdk = { path = "../../../crates/auki-sdk" }
 auki-sdk-web = { path = "../../../bindings/web/auki-sdk-web" }
-futures = { workspace = true }
-futures-timer = { workspace = true }
 js-sys = { workspace = true }
-tokio-util = { workspace = true, features = ["rt"] }
-uuid = { workspace = true, features = ["js"] }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }

@@ -14,6 +14,7 @@
       const initialized = init();
       let peer;
       let echo;
+      let terminal;
 
       globalThis.echoHarness = Object.freeze({
         async start({ email, password, domainId }) {
@@ -37,6 +38,10 @@
             }
             peer = await session.startPeer(domainId);
             echo = new AukiEcho(peer);
+            terminal = peer.waitStopped().then(
+              () => ({ error: undefined }),
+              (error) => ({ error }),
+            );
           } finally {
             session.free();
           }
@@ -90,13 +95,39 @@
         async shutdown() {
           const running = peer;
           const mounted = echo;
+          const stopped = terminal;
           peer = undefined;
           echo = undefined;
+          terminal = undefined;
           if (!running) {
             return;
           }
+          let closeError;
           try {
-            await running.shutdown();
+            await mounted?.close();
+            await mounted?.close();
+          } catch (error) {
+            closeError = error;
+          }
+          const shutdown = running.shutdown();
+          let fenced = false;
+          try {
+            new AukiEcho(running);
+          } catch {
+            fenced = true;
+          }
+          try {
+            await shutdown;
+            if (!fenced) {
+              throw new Error("AukiPeer.shutdown() did not synchronously fence new protocols");
+            }
+            const terminalResult = await stopped;
+            if (terminalResult?.error) {
+              throw terminalResult.error;
+            }
+            if (closeError) {
+              throw closeError;
+            }
           } finally {
             mounted?.free();
             running.free();

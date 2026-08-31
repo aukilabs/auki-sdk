@@ -17,7 +17,9 @@ The peer can serve and initiate the exact `/example/echo/1.0.0` protocol. Its
 another browser peer. Every outbound exchange uses the exact WSS route from
 the remote peer card, so peers selected onto different DMS relays can connect.
 The shared adapter authenticates the stream, runs the Rust protocol, and owns
-bounded cleanup. Trusted discovery from only a Peer ID remains separate work.
+bounded cleanup. `AukiEcho.close()` is the awaited protocol-unmount barrier and
+runs before `AukiPeer.shutdown()`. Trusted discovery from only a Peer ID remains
+separate work.
 
 ## Run the Peer Playground
 

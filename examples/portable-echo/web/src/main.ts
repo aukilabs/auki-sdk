@@ -207,7 +207,7 @@ async function startSelectedPeer(generation: number): Promise<void> {
         userSession = undefined;
       }
       session.free();
-      await peer.shutdown().catch(() => {});
+      await closeOwnedPeer(peer, echo);
       echo.free();
       peer.free();
       startedPeer = undefined;
@@ -234,6 +234,7 @@ async function startSelectedPeer(generation: number): Promise<void> {
     const receiveLoopGeneration = ++receiveGeneration;
     const task = receiveEchoes(peer, echo, receiveLoopGeneration);
     receiveTask = task;
+    monitorPeerLifecycle(peer, echo);
     void task
       .finally(() => {
         if (receiveTask === task) {
@@ -243,7 +244,7 @@ async function startSelectedPeer(generation: number): Promise<void> {
       .catch(() => {});
   } catch (error) {
     if (startedPeer) {
-      await startedPeer.shutdown().catch(() => {});
+      await closeOwnedPeer(startedPeer, startedEcho);
       startedEcho?.free();
       startedPeer.free();
     }
@@ -418,7 +419,16 @@ function isActive(peer: AukiPeer, echo: AukiEcho, generation: number): boolean {
   return runningPeer === peer && runningEcho === echo && receiveGeneration === generation;
 }
 
-async function stopPeer(): Promise<void> {
+function monitorPeerLifecycle(peer: AukiPeer, echo: AukiEcho): void {
+  const stopped: Promise<void> = peer.waitStopped();
+  void stopped.catch((error) => {
+    if (runningPeer === peer && runningEcho === echo) {
+      void stopPeer(error);
+    }
+  });
+}
+
+async function stopPeer(terminalFailure?: unknown): Promise<void> {
   const peer = runningPeer;
   const echo = runningEcho;
   if (!peer || !echo) {
@@ -431,21 +441,50 @@ async function stopPeer(): Promise<void> {
   const pendingReceive = receiveTask;
   setPanelBusy(ui.connectPanel, true);
   ui.stopPeer.disabled = true;
-  setStatus("Stopping the peer and releasing its relay booking…", "busy");
-  try {
-    await peer.shutdown();
+  setStatus(
+    terminalFailure
+      ? "Peer stopped unexpectedly; finishing local cleanup…"
+      : "Stopping the peer and releasing its relay booking…",
+    "busy",
+  );
+  const cleanupFailures = await closeOwnedPeer(peer, echo);
+  await Promise.allSettled([
+    ...(pendingReceive ? [pendingReceive] : []),
+    ...activeSends,
+  ]);
+  echo.free();
+  peer.free();
+  resetToLogin();
+
+  if (terminalFailure) {
+    const cleanup = cleanupFailures.length
+      ? ` Cleanup also reported: ${cleanupFailures.join("; ")}`
+      : "";
+    setStatus(`Peer stopped unexpectedly: ${errorMessage(terminalFailure)}.${cleanup}`, "error");
+  } else if (cleanupFailures.length === 0) {
     setStatus("Peer stopped. Log in again to start a fresh Peer ID.", "idle");
-  } catch (error) {
-    setStatus(`Peer stopped with incomplete cleanup: ${errorMessage(error)}`, "error");
-  } finally {
-    await Promise.allSettled([
-      ...(pendingReceive ? [pendingReceive] : []),
-      ...activeSends,
-    ]);
-    echo.free();
-    peer.free();
-    resetToLogin();
+  } else {
+    setStatus(`Peer stopped with incomplete cleanup: ${cleanupFailures.join("; ")}`, "error");
   }
+}
+
+async function closeOwnedPeer(peer: AukiPeer, echo?: AukiEcho): Promise<string[]> {
+  const failures: string[] = [];
+  if (echo) {
+    try {
+      const closingEcho: Promise<void> = echo.close();
+      await closingEcho;
+    } catch (error) {
+      failures.push(`portable echo: ${errorMessage(error)}`);
+    }
+  }
+  try {
+    const shuttingDown: Promise<void> = peer.shutdown();
+    await shuttingDown;
+  } catch (error) {
+    failures.push(`Auki peer: ${errorMessage(error)}`);
+  }
+  return failures;
 }
 
 function resetToLogin(): void {
@@ -482,9 +521,7 @@ function releasePageResources(): void {
       ...(receiveTask ? [receiveTask] : []),
       ...activeSends,
     ];
-    void peer
-      .shutdown()
-      .catch(() => {})
+    void closeOwnedPeer(peer, echo)
       .then(() => Promise.allSettled(pending))
       .finally(() => {
         echo.free();

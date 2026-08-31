@@ -55,6 +55,22 @@ pub struct AukiPeerReachability {
     tcp: Option<Multiaddr>,
 }
 
+/// Clone-only observation of one browser Peer's terminal lifecycle result.
+///
+/// The observer does not retain the Peer, relay booking, authority, or
+/// transport. Every clone receives the same terminal result.
+#[derive(Clone)]
+pub struct AukiPeerLifecycle {
+    stopped: Shared<oneshot::Receiver<SupervisorExit>>,
+}
+
+impl AukiPeerLifecycle {
+    /// Wait until the browser Peer and its relay supervisor have stopped.
+    pub async fn wait_stopped(&self) -> AukiPeerExit {
+        peer_exit(wait_for_supervisor(self.stopped.clone()).await)
+    }
+}
+
 impl AukiPeerReachability {
     /// Exact WSS circuit route suitable for another browser Peer.
     pub fn wss(&self) -> &Multiaddr {
@@ -223,15 +239,14 @@ impl AukiPeer {
         self.protocols.clone()
     }
 
+    /// Observe terminal lifecycle without retaining this Peer owner.
+    pub fn lifecycle(&self) -> AukiPeerLifecycle {
+        self.relay.lifecycle()
+    }
+
     /// Wait until either the browser swarm or its authority/booking supervisor stops.
     pub async fn wait_stopped(&self) -> AukiPeerExit {
-        match self.relay.wait_stopped().await {
-            SupervisorExit::Node(status) => AukiPeerExit::Node(status),
-            SupervisorExit::Failed { reason } => AukiPeerExit::SupervisorFailed { reason },
-            SupervisorExit::Shutdown | SupervisorExit::OwnersDropped => {
-                AukiPeerExit::SupervisorStopped
-            }
-        }
+        self.lifecycle().wait_stopped().await
     }
 
     /// Stop the node, delete the booking, and clear authority.
@@ -648,13 +663,14 @@ impl RelaySupervisor {
         }
     }
 
+    fn lifecycle(&self) -> AukiPeerLifecycle {
+        AukiPeerLifecycle {
+            stopped: self.stopped.clone(),
+        }
+    }
+
     async fn wait_stopped(&self) -> SupervisorExit {
-        self.stopped
-            .clone()
-            .await
-            .unwrap_or_else(|_| SupervisorExit::Failed {
-                reason: "browser relay supervisor status channel dropped".into(),
-            })
+        wait_for_supervisor(self.stopped.clone()).await
     }
 
     async fn stop(&self) -> SupervisorExit {
@@ -677,6 +693,20 @@ enum SupervisorExit {
     OwnersDropped,
     Node(BrowserNodeExit),
     Failed { reason: String },
+}
+
+fn peer_exit(exit: SupervisorExit) -> AukiPeerExit {
+    match exit {
+        SupervisorExit::Node(status) => AukiPeerExit::Node(status),
+        SupervisorExit::Failed { reason } => AukiPeerExit::SupervisorFailed { reason },
+        SupervisorExit::Shutdown | SupervisorExit::OwnersDropped => AukiPeerExit::SupervisorStopped,
+    }
+}
+
+async fn wait_for_supervisor(stopped: Shared<oneshot::Receiver<SupervisorExit>>) -> SupervisorExit {
+    stopped.await.unwrap_or_else(|_| SupervisorExit::Failed {
+        reason: "browser relay supervisor status channel dropped".into(),
+    })
 }
 
 enum SupervisionEnd {
@@ -897,4 +927,30 @@ enum SupervisorError {
     RelayAuthorityEnded,
     #[error("DMS changed or withdrew the browser relay assignment; restart the Peer")]
     RelayChanged,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    #[wasm_bindgen_test(async)]
+    async fn lifecycle_clones_share_one_terminal_result() {
+        let (stopped_sender, stopped_receiver) = oneshot::channel();
+        let lifecycle = AukiPeerLifecycle {
+            stopped: stopped_receiver.shared(),
+        };
+        let clone = lifecycle.clone();
+        stopped_sender
+            .send(SupervisorExit::Failed {
+                reason: "relay ended".to_owned(),
+            })
+            .expect("terminal status receiver remains alive");
+
+        let expected = AukiPeerExit::SupervisorFailed {
+            reason: "relay ended".to_owned(),
+        };
+        assert_eq!(lifecycle.wait_stopped().await, expected);
+        assert_eq!(clone.wait_stopped().await, expected);
+    }
 }

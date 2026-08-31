@@ -14,10 +14,14 @@ mod facade {
     use auki_auth::{
         AuthClient, AuthEnvironment, AuthSession, Credentials, DomainDescriptor, DomainSelection,
     };
-    use auki_sdk::{AukiPeer as SdkPeer, AukiPeerConfig, AukiPeerProtocols, Identity};
-    use js_sys::{Array, Error as JsError};
+    use auki_sdk::{
+        AukiPeer as SdkPeer, AukiPeerConfig, AukiPeerExit, AukiPeerLifecycle, AukiPeerProtocols,
+        Identity,
+    };
+    use js_sys::{Array, Error as JsError, Promise};
     use uuid::Uuid;
     use wasm_bindgen::prelude::*;
+    use wasm_bindgen_futures::future_to_promise;
 
     /// Authenticated User session used to inspect Domains and start peers.
     #[wasm_bindgen]
@@ -156,6 +160,7 @@ mod facade {
     #[wasm_bindgen]
     pub struct AukiPeer {
         inner: RefCell<Option<SdkPeer>>,
+        lifecycle: AukiPeerLifecycle,
         peer_id: String,
         domain_id: String,
         wss_route: String,
@@ -165,6 +170,7 @@ mod facade {
     impl AukiPeer {
         fn new(peer: SdkPeer) -> Self {
             Self {
+                lifecycle: peer.lifecycle(),
                 peer_id: peer.peer_id().to_string(),
                 domain_id: peer.domain_id().to_string(),
                 wss_route: peer.reachability().wss().to_string(),
@@ -205,16 +211,38 @@ mod facade {
             self.tcp_route.clone()
         }
 
+        /// Resolve after explicit shutdown or reject after unexpected terminal failure.
+        #[wasm_bindgen(js_name = waitStopped, unchecked_return_type = "Promise<void>")]
+        pub fn wait_stopped(&self) -> Promise {
+            let lifecycle = self.lifecycle.clone();
+            future_to_promise(async move {
+                match lifecycle.wait_stopped().await {
+                    AukiPeerExit::SupervisorStopped => Ok(JsValue::UNDEFINED),
+                    AukiPeerExit::Node(status) => Err(js_context(
+                        "browser Peer transport stopped unexpectedly",
+                        format!("{status:?}"),
+                    )),
+                    AukiPeerExit::SupervisorFailed { reason } => {
+                        Err(js_context("browser Peer stopped unexpectedly", reason))
+                    }
+                }
+            })
+        }
+
         /// Stop protocols, release the relay booking, and stop the transport.
-        pub async fn shutdown(&self) -> Result<(), JsValue> {
+        #[wasm_bindgen(unchecked_return_type = "Promise<void>")]
+        pub fn shutdown(&self) -> Result<Promise, JsValue> {
             let peer = self
                 .inner
                 .borrow_mut()
                 .take()
                 .ok_or_else(|| js_failure("Auki peer is stopped"))?;
-            peer.shutdown()
-                .await
-                .map_err(|error| js_context("shut down browser Peer", error))
+            Ok(future_to_promise(async move {
+                peer.shutdown()
+                    .await
+                    .map_err(|error| js_context("shut down browser Peer", error))?;
+                Ok(JsValue::UNDEFINED)
+            }))
         }
     }
 

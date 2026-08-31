@@ -48,9 +48,50 @@ pub fn protocol_spec() -> Result<AukiProtocolSpec, AukiProtocolError> {
     )
 }
 
+/// Cloneable outbound half of the portable echo adapter.
+#[derive(Clone)]
+pub struct EchoClient {
+    protocols: AukiPeerProtocols,
+}
+
+impl EchoClient {
+    /// Send one echo through the routes configured on the owning native Auki peer.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn send(
+        &self,
+        remote_peer_id: PeerId,
+        payload: impl Into<Vec<u8>>,
+    ) -> Result<EchoSendReceipt, EchoAdapterError> {
+        let request = EchoRequest::new(payload)?;
+        send_opened(
+            remote_peer_id,
+            request,
+            self.protocols.open(remote_peer_id, PROTOCOL_ID),
+        )
+        .await
+    }
+
+    /// Send one echo through an exact advertised route.
+    pub async fn send_exact(
+        &self,
+        remote_peer_id: PeerId,
+        route: Multiaddr,
+        payload: impl Into<Vec<u8>>,
+    ) -> Result<EchoSendReceipt, EchoAdapterError> {
+        let request = EchoRequest::new(payload)?;
+        send_opened(
+            remote_peer_id,
+            request,
+            self.protocols
+                .open_exact(remote_peer_id, route, PROTOCOL_ID),
+        )
+        .await
+    }
+}
+
 /// Mounted portable echo service plus its outbound client.
 pub struct EchoEndpoint {
-    protocols: AukiPeerProtocols,
+    client: EchoClient,
     registration: AukiProtocolRegistration,
     events: EchoEventReceiver,
 }
@@ -87,10 +128,15 @@ impl EchoEndpoint {
         })?;
 
         Ok(Self {
-            protocols,
+            client: EchoClient { protocols },
             registration,
             events,
         })
+    }
+
+    /// Clone the outbound client without cloning inbound registration ownership.
+    pub fn client(&self) -> EchoClient {
+        self.client.clone()
     }
 
     /// Obtain a receiver for inbound completion, failure, and lag events.
@@ -108,13 +154,7 @@ impl EchoEndpoint {
         remote_peer_id: PeerId,
         payload: impl Into<Vec<u8>>,
     ) -> Result<EchoSendReceipt, EchoAdapterError> {
-        let request = EchoRequest::new(payload)?;
-        send_opened(
-            remote_peer_id,
-            request,
-            self.protocols.open(remote_peer_id, PROTOCOL_ID),
-        )
-        .await
+        self.client.send(remote_peer_id, payload).await
     }
 
     /// Send one echo through an exact advertised route.
@@ -124,14 +164,7 @@ impl EchoEndpoint {
         route: Multiaddr,
         payload: impl Into<Vec<u8>>,
     ) -> Result<EchoSendReceipt, EchoAdapterError> {
-        let request = EchoRequest::new(payload)?;
-        send_opened(
-            remote_peer_id,
-            request,
-            self.protocols
-                .open_exact(remote_peer_id, route, PROTOCOL_ID),
-        )
-        .await
+        self.client.send_exact(remote_peer_id, route, payload).await
     }
 
     /// Stop accepting inbound echo streams and await admitted handlers.

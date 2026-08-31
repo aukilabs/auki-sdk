@@ -6,7 +6,8 @@ JavaScript uses `AukiUserSession` to authenticate a User, list accessible
 Domains, and start an ephemeral `AukiPeer`. A browser peer always acquires a
 relay before startup completes and exposes its confirmed WSS and optional TCP
 circuit routes as public peer-card data. `AukiPeer.shutdown()` is the awaited
-cleanup barrier.
+cleanup barrier, while `AukiPeer.waitStopped()` reports unexpected terminal
+transport or relay failure to the application.
 
 Protocol implementations stay in Rust. An application-specific adapter
 compiled into the same Wasm module obtains `AukiPeerProtocols` through the

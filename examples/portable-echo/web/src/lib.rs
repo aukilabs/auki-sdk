@@ -3,17 +3,21 @@
 #![cfg(target_arch = "wasm32")]
 #![forbid(unsafe_code)]
 
-use std::fmt::Display;
+use std::{cell::RefCell, fmt::Display};
 
-use auki_portable_echo_adapter::{EchoEndpoint, EchoEventReceiver, EchoServeEvent, PROTOCOL_ID};
+use auki_portable_echo_adapter::{
+    EchoClient, EchoEndpoint, EchoEventReceiver, EchoServeEvent, PROTOCOL_ID,
+};
 use auki_sdk::{Multiaddr, PeerId};
 pub use auki_sdk_web::{AukiDomain, AukiPeer, AukiUserSession};
-use js_sys::Error as JsError;
+use js_sys::{Error as JsError, Promise};
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::future_to_promise;
 
 #[wasm_bindgen]
 pub struct AukiEcho {
-    endpoint: EchoEndpoint,
+    endpoint: RefCell<Option<EchoEndpoint>>,
+    client: EchoClient,
     events: EchoEventReceiver,
 }
 
@@ -26,8 +30,13 @@ impl AukiEcho {
             .ok_or_else(|| js_error("Auki peer is stopped"))?;
         let endpoint = EchoEndpoint::mount(protocols)
             .map_err(|error| js_context("mount portable echo", error))?;
+        let client = endpoint.client();
         let events = endpoint.events();
-        Ok(Self { endpoint, events })
+        Ok(Self {
+            endpoint: RefCell::new(Some(endpoint)),
+            client,
+            events,
+        })
     }
 
     #[wasm_bindgen(getter)]
@@ -42,6 +51,9 @@ impl AukiEcho {
         wss_route: String,
         payload: Vec<u8>,
     ) -> Result<EchoReceipt, JsValue> {
+        if self.endpoint.borrow().is_none() {
+            return Err(js_error("portable echo endpoint is stopped"));
+        }
         let peer_id = remote_peer_id
             .parse::<PeerId>()
             .map_err(|error| js_context("parse remote Peer ID", error))?;
@@ -49,7 +61,7 @@ impl AukiEcho {
             .parse::<Multiaddr>()
             .map_err(|error| js_context("parse remote WSS route", error))?;
         let receipt = self
-            .endpoint
+            .client
             .send_exact(peer_id, route, payload)
             .await
             .map_err(|error| js_context("run portable echo", error))?;
@@ -77,6 +89,21 @@ impl AukiEcho {
             ))),
             None => Err(js_error("portable echo endpoint is stopped")),
         }
+    }
+
+    /// Stop inbound serving and resolve after every admitted handler is gone.
+    #[wasm_bindgen(unchecked_return_type = "Promise<void>")]
+    pub fn close(&self) -> Promise {
+        let endpoint = self.endpoint.borrow_mut().take();
+        future_to_promise(async move {
+            if let Some(endpoint) = endpoint {
+                endpoint
+                    .close()
+                    .await
+                    .map_err(|error| js_context("close portable echo", error))?;
+            }
+            Ok(JsValue::UNDEFINED)
+        })
     }
 }
 

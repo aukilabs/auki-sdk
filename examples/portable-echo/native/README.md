@@ -36,6 +36,26 @@ cargo run --locked -p auki-portable-echo-native
 Terminal B prints `ECHO_OK`, closes its stream, and shuts down. Stop terminal A
 with Ctrl-C. Both processes await the facade's ordered shutdown.
 
+## Round trip with the browser playground
+
+Start a browser peer from the
+[Peer Playground](../web/README.md), then copy its Peer ID and the `tcp` route
+from its public Peer Card. Run the native peer with those values and keep it
+serving after its first outbound echo:
+
+```sh
+export AUKI_REMOTE_PEER_ID='<browser Peer ID>'
+export AUKI_REMOTE_ROUTE='<browser Peer Card tcp route>'
+export AUKI_KEEP_RUNNING=1
+cargo run --locked -p auki-portable-echo-native
+```
+
+The terminal first prints `ECHO_OK`, then `WAITING_FOR_PEER`. Paste its printed
+`PEER_CARD` into the playground and send an echo back. The browser currently
+dials through its own DMS-confirmed relay, so this manual v0.1 round trip
+requires both peers to receive a slot on the same relay. Stop the terminal with
+Ctrl-C when finished.
+
 A trusted native application can use App credentials instead:
 
 ```sh

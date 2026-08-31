@@ -665,6 +665,7 @@ dependencies = [
  "auki-portable-echo-protocol",
  "auki-sdk",
  "futures",
+ "serde_json",
  "tokio",
  "uuid",
 ]

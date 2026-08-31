@@ -63,13 +63,33 @@ async fn main() -> Result<()> {
 
     println!("READY");
     println!("PEER_ID={}", peer.peer_id());
+    let mut public_peer_card = None;
     for published in context.routes().snapshot()?.relay_routes {
         println!("RELAY_ROUTE={}", published.route);
+        if let Some(wss_route) = published.wss_route {
+            println!("RELAY_WSS_ROUTE={wss_route}");
+            public_peer_card.get_or_insert_with(|| {
+                serde_json::json!({
+                    "version": 1,
+                    "domainId": peer.domain_id().to_string(),
+                    "peerId": peer.peer_id().to_string(),
+                    "protocols": [ECHO_PROTOCOL_ID],
+                    "routes": {
+                        "wss": wss_route.to_string(),
+                        "tcp": published.route.to_string(),
+                    },
+                })
+            });
+        }
+    }
+    if let Some(card) = public_peer_card {
+        println!("PEER_CARD={card}");
     }
 
     if let Some(remote_peer) = remote_peer {
         run_echo_client(&context.protocols(), remote_peer).await?;
-    } else {
+    }
+    if remote_peer.is_none() || env::var_os("AUKI_KEEP_RUNNING").is_some() {
         println!("WAITING_FOR_PEER");
         tokio::signal::ctrl_c().await?;
     }

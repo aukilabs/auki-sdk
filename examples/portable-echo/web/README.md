@@ -2,7 +2,7 @@
 
 This example mounts the same Rust echo protocol used by the native example on
 an authenticated browser peer. JavaScript sees a small `BrowserUserSession`
-and `BrowserEchoServer`;
+and `BrowserEchoPeer`;
 credentials, DDS authority, relay booking, libp2p, authenticated streams, and
 echo framing stay inside Rust/Wasm.
 
@@ -12,9 +12,12 @@ The browser Peer ID is intentionally ephemeral in v0.1. Log in with
 a fresh identity and relay route. Reloading the page therefore creates a new
 peer.
 
-The first interoperability proof runs the browser as the echo server. Its
+The peer can serve and initiate the exact `/example/echo/1.0.0` protocol. Its
 `tcpRoute` is suitable for the existing native example, while `wssRoute` is
-available to another browser peer.
+available to another browser peer. Every outbound exchange connects one exact
+route, authenticates, runs the shared Rust client, and closes the stream and
+route. This manual v0.1 demo accepts only peers using the same DMS-confirmed
+relay; trusted multi-relay discovery remains separate work.
 
 Build the package with:
 

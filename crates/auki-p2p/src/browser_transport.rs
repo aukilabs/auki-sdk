@@ -35,7 +35,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::{
     authentication::{authenticate_duplex, SessionRequirements},
     browser_authority::BrowserAuthority,
-    browser_route::{browser_direct_address, parse_browser_relay_route},
+    browser_route::{browser_direct_address, parse_browser_relay_route_for_peer},
     relay::{
         ObservedRelayLimits, RelayCancellation, RelayProvider, RelayReservationEvent,
         RelayReservationHandle, RelayReservationNode, RelayReservationSnapshot,
@@ -231,8 +231,14 @@ impl BrowserNode {
     }
 
     /// Perform relay source admission and establish one exact WSS circuit.
-    pub async fn connect_relayed(&self, route: Multiaddr) -> Result<BrowserRelayRoute> {
-        let parsed = parse_browser_relay_route(&route)?;
+    pub async fn connect_relayed(
+        &self,
+        expected_peer_id: PeerId,
+        route: Multiaddr,
+    ) -> Result<BrowserRelayRoute> {
+        // The expected terminal Peer ID is checked before source admission so
+        // a mismatched route never receives this peer's DDS credential.
+        let parsed = parse_browser_relay_route_for_peer(&route, expected_peer_id)?;
         let tokens = self.authority.tokens();
         let verifier = self.authority.verifier();
         let authorization = source_admission::prepare_authorization(

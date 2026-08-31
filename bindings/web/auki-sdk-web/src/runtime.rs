@@ -5,7 +5,7 @@ use auki_auth::{AuthorityRenewal, PreparedPeer};
 use auki_p2p::{
     ApplicationProtocol, AuthenticatedStream, BrowserAuthority,
     BrowserIncomingAuthenticatedStreams, BrowserNode, BrowserNodeExit, BrowserRelayRoute, Identity,
-    Multiaddr, PeerAuthorityUpdate, PeerId, RelayBaseTransport, RelayReservationError,
+    Multiaddr, PeerAuthorityUpdate, PeerId, Protocol, RelayBaseTransport, RelayReservationError,
 };
 use auki_relay_booking::{
     CreateRelayBookingRequest, RelayAuthorizationError, RelayAuthorizationProvider,
@@ -62,6 +62,16 @@ impl AukiWebReachability {
     /// Exact TCP circuit route suitable for a native Peer, when advertised by DMS.
     pub fn tcp(&self) -> Option<&Multiaddr> {
         self.tcp.as_ref()
+    }
+
+    /// Exact circuit route to another Peer through this Peer's
+    /// DMS-confirmed WSS relay.
+    pub fn wss_route_to(&self, peer_id: PeerId) -> Multiaddr {
+        let mut route = self.wss.clone();
+        let target = route.pop();
+        debug_assert!(matches!(target, Some(Protocol::P2p(_))));
+        route.push(Protocol::P2p(peer_id));
+        route
     }
 }
 
@@ -238,21 +248,14 @@ impl AukiWebPeer {
         Ok(self.node.accept(protocol)?)
     }
 
-    /// Source-admit and pin one exact WSS circuit to the expected remote Peer.
-    pub async fn connect(
-        &self,
-        expected_peer: PeerId,
-        route: Multiaddr,
-    ) -> Result<AukiWebRoute, AukiWebPeerError> {
-        let route = self.node.connect_relayed(route).await?;
-        if route.target_peer_id() != expected_peer {
-            let actual = route.target_peer_id();
-            let _ = self.node.close_relay_route(&route).await;
-            return Err(AukiWebPeerError::UnexpectedRouteTarget {
-                expected: expected_peer.to_string(),
-                actual: actual.to_string(),
-            });
-        }
+    /// Source-admit and pin one exact circuit to a remote Peer through this
+    /// Peer's DMS-confirmed WSS relay.
+    ///
+    /// Trusted multi-relay discovery is deliberately outside the v0.1
+    /// facade; callers provide only the expected target Peer ID.
+    pub async fn connect(&self, expected_peer: PeerId) -> Result<AukiWebRoute, AukiWebPeerError> {
+        let route = self.reachability.wss_route_to(expected_peer);
+        let route = self.node.connect_relayed(expected_peer, route).await?;
         Ok(AukiWebRoute { inner: route })
     }
 
@@ -280,8 +283,11 @@ impl AukiWebPeer {
         }
     }
 
-    /// Ask the lifecycle owner to stop the node, delete the booking, and clear authority.
-    pub async fn shutdown(self) -> Result<(), AukiWebPeerError> {
+    /// Stop the node, delete the booking, and clear authority.
+    ///
+    /// The terminal result is shared, so repeated calls observe the same
+    /// completed shutdown. Operations racing with shutdown fail normally.
+    pub async fn shutdown(&self) -> Result<(), AukiWebPeerError> {
         match self.relay.stop().await {
             SupervisorExit::Failed { reason } => {
                 Err(AukiWebPeerError::Shutdown { details: reason })
@@ -323,8 +329,6 @@ pub enum AukiWebPeerError {
     RelayChangedDuringStartup,
     #[error("relay authority or provider lease reached its safety deadline during startup")]
     RelayAuthorityEndedDuringStartup,
-    #[error("connected route targets {actual}, expected {expected}")]
-    UnexpectedRouteTarget { expected: String, actual: String },
     #[error("Web Peer shutdown was incomplete: {details}")]
     Shutdown { details: String },
 }

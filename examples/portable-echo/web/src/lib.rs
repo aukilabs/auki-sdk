@@ -12,10 +12,10 @@ use std::{
 use auki_auth::{
     AuthClient, AuthEnvironment, AuthSession, Credentials, DomainDescriptor, DomainSelection,
 };
-use auki_p2p::{ApplicationProtocol, BrowserIncomingAuthenticatedStreams, Identity};
-use auki_portable_echo_protocol::{ID as ECHO_PROTOCOL_ID, run_server};
-use auki_sdk_web::{AukiWebPeer, AukiWebPeerConfig};
-use futures::{AsyncWriteExt, FutureExt, pin_mut};
+use auki_p2p::{ApplicationProtocol, BrowserIncomingAuthenticatedStreams, Identity, PeerId};
+use auki_portable_echo_protocol::{EchoRequest, ID as ECHO_PROTOCOL_ID, run_client, run_server};
+use auki_sdk_web::{AukiWebPeer, AukiWebPeerConfig, AukiWebRoute};
+use futures::{AsyncWriteExt, Future, FutureExt, pin_mut};
 use futures_timer::Delay;
 use js_sys::{Array, Error as JsError};
 use tokio_util::sync::CancellationToken;
@@ -65,8 +65,8 @@ impl BrowserUserSession {
     /// Authorize a fresh ephemeral peer in the selected Domain and acquire its
     /// mandatory relay before opting into the exact echo protocol.
     #[wasm_bindgen(js_name = startPeer)]
-    pub async fn start_peer(&self, domain_id: String) -> Result<BrowserEchoServer, JsValue> {
-        BrowserEchoServer::start(self.auth.clone(), domain_id).await
+    pub async fn start_peer(&self, domain_id: String) -> Result<BrowserEchoPeer, JsValue> {
+        BrowserEchoPeer::start(self.auth.clone(), domain_id).await
     }
 }
 
@@ -113,10 +113,10 @@ impl BrowserDomain {
     }
 }
 
-/// One explicitly opted-in echo server running on an ephemeral browser peer.
+/// One ephemeral browser peer that serves and sends the exact echo protocol.
 #[wasm_bindgen]
-pub struct BrowserEchoServer {
-    peer: RefCell<Option<AukiWebPeer>>,
+pub struct BrowserEchoPeer {
+    peer: AukiWebPeer,
     incoming: RefCell<Option<BrowserIncomingAuthenticatedStreams>>,
     serving: Cell<bool>,
     cancellation: CancellationToken,
@@ -128,8 +128,8 @@ pub struct BrowserEchoServer {
 }
 
 #[wasm_bindgen]
-impl BrowserEchoServer {
-    async fn start(auth: AuthSession, domain_id: String) -> Result<BrowserEchoServer, JsValue> {
+impl BrowserEchoPeer {
+    async fn start(auth: AuthSession, domain_id: String) -> Result<BrowserEchoPeer, JsValue> {
         let domain_id =
             Uuid::parse_str(&domain_id).map_err(|_| js_failure("domain ID must be a UUID"))?;
         let identity = Identity::generate();
@@ -155,7 +155,7 @@ impl BrowserEchoServer {
             domain_id: peer.domain_id().to_string(),
             wss_route: peer.reachability().wss().to_string(),
             tcp_route: peer.reachability().tcp().map(ToString::to_string),
-            peer: RefCell::new(Some(peer)),
+            peer,
             incoming: RefCell::new(Some(incoming)),
             serving: Cell::new(false),
             cancellation: CancellationToken::new(),
@@ -188,19 +188,25 @@ impl BrowserEchoServer {
         self.tcp_route.clone()
     }
 
+    /// Exact application protocol this peer explicitly serves and sends.
+    #[wasm_bindgen(getter)]
+    pub fn protocol(&self) -> String {
+        ECHO_PROTOCOL_ID.to_owned()
+    }
+
     /// Serve one authenticated request with the unmodified shared Rust
     /// protocol and return only its validated application result.
     #[wasm_bindgen(js_name = serveOnce)]
     pub async fn serve_once(&self) -> Result<EchoReceipt, JsValue> {
         if self.lifecycle.get() != Lifecycle::Running {
-            return Err(js_failure("echo server is stopped"));
+            return Err(js_failure("echo peer is stopped"));
         }
         if self.serving.replace(true) {
             return Err(js_failure("an echo request is already being served"));
         }
         let Some(mut incoming) = self.incoming.borrow_mut().take() else {
             self.serving.set(false);
-            return Err(js_failure("echo server is stopped"));
+            return Err(js_failure("echo peer is stopped"));
         };
 
         let (result, incoming_is_open) = serve_one(&self.cancellation, &mut incoming).await;
@@ -212,26 +218,46 @@ impl BrowserEchoServer {
         result
     }
 
+    /// Connect to one advertised WSS route, run the shared Rust echo client,
+    /// and close the exact circuit after the response is validated.
+    #[wasm_bindgen(js_name = sendEcho)]
+    pub async fn send_echo(
+        &self,
+        remote_domain_id: String,
+        remote_peer_id: String,
+        remote_protocol: String,
+        payload: Vec<u8>,
+    ) -> Result<EchoReceipt, JsValue> {
+        if self.lifecycle.get() != Lifecycle::Running {
+            return Err(js_failure("echo peer is stopped"));
+        }
+        let remote_domain_id = Uuid::parse_str(&remote_domain_id)
+            .map_err(|_| js_failure("remote Domain ID must be a UUID"))?;
+        if remote_domain_id != self.peer.domain_id() {
+            return Err(js_failure("remote peer card belongs to a different Domain"));
+        }
+        if remote_protocol != ECHO_PROTOCOL_ID {
+            return Err(js_failure(
+                "remote peer card does not advertise the echo protocol",
+            ));
+        }
+        let remote_peer_id = remote_peer_id
+            .parse::<PeerId>()
+            .map_err(|error| js_context("parse remote Peer ID", error))?;
+        let request = EchoRequest::new(payload)
+            .map_err(|error| js_context("validate echo request", error))?;
+        send_one(&self.peer, &self.cancellation, remote_peer_id, request).await
+    }
+
     /// Stop accepting echo streams and run the facade's ordered peer cleanup.
     pub async fn shutdown(&self) -> Result<(), JsValue> {
-        match self.lifecycle.replace(Lifecycle::Stopping) {
-            Lifecycle::Running => {}
-            Lifecycle::Stopping => {
-                return Err(js_failure("echo server shutdown is already in progress"));
-            }
-            Lifecycle::Stopped => {
-                self.lifecycle.set(Lifecycle::Stopped);
-                return Ok(());
-            }
+        if self.lifecycle.get() == Lifecycle::Running {
+            self.lifecycle.set(Lifecycle::Stopping);
+            self.cancellation.cancel();
+            self.incoming.borrow_mut().take();
         }
-        self.cancellation.cancel();
-        self.incoming.borrow_mut().take();
-        let peer = self.peer.borrow_mut().take();
-        let Some(peer) = peer else {
-            self.lifecycle.set(Lifecycle::Stopped);
-            return Ok(());
-        };
-        let result = peer
+        let result = self
+            .peer
             .shutdown()
             .await
             .map_err(|error| js_context("shut down browser Peer", error));
@@ -240,7 +266,7 @@ impl BrowserEchoServer {
     }
 }
 
-impl Drop for BrowserEchoServer {
+impl Drop for BrowserEchoPeer {
     fn drop(&mut self) {
         self.cancellation.cancel();
     }
@@ -255,7 +281,7 @@ async fn serve_one(
         let cancelled = cancellation.cancelled().fuse();
         pin_mut!(accept, cancelled);
         futures::select_biased! {
-            () = cancelled => return (Err(js_failure("echo server is stopped")), false),
+            () = cancelled => return (Err(js_failure("echo peer is stopped")), false),
             accepted = accept => accepted,
         }
     };
@@ -290,7 +316,7 @@ async fn serve_one(
     };
     let request = match exchange {
         EchoExchange::Stopped => {
-            return (Err(js_failure("echo server is stopped")), false);
+            return (Err(js_failure("echo peer is stopped")), false);
         }
         EchoExchange::TimedOut => {
             return (Err(js_failure("echo exchange timed out")), true);
@@ -308,7 +334,7 @@ async fn serve_one(
         let cancelled = cancellation.cancelled().fuse();
         pin_mut!(close, timeout, cancelled);
         futures::select_biased! {
-            () = cancelled => return (Err(js_failure("echo server is stopped")), false),
+            () = cancelled => return (Err(js_failure("echo peer is stopped")), false),
             () = timeout => return (Err(js_failure("closing echo stream timed out")), true),
             close = close => close,
         }
@@ -324,6 +350,107 @@ async fn serve_one(
         }),
         true,
     )
+}
+
+async fn send_one(
+    peer: &AukiWebPeer,
+    cancellation: &CancellationToken,
+    remote_peer_id: PeerId,
+    request: EchoRequest,
+) -> Result<EchoReceipt, JsValue> {
+    let protocol = ApplicationProtocol::new(ECHO_PROTOCOL_ID)
+        .map_err(|error| js_context("configure echo protocol", error))?;
+    let route = bounded_operation(
+        cancellation,
+        "connect remote echo Peer",
+        peer.connect(remote_peer_id),
+    )
+    .await?;
+    let exchange = exchange_on_route(
+        peer,
+        cancellation,
+        &route,
+        protocol,
+        remote_peer_id,
+        request,
+    )
+    .await;
+    let close = timed_operation("close remote relay route", peer.close_route(&route)).await;
+    prefer_primary(exchange, close)
+}
+
+async fn exchange_on_route(
+    peer: &AukiWebPeer,
+    cancellation: &CancellationToken,
+    route: &AukiWebRoute,
+    protocol: ApplicationProtocol,
+    remote_peer_id: PeerId,
+    request: EchoRequest,
+) -> Result<EchoReceipt, JsValue> {
+    let mut stream = bounded_operation(
+        cancellation,
+        "open authenticated echo stream",
+        peer.open(route, protocol),
+    )
+    .await?;
+    let exchange = bounded_operation(
+        cancellation,
+        "run shared echo client",
+        run_client(&mut stream, request),
+    )
+    .await
+    .map(|response| EchoReceipt {
+        remote_peer_id: remote_peer_id.to_string(),
+        payload: response.into_bytes(),
+    });
+    let close = timed_operation("close echo stream", stream.close()).await;
+    prefer_primary(exchange, close)
+}
+
+async fn bounded_operation<T, E, F>(
+    cancellation: &CancellationToken,
+    context: &'static str,
+    operation: F,
+) -> Result<T, JsValue>
+where
+    E: Display,
+    F: Future<Output = Result<T, E>>,
+{
+    let operation = operation.fuse();
+    let timeout = Delay::new(EXCHANGE_TIMEOUT).fuse();
+    let cancelled = cancellation.cancelled().fuse();
+    pin_mut!(operation, timeout, cancelled);
+    futures::select_biased! {
+        result = operation => result.map_err(|error| js_context(context, error)),
+        () = cancelled => Err(js_failure("echo peer is stopped")),
+        () = timeout => Err(js_message(format!("{context} timed out"))),
+    }
+}
+
+async fn timed_operation<T, E, F>(context: &'static str, operation: F) -> Result<T, JsValue>
+where
+    E: Display,
+    F: Future<Output = Result<T, E>>,
+{
+    let operation = operation.fuse();
+    let timeout = Delay::new(EXCHANGE_TIMEOUT).fuse();
+    pin_mut!(operation, timeout);
+    match futures::future::select(operation, timeout).await {
+        futures::future::Either::Left((result, _)) => {
+            result.map_err(|error| js_context(context, error))
+        }
+        futures::future::Either::Right(((), _)) => Err(js_message(format!("{context} timed out"))),
+    }
+}
+
+fn prefer_primary<T>(
+    primary: Result<T, JsValue>,
+    cleanup: Result<(), JsValue>,
+) -> Result<T, JsValue> {
+    match primary {
+        Err(error) => Err(error),
+        Ok(value) => cleanup.map(|()| value),
+    }
 }
 
 enum EchoExchange {
@@ -344,7 +471,7 @@ enum Lifecycle {
     Stopped,
 }
 
-/// Validated result of one shared echo-protocol server conversation.
+/// Validated result of one shared echo-protocol conversation.
 #[wasm_bindgen]
 pub struct EchoReceipt {
     remote_peer_id: String,
@@ -370,4 +497,8 @@ fn js_context(context: &'static str, error: impl Display) -> JsValue {
 
 fn js_failure(message: &'static str) -> JsValue {
     JsError::new(message).into()
+}
+
+fn js_message(message: String) -> JsValue {
+    JsError::new(&message).into()
 }

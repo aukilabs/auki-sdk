@@ -77,6 +77,20 @@ pub(crate) fn parse_browser_relay_route(route: &Multiaddr) -> Result<ParsedBrows
     })
 }
 
+pub(crate) fn parse_browser_relay_route_for_peer(
+    route: &Multiaddr,
+    expected_peer_id: PeerId,
+) -> Result<ParsedBrowserRelayRoute> {
+    let parsed = parse_browser_relay_route(route)?;
+    if parsed.target_peer_id != expected_peer_id {
+        return Err(Error::UnexpectedRemotePeer {
+            expected: expected_peer_id.to_string(),
+            actual: parsed.target_peer_id.to_string(),
+        });
+    }
+    Ok(parsed)
+}
+
 fn invalid_browser_route<T>(route: &Multiaddr, reason: &str) -> Result<T> {
     Err(Error::InvalidRelayRoute {
         address: route.to_string(),
@@ -184,5 +198,24 @@ mod tests {
                 "accepted invalid route {raw}"
             );
         }
+    }
+
+    #[test]
+    fn expected_target_is_rejected_before_the_route_can_be_dialed() {
+        let relay = peer_id();
+        let advertised_target = peer_id();
+        let expected_target = peer_id();
+        let route: Multiaddr = format!(
+            "/dns4/relay.dev.aukiverse.com/tcp/4443/wss/p2p/{relay}/p2p-circuit/p2p/{advertised_target}"
+        )
+        .parse()
+        .unwrap();
+
+        assert!(matches!(
+            parse_browser_relay_route_for_peer(&route, expected_target),
+            Err(Error::UnexpectedRemotePeer { expected, actual })
+                if expected == expected_target.to_string()
+                    && actual == advertised_target.to_string()
+        ));
     }
 }

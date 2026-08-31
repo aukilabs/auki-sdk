@@ -12,13 +12,13 @@
       import init, { BrowserUserSession } from "/pkg-web/auki_portable_echo_web.js";
 
       const initialized = init();
-      let server;
+      let peer;
 
       globalThis.echoHarness = Object.freeze({
         async start({ email, password, domainId }) {
           await initialized;
-          if (server) {
-            throw new Error("browser echo server is already running");
+          if (peer) {
+            throw new Error("browser echo peer is already running");
           }
           const session = await BrowserUserSession.loginDev(email, password);
           try {
@@ -34,24 +34,45 @@
             if (!selected) {
               throw new Error("the authenticated User cannot access the selected Domain");
             }
-            server = await session.startPeer(domainId);
+            peer = await session.startPeer(domainId);
           } finally {
             session.free();
           }
           document.querySelector("#status").textContent = "ready";
           return {
-            peerId: server.peerId,
-            domainId: server.domainId,
-            wssRoute: server.wssRoute,
-            tcpRoute: server.tcpRoute,
+            peerId: peer.peerId,
+            domainId: peer.domainId,
+            protocol: peer.protocol,
+            wssRoute: peer.wssRoute,
+            tcpRoute: peer.tcpRoute,
           };
         },
 
         async serveOnce() {
-          if (!server) {
-            throw new Error("browser echo server is not running");
+          if (!peer) {
+            throw new Error("browser echo peer is not running");
           }
-          const receipt = await server.serveOnce();
+          const receipt = await peer.serveOnce();
+          try {
+            return {
+              remotePeerId: receipt.remotePeerId,
+              payload: Array.from(receipt.payload),
+            };
+          } finally {
+            receipt.free();
+          }
+        },
+
+        async sendEcho({ domainId, peerId, protocol, payload }) {
+          if (!peer) {
+            throw new Error("browser echo peer is not running");
+          }
+          const receipt = await peer.sendEcho(
+            domainId,
+            peerId,
+            protocol,
+            Uint8Array.from(payload),
+          );
           try {
             return {
               remotePeerId: receipt.remotePeerId,
@@ -63,8 +84,8 @@
         },
 
         async shutdown() {
-          const running = server;
-          server = undefined;
+          const running = peer;
+          peer = undefined;
           if (!running) {
             return;
           }

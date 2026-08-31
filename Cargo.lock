@@ -337,9 +337,9 @@ name = "auki-auth"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "auki-domain",
  "auki-p2p",
- "auki-session",
+ "auki-protocols",
+ "auki-sdk",
  "base64",
  "chrono",
  "futures",
@@ -351,7 +351,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",

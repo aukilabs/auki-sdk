@@ -29,8 +29,7 @@ uuid = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
-auki-domain = { path = "../auki-domain" }
-auki-session = { path = "../auki-session" }
+auki-protocols = { path = "../auki-protocols", features = ["info-endpoint"] }
+auki-sdk = { path = "../auki-sdk" }
 jsonwebtoken = "9.3.0"
-tempfile = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }

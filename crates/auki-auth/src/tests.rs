@@ -1,11 +1,13 @@
 use std::{collections::HashMap, time::Duration};
 
-use auki_domain::{Domain, DomainConfig, DomainStatus, ServedProtocols};
 use auki_p2p::{
     Identity, Multiaddr, P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_SCOPE, P2P_TOKEN_TTL,
     P2P_TOKEN_TYPE, P2PAccessClaims, Protocol,
 };
-use auki_session::Peer;
+use auki_protocols::info::{InfoClient, InfoEndpoint, v1::AuthenticatedParticipantInfo};
+use auki_sdk::{
+    AukiPeer, AukiPeerConfig, AukiPeerStatus, ExternalAuthorityControl, ExternalAuthorityUpdate,
+};
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
@@ -24,7 +26,7 @@ use uuid::Uuid;
 
 use crate::{
     AppCredentials, AuthClient, AuthEnvironment, AuthLimits, Credentials, DomainSelection, Error,
-    PreparedPeer, SecretString,
+    PreparedPeer, RenewedAuthority, SecretString,
     client::{validate_challenge_at, verification_key_id},
     wire::PeerChallengeResponse,
 };
@@ -288,60 +290,62 @@ fn verification_keys_response(
     }))
 }
 
-async fn start_domain(identity: Identity, prepared: &PreparedPeer) -> (Domain, tempfile::TempDir) {
-    let root = tempfile::tempdir().unwrap();
-    let peer = Peer::new(prepared.peer_id.to_string(), "auki-auth-domain-proof")
-        .with_storage_root(root.path().to_path_buf());
-    let session = peer.start_session().unwrap();
-    let domain = Domain::builder(
-        &peer,
-        &session,
-        DomainConfig::new(prepared.domain.id, identity),
-    )
-    .authority(
+fn initial_authority(prepared: &PreparedPeer) -> ExternalAuthorityUpdate {
+    ExternalAuthorityUpdate::new(
+        prepared.domain.id,
+        prepared.peer_id,
         prepared.verification_keys.clone(),
         prepared.initial_credential.clone(),
+        prepared.credential_expires_at,
     )
-    .join()
-    .await
-    .unwrap();
-    (domain, root)
 }
 
-async fn start_listening_domain(
+fn renewed_authority(renewed: RenewedAuthority) -> ExternalAuthorityUpdate {
+    ExternalAuthorityUpdate::new(
+        renewed.domain.id,
+        renewed.peer_id,
+        renewed.verification_keys,
+        renewed.credential,
+        renewed.credential_expires_at,
+    )
+}
+
+async fn start_peer(
     identity: Identity,
     prepared: &PreparedPeer,
-) -> (Domain, tempfile::TempDir) {
-    start_listening_protocol_domain(identity, prepared, None, ServedProtocols::none()).await
+) -> (AukiPeer, ExternalAuthorityControl) {
+    AukiPeer::start_external(
+        identity,
+        initial_authority(prepared),
+        AukiPeerConfig::dev().direct_only(),
+    )
+    .await
+    .unwrap()
 }
 
-async fn start_listening_protocol_domain(
+async fn start_listening_peer(
+    identity: Identity,
+    prepared: &PreparedPeer,
+) -> (AukiPeer, ExternalAuthorityControl) {
+    start_listening_routed_peer(identity, prepared, None).await
+}
+
+async fn start_listening_routed_peer(
     identity: Identity,
     prepared: &PreparedPeer,
     route: Option<(auki_p2p::PeerId, Multiaddr)>,
-    served_protocols: ServedProtocols,
-) -> (Domain, tempfile::TempDir) {
-    let root = tempfile::tempdir().unwrap();
-    let peer = Peer::new(prepared.peer_id.to_string(), "auki-auth-listener-proof")
-        .with_storage_root(root.path().to_path_buf());
-    let session = peer.start_session().unwrap();
+) -> (AukiPeer, ExternalAuthorityControl) {
     let listener: Multiaddr = "/ip4/127.0.0.1/tcp/0".parse().unwrap();
-    let mut config = DomainConfig::new(prepared.domain.id, identity)
+    let mut config = AukiPeerConfig::dev()
+        .direct_only()
         .with_listen_addresses([listener])
         .unwrap();
     if let Some((peer_id, address)) = route {
         config = config.with_peer_routes(peer_id, [address]).unwrap();
     }
-    let domain = Domain::builder(&peer, &session, config)
-        .authority(
-            prepared.verification_keys.clone(),
-            prepared.initial_credential.clone(),
-        )
-        .served_protocols(served_protocols)
-        .join()
+    AukiPeer::start_external(identity, initial_authority(prepared), config)
         .await
-        .unwrap();
-    (domain, root)
+        .unwrap()
 }
 
 fn tcp_port(address: &Multiaddr) -> u16 {
@@ -407,7 +411,7 @@ fn signed_peer_response_with_key(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn user_flow_starts_domain_and_explicitly_renews_authority_in_place() {
+async fn user_flow_starts_peer_and_explicitly_renews_authority_in_place() {
     let identity = Identity::from_ed25519_seed(&[0x31; 32]);
     let domain_id = Uuid::from_u128(0xd0);
     let organization_id = Uuid::from_u128(0xa0);
@@ -458,50 +462,41 @@ async fn user_flow_starts_domain_and_explicitly_renews_authority_in_place() {
     assert!(prepared.renew_at < prepared.credential_expires_at);
     assert!(!format!("{prepared:?}").contains("dds-service"));
 
-    let (domain, _storage) = start_listening_domain(identity.clone(), &prepared).await;
-    assert_eq!(domain.status(), DomainStatus::Ready);
-    assert_eq!(domain.domain_id(), domain_id);
-    assert_eq!(domain.peer_id(), prepared.peer_id);
-    assert_eq!(domain.listen_addresses().len(), 1);
-    let listener_port = tcp_port(&domain.listen_addresses()[0]);
-    let authority = domain.authority();
-    assert_eq!(authority.domain_id(), domain_id);
-    assert_eq!(authority.peer_id(), prepared.peer_id);
+    let (peer, authority) = start_listening_peer(identity.clone(), &prepared).await;
+    assert_eq!(peer.status(), AukiPeerStatus::Ready);
+    assert_eq!(peer.domain_id(), domain_id);
+    assert_eq!(peer.peer_id(), prepared.peer_id);
+    assert_eq!(peer.listen_addresses().len(), 1);
+    let listener_port = tcp_port(&peer.listen_addresses()[0]);
+    let authorization = peer.protocol_context().authorization();
+    let initial = authorization.current().unwrap();
+    assert_eq!(initial.claims().domain_ids, [domain_id.to_string()]);
+    assert_eq!(initial.claims().peer_id, prepared.peer_id.to_string());
 
     let renewed = prepared.renewal.renew().await.unwrap();
     assert!(renewed.credential_expires_at > prepared.credential_expires_at);
     assert_eq!(renewed.peer_id, prepared.peer_id);
     assert_eq!(renewed.verification_keys.generation(), 2);
 
-    // Update authority on the same live Domain. Keys are intentionally
-    // installed first so a rotated-key credential can never race ahead of
-    // the verifier that admits it.
-    authority
-        .install_verification_keys(renewed.verification_keys)
-        .await
-        .unwrap();
-    authority
-        .install_credential(renewed.credential)
-        .await
-        .unwrap();
-    assert_eq!(domain.status(), DomainStatus::Ready);
-    assert_eq!(authority.domain_id(), domain_id);
-    assert_eq!(authority.peer_id(), prepared.peer_id);
+    let outcome = authority.replace(renewed_authority(renewed)).await.unwrap();
+    assert_eq!(outcome.credential_revision(), 2);
+    assert_eq!(peer.status(), AukiPeerStatus::Ready);
+    assert_eq!(authorization.current().unwrap().credential_revision(), 2);
 
-    let status = domain.subscribe_status();
+    let status = peer.subscribe_status();
     assert!(matches!(
         prepared.renewal.renew().await.unwrap_err(),
         Error::DomainNotAccessible
     ));
-    assert_eq!(domain.status(), DomainStatus::Ready);
-    assert_eq!(*status.borrow(), DomainStatus::Ready);
+    assert_eq!(peer.status(), AukiPeerStatus::Ready);
+    assert_eq!(*status.borrow(), AukiPeerStatus::Ready);
     assert!(!status.has_changed().unwrap());
 
-    tokio::time::timeout(Duration::from_secs(5), domain.leave())
+    tokio::time::timeout(Duration::from_secs(5), peer.shutdown())
         .await
-        .expect("explicit Domain fence must release listener and tasks")
+        .expect("explicit peer fence must release listener and tasks")
         .unwrap();
-    assert_eq!(*status.borrow(), DomainStatus::Stopped);
+    assert_eq!(*status.borrow(), AukiPeerStatus::Stopped);
     std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, listener_port)).unwrap();
 
     let requests = server.finish().await;
@@ -540,7 +535,7 @@ async fn user_flow_starts_domain_and_explicitly_renews_authority_in_place() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn two_user_peers_fetch_resources_over_direct_tcp_across_live_renewal() {
+async fn two_user_peers_exchange_protocol_data_over_direct_tcp_across_live_renewal() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let a_identity = Identity::from_ed25519_seed(&[0x71; 32]);
         let b_identity = Identity::from_ed25519_seed(&[0x72; 32]);
@@ -601,61 +596,69 @@ async fn two_user_peers_fetch_resources_over_direct_tcp_across_live_renewal() {
         assert_eq!(a_prepared.domain.id, domain_id);
         assert_eq!(b_prepared.domain.id, domain_id);
 
-        let (a, _a_storage) = start_listening_protocol_domain(
-            a_identity.clone(),
-            &a_prepared,
-            None,
-            ServedProtocols::none().with_resources_v2(),
-        )
-        .await;
-        assert_eq!(a.status(), DomainStatus::Ready);
-        assert_eq!(a.served_protocol_ids().len(), 1);
+        let (a, a_authority) =
+            start_listening_routed_peer(a_identity.clone(), &a_prepared, None).await;
+        assert_eq!(a.status(), AukiPeerStatus::Ready);
         let a_address = a.listen_addresses()[0].clone();
         let a_port = tcp_port(&a_address);
+        let info = InfoEndpoint::mount(
+            a.protocols(),
+            move |requester: &auki_p2p::AuthenticatedPeer| {
+                assert_eq!(requester.peer_id, b_peer);
+                Some(AuthenticatedParticipantInfo {
+                    app: "auki-auth-test".into(),
+                    app_version: "0.1.0".into(),
+                    name: "peer-a".into(),
+                    session_id: "session-a".into(),
+                    session_clock_id: "clock-a".into(),
+                    session_clock_hash: "hash-a".into(),
+                    session_now_ns: 1,
+                    peer_id: a_peer,
+                    app_instance: "test-a".into(),
+                })
+            },
+        )
+        .unwrap();
 
-        let (b, _b_storage) = start_listening_protocol_domain(
+        let (b, _b_authority) = start_listening_routed_peer(
             b_identity.clone(),
             &b_prepared,
             Some((a_peer, a_address.clone())),
-            ServedProtocols::none(),
         )
         .await;
-        assert_eq!(b.status(), DomainStatus::Ready);
-        assert!(b.served_protocol_ids().is_empty());
+        assert_eq!(b.status(), AukiPeerStatus::Ready);
         let b_port = tcp_port(&b.listen_addresses()[0]);
+        let info_client = InfoClient::new(b.protocols());
 
-        let first = b.fetch_resources_catalog(a_peer).await.unwrap();
-        assert!(first.resources.is_empty());
+        let first = info_client.fetch(a_peer).await.unwrap();
+        assert_eq!(first.name, "peer-a");
         assert_eq!(a.known_peers().peer_count(), 1);
         assert_eq!(b.known_peers().peer_count(), 1);
 
         let renewed = a_prepared.renewal.renew().await.unwrap();
         assert_eq!(renewed.verification_keys.generation(), 1);
-        let authority = a.authority();
-        authority
-            .install_verification_keys(renewed.verification_keys)
+        let outcome = a_authority
+            .replace(renewed_authority(renewed))
             .await
             .unwrap();
-        authority
-            .install_credential(renewed.credential)
-            .await
-            .unwrap();
-        assert_eq!(a.status(), DomainStatus::Ready);
+        assert_eq!(outcome.credential_revision(), 2);
+        assert_eq!(a.status(), AukiPeerStatus::Ready);
         assert_eq!(a.listen_addresses(), [a_address]);
 
-        // The second stream uses the same live Domains and direct route;
+        // The second stream uses the same live peers and direct route;
         // neither runtime is rebuilt or explicitly reconnected after renewal.
-        let second = b.fetch_resources_catalog(a_peer).await.unwrap();
-        assert!(second.resources.is_empty());
+        let second = info_client.fetch(a_peer).await.unwrap();
+        assert_eq!(second.name, "peer-a");
         assert_eq!(a.known_peers().peer_count(), 1);
         assert_eq!(b.known_peers().peer_count(), 1);
 
         let a_status = a.subscribe_status();
         let b_status = b.subscribe_status();
-        b.leave().await.unwrap();
-        a.leave().await.unwrap();
-        assert_eq!(*b_status.borrow(), DomainStatus::Stopped);
-        assert_eq!(*a_status.borrow(), DomainStatus::Stopped);
+        info.close().await.unwrap();
+        b.shutdown().await.unwrap();
+        a.shutdown().await.unwrap();
+        assert_eq!(*b_status.borrow(), AukiPeerStatus::Stopped);
+        assert_eq!(*a_status.borrow(), AukiPeerStatus::Stopped);
         let _b_rebound = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, b_port))
             .expect("B listener must be reusable immediately after ordered leave");
         let _a_rebound = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, a_port))
@@ -777,7 +780,7 @@ async fn malformed_rotation_is_rejected_without_advancing_renewal_version() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn app_flow_uses_basic_exchange_and_starts_the_same_domain_shape() {
+async fn app_flow_uses_basic_exchange_and_starts_the_same_peer_shape() {
     let identity = Identity::from_ed25519_seed(&[0x32; 32]);
     let domain_id = Uuid::from_u128(0xd1);
     let organization_id = Uuid::from_u128(0xa1);
@@ -806,28 +809,27 @@ async fn app_flow_uses_basic_exchange_and_starts_the_same_domain_shape() {
         .authorize_peer(DomainSelection::new(domain_id), &identity.proof())
         .await
         .unwrap();
-    let (domain, _storage) = start_domain(identity.clone(), &prepared).await;
-    assert_eq!(domain.status(), DomainStatus::Ready);
-    assert_eq!(domain.domain_id(), domain_id);
-    assert_eq!(domain.peer_id(), prepared.peer_id);
-    let authority = domain.authority();
+    let (peer, authority) = start_peer(identity.clone(), &prepared).await;
+    assert_eq!(peer.status(), AukiPeerStatus::Ready);
+    assert_eq!(peer.domain_id(), domain_id);
+    assert_eq!(peer.peer_id(), prepared.peer_id);
     let renewed = prepared.renewal.renew().await.unwrap();
     assert_eq!(renewed.peer_id, prepared.peer_id);
     assert_eq!(renewed.verification_keys.generation(), 2);
-    authority
-        .install_verification_keys(renewed.verification_keys)
+    let outcome = authority.replace(renewed_authority(renewed)).await.unwrap();
+    assert_eq!(outcome.credential_revision(), 2);
+    assert_eq!(peer.status(), AukiPeerStatus::Ready);
+    assert_eq!(
+        peer.protocol_context()
+            .authorization()
+            .current()
+            .unwrap()
+            .credential_revision(),
+        2
+    );
+    tokio::time::timeout(Duration::from_secs(5), peer.shutdown())
         .await
-        .unwrap();
-    authority
-        .install_credential(renewed.credential)
-        .await
-        .unwrap();
-    assert_eq!(domain.status(), DomainStatus::Ready);
-    assert_eq!(authority.domain_id(), domain_id);
-    assert_eq!(authority.peer_id(), prepared.peer_id);
-    tokio::time::timeout(Duration::from_secs(5), domain.leave())
-        .await
-        .expect("renewed App Domain must leave cleanly")
+        .expect("renewed App peer must shut down cleanly")
         .unwrap();
 
     let requests = server.finish().await;

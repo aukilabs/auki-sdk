@@ -21,6 +21,27 @@ bounded cleanup. `AukiEcho.close()` is the awaited protocol-unmount barrier and
 runs before `AukiPeer.shutdown()`. Trusted discovery from only a Peer ID remains
 separate work.
 
+## Copy the minimal app
+
+[`minimal.html`](minimal.html) and [`src/minimal.ts`](src/minimal.ts) are the
+copyable reference surface. They use the public bindings directly: authenticate
+a User, enter an accessible Domain UUID, start an ephemeral relay-backed peer,
+mount echo, dial an exact advertised WSS route, and shut the protocol and peer
+down in order. There is no peer-card or application framework hidden around
+those calls.
+
+Run the development server and open `/minimal.html` in two tabs:
+
+```sh
+cd examples/portable-echo/web
+npm ci
+npm run dev
+```
+
+Start both tabs in the same Domain, then copy the Peer ID and WSS route printed
+by each tab into the other. Use **Stop peer** to await protocol shutdown and
+relay release.
+
 ## Run the Peer Playground
 
 Prerequisites:
@@ -43,7 +64,7 @@ npm ci
 npm run dev
 ```
 
-Open the printed localhost URL in two tabs. In each tab, log in, select the
+Open the printed localhost root URL in two tabs. In each tab, log in, select the
 same Domain, and start a peer. Paste the other tab's complete public Peer Card,
 enter a message, and send. Use **Stop peer** before closing a tab
 so the relay booking is released cleanly. The page never writes credentials or
@@ -57,7 +78,10 @@ npm run build
 
 ## Live direction proof
 
-The protected smoke test starts two ephemeral peers in separate tabs and one
+The playground is intentionally a larger UI example with defensive interaction
+and lifecycle handling; it is not the copy-and-paste SDK surface. The protected
+smoke harness under `scripts/` is test machinery rather than application code.
+It starts two ephemeral peers in separate tabs and one
 native peer. It proves browser A to browser B, browser B to browser A, native to
 browser A, and browser A back to the same native peer. It verifies exact
 payloads, authenticated Peer IDs, confirmed TCP/WSS relay reachability, and

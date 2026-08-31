@@ -5,6 +5,10 @@ This is the smallest complete native application built from the high-level
 authorizes one exact Domain, starts a relay-reachable peer, mounts the Rust echo
 protocol, and shuts the protocol and peer down in order.
 
+Protocol authors should start with the
+[portable authoring workflow](../../../docs/p2p/authoring-protocols.md); this
+file focuses only on running the native host.
+
 The default application contains the developer-facing path only. The more
 verbose machine-readable executable used by the protected Web/native smoke test
 is kept separately as `auki-portable-echo-interop`.
@@ -57,16 +61,12 @@ or distributed client.
 
 ## Web/native interoperability proof
 
-The protected smoke test needs additional peer-card output, inbound event
-markers, flexible credential parsing, and keep-running controls. Those concerns
-remain in the explicit interop binary instead of obscuring the copyable app:
-
-```sh
-cargo run --locked -p auki-portable-echo-native \
-  --bin auki-portable-echo-interop
-```
-
-Normally, run it through the [Web/Wasm example](../web/README.md):
+The protected smoke test needs a separate environment contract, peer-card
+output, inbound event markers, flexible credential parsing, and keep-running
+controls. Those concerns remain in the `auki-portable-echo-interop` binary
+instead of obscuring the copyable app. The binary is test machinery; run it
+through the [Web/Wasm smoke command](../web/README.md#live-direction-proof),
+which supplies its required `AUKI_STATE_DIR` and other controls:
 
 ```sh
 cd examples/portable-echo/web
@@ -79,3 +79,7 @@ npm run smoke:dev
 That proof covers browser-to-browser in both directions, native-to-browser, and
 browser-to-native using each remote peer's exact advertised route. Peers do not
 need to receive reservations on the same relay.
+
+The manual values and smoke-test peer cards are application-owned exchange
+records. The SDK does not automatically discover peers or publish their routes
+in `0.1`.

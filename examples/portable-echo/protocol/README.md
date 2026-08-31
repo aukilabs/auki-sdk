@@ -1,7 +1,7 @@
 # auki-portable-echo-protocol
 
-Platform-neutral reference protocol used to prove that native Rust and Web
-peers can run one shared Rust implementation.
+Platform-neutral reference protocol shared unchanged by native Rust and Web
+peers.
 
 ## Contract
 
@@ -14,7 +14,23 @@ peers can run one shared Rust implementation.
 The client rejects a response that differs from its request. Empty and
 oversized frames are rejected before payload allocation or I/O respectively.
 
-The crate owns no authentication, transport, runtime, timers, persistence, or
+The exact protocol ID is immutable wire identity. A change to framing, bounds,
+conversation, or observable semantics requires a new ID; a Cargo package bump
+alone does not create a new wire protocol.
+
+This crate owns no authentication, transport, runtime, timers, persistence, or
 platform bindings. Its client and server functions accept any
-`futures::AsyncRead + AsyncWrite` stream, allowing the same code to run over a
-native authenticated `AukiPeer` stream or a browser stream adapted in Wasm.
+`futures::AsyncRead + AsyncWrite` stream, allowing the same code to run over an
+authenticated native or browser `AukiPeer` stream.
+
+Its locked tests cover the ID and representative bytes, the client/server
+conversation, mismatched responses, and empty or oversized input:
+
+```sh
+cargo test --locked -p auki-portable-echo-protocol
+cargo check --locked -p auki-portable-echo-protocol \
+  --target wasm32-unknown-unknown
+```
+
+See [Author a portable Auki protocol](../../../docs/p2p/authoring-protocols.md)
+before assigning a new product protocol ID.

@@ -1,37 +1,64 @@
 # auki-auth
 
-`auki-auth` turns Auki API credentials into the authority needed to start one
-authenticated P2P peer. It handles API/DDS HTTP, accessible-Domain selection,
-proof of the peer's stable libp2p identity, verification keys, and the signed
-Domain credential.
+`auki-auth` turns an Auki User or trusted App login into a validated
+`PreparedPeer`: authority for one exact Peer ID in one selected DDS Domain.
 
-The same user authentication and authority preparation compile for native Rust
-and browser Wasm. App credentials remain restricted to trusted native or
-backend applications because an App secret must never ship to a browser.
+```text
+credentials -> AuthSession -> selected Domain + identity proof -> PreparedPeer
+                                                                  |
+                                                                  v
+                                                           AukiPeer::start
+```
 
-It deliberately does not discover peers, resolve routes, contact DMS, book a
-relay, join a Domain, or spawn a renewal task. The host remains the composition
-root for those operations.
+The crate owns bounded API/DDS exchanges, accessible-Domain validation, Peer-ID
+proof, verification keys, and the initial signed credential. It deliberately
+does not discover peers, resolve or publish routes, contact DMS, book a relay,
+or spawn an authority-renewal task.
 
-## Authenticate in dev
+The high-level `auki-sdk::AukiPeer` consumes `PreparedPeer` and owns renewable
+authority, transport, relay-backed reachability, protocols, fencing, and
+shutdown.
 
-For a person using a trusted native application:
+## Native Rust
+
+Native applications may authenticate a User or a trusted App. They normally
+persist one identity and reuse it on every launch:
 
 ```rust,no_run
-let client = auki_auth::AuthClient::new(auki_auth::AuthEnvironment::dev())?;
-let session = client
-    .authenticate(auki_auth::Credentials::user_password(
+use auki_auth::{AuthClient, AuthEnvironment, Credentials, DomainSelection};
+use auki_sdk::{AukiPeer, AukiPeerConfig, Identity};
+
+# async fn run() -> Result<(), Box<dyn std::error::Error>> {
+let identity = Identity::load_or_create("./state/auki-peer.identity")?;
+let session = AuthClient::new(AuthEnvironment::dev())?
+    .authenticate(Credentials::user_password(
         "developer@example.com",
         password_from_secret_store,
     ))
     .await?;
-# Ok::<(), Box<dyn std::error::Error>>(())
+let prepared = session
+    .authorize_peer(DomainSelection::new(domain_id), &identity.proof())
+    .await?;
+
+let peer = AukiPeer::start(identity, prepared, AukiPeerConfig::dev()).await?;
+// Mount product protocols through peer.protocols().
+peer.shutdown().await?;
+# Ok(())
+# }
 ```
 
-For a trusted native or headless application:
+`authorize_peer` verifies that the authenticated principal can currently access
+the selected Domain. Call `accessible_domains()` first when the application
+needs to present a list to a person.
+
+Identity material fails closed if it is missing in an unsafe state or corrupt;
+the SDK never silently replaces corrupt material with a new Peer ID. One
+persisted identity belongs to one live runtime at a time.
+
+For a trusted native or headless application, only the authentication input
+changes:
 
 ```rust,no_run
-let client = auki_auth::AuthClient::new(auki_auth::AuthEnvironment::dev())?;
 let session = client
     .authenticate(auki_auth::Credentials::app(
         app_access_key,
@@ -41,74 +68,35 @@ let session = client
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-An app secret must not be embedded in a browser or mobile frontend. Both
-authentication methods return the same `AuthSession`; everything after this
-point is identical.
+Never embed an App secret in a browser, mobile binary, public repository,
+container image, or log.
 
-## Prepare and start a Domain
+## Web/Wasm
 
-Persist one identity and reuse it on every launch. Missing, corrupt, or unsafe
-identity material fails closed instead of silently changing the Peer ID.
+User authentication and authority preparation compile to Wasm. The generic Web
+binding exposes them as `AukiUserSession`: JavaScript logs in a User, lists
+accessible Domains, and selects one before starting an `AukiPeer`.
 
-```rust,no_run
-use auki_auth::DomainSelection;
-use auki_domain::{Domain, DomainConfig};
-use auki_p2p::Identity;
-use auki_session::Peer;
+The Web `0.1` facade creates a fresh in-memory identity for each peer start and
+always acquires one confirmed WSS relay route. Reloading or starting again
+therefore creates a new Peer ID. It does not accept App credentials or persist
+the User password or peer identity.
 
-let selected = session
-    .accessible_domains()
-    .await?
-    .into_iter()
-    .next()
-    .ok_or("no accessible Domain")?;
-let identity = Identity::load_or_create("./state/auki-peer.identity")?;
-let prepared = session
-    .authorize_peer(
-        DomainSelection::new(selected.domain.id),
-        &identity.proof(),
-    )
-    .await?;
+See the
+[minimal browser echo](../../examples/portable-echo/web/README.md#copy-the-minimal-app)
+for the complete public flow.
 
-let peer = Peer::new(prepared.peer_id.to_string(), "robot-experiment")
-    .with_storage_root("./state".into());
-let sdk_session = peer.start_session()?;
-let domain = Domain::builder(
-    &peer,
-    &sdk_session,
-    DomainConfig::new(prepared.domain.id, identity),
-)
-.authority(
-    prepared.verification_keys.clone(),
-    prepared.initial_credential.clone(),
-)
-.join()
-.await?;
-# Ok::<(), Box<dyn std::error::Error>>(())
-```
+## Boundary rules
 
-This starts with no discovered routes. Configure listeners and exact-peer route
-candidates on `DomainConfig` when the host has them.
+- `auki-auth` proves authority; it does not create reachability.
+- `AukiPeer` renews authority and owns relay-backed runtime lifecycle.
+- Native peers normally persist identity; Web peers are intentionally ephemeral
+  in `0.1`.
+- A remote Peer ID and exact TCP or WSS route still come from application
+  configuration, a product control plane, or manual exchange.
+- A route is never authority, and `0.1` has no automatic discovery or route
+  publication.
 
-## Renew explicitly
-
-The host decides when to renew, normally using `prepared.renew_at`. Install the
-new key set before the new credential on the existing Domain:
-
-```rust,no_run
-let renewed = prepared.renewal.renew().await?;
-let authority = domain.authority();
-authority
-    .install_verification_keys(renewed.verification_keys)
-    .await?;
-authority.install_credential(renewed.credential).await?;
-# Ok::<(), Box<dyn std::error::Error>>(())
-```
-
-This does not reconnect or reconstruct the Domain. `auki-auth` does not sleep,
-schedule, perform implicit transient retries, or spawn a global runtime;
-cancellation-aware variants are available for hosts that own shutdown. A valid
-rotation retains the old signer as `previous`, so cancellation after the key
-update leaves the old credential usable. The host runtime should retry a failed
-renewal within a bounded budget before literal credential expiry, then stop or
-explicitly fence the peer if authority cannot be renewed.
+Low-level hosts may consume `PreparedPeer::renewal` themselves, but ordinary
+User/App applications should use `AukiPeer::start` rather than reimplementing
+key rotation, credential expiry fencing, relay recovery, and cleanup.

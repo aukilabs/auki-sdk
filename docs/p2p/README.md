@@ -1,167 +1,133 @@
 # Auki P2P
 
-Build authenticated peer-to-peer applications for robots, spatial tools, and
-native services without assembling the networking runtime yourself.
+Build authenticated peer-to-peer applications without assembling authority,
+libp2p, relay booking, or shutdown machinery yourself.
 
-**[Get started with Rust](getting-started.md)** ·
-**[Run the local transport demo](../../examples/diagnostic-app/README.md)**
-
-> **Current scope:** The high-level `AukiPeer` facade is available in Rust.
-> User and trusted App peers get automatic authority renewal and relay-backed
-> reachability by default. Peer discovery and route distribution are separate
-> work; applications still provide the expected remote Peer ID and route.
+**[Run the Rust quickstart](getting-started.md)** ·
+**[Author a portable protocol](authoring-protocols.md)** ·
+**[Try the Web peer](../../examples/portable-echo/web/README.md)**
 
 ## The mental model
 
-An Auki peer is one stable cryptographic identity operating inside one
-authorized Domain.
+An `AukiPeer` is one cryptographic Peer ID operating inside one authorized DDS
+Domain.
 
 ```text
-User password or App credentials
-              │
-              ▼
-          auki-auth ─────► PreparedPeer
-                                │
-persistent Identity ─────────────┤
-routes + protocol registrations ─┤
-                                ▼
-                           AukiPeer
-                                │
-                 ┌──────────────┼──────────────┐
-                 ▼              ▼              ▼
-             authority        routes        protocols
-              renewal       and relay      and app data
+credentials + selected Domain + identity proof
+                       |
+                       v
+                  PreparedPeer
+                       |
+                       v
+                   AukiPeer
+              /          |          \
+       authority       routes       protocols
+        renewal       and relay     and app data
 ```
 
-The distinction between authority and reachability is important:
+Native applications normally persist their identity and reuse the same Peer ID
+after restart. The Web `0.1` facade intentionally creates an in-memory identity
+for each peer start, so a reload or new start gets a new Peer ID.
+
+Authority and reachability are separate:
 
 - A credential proves which Peer ID may participate in which Domain.
-- A route only tells the transport where to dial that peer.
+- A route tells the transport where to dial that peer.
 - A relay makes a peer reachable; it does not discover other peers.
 - Application policy still decides who may invoke a command or capability.
 
-## The normal Rust path
+## The normal application path
 
-Most applications perform five explicit steps:
+### Native Rust
 
 1. Authenticate a User or trusted App with `auki-auth`.
-2. Select one currently accessible Domain.
-3. Load one persistent identity and prove ownership of its Peer ID.
-4. Pass the resulting `PreparedPeer`, identity, and `AukiPeerConfig` to
-   `AukiPeer::start`.
-5. Register or open application protocols through
-   `peer.protocols()` and finish with `peer.shutdown().await`.
+2. Select one accessible Domain.
+3. Load a persistent identity and authorize its Peer ID.
+4. Start `AukiPeer` with `AukiPeerConfig`; relay reachability is the default.
+5. Mount only the application protocols this peer serves.
+6. Dial an expected Peer ID through its exact advertised route.
+7. Close mounted protocol endpoints, then await `peer.shutdown()`.
 
-`AukiPeer::start` owns the mechanical work between steps four and five:
+`AukiPeer::start` owns credential renewal, authenticated transport, DMS relay
+booking, route state, supervision, fencing, and ordered shutdown. Native hosts
+may explicitly choose `AukiPeerConfig::direct_only()` when they provide their
+own reachable listener and route.
 
-- the authenticated P2P transport;
-- verification keys and credential renewal;
-- local route state;
-- DMS relay booking and reservation recovery; and
-- readiness monitoring and ordered shutdown.
+### Web
 
-Relay-backed reachability is required by default. Startup returns only after
-the transport and authority are ready and at least one confirmed relay route is
-available. `AukiPeerConfig::direct_only()` is the explicit opt-out and makes no
-DMS relay-booking calls.
+The Rust/Wasm binding follows the same model with a deliberately smaller
+surface. `AukiUserSession` authenticates a User, lists accessible Domains, and
+starts an ephemeral `AukiPeer`. Browser peers always acquire one confirmed WSS
+relay route; there is no direct-only browser mode in `0.1`.
 
-## What your application still owns
+Protocol implementations remain in Rust. A thin binding such as `AukiEcho`
+mounts a shared Rust adapter on the generic browser peer. See the
+[minimal browser echo](../../examples/portable-echo/web/README.md#copy-the-minimal-app).
+App access keys and secrets are never accepted by the browser facade.
 
-The facade deliberately leaves product decisions visible:
+## What remains explicit
 
-| Application provides | SDK owns |
+| Application or protocol owner provides | SDK owns |
 | --- | --- |
-| Credentials and exact Domain selection | Authentication proof and renewable authority |
-| Stable identity storage location | Authenticated transport lifecycle |
-| Exact inbound protocol registrations | Protocol hosting and authenticated streams |
-| Initial remote Peer IDs and route hints | Direct-first dialing and local relay recovery |
-| Capability or command policy | Mutual Peer-ID and Domain authentication |
+| Credentials and exact Domain choice | Authentication proof and renewable authority |
+| Native identity storage path | Authenticated transport lifecycle |
+| Exact protocol opt-ins and product policy | Mutually authenticated protocol streams |
+| Remote Peer ID and complete route | Route validation and exact-peer dialing |
+| Where peer information is shared | Relay booking, recovery, fencing, and cleanup |
 
-Discovery is not hidden inside authentication. Until a directory or
-rendezvous layer is added, exchange the remote Peer ID and its complete direct
-or relay route through configuration or an application control plane.
+Discovery and route publication are not hidden inside authentication. In
+`0.1`, exchange the remote Peer ID, Domain ID, supported protocol IDs, and
+complete TCP or WSS route through configuration, a product control plane, or a
+manual peer card. That record is application data, not authority, and the SDK
+still authenticates the remote Peer ID and Domain before application bytes
+flow.
 
 ## Protocols are explicit
 
-A new peer serves no application protocol by default. Register each exact,
-versioned product protocol explicitly:
-
-Product owners choose bounded, explicitly versioned IDs shaped like
-`/<name>[/<name>...]/<version>`; for example, `/posemesh/store/v1`. The
-top-level `/auki/` namespace is reserved; retained SDK protocols use
-`/auki/auth/1/...`.
-`/auki-p2p/dataset/0` remains a valid product protocol, not a required prefix.
+A new peer serves no product protocol by default. Product owners choose a
+bounded, explicitly versioned ID shaped like
+`/<namespace>[/<name>...]/<version>`, for example
+`/example/echo/1.0.0`. The top-level `/auki/` namespace is reserved for SDK
+protocols.
 
 ```rust
-let registration = peer.protocols().register(spec, handler)?;
+let endpoint = MyProtocolEndpoint::mount(peer.protocols())?;
 ```
 
-Keep the returned registration alive for as long as the handler should remain
-mounted. Client-side protocol opens do not require mounting the corresponding
-inbound handler locally.
+Keep the endpoint alive while serving. A client-only peer does not need to
+mount the corresponding inbound protocol. The portable protocol owns its wire
+types, codec, bounds, and conversation; the shared adapter owns mounting,
+dialing, deadlines, and stream cleanup.
 
-The protocol context intentionally exposes only:
+Follow [Author a portable protocol](authoring-protocols.md) before assigning a
+new ID. An exact ID must never acquire a second wire format.
 
-- authenticated protocol registration and opening;
-- a read-only view of published local routes;
-- non-secret local identity and authorization metadata.
+## Safe defaults and limits
 
-It does not expose the raw Domain, transport node, authority installer, or
-relay reservations.
-
-## Safe defaults
-
-- Identity corruption fails closed; the SDK never silently creates a new Peer
-  ID over invalid material.
+- Native identity corruption fails closed; it never silently creates a new
+  Peer ID over invalid material.
 - Routes and `known_peers()` never grant authority.
 - Remote operations authenticate the expected Peer ID and exact Domain.
-- Relay-backed startup is the default; direct-only operation is explicit.
-- Credential renewal and authority expiry are supervised by the facade.
-- Explicit `shutdown().await` drains reservations and requests DMS booking
-  deletion before stopping the transport.
-- App secrets belong only in trusted native or headless processes—not browsers
-  or distributed mobile applications.
+- Relay-backed startup is the native default and the Web requirement.
+- Explicit endpoint close and `peer.shutdown()` are the external cleanup
+  barriers.
+- One live runtime per Peer ID is supported. Native replicas need distinct
+  identities; a persisted identity belongs to one live process or pod.
+- App secrets belong only in trusted native or headless processes, never a
+  browser or distributed mobile application.
 
-## One identity, one live runtime
-
-Version `0.1.0` supports one live `AukiPeer` for a given Peer ID. Reusing the
-same identity after awaited shutdown is supported; running the same identity
-in simultaneous processes or pods is not.
-
-For Kubernetes, use one replica per persisted identity, such as a
-single-replica StatefulSet or a Recreate rollout. Parallel replicas need
-distinct identities.
-
-## Advanced machine authority
-
-Robot and Compute hosts may already receive authority through a product
-control plane. Those integrations use `AukiPeer::start_external` and feed
-complete replacements through `ExternalAuthorityControl`. The host retains
-its task or heartbeat policy; the facade still owns the transport, routes,
-protocol context, fencing, and shutdown.
-
-This is an integration boundary, not the recommended first experiment. User
-and App developers should begin with `auki-auth` and `AukiPeer::start`.
+Robot and Compute hosts that receive authority from a product control plane may
+use native `AukiPeer::start_external`. They retain task or heartbeat policy;
+the facade still owns transport, routes, protocols, fencing, and shutdown.
 
 ## Platform status
 
 | Platform | High-level authenticated peer facade |
 | --- | --- |
-| Rust | Available: User/App auth, renewal, relay, status, protocols, shutdown |
-| Python | Pending |
+| Native Rust | User/App auth, persistent identity, renewal, relay, protocols, shutdown |
+| Web/Wasm | User auth, ephemeral identity, mandatory WSS relay, exact-route protocols, shutdown |
+| Python | Pending on the canonical `AukiPeer` runtime |
 | Swift/iOS | Pending |
-| Web | Pending; browser-safe auth and transport are required |
-
-## Start here
-
-- **First authenticated experiment:** follow
-  [Getting started with Rust](getting-started.md).
-- **No service credentials yet:** run the
-  [local two-peer transport demo](../../examples/diagnostic-app/README.md).
-- **Migrating Manager-era code:** read the
-  [authenticated Domain migration guide](../authenticated-domain-migration.md).
-- **Building a custom protocol:** use the safe surface described in
-  [`AukiPeerProtocolContext`](../../crates/auki-sdk/src/context.rs).
 
 ## Keep these rules
 
@@ -169,5 +135,5 @@ and App developers should begin with `auki-auth` and `AukiPeer::start`.
 
 > A relay makes your peer reachable. It does not tell you which peers exist.
 
-> `known_peers()` reports authenticated connections observed now. It is not a
-> Domain roster, discovery service, route source, or authorization cache.
+> A protocol ID names one immutable wire contract. Change the contract, change
+> the ID.

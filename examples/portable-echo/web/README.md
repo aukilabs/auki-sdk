@@ -3,8 +3,9 @@
 This example mounts the same Rust echo adapter used by the native example on
 an authenticated browser peer. JavaScript composes the generic
 `AukiUserSession` and `AukiPeer` facade with the tiny `AukiEcho` protocol
-binding. Credentials, DDS authority, relay booking, libp2p, authenticated
-streams, deadlines, cleanup, and echo framing stay inside Rust/Wasm.
+binding. Credential values enter through the login call but are not persisted;
+authentication, DDS authority, relay booking, libp2p, authenticated streams,
+deadlines, cleanup, and echo framing are implemented in Rust/Wasm.
 
 The browser Peer ID is intentionally ephemeral in v0.1. Log in with
 `AukiUserSession.loginDev(...)`, list the accessible Domains, and call
@@ -20,6 +21,11 @@ The shared adapter authenticates the stream, runs the Rust protocol, and owns
 bounded cleanup. `AukiEcho.close()` is the awaited protocol-unmount barrier and
 runs before `AukiPeer.shutdown()`. Trusted discovery from only a Peer ID remains
 separate work.
+
+Protocol authors should start with the
+[portable authoring workflow](../../../docs/p2p/authoring-protocols.md). This
+README keeps the minimal application, richer playground, and protected smoke
+test separate on purpose.
 
 ## Copy the minimal app
 
@@ -69,6 +75,10 @@ same Domain, and start a peer. Paste the other tab's complete public Peer Card,
 enter a message, and send. Use **Stop peer** before closing a tab
 so the relay booking is released cleanly. The page never writes credentials or
 the ephemeral Peer ID to browser storage.
+
+The playground's Peer Card is application-owned JSON for this example, not a
+stable SDK discovery or authorization type. No peer or route is published
+automatically in `0.1`.
 
 Build the standalone assets with:
 

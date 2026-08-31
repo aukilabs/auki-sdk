@@ -165,7 +165,7 @@ impl From<Uuid> for DomainSelection {
     }
 }
 
-/// Complete initial authority required before a Domain is allowed to start.
+/// Complete initial authority consumed by a high-level Auki peer runtime.
 #[derive(Clone, Debug)]
 pub struct PreparedPeer {
     pub domain: DomainDescriptor,

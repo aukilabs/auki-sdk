@@ -4,19 +4,29 @@ This crate mounts the transport-neutral
 [`auki-portable-echo-protocol`](../protocol/README.md) on the canonical
 cross-target `AukiPeer` protocol surface.
 
-It owns the protocol registration, five-second stream-operation deadlines,
-the SDK registration shutdown barrier, a cross-target exact-route client, a
-native configured-route client, stream cleanup, and a bounded nonblocking
-queue of inbound results. A slow event consumer receives an explicit `Lagged`
-event; it never stalls a protocol handler or prevents buffered events from
-making progress.
+For an application, the whole protocol-specific lifecycle is:
 
-The native and Web hosts only need to:
+```rust
+let echo = EchoEndpoint::mount(peer.protocols())?;
+let receipt = echo.send_exact(remote_peer_id, remote_route, payload).await?;
+echo.close().await?;
+```
 
-1. authenticate and start an `AukiPeer`;
-2. call `EchoEndpoint::mount(peer.protocols())`;
-3. call `send_exact` with an advertised peer route; and
-4. close the endpoint before the peer.
+The reusable adapter behind those calls owns the exact protocol registration,
+five-second open/exchange/close deadlines, stream cleanup, an exact-route
+cross-target client, a configured-route native client, and a bounded
+nonblocking queue of inbound results. A slow event consumer receives an
+explicit `Lagged` event; it never stalls a handler.
 
-The crate contains no Tokio, wasm-bindgen, browser API, credential, or UI
-policy. It compiles unchanged for native and `wasm32-unknown-unknown`.
+The adapter is protocol-author code written once, not application glue and not
+generic SDK transport code. It contains no Tokio, wasm-bindgen, browser API,
+credential, or UI policy and compiles unchanged for native and
+`wasm32-unknown-unknown`.
+
+The application still authenticates and starts the peer, obtains remote peer
+information, selects which protocols to mount, applies product authorization
+policy, and closes the endpoint before the peer. The SDK owns authority, relay,
+route authentication, protocol hosting, fencing, and peer shutdown.
+
+See [Author a portable Auki protocol](../../../docs/p2p/authoring-protocols.md)
+for the complete ownership and release workflow.

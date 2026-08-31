@@ -358,32 +358,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "auki-domain-py"
-version = "0.1.0"
-dependencies = [
- "auki-datatypes",
- "auki-domain",
- "auki-logs",
- "auki-p2p",
- "auki-protocols",
- "auki-registry",
- "auki-session",
- "futures",
- "jsonwebtoken 9.3.1",
- "parking_lot",
- "prost",
- "pyo3",
- "pyo3-async-runtimes",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tokio-util",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "auki-geometry"
 version = "0.0.0"
 dependencies = [
@@ -3763,19 +3737,6 @@ dependencies = [
  "pyo3-ffi",
  "pyo3-macros",
  "unindent",
-]
-
-[[package]]
-name = "pyo3-async-runtimes"
-version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2529f0be73ffd2be0cc43c013a640796558aa12d7ca0aab5cc14f375b4733031"
-dependencies = [
- "futures",
- "once_cell",
- "pin-project-lite",
- "pyo3",
- "tokio",
 ]
 
 [[package]]

@@ -42,14 +42,13 @@
 //! as Python dicts / strings, not as pyclasses — same convention as
 //! `auki-manifests-py`.
 
-use std::ffi::CString;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use pyo3::exceptions::{PyNotImplementedError, PyOSError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyCapsule, PyDict, PyModule};
+use pyo3::types::{PyAny, PyDict, PyModule};
 use serde_json::Value as JsonValue;
 
 // Bring auki-registry-py's lib (named `auki_registry`) into scope under a
@@ -59,10 +58,6 @@ use auki_registry as registry_py;
 use auki_manifests_rs as manifests;
 use auki_registry_rs as registry;
 use auki_session_rs as session;
-use auki_session_rs::{
-    PY_DOMAIN_PEER_CAPSULE_ABI_NAME as DOMAIN_PEER_CAPSULE_NAME,
-    PY_DOMAIN_SESSION_CAPSULE_ABI_NAME as DOMAIN_SESSION_CAPSULE_NAME,
-};
 
 // ─── JSON helpers ───────────────────────────────────────────────────────────
 
@@ -922,13 +917,6 @@ impl Peer {
         let s = self.inner.start_session().map_err(map_session_error)?;
         Ok(Session { inner: Arc::new(s) })
     }
-
-    /// SDK-internal bridge consumed by `auki-domain-py`.
-    fn _domain_handle(&self, py: Python<'_>) -> PyResult<Py<PyCapsule>> {
-        let name = CString::new(DOMAIN_PEER_CAPSULE_NAME).expect("static literal contains no nul");
-        let capsule = PyCapsule::new_bound(py, Arc::clone(&self.inner), Some(name))?;
-        Ok(capsule.unbind())
-    }
 }
 
 // ─── Session pyclass ─────────────────────────────────────────────────────────
@@ -1108,14 +1096,6 @@ impl Session {
             root: handle.root().to_string_lossy().into_owned(),
             log_ref_inner: handle.log_ref().clone(),
         })
-    }
-
-    /// SDK-internal bridge consumed by `auki-domain-py`.
-    fn _domain_handle(&self, py: Python<'_>) -> PyResult<Py<PyCapsule>> {
-        let name =
-            CString::new(DOMAIN_SESSION_CAPSULE_NAME).expect("static literal contains no nul");
-        let capsule = PyCapsule::new_bound(py, Arc::clone(&self.inner), Some(name))?;
-        Ok(capsule.unbind())
     }
 
     // ─── Materialization stubs ────────────────────────────────────────

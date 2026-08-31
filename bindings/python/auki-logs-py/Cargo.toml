@@ -41,7 +41,7 @@ auki-logs-rs = { package = "auki-logs", path = "../../../crates/auki-logs" }
 # `manifest()`.
 serde_json = "1"
 # `abi3-py38` builds a stable-ABI extension that works on Python 3.8+
-# without rebuilding per minor version, matching `auki-domain-py`.
+# without rebuilding per minor version, matching the other SDK wheels.
 pyo3 = { version = "0.22", features = ["abi3-py38"] }
 
 [dev-dependencies]

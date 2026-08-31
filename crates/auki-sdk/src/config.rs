@@ -1,8 +1,10 @@
 use std::{net::IpAddr, time::Duration};
 
-use auki_p2p::{Multiaddr, PeerId};
 #[cfg(not(target_arch = "wasm32"))]
-use auki_p2p::{Protocol, RouteCatalogLimits, canonicalize_circuit_route, validate_direct_route};
+use auki_p2p::{
+    Multiaddr, PeerId, Protocol, RouteCatalogLimits, canonicalize_circuit_route,
+    validate_direct_route,
+};
 use reqwest::Url;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashSet;
@@ -14,6 +16,7 @@ pub const DEV_DMS_BASE_URL: &str = "https://dms.dev.aukiverse.com/v1/";
 const MAX_LISTEN_ADDRESSES: usize = 16;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_ADVERTISED_DIRECT_ROUTES: usize = 16;
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_LOCAL_ROUTES: usize = 16;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_INITIAL_ROUTE_PEERS: usize = 1_024;
@@ -153,12 +156,14 @@ pub enum AukiRelayConfigError {
 ///
 /// Route hints only tell the transport where to dial. The expected Peer ID and
 /// selected Domain are still verified by the authenticated protocol layer.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InitialPeerRoutes {
     peer_id: PeerId,
     routes: Vec<Multiaddr>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl InitialPeerRoutes {
     /// Peer that every route is required to reach.
     pub fn peer_id(&self) -> PeerId {
@@ -176,8 +181,11 @@ impl InitialPeerRoutes {
 #[derive(Clone, Debug)]
 pub struct AukiPeerConfig {
     dms_base_url: Url,
+    #[cfg(not(target_arch = "wasm32"))]
     listen_addresses: Vec<Multiaddr>,
+    #[cfg(not(target_arch = "wasm32"))]
     advertised_direct_routes: Vec<Multiaddr>,
+    #[cfg(not(target_arch = "wasm32"))]
     initial_peer_routes: Vec<InitialPeerRoutes>,
     relay: Option<AukiRelayConfig>,
 }
@@ -192,8 +200,11 @@ impl AukiPeerConfig {
         let dms_base_url = parse_dms_base_url(dms_base_url.as_ref())?;
         Ok(Self {
             dms_base_url,
+            #[cfg(not(target_arch = "wasm32"))]
             listen_addresses: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             advertised_direct_routes: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             initial_peer_routes: Vec::new(),
             relay: Some(AukiRelayConfig::default()),
         })
@@ -315,6 +326,7 @@ impl AukiPeerConfig {
         if relay.relay_count != 1 {
             return Err(AukiPeerConfigError::BrowserRelayCount);
         }
+        #[cfg(not(target_arch = "wasm32"))]
         validate_local_route_capacity(self.advertised_direct_routes.len(), Some(relay))?;
         self.relay = Some(relay);
         Ok(self)
@@ -326,16 +338,19 @@ impl AukiPeerConfig {
     }
 
     /// Requested local listener addresses.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn listen_addresses(&self) -> &[Multiaddr] {
         &self.listen_addresses
     }
 
     /// Local direct routes exposed for caller-managed publication.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn advertised_direct_routes(&self) -> &[Multiaddr] {
         &self.advertised_direct_routes
     }
 
     /// Initial remote route hints in stable Peer-ID order.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn initial_peer_routes(&self) -> &[InitialPeerRoutes] {
         &self.initial_peer_routes
     }
@@ -375,6 +390,7 @@ pub enum AukiPeerConfigError {
     #[error(
         "{direct_routes} direct routes plus {relay_routes} relay routes exceed the {maximum}-route local publication limit"
     )]
+    #[cfg(not(target_arch = "wasm32"))]
     LocalRouteLimit {
         /// Canonical direct routes selected by the caller.
         direct_routes: usize,
@@ -391,6 +407,7 @@ pub enum AukiPeerConfigError {
     BrowserRelayCount,
     /// A bounded address set exceeded its maximum size.
     #[error("{kind} contains more than {maximum} addresses")]
+    #[cfg(not(target_arch = "wasm32"))]
     AddressLimit {
         /// Address-set name.
         kind: &'static str,
@@ -399,6 +416,7 @@ pub enum AukiPeerConfigError {
     },
     /// One encoded multiaddr exceeded its fixed pre-validation bound.
     #[error("{kind} contains a multiaddr larger than {maximum} encoded bytes")]
+    #[cfg(not(target_arch = "wasm32"))]
     AddressTooLong {
         /// Address-set name.
         kind: &'static str,
@@ -407,18 +425,21 @@ pub enum AukiPeerConfigError {
     },
     /// A local advertised route is not a direct TCP route.
     #[error("advertised direct route is invalid: {reason}")]
+    #[cfg(not(target_arch = "wasm32"))]
     InvalidAdvertisedDirectRoute {
         /// Bounded static diagnostic.
         reason: &'static str,
     },
     /// One remote peer supplied an invalid route hint.
     #[error("initial route for Peer {peer_id} is invalid")]
+    #[cfg(not(target_arch = "wasm32"))]
     InvalidInitialPeerRoute {
         /// Expected remote peer.
         peer_id: PeerId,
     },
     /// One remote peer exceeded the per-peer route bound.
     #[error("initial routes for Peer {peer_id} exceed the {maximum}-route limit")]
+    #[cfg(not(target_arch = "wasm32"))]
     InitialPeerRouteLimit {
         /// Expected remote peer.
         peer_id: PeerId,
@@ -427,18 +448,21 @@ pub enum AukiPeerConfigError {
     },
     /// The configuration exceeded the remote peer bound.
     #[error("initial route hints exceed the {maximum}-peer limit")]
+    #[cfg(not(target_arch = "wasm32"))]
     InitialPeerLimit {
         /// Fixed peer maximum.
         maximum: usize,
     },
     /// The configuration exceeded the aggregate remote route bound.
     #[error("initial route hints exceed the {maximum}-route aggregate limit")]
+    #[cfg(not(target_arch = "wasm32"))]
     InitialRouteLimit {
         /// Fixed aggregate maximum.
         maximum: usize,
     },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn validate_local_route_capacity(
     direct_routes: usize,
     relay: Option<AukiRelayConfig>,
@@ -661,10 +685,32 @@ mod tests {
         let config = AukiPeerConfig::dev();
         assert!(config.relay_required());
         assert_eq!(config.relay(), Some(AukiRelayConfig::default()));
-        assert!(config.listen_addresses().is_empty());
-        assert!(config.advertised_direct_routes().is_empty());
-        assert!(config.initial_peer_routes().is_empty());
         assert_eq!(config.dms_base_url(), DEV_DMS_BASE_URL);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            assert!(config.listen_addresses().is_empty());
+            assert!(config.advertised_direct_routes().is_empty());
+            assert!(config.initial_peer_routes().is_empty());
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[test]
+    fn browser_config_preserves_its_single_relay_contract() {
+        let one = AukiRelayConfig::default();
+        assert_eq!(
+            AukiPeerConfig::dev().with_relay(one).unwrap().relay(),
+            Some(one)
+        );
+
+        let two = AukiRelayConfig {
+            relay_count: 2,
+            ..one
+        };
+        assert_eq!(
+            AukiPeerConfig::dev().with_relay(two).unwrap_err(),
+            AukiPeerConfigError::BrowserRelayCount
+        );
     }
 
     #[test]

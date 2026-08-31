@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 use auki_sdk::{
     AukiKnownPeerEvent, AukiKnownPeerRecvError, AukiKnownPeerSnapshot, AukiKnownPeers, AukiPeer,
     AukiPeerAuthorityError, AukiPeerProtocolContext, AukiPeerProtocols, AukiPeerRelayError,

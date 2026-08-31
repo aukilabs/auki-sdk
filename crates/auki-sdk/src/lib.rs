@@ -6,6 +6,7 @@
 
 mod config;
 mod protocol_contract;
+#[cfg(not(target_arch = "wasm32"))]
 mod status;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -55,9 +56,11 @@ pub use browser_peer_runtime::{
 };
 #[cfg(target_arch = "wasm32")]
 pub use browser_protocols::{AukiPeerProtocols, AukiProtocolRegistration};
+#[cfg(not(target_arch = "wasm32"))]
+pub use config::InitialPeerRoutes;
 pub use config::{
     AukiPeerConfig, AukiPeerConfigError, AukiRelayConfig, AukiRelayConfigError, AukiRelayMode,
-    DEV_DMS_BASE_URL, InitialPeerRoutes,
+    DEV_DMS_BASE_URL,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use context::{AukiPeerProtocolContext, AukiPeerRoutes, AukiPeerRoutesError};
@@ -77,4 +80,5 @@ pub use protocol_contract::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use protocols::{AukiPeerProtocols, AukiProtocolRegistration};
+#[cfg(not(target_arch = "wasm32"))]
 pub use status::{AukiPeerFailure, AukiPeerStatus};

@@ -14,6 +14,10 @@ mod authenticated_stream;
 mod authentication;
 #[cfg(not(target_arch = "wasm32"))]
 mod authority;
+mod authority_update;
+#[cfg(target_arch = "wasm32")]
+#[allow(dead_code)]
+mod browser_authority;
 #[cfg(target_arch = "wasm32")]
 #[allow(dead_code)]
 mod browser_transport;
@@ -22,6 +26,8 @@ mod error;
 mod identity;
 #[cfg(not(target_arch = "wasm32"))]
 mod identity_store;
+#[allow(dead_code)]
+mod local_authority;
 #[cfg(not(target_arch = "wasm32"))]
 mod observation;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -46,6 +52,9 @@ pub use authenticated_stream::AuthenticatedStream;
 pub use authentication::{AuthenticatedPeer, SessionRequirements};
 #[cfg(not(target_arch = "wasm32"))]
 pub use authority::{DomainAuthority, P2pCredentialError, P2pCredentialResult};
+pub use authority_update::PeerAuthorityUpdate;
+#[cfg(target_arch = "wasm32")]
+pub use browser_authority::BrowserAuthority;
 pub use error::{Error, Result};
 pub use identity::{Identity, PeerIdentityProof};
 pub use libp2p::{multiaddr::Protocol, swarm::ConnectionId, Multiaddr};

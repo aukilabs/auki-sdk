@@ -52,6 +52,12 @@ pub enum Error {
         credential_expiration: u64,
         expected_expiration: u64,
     },
+    #[error("authority update targets Domain {actual}, expected {expected}")]
+    AuthorityDomainMismatch { expected: String, actual: String },
+    #[error("authority update targets Peer {actual}, expected {expected}")]
+    AuthorityPeerMismatch { expected: String, actual: String },
+    #[error("authority credential expiration must be a future whole UTC second")]
+    InvalidAuthorityExpiration,
     #[error("token Peer ID {token_peer_id} does not match Noise Peer ID {noise_peer_id}")]
     PeerIdMismatch {
         token_peer_id: String,

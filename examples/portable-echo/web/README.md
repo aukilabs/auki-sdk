@@ -19,10 +19,38 @@ route, authenticates, runs the shared Rust client, and closes the stream and
 route. This manual v0.1 demo accepts only peers using the same DMS-confirmed
 relay; trusted multi-relay discovery remains separate work.
 
-Build the package with:
+## Run the Peer Playground
+
+Prerequisites:
+
+- Rust 1.89.0 or newer
+- Node.js 20.19 or newer (or 22.12 or newer)
+- `wasm-pack` 0.13.1
+- the `wasm32-unknown-unknown` Rust target
+
+Install the pinned Wasm builder and target once if needed:
 
 ```sh
-wasm-pack build examples/portable-echo/web --target web --out-dir pkg-web --dev
+cargo install wasm-pack --version 0.13.1 --locked
+rustup target add wasm32-unknown-unknown
+```
+
+```sh
+cd examples/portable-echo/web
+npm ci
+npm run dev
+```
+
+Open the printed localhost URL in two tabs. In each tab, log in, select the
+same Domain, and start a peer. Paste the other tab's public Peer Card (or only
+its Peer ID), enter a message, and send. Use **Stop peer** before closing a tab
+so the relay booking is released cleanly. The page never writes credentials or
+the ephemeral Peer ID to browser storage.
+
+Build the standalone assets with:
+
+```sh
+npm run build
 ```
 
 ## Live direction proof
@@ -33,11 +61,10 @@ as a client to browser A. It verifies exact payloads, authenticated Peer IDs,
 relayed transport, and clean shutdown on every side. Browser-to-native is added
 after the native facade exposes its confirmed WSS reachability.
 
-Install its local tooling once:
+Install Chromium for the protected smoke once if it is not already available:
 
 ```sh
 cd examples/portable-echo/web
-npm ci
 npx playwright install chromium
 ```
 

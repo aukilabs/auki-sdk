@@ -34,7 +34,8 @@ use crate::{
         pull_booking_renewal_forward, ready_relay, relay_renewal_start_deadline,
         relay_usable_until,
     },
-    browser_protocols::{AukiPeerProtocols, AukiProtocolError},
+    browser_protocols::AukiPeerProtocols,
+    protocol_contract::AukiProtocolError,
 };
 
 const RELAY_RETRY: Duration = Duration::from_secs(2);

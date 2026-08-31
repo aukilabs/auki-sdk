@@ -5,6 +5,7 @@
 //! optional DMS-backed relay reachability for their complete shared lifetime.
 
 mod config;
+mod protocol_contract;
 mod status;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -55,10 +56,7 @@ pub use browser_peer_runtime::{
     AukiPeerShutdownError, AukiPeerStartError,
 };
 #[cfg(target_arch = "wasm32")]
-pub use browser_protocols::{
-    AukiPeerProtocols, AukiProtocolError, AukiProtocolRegistration, AukiProtocolRouteAttempt,
-    AukiProtocolSpec, AukiProtocolStream,
-};
+pub use browser_protocols::{AukiPeerProtocols, AukiProtocolRegistration};
 pub use config::{
     AukiPeerConfig, AukiPeerConfigError, AukiRelayConfig, AukiRelayConfigError, AukiRelayMode,
     DEV_DMS_BASE_URL, InitialPeerRoutes,
@@ -76,9 +74,9 @@ pub use peer_runtime::{
     AukiPeerStartError, AukiPeerTransportError, ExternalAuthorityControl,
     ExternalAuthorityReplaceOutcome,
 };
-#[cfg(not(target_arch = "wasm32"))]
-pub use protocols::{
-    AukiPeerProtocols, AukiProtocolError, AukiProtocolRegistration, AukiProtocolRouteAttempt,
-    AukiProtocolSpec, AukiProtocolStream,
+pub use protocol_contract::{
+    AukiProtocolError, AukiProtocolRouteAttempt, AukiProtocolSpec, AukiProtocolStream,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use protocols::{AukiPeerProtocols, AukiProtocolRegistration};
 pub use status::{AukiPeerFailure, AukiPeerStatus};

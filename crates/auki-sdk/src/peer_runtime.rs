@@ -24,7 +24,8 @@ use crate::{
     config::{AukiPeerConfig, AukiRelayConfig, AukiRelayMode},
     context::{AukiPeerProtocolContext, ContextLifecycle},
     known_peers::AukiKnownPeers,
-    protocols::{AukiPeerProtocols, AukiProtocolError},
+    protocol_contract::AukiProtocolError,
+    protocols::AukiPeerProtocols,
     relay::{
         RelayBookingClient, RelayBookingClientError, RelayBookingMode, RelayIdempotencyKey,
         coordinator::{

@@ -250,10 +250,34 @@ impl RelayProvider {
     /// The lexicographically first canonical base compatible with this
     /// provider's selected transport.
     pub fn selected_base(&self) -> &Multiaddr {
+        self.base_for_transport(self.selected_transport)
+            .expect("RelayProvider construction requires a compatible base")
+    }
+
+    /// The lexicographically first canonical base for an advertised
+    /// transport, when the provider supplied one.
+    pub fn base_for_transport(&self, transport: RelayBaseTransport) -> Option<&Multiaddr> {
         self.bases
             .iter()
-            .find(|base| provider_base_transport(base) == Some(self.selected_transport))
-            .expect("RelayProvider construction requires a compatible base")
+            .find(|base| provider_base_transport(base) == Some(transport))
+    }
+
+    /// Construct one exact circuit route through a validated provider base.
+    ///
+    /// This only constructs an address. A host must not publish it until the
+    /// corresponding relay reservation has independent publishable evidence.
+    pub fn circuit_route_for_transport(
+        &self,
+        transport: RelayBaseTransport,
+        target_peer_id: PeerId,
+    ) -> RelayReservationResult<Multiaddr> {
+        let base = self
+            .base_for_transport(transport)
+            .ok_or(RelayReservationError::MissingTransportBase(transport))?;
+        Ok(base
+            .clone()
+            .with(Protocol::P2pCircuit)
+            .with(Protocol::P2p(target_peer_id)))
     }
 
     /// Address passed to `Swarm::listen_on` for a reservation.
@@ -262,8 +286,8 @@ impl RelayProvider {
     }
 
     fn publishable_route(&self, local_peer_id: PeerId) -> Multiaddr {
-        self.reservation_listen_address()
-            .with(Protocol::P2p(local_peer_id))
+        self.circuit_route_for_transport(self.selected_transport, local_peer_id)
+            .expect("RelayProvider construction requires a compatible base")
     }
 }
 
@@ -1105,6 +1129,7 @@ mod tests {
     #[test]
     fn mixed_provider_bases_are_retained_and_selected_by_transport() {
         let relay = peer_id();
+        let target = peer_id();
         let bases = [
             format!("/dns4/browser-a.dev.aukiverse.com/tcp/04443/wss/p2p/{relay}"),
             format!("/dns4/native-z.dev.aukiverse.com./tcp/0443/p2p/{relay}"),
@@ -1142,11 +1167,30 @@ mod tests {
             browser.reservation_listen_address().to_string(),
             format!("/dns4/browser-a.dev.aukiverse.com/tcp/4443/wss/p2p/{relay}/p2p-circuit")
         );
+        assert_eq!(
+            browser
+                .circuit_route_for_transport(RelayBaseTransport::Wss, target)
+                .unwrap()
+                .to_string(),
+            format!(
+                "/dns4/browser-a.dev.aukiverse.com/tcp/4443/wss/p2p/{relay}/p2p-circuit/p2p/{target}"
+            )
+        );
+        assert_eq!(
+            browser
+                .circuit_route_for_transport(RelayBaseTransport::Tcp, target)
+                .unwrap()
+                .to_string(),
+            format!(
+                "/dns4/native-z.dev.aukiverse.com/tcp/443/p2p/{relay}/p2p-circuit/p2p/{target}"
+            )
+        );
     }
 
     #[test]
     fn provider_fails_closed_without_a_base_for_the_selected_transport() {
         let relay = peer_id();
+        let target = peer_id();
         let tcp = format!("/dns4/relay.dev.aukiverse.com/tcp/443/p2p/{relay}");
         let wss = format!("/dns4/relay.dev.aukiverse.com/tcp/4443/wss/p2p/{relay}");
 
@@ -1158,6 +1202,14 @@ mod tests {
         ));
         assert!(matches!(
             RelayProvider::new_for_transport(relay, [&tcp], RelayBaseTransport::Wss, limits(),),
+            Err(RelayReservationError::MissingTransportBase(
+                RelayBaseTransport::Wss
+            ))
+        ));
+
+        let provider = RelayProvider::new(relay, [&tcp], limits()).unwrap();
+        assert!(matches!(
+            provider.circuit_route_for_transport(RelayBaseTransport::Wss, target),
             Err(RelayReservationError::MissingTransportBase(
                 RelayBaseTransport::Wss
             ))

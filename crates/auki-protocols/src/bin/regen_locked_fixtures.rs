@@ -4,12 +4,12 @@
 //! Run after any intentional schema change to commit updated fixtures:
 //!
 //! ```sh
-//! cargo run -p auki-protocols --bin regen_locked_fixtures --features catalog,stream
+//! cargo run -p auki-protocols --bin regen_protocol_fixtures --features catalog,stream
 //! ```
 //!
 //! Hash values for `RegistryRef` fields match the corresponding
 //! `auki-registry` locked fixtures. Run
-//! `cargo run -p auki-registry --bin regen_locked_fixtures` first to keep
+//! `cargo run -p auki-registry --bin regen_registry_fixtures` first to keep
 //! the two sets of fixtures in sync.
 
 use auki_manifests::{PoseSource, PoseWriterMode, TimeTransformSource};

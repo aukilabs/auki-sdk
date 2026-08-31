@@ -115,7 +115,7 @@ tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [[bin]]
-name = "regen_locked_fixtures"
+name = "regen_protocol_fixtures"
 path = "src/bin/regen_locked_fixtures.rs"
 required-features = ["catalog", "stream"]
 

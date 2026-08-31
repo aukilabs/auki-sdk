@@ -2,7 +2,7 @@
 //!
 //! Each test deserializes a fixture into the Rust type, re-serializes to
 //! canonical JSON via `auki-jcs`, and asserts byte-equality with the file.
-//! A failure means either the fixture is stale (run `regen_locked_fixtures`)
+//! A failure means either the fixture is stale (run `regen_protocol_fixtures`)
 //! or the struct shape changed without a coordinated fixture update.
 //!
 //! Run with:

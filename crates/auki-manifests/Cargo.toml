@@ -28,3 +28,7 @@ serde_json = "1"
 auki-logs = { path = "../auki-logs" }
 ciborium = "0.2"
 tempfile = "3"
+
+[[bin]]
+name = "regen_manifest_fixtures"
+path = "src/bin/regen_locked_fixtures.rs"

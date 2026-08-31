@@ -2,6 +2,8 @@
 
 #[cfg(feature = "registry-endpoint")]
 mod endpoint;
+#[cfg(all(feature = "registry-fs-provider", not(target_arch = "wasm32")))]
+mod fs;
 mod wire;
 
 #[cfg(feature = "registry-endpoint")]
@@ -9,6 +11,8 @@ pub use endpoint::{
     REGISTRY_MAX_CONCURRENCY, REGISTRY_OPERATION_TIMEOUT, RegistryClient, RegistryEndpoint,
     RegistryEndpointError, RegistryOperation, RegistryProvider, registry_protocol_spec,
 };
+#[cfg(all(feature = "registry-fs-provider", not(target_arch = "wasm32")))]
+pub use fs::FsRegistryProvider;
 
 /// Get-only registry protocol version 0.2.0.
 pub mod v2 {

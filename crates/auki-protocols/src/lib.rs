@@ -19,6 +19,8 @@ pub mod info;
 pub mod message;
 #[cfg(feature = "registry")]
 pub mod registry;
+#[cfg(all(feature = "session-adapter", not(target_arch = "wasm32")))]
+pub mod session_adapter;
 #[cfg(feature = "stream")]
 pub mod stream;
 

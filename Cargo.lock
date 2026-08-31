@@ -603,6 +603,7 @@ dependencies = [
  "auki-p2p",
  "auki-registry",
  "auki-sdk",
+ "auki-session",
  "futures",
  "futures-timer",
  "hex",
@@ -611,6 +612,7 @@ dependencies = [
  "prost",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]

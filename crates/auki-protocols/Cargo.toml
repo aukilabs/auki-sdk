@@ -44,6 +44,7 @@ registry-endpoint = [
     "dep:auki-sdk",
     "dep:futures-timer",
 ]
+registry-fs-provider = ["registry-endpoint"]
 blob = [
     "dep:auki-datatypes",
     "dep:auki-registry",
@@ -53,6 +54,7 @@ blob = [
     "dep:thiserror",
 ]
 blob-endpoint = ["blob", "dep:auki-sdk", "dep:futures-timer"]
+blob-fs-provider = ["blob-endpoint"]
 message = [
     "dep:auki-datatypes",
     "dep:auki-registry",
@@ -77,6 +79,12 @@ stream = [
     "dep:thiserror",
 ]
 stream-endpoint = ["stream", "dep:auki-sdk", "dep:futures-timer"]
+session-adapter = [
+    "catalog-endpoint",
+    "stream-endpoint",
+    "dep:auki-session",
+    "dep:tokio",
+]
 
 [dependencies]
 async-channel = { workspace = true, optional = true }
@@ -95,12 +103,16 @@ serde_json = { version = "1", optional = true }
 thiserror = { version = "2", optional = true }
 tokio = { workspace = true, features = ["sync"], optional = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+auki-session = { path = "../auki-session", optional = true }
+
 [dev-dependencies]
 auki-p2p = { path = "../auki-p2p" }
 futures = "0.3"
 hex = { workspace = true }
 jsonwebtoken = "9.3.0"
 serde_json = "1"
+tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [[bin]]

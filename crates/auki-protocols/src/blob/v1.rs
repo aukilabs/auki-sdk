@@ -19,6 +19,8 @@ use thiserror::Error;
 
 #[cfg(feature = "blob-endpoint")]
 mod endpoint;
+#[cfg(all(feature = "blob-fs-provider", not(target_arch = "wasm32")))]
+mod fs;
 
 #[cfg(feature = "blob-endpoint")]
 pub use endpoint::{
@@ -27,6 +29,8 @@ pub use endpoint::{
     MAX_CONCURRENCY as ENDPOINT_MAX_CONCURRENCY, OPEN_TIMEOUT, ProvidedBlobChunk, ROUND_TIMEOUT,
     protocol_spec,
 };
+#[cfg(all(feature = "blob-fs-provider", not(target_arch = "wasm32")))]
+pub use fs::FsBlobProvider;
 
 /// Exact authenticated blob 0.1.0 protocol identifier.
 pub const ID: &str = crate::ids::BLOBS_V0_1_0;

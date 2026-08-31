@@ -454,9 +454,10 @@ fn ready_snapshot(
             assignment_id: Some(assignment_id),
             reservation_epoch: Some(reservation_epoch),
             provider_peer_id: Some(relay_peer_id.to_string()),
-            provider_base_addresses: Some(vec![format!(
-                "/dns4/relay-a.dev.aukiverse.com/tcp/443/p2p/{relay_peer_id}"
-            )]),
+            provider_base_addresses: Some(vec![
+                format!("/dns4/relay-{slot_id}.dev.aukiverse.com/tcp/443/p2p/{relay_peer_id}"),
+                format!("/dns4/relay-{slot_id}.dev.aukiverse.com/tcp/4443/wss/p2p/{relay_peer_id}"),
+            ]),
             limits: Some(RelayLimits {
                 duration_seconds: 900,
                 data_bytes_per_direction: 1_048_576,
@@ -503,15 +504,17 @@ fn confirmed_local_route(
     local_peer_id: PeerId,
     relay_peer_id: PeerId,
 ) -> PublishedRelayRoute {
-    let base = format!(
-        "/dns4/relay-{}.dev.aukiverse.com/tcp/443/p2p/{relay_peer_id}",
-        fence.local_generation
-    );
+    let base = format!("/dns4/relay-{}.dev.aukiverse.com", fence.slot_id);
     PublishedRelayRoute {
         fence,
-        route: format!("{base}/p2p-circuit/p2p/{local_peer_id}")
+        route: format!("{base}/tcp/443/p2p/{relay_peer_id}/p2p-circuit/p2p/{local_peer_id}")
             .parse()
             .expect("canonical circuit route"),
+        wss_route: Some(
+            format!("{base}/tcp/4443/wss/p2p/{relay_peer_id}/p2p-circuit/p2p/{local_peer_id}")
+                .parse()
+                .expect("canonical WSS circuit route"),
+        ),
         limits: ExpectedRelayLimits::new(Duration::from_secs(900), 1_048_576)
             .expect("finite relay limits"),
         authorized_until: chrono::Utc::now() + chrono::Duration::minutes(4),
@@ -751,9 +754,59 @@ async fn actor_publishes_exact_fenced_route_to_local_catalog() {
     assert_eq!(published.fence, route_fence(fence));
     assert_eq!(published.relay_peer_id, relay_peer_id);
     assert_eq!(published.route, route);
+    assert_eq!(
+        published.wss_route.as_ref().map(ToString::to_string),
+        Some(format!(
+            "/dns4/relay-{slot_id}.dev.aukiverse.com/tcp/4443/wss/p2p/{relay_peer_id}/p2p-circuit/p2p/{local_peer_id}"
+        ))
+    );
     assert_eq!(published.limits, expected_limits);
     assert_eq!(published.authorized_until, expected_deadline);
 
+    actor.remove_all_slots().await.unwrap();
+}
+
+#[tokio::test]
+async fn actor_publishes_tcp_only_provider_without_wss_reachability() {
+    let booking_id = Uuid::new_v4();
+    let local_peer_id = PeerId::random();
+    let relay_peer_id = PeerId::random();
+    let slot_id = Uuid::new_v4();
+    let mut snapshot = ready_snapshot(
+        booking_id,
+        slot_id,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        relay_peer_id,
+    );
+    snapshot.slots[0]
+        .provider_base_addresses
+        .as_mut()
+        .expect("ready provider bases")
+        .retain(|address| !address.contains("/wss/"));
+    let api = Arc::new(ScriptedApi::default());
+    let backend = Arc::new(PendingStartBackend::new());
+    let catalog = local_route_catalog(local_peer_id);
+    let (mut actor, _commands) = actor_harness(
+        api,
+        backend.clone(),
+        Arc::new(catalog.clone()),
+        coordinator_config("actor-tcp-only"),
+        snapshot,
+    );
+    actor.apply_current_snapshot().await.unwrap();
+    wait_for_count(&backend.starts, 1).await;
+    let fence = actor.slots[&slot_id].fence;
+    let route = confirmed_local_route(fence, local_peer_id, relay_peer_id).route;
+
+    actor
+        .publish_confirmed_route(fence, route.clone(), relay_peer_id)
+        .await
+        .expect("TCP-only provider publishes");
+
+    let published = catalog.snapshot().unwrap().relay_routes.remove(0);
+    assert_eq!(published.route, route);
+    assert_eq!(published.wss_route, None);
     actor.remove_all_slots().await.unwrap();
 }
 

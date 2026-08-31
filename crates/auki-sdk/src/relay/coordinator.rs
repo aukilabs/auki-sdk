@@ -17,8 +17,9 @@ use std::{
 use async_trait::async_trait;
 use auki_domain::{DomainRelayError, DomainRelayReservations};
 use auki_p2p::{
-    ExpectedRelayLimits, Multiaddr, PeerId, RelayConfirmationRejection, RelayProvider,
-    RelayReservationHandle, RelayReservationSnapshot, RelayTransportEvent,
+    ExpectedRelayLimits, Multiaddr, PeerId, Protocol, RelayBaseTransport,
+    RelayConfirmationRejection, RelayProvider, RelayReservationHandle, RelayReservationSnapshot,
+    RelayTransportEvent,
 };
 use parking_lot::Mutex;
 use rand::Rng;
@@ -224,6 +225,7 @@ pub(crate) type SharedReservationBackend = Arc<dyn RelayReservationBackend>;
 pub(crate) struct PublishedRelayRoute {
     pub(crate) fence: LocalRelayFence,
     pub(crate) route: Multiaddr,
+    pub(crate) wss_route: Option<Multiaddr>,
     pub(crate) limits: ExpectedRelayLimits,
     pub(crate) authorized_until: chrono::DateTime<chrono::Utc>,
     pub(crate) relay_peer_id: PeerId,
@@ -304,6 +306,7 @@ impl RelayRouteRegistry for FencedRouteCatalog {
                 fence: route_fence(fence),
                 relay_peer_id: route.relay_peer_id,
                 route: route.route,
+                wss_route: route.wss_route,
                 limits: route.limits,
                 authorized_until: route.authorized_until,
             })
@@ -392,6 +395,7 @@ impl RelayRouteRegistry for auki_p2p::RouteCatalog {
             fence: route_fence(route.fence),
             relay_peer_id: route.relay_peer_id,
             route: route.route,
+            wss_route: route.wss_route,
             limits: route.limits,
             authorized_until: route.authorized_until,
         })
@@ -1343,9 +1347,38 @@ impl CoordinatorActor {
                     "confirmed route no longer has a current local fence".to_string(),
                 )
             })?;
+        let target_peer_id = match route.iter().last() {
+            Some(Protocol::P2p(peer_id)) => peer_id,
+            _ => {
+                return Err(RelayCoordinatorError::RouteRegistry(
+                    "confirmed relay route is missing its target Peer ID".to_string(),
+                ));
+            }
+        };
+        let provider = relay_provider(
+            &relay_peer_id.to_string(),
+            &local.provider_base_addresses,
+            local.limits.duration_seconds(),
+            local.limits.data_bytes_per_direction(),
+        )
+        .map_err(|error| RelayCoordinatorError::RouteRegistry(error.to_string()))?;
+        let expected_route = provider
+            .circuit_route_for_transport(RelayBaseTransport::Tcp, target_peer_id)
+            .map_err(|error| RelayCoordinatorError::RouteRegistry(error.to_string()))?;
+        if expected_route != route {
+            return Err(RelayCoordinatorError::RouteRegistry(
+                "confirmed TCP route differs from the current DMS provider metadata".to_string(),
+            ));
+        }
+        let wss_route = provider
+            .base_for_transport(RelayBaseTransport::Wss)
+            .map(|_| provider.circuit_route_for_transport(RelayBaseTransport::Wss, target_peer_id))
+            .transpose()
+            .map_err(|error| RelayCoordinatorError::RouteRegistry(error.to_string()))?;
         let published = PublishedRelayRoute {
             fence,
             route,
+            wss_route,
             limits: local.limits,
             authorized_until: local.authorized_until,
             relay_peer_id,

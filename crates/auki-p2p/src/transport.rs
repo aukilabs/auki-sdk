@@ -3,17 +3,12 @@ use std::{
     error::Error as StdError,
     future::Future,
     panic::AssertUnwindSafe,
-    pin::Pin,
     sync::Arc,
-    task::{Context, Poll},
     time::Duration,
 };
 
 use chrono::Utc;
-use futures::{
-    io::{AsyncRead, AsyncWrite},
-    FutureExt, StreamExt,
-};
+use futures::{FutureExt, StreamExt};
 use libp2p::{
     core::transport::{ListenerId, TransportError},
     multiaddr::Protocol,
@@ -22,14 +17,14 @@ use libp2p::{
         dial_opts::{DialOpts, PeerCondition},
         ConnectionId, DialError, NetworkBehaviour, SwarmEvent,
     },
-    tcp, yamux, Multiaddr, PeerId, Stream, StreamProtocol, Swarm, SwarmBuilder,
+    tcp, yamux, Multiaddr, PeerId, Stream, Swarm, SwarmBuilder,
 };
 use libp2p_stream::{Behaviour as StreamBehaviour, IncomingStreams};
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex as AsyncMutex};
 use uuid::Uuid;
 
 use crate::{
-    authentication::{authenticate_duplex, AuthenticatedPeer, SessionRequirements},
+    authentication::{authenticate_duplex, SessionRequirements},
     authority::DomainAuthority,
     observation::{NodeFailure, NodeObservations},
     relay::{
@@ -43,100 +38,14 @@ use crate::{
         ensure_token_peer, unix_time_now, DdsTokenVerifier, DdsVerificationKeys, P2PAccessClaims,
         SignedP2pCredential, TokenStore,
     },
-    Error, Identity, Result as P2PResult,
+    ApplicationProtocol, AuthenticatedStream, Error, Identity, Result as P2PResult,
 };
-
-const APPLICATION_PROTOCOL_MAX_BYTES: usize = 255;
-const APPLICATION_COMPONENT_MAX_BYTES: usize = 64;
-const VERSION_COMPONENT_MAX_BYTES: usize = 32;
 
 #[derive(NetworkBehaviour)]
 struct Behaviour {
     relay: relay_client::Behaviour,
     streams: StreamBehaviour,
     targeted_streams: TargetedStreamBehaviour,
-}
-
-/// A bounded, explicitly versioned libp2p application protocol ID.
-///
-/// IDs use `/<name>[/<name>...]/<version>`. Name components are bounded
-/// lowercase ASCII identifiers; versions are bounded numeric components with
-/// an optional `v` prefix.
-///
-/// Product owners choose their own namespace. The top-level `/auki/`
-/// namespace is reserved for the authenticated SDK protocol family.
-#[derive(Clone, Debug)]
-pub struct ApplicationProtocol(StreamProtocol);
-
-impl ApplicationProtocol {
-    pub fn new(value: impl Into<String>) -> P2PResult<Self> {
-        let value = value.into();
-        if value.len() > APPLICATION_PROTOCOL_MAX_BYTES {
-            return Err(Error::InvalidProtocol(format!(
-                "protocol ID exceeds {APPLICATION_PROTOCOL_MAX_BYTES} bytes"
-            )));
-        }
-        let components: Vec<_> = value.split('/').collect();
-        let sdk_application = components.len() == 6
-            && components[0].is_empty()
-            && components[1] == "auki"
-            && components[2] == "auth"
-            && components[3] == "1"
-            && is_application_component(components[4])
-            && is_version_component(components[5]);
-        let product_application = components.len() >= 3
-            && components[0].is_empty()
-            && components[1] != "auki"
-            && components[1..components.len() - 1]
-                .iter()
-                .all(|component| is_application_component(component))
-            && is_version_component(components.last().copied().unwrap_or_default());
-        if !sdk_application && !product_application {
-            return Err(Error::InvalidProtocol(
-                "expected a bounded /<namespace>/.../<version> ID; /auki/ is reserved for /auki/auth/1/<application>/<version>"
-                    .into(),
-            ));
-        }
-        let protocol = StreamProtocol::try_from_owned(value)
-            .map_err(|error| Error::InvalidProtocol(error.to_string()))?;
-        Ok(Self(protocol))
-    }
-}
-
-fn is_application_component(component: &str) -> bool {
-    if component.is_empty() || component.len() > APPLICATION_COMPONENT_MAX_BYTES {
-        return false;
-    }
-    let mut bytes = component.bytes();
-    let Some(first) = bytes.next() else {
-        return false;
-    };
-    first.is_ascii_lowercase()
-        && bytes.all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
-        })
-}
-
-fn is_version_component(component: &str) -> bool {
-    if component.is_empty() || component.len() > VERSION_COMPONENT_MAX_BYTES {
-        return false;
-    }
-    let bytes = component.strip_prefix('v').unwrap_or(component).as_bytes();
-    bytes.first().is_some_and(u8::is_ascii_digit)
-        && bytes.last().is_some_and(u8::is_ascii_digit)
-        && bytes
-            .iter()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'.' | b'-'))
-        && !bytes
-            .windows(2)
-            .any(|pair| !pair[0].is_ascii_digit() && !pair[1].is_ascii_digit())
-}
-
-/// The public byte-stream boundary. The inner libp2p stream is deliberately not
-/// exposed and this wrapper can only be constructed after mutual DDS auth.
-pub struct AuthenticatedStream {
-    inner: Stream,
-    remote: AuthenticatedPeer,
 }
 
 /// A circuit connection selected by one explicit relay route.
@@ -187,55 +96,6 @@ pub enum RelayTransportEvent {
     Canceled {
         handle: RelayReservationHandle,
     },
-}
-
-impl std::fmt::Debug for AuthenticatedStream {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("AuthenticatedStream")
-            .field("remote", &self.remote)
-            .finish_non_exhaustive()
-    }
-}
-
-impl AuthenticatedStream {
-    pub fn remote_peer(&self) -> &AuthenticatedPeer {
-        &self.remote
-    }
-}
-
-impl AsyncRead for AuthenticatedStream {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-        buffer: &mut [u8],
-    ) -> Poll<std::io::Result<usize>> {
-        Pin::new(&mut self.inner).poll_read(context, buffer)
-    }
-}
-
-impl AsyncWrite for AuthenticatedStream {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-        buffer: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
-        Pin::new(&mut self.inner).poll_write(context, buffer)
-    }
-
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.inner).poll_flush(context)
-    }
-
-    fn poll_close(
-        mut self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.inner).poll_close(context)
-    }
 }
 
 pub struct IncomingAuthenticatedStreams {
@@ -581,7 +441,7 @@ impl Node {
     ) -> P2PResult<IncomingAuthenticatedStreams> {
         let mut control = self.control.clone();
         let inner = control
-            .accept(protocol.0)
+            .accept(protocol.stream_protocol())
             .map_err(|_| Error::ProtocolAlreadyRegistered)?;
         Ok(IncomingAuthenticatedStreams {
             inner,
@@ -619,7 +479,7 @@ impl Node {
         let connection_id = self.connect_exact(remote_peer_id, addresses, None).await?;
         let stream = self
             .targeted_control
-            .open_stream(remote_peer_id, connection_id, protocol.0)
+            .open_stream(remote_peer_id, connection_id, protocol.stream_protocol())
             .await
             .map_err(Error::from)?;
         let stream = authenticate(
@@ -776,7 +636,11 @@ impl Node {
         }
         let stream = self
             .targeted_control
-            .open_stream(route.target_peer_id, route.connection_id, protocol.0)
+            .open_stream(
+                route.target_peer_id,
+                route.connection_id,
+                protocol.stream_protocol(),
+            )
             .await?;
         let stream = authenticate(
             stream,
@@ -896,39 +760,19 @@ impl Node {
         target_peer_id: PeerId,
         domain_id: Uuid,
     ) -> P2PResult<chrono::DateTime<Utc>> {
-        let token = self.tokens.snapshot().await.ok_or(Error::MissingToken)?;
-        let claims = self.verifier.verify(token.as_str())?;
-        ensure_token_peer(&claims, self.peer_id())?;
-        if !claims
-            .domain_ids
-            .iter()
-            .filter_map(|domain| Uuid::parse_str(domain).ok())
-            .any(|domain| domain == domain_id)
-        {
-            return Err(Error::RemoteDomainMismatch(domain_id.to_string()));
-        }
+        let authorization = source_admission::prepare_authorization(
+            self.peer_id(),
+            target_peer_id,
+            domain_id,
+            &self.tokens,
+            &self.verifier,
+        )
+        .await?;
         let mut stream = self
             .targeted_control
             .open_stream(relay_peer_id, relay_connection, source_admission::PROTOCOL)
             .await?;
-        let accepted_until = source_admission::authorize(
-            &mut stream,
-            source_admission::Request {
-                domain_id,
-                target_peer_id,
-                p2p_access_token: token.as_str(),
-            },
-            Utc::now,
-        )
-        .await?;
-        let token_expiration = i64::try_from(claims.exp)
-            .ok()
-            .and_then(|seconds| chrono::DateTime::<Utc>::from_timestamp(seconds, 0))
-            .ok_or(Error::RelayAdmissionMalformed)?;
-        if accepted_until > token_expiration {
-            return Err(Error::RelayAdmissionMalformed);
-        }
-        Ok(accepted_until)
+        source_admission::authorize_prepared(&mut stream, authorization, Utc::now).await
     }
 
     async fn send_unit_command(
@@ -2286,7 +2130,7 @@ async fn authenticate(
         requirements,
     )
     .await?;
-    Ok(AuthenticatedStream { inner, remote })
+    Ok(AuthenticatedStream::new(inner, remote))
 }
 
 #[cfg(test)]

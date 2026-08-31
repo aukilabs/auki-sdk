@@ -10,6 +10,7 @@ description = "DDS-authenticated Auki P2P runtime, exact-route transport, and re
 readme = "README.md"
 
 [dependencies]
+async-channel = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 futures-timer = { workspace = true }
@@ -19,6 +20,7 @@ libp2p-identity = { workspace = true }
 parking_lot = { workspace = true }
 p256 = "0.13.2"
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 web-time = { workspace = true }
@@ -27,7 +29,6 @@ web-time = { workspace = true }
 hickory-resolver = "0.25.2"
 libp2p = { workspace = true, features = ["tokio", "macros", "noise", "tcp", "yamux", "dns", "relay"] }
 libp2p-stream = { workspace = true }
-serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }

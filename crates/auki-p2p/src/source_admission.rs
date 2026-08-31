@@ -2,9 +2,11 @@ use std::{fmt, time::Duration};
 
 use chrono::{DateTime, Utc};
 use futures::{
+    future::{select, Either},
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    Future,
+    pin_mut, Future,
 };
+use futures_timer::Delay;
 use libp2p::{PeerId, StreamProtocol};
 use serde::{
     de::{self, MapAccess, Visitor},
@@ -13,7 +15,10 @@ use serde::{
 };
 use uuid::Uuid;
 
-use crate::{Error, Result};
+use crate::{
+    token::{ensure_token_peer, DdsTokenVerifier, SignedP2pCredential, TokenStore},
+    Error, Result,
+};
 
 pub(crate) const PROTOCOL: StreamProtocol = StreamProtocol::new("/auki-p2p/relay-auth/1");
 pub(crate) const REQUEST_MAX_BYTES: usize = 64 * 1024;
@@ -162,10 +167,76 @@ where
     Ok(accepted_until)
 }
 
+pub(crate) struct PreparedAuthorization {
+    domain_id: Uuid,
+    target_peer_id: PeerId,
+    token: SignedP2pCredential,
+    token_expiration: DateTime<Utc>,
+}
+
+pub(crate) async fn prepare_authorization(
+    local_peer_id: PeerId,
+    target_peer_id: PeerId,
+    domain_id: Uuid,
+    tokens: &TokenStore,
+    verifier: &DdsTokenVerifier,
+) -> Result<PreparedAuthorization> {
+    let token = tokens.snapshot().await.ok_or(Error::MissingToken)?;
+    let claims = verifier.verify(token.as_str())?;
+    ensure_token_peer(&claims, local_peer_id)?;
+    if !claims
+        .domain_ids
+        .iter()
+        .filter_map(|domain| Uuid::parse_str(domain).ok())
+        .any(|domain| domain == domain_id)
+    {
+        return Err(Error::RemoteDomainMismatch(domain_id.to_string()));
+    }
+    let token_expiration = i64::try_from(claims.exp)
+        .ok()
+        .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
+        .ok_or(Error::RelayAdmissionMalformed)?;
+
+    Ok(PreparedAuthorization {
+        domain_id,
+        target_peer_id,
+        token,
+        token_expiration,
+    })
+}
+
+pub(crate) async fn authorize_prepared<S, F>(
+    stream: &mut S,
+    prepared: PreparedAuthorization,
+    now: F,
+) -> Result<DateTime<Utc>>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    F: FnOnce() -> DateTime<Utc>,
+{
+    let accepted_until = authorize(
+        stream,
+        Request {
+            domain_id: prepared.domain_id,
+            target_peer_id: prepared.target_peer_id,
+            p2p_access_token: prepared.token.as_str(),
+        },
+        now,
+    )
+    .await?;
+    if accepted_until > prepared.token_expiration {
+        return Err(Error::RelayAdmissionMalformed);
+    }
+    Ok(accepted_until)
+}
+
 async fn timeout<T>(duration: Duration, future: impl Future<Output = Result<T>>) -> Result<T> {
-    tokio::time::timeout(duration, future)
-        .await
-        .map_err(|_| Error::RelayAdmissionTimeout)?
+    let delay = Delay::new(duration);
+    pin_mut!(future, delay);
+    match select(future, delay).await {
+        Either::Left((result, _)) => result,
+        Either::Right(((), _)) => Err(Error::RelayAdmissionTimeout),
+    }
 }
 
 async fn write_frame<S>(stream: &mut S, payload: &[u8], maximum: usize) -> Result<()>

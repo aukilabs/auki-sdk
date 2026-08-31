@@ -7,6 +7,10 @@
 //! fetch credentials or understand tasks, datasets, or machine-auth flows.
 
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+mod application_protocol;
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+mod authenticated_stream;
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod authentication;
 #[cfg(not(target_arch = "wasm32"))]
 mod authority;
@@ -22,27 +26,28 @@ mod identity_store;
 mod observation;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod relay;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod relay_client;
 #[cfg(not(target_arch = "wasm32"))]
 mod routing;
 #[cfg(not(target_arch = "wasm32"))]
 mod runtime;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod source_admission;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod targeted_stream;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod token;
 #[cfg(not(target_arch = "wasm32"))]
 mod transport;
 
+pub use application_protocol::ApplicationProtocol;
+pub use authenticated_stream::AuthenticatedStream;
 pub use authentication::{AuthenticatedPeer, SessionRequirements};
 #[cfg(not(target_arch = "wasm32"))]
 pub use authority::{DomainAuthority, P2pCredentialError, P2pCredentialResult};
 pub use error::{Error, Result};
 pub use identity::{Identity, PeerIdentityProof};
-#[cfg(not(target_arch = "wasm32"))]
 pub use libp2p::{multiaddr::Protocol, swarm::ConnectionId, Multiaddr};
 pub use libp2p_identity::PeerId;
 #[cfg(not(target_arch = "wasm32"))]
@@ -64,7 +69,6 @@ pub use routing::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use runtime::{AuthenticatedRouteStream, ExactRoute, ProtocolServer, ProtocolSpec};
-#[cfg(not(target_arch = "wasm32"))]
 pub use targeted_stream::TargetedStreamError;
 pub use token::{
     DdsTokenVerifier, DdsVerificationKeys, P2PAccessClaims, PeerRole, SignedApplicationMetadata,
@@ -76,7 +80,4 @@ pub use token::{
     P2P_TOKEN_TYPE,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use transport::{
-    ApplicationProtocol, AuthenticatedStream, IncomingAuthenticatedStreams, Node, RelayRouteHandle,
-    RelayTransportEvent,
-};
+pub use transport::{IncomingAuthenticatedStreams, Node, RelayRouteHandle, RelayTransportEvent};

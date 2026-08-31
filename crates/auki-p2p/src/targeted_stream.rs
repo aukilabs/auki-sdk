@@ -8,6 +8,7 @@
 
 use std::{
     collections::{HashMap, VecDeque},
+    pin::Pin as StdPin,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -15,6 +16,8 @@ use std::{
     task::{Context, Poll},
 };
 
+use async_channel::{Receiver, Sender};
+use futures::{channel::oneshot, Stream as FuturesStream};
 use libp2p::{
     core::{
         transport::PortUse,
@@ -29,7 +32,6 @@ use libp2p::{
     },
     Multiaddr, PeerId, Stream, StreamProtocol,
 };
-use tokio::sync::{mpsc, oneshot};
 
 const COMMAND_CAPACITY: usize = 64;
 
@@ -103,7 +105,7 @@ pub enum TargetedStreamError {
 /// correlated independently even if negotiations complete out of order.
 #[derive(Clone)]
 pub struct TargetedStreamControl {
-    commands: mpsc::Sender<OpenCommand>,
+    commands: Sender<OpenCommand>,
     next_request_id: Arc<AtomicU64>,
 }
 
@@ -148,8 +150,8 @@ impl TargetedStreamControl {
 
 /// A behaviour that opens outbound substreams on an exact connection handler.
 pub struct TargetedStreamBehaviour {
-    command_sender: mpsc::Sender<OpenCommand>,
-    commands: mpsc::Receiver<OpenCommand>,
+    command_sender: Sender<OpenCommand>,
+    commands: StdPin<Box<Receiver<OpenCommand>>>,
     next_request_id: Arc<AtomicU64>,
     connections: HashMap<ConnectionId, PeerId>,
     pending: HashMap<RequestId, PendingOpen>,
@@ -157,10 +159,10 @@ pub struct TargetedStreamBehaviour {
 
 impl TargetedStreamBehaviour {
     pub fn new() -> Self {
-        let (command_sender, commands) = mpsc::channel(COMMAND_CAPACITY);
+        let (command_sender, commands) = async_channel::bounded(COMMAND_CAPACITY);
         Self {
             command_sender,
-            commands,
+            commands: Box::pin(commands),
             next_request_id: Arc::new(AtomicU64::new(1)),
             connections: HashMap::new(),
             pending: HashMap::new(),
@@ -175,7 +177,7 @@ impl TargetedStreamBehaviour {
     }
 
     fn handle_open(&mut self, command: OpenCommand) -> Option<OpenRequest> {
-        if command.response.is_closed() {
+        if command.response.is_canceled() {
             return None;
         }
 
@@ -341,7 +343,7 @@ impl NetworkBehaviour for TargetedStreamBehaviour {
         cx: &mut Context<'_>,
     ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
         loop {
-            match self.commands.poll_recv(cx) {
+            match self.commands.as_mut().poll_next(cx) {
                 Poll::Ready(Some(command)) => {
                     let peer_id = command.peer_id;
                     let connection_id = command.connection_id;
@@ -476,9 +478,13 @@ impl ConnectionHandler for TargetedStreamHandler {
 
 #[cfg(test)]
 mod tests {
-    use std::{future::Future, pin::Pin};
+    use std::{
+        future::Future,
+        pin::Pin,
+        sync::atomic::{AtomicBool, Ordering as AtomicOrdering},
+    };
 
-    use futures::task::noop_waker_ref;
+    use futures::task::{noop_waker_ref, waker, ArcWake};
     use libp2p::{
         core::{connection::ConnectedPoint, upgrade::UpgradeInfo},
         swarm::{behaviour::ConnectionEstablished, StreamUpgradeError},
@@ -531,6 +537,86 @@ mod tests {
             cause: None,
             remaining_established,
         }));
+    }
+
+    #[test]
+    fn command_queue_keeps_its_declared_strict_bound() {
+        let behaviour = TargetedStreamBehaviour::new();
+        let remote = peer();
+        let connection_id = ConnectionId::new_unchecked(10);
+        let mut receivers = Vec::with_capacity(COMMAND_CAPACITY);
+
+        for request_id in 0..COMMAND_CAPACITY {
+            let (response, receiver) = oneshot::channel();
+            let command = OpenCommand {
+                request_id: RequestId(request_id as u64),
+                peer_id: remote,
+                connection_id,
+                protocol: StreamProtocol::new("/auki-p2p/capacity/1"),
+                response,
+            };
+            assert!(behaviour.command_sender.try_send(command).is_ok());
+            receivers.push(receiver);
+        }
+
+        let (response, _receiver) = oneshot::channel();
+        let overflow = OpenCommand {
+            request_id: RequestId(COMMAND_CAPACITY as u64),
+            peer_id: remote,
+            connection_id,
+            protocol: StreamProtocol::new("/auki-p2p/capacity/1"),
+            response,
+        };
+        assert!(matches!(
+            behaviour.command_sender.try_send(overflow),
+            Err(async_channel::TrySendError::Full(_))
+        ));
+        assert_eq!(
+            behaviour.commands.as_ref().get_ref().len(),
+            COMMAND_CAPACITY
+        );
+    }
+
+    #[test]
+    fn idle_behaviour_is_woken_when_a_command_arrives() {
+        struct WakeFlag(AtomicBool);
+
+        impl ArcWake for WakeFlag {
+            fn wake_by_ref(flag: &Arc<Self>) {
+                flag.0.store(true, AtomicOrdering::SeqCst);
+            }
+        }
+
+        let mut behaviour = TargetedStreamBehaviour::new();
+        let remote = peer();
+        let connection_id = ConnectionId::new_unchecked(11);
+        establish(&mut behaviour, remote, connection_id);
+
+        let flag = Arc::new(WakeFlag(AtomicBool::new(false)));
+        let waker = waker(flag.clone());
+        let mut cx = Context::from_waker(&waker);
+        assert!(behaviour.poll(&mut cx).is_pending());
+
+        let (response, _receiver) = oneshot::channel();
+        assert!(behaviour
+            .command_sender
+            .try_send(OpenCommand {
+                request_id: RequestId(1),
+                peer_id: remote,
+                connection_id,
+                protocol: StreamProtocol::new("/auki-p2p/wakeup/1"),
+                response,
+            })
+            .is_ok());
+        assert!(flag.0.load(AtomicOrdering::SeqCst));
+        assert!(matches!(
+            behaviour.poll(&mut cx),
+            Poll::Ready(ToSwarm::NotifyHandler {
+                peer_id,
+                handler: NotifyHandler::One(actual_connection_id),
+                ..
+            }) if peer_id == remote && actual_connection_id == connection_id
+        ));
     }
 
     #[test]

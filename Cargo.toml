@@ -46,6 +46,7 @@ authors = ["Auki Labs Limited"]
 
 [workspace.dependencies]
 anyhow = "1.0.95"
+async-channel = "2.5.0"
 async-trait = "0.1.88"
 base64 = "0.22.1"
 chrono = { version = "0.4.38", features = ["serde"] }

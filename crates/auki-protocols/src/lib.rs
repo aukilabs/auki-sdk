@@ -9,6 +9,16 @@
 
 pub mod ids;
 
+#[cfg(any(
+    feature = "blob-endpoint",
+    feature = "catalog-endpoint",
+    feature = "info-endpoint",
+    feature = "message-endpoint",
+    feature = "registry-endpoint",
+    feature = "stream-endpoint",
+))]
+mod endpoint_support;
+
 #[cfg(feature = "blob")]
 pub mod blob;
 #[cfg(feature = "catalog")]

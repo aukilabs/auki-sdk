@@ -9,17 +9,15 @@
 
 use std::{fmt, future::Future, pin::Pin, time::Duration};
 
-#[cfg(target_arch = "wasm32")]
-use std::rc::Rc;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc;
-
 use auki_sdk::{
     AukiPeerProtocols, AukiProtocolError, AukiProtocolRegistration, AukiProtocolSpec,
     AukiProtocolStream, AuthenticatedPeer, AuthenticatedRouteStream, Multiaddr, PeerId,
 };
-use futures::{AsyncRead, AsyncWrite, AsyncWriteExt, FutureExt, pin_mut};
-use futures_timer::Delay;
+use futures::{AsyncRead, AsyncWrite, AsyncWriteExt};
+
+use crate::endpoint_support::{
+    clone_shared, deadline_after as support_deadline_after, prefer_primary, share,
+};
 
 use super::{
     BlobChunkMeta, BlobRequest, BlobResponse, BlobsProtocolError, ID, MAX_BLOB_BYTES,
@@ -129,11 +127,6 @@ pub trait BlobProvider: 'static {
     ) -> BlobProviderFuture<'a>;
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-type SharedProvider<P> = Arc<P>;
-#[cfg(target_arch = "wasm32")]
-type SharedProvider<P> = Rc<P>;
-
 /// Cloneable outbound half of the Blob v1 endpoint.
 #[derive(Clone)]
 pub struct BlobClient {
@@ -191,9 +184,9 @@ impl BlobEndpoint {
     where
         P: BlobProvider,
     {
-        let provider = SharedProvider::new(provider);
+        let provider = share(provider);
         let registration = protocols.register(blob_protocol_spec()?, move |mut stream| {
-            let provider = SharedProvider::clone(&provider);
+            let provider = clone_shared(&provider);
             async move {
                 let _ = serve_and_close(&mut stream, provider.as_ref()).await;
             }
@@ -530,20 +523,7 @@ async fn deadline_after<T>(
     duration: Duration,
     future: impl Future<Output = T>,
 ) -> Result<T, BlobEndpointError> {
-    let work = future.fuse();
-    let timer = Delay::new(duration).fuse();
-    pin_mut!(work, timer);
-    futures::select_biased! {
-        result = work => Ok(result),
-        () = timer => Err(BlobEndpointError::Timeout(operation)),
-    }
-}
-
-fn prefer_primary<T, E>(primary: Result<T, E>, cleanup: Result<(), E>) -> Result<T, E> {
-    match primary {
-        Err(error) => Err(error),
-        Ok(value) => cleanup.map(|()| value),
-    }
+    support_deadline_after(duration, future, || BlobEndpointError::Timeout(operation)).await
 }
 
 /// One fixed-deadline Blob v1 operation.

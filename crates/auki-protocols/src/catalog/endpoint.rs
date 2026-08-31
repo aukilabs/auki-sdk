@@ -8,17 +8,13 @@
 
 use std::{fmt, future::Future, time::Duration};
 
-#[cfg(target_arch = "wasm32")]
-use std::rc::Rc;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc;
-
 use auki_sdk::{
     AukiPeerProtocols, AukiProtocolError, AukiProtocolRegistration, AukiProtocolSpec,
     AukiProtocolStream, AuthenticatedPeer, AuthenticatedRouteStream, Multiaddr, PeerId,
 };
-use futures::{AsyncWriteExt, FutureExt, pin_mut};
-use futures_timer::Delay;
+use futures::AsyncWriteExt;
+
+use crate::endpoint_support::{Shared, clone_shared, deadline_after, prefer_primary, share};
 
 use super::{v3, v4};
 
@@ -28,10 +24,7 @@ pub const CATALOG_MAX_CONCURRENCY: usize = 16;
 /// Fixed deadline for opening, exchanging, or closing one Catalog stream.
 pub const CATALOG_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[cfg(not(target_arch = "wasm32"))]
-type ProviderHandle = Arc<dyn CatalogProvider>;
-#[cfg(target_arch = "wasm32")]
-type ProviderHandle = Rc<dyn CatalogProvider>;
+type ProviderHandle = Shared<dyn CatalogProvider>;
 
 /// Application-owned source of currently available resources.
 ///
@@ -193,19 +186,19 @@ impl CatalogEndpoint {
         P: CatalogProvider,
     {
         let local_peer_id = protocols.peer_id();
-        let provider = share_provider(provider);
+        let provider: ProviderHandle = share(provider);
 
-        let resources_provider = clone_provider(&provider);
+        let resources_provider = clone_shared(&provider);
         let resources_registration =
             protocols.register(resources_protocol_spec()?, move |mut stream| {
-                let provider = clone_provider(&resources_provider);
+                let provider = clone_shared(&resources_provider);
                 async move {
                     let _ = serve_resources(&mut stream, provider.as_ref(), local_peer_id).await;
                 }
             })?;
 
         let maps_registration = protocols.register(maps_protocol_spec()?, move |mut stream| {
-            let provider = clone_provider(&provider);
+            let provider = clone_shared(&provider);
             async move {
                 let _ = serve_maps(&mut stream, provider.as_ref()).await;
             }
@@ -400,34 +393,10 @@ async fn deadline<T>(
     operation: CatalogOperation,
     future: impl Future<Output = T>,
 ) -> Result<T, CatalogEndpointError> {
-    let work = future.fuse();
-    let timer = Delay::new(CATALOG_OPERATION_TIMEOUT).fuse();
-    pin_mut!(work, timer);
-    futures::select_biased! {
-        result = work => Ok(result),
-        () = timer => Err(CatalogEndpointError::Timeout(operation)),
-    }
-}
-
-fn prefer_primary<T, E>(primary: Result<T, E>, cleanup: Result<(), E>) -> Result<T, E> {
-    match primary {
-        Err(error) => Err(error),
-        Ok(value) => cleanup.map(|()| value),
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn share_provider<P: CatalogProvider>(provider: P) -> ProviderHandle {
-    Arc::new(provider)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn share_provider<P: CatalogProvider>(provider: P) -> ProviderHandle {
-    Rc::new(provider)
-}
-
-fn clone_provider(provider: &ProviderHandle) -> ProviderHandle {
-    provider.clone()
+    deadline_after(CATALOG_OPERATION_TIMEOUT, future, || {
+        CatalogEndpointError::Timeout(operation)
+    })
+    .await
 }
 
 /// One bounded Catalog endpoint operation.

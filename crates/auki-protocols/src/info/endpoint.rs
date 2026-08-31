@@ -2,17 +2,13 @@
 
 use std::{fmt, future::Future, time::Duration};
 
-#[cfg(target_arch = "wasm32")]
-use std::rc::Rc;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc;
-
 use auki_sdk::{
     AukiPeerProtocols, AukiProtocolError, AukiProtocolRegistration, AukiProtocolSpec,
     AuthenticatedPeer, AuthenticatedRouteStream, Multiaddr, PeerId,
 };
-use futures::{AsyncWriteExt, FutureExt, pin_mut};
-use futures_timer::Delay;
+use futures::AsyncWriteExt;
+
+use crate::endpoint_support::{Shared, clone_shared, deadline_after, prefer_primary, share};
 
 use super::v1::{
     AuthenticatedParticipantInfo, ID, InfoProtocolError, MAX_INFO_FRAME_BYTES,
@@ -26,10 +22,7 @@ pub const INFO_MAX_CONCURRENCY: usize = 16;
 /// Fixed deadline for each open, exchange, and close operation.
 pub const INFO_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[cfg(not(target_arch = "wasm32"))]
-type ProviderHandle = Arc<dyn InfoProvider>;
-#[cfg(target_arch = "wasm32")]
-type ProviderHandle = Rc<dyn InfoProvider>;
+type ProviderHandle = Shared<dyn InfoProvider>;
 
 /// Application-owned source of participant metadata.
 ///
@@ -136,9 +129,9 @@ impl InfoEndpoint {
         P: InfoProvider,
     {
         let local_peer_id = protocols.peer_id();
-        let provider = share_provider(provider);
+        let provider: ProviderHandle = share(provider);
         let registration = protocols.register(info_protocol_spec()?, move |mut stream| {
-            let provider = clone_provider(&provider);
+            let provider = clone_shared(&provider);
             async move {
                 let requester = stream.remote_peer().clone();
                 let exchange = deadline(InfoOperation::Exchange, async {
@@ -212,13 +205,10 @@ async fn deadline<T>(
     operation: InfoOperation,
     future: impl Future<Output = T>,
 ) -> Result<T, InfoEndpointError> {
-    let work = future.fuse();
-    let timer = Delay::new(INFO_OPERATION_TIMEOUT).fuse();
-    pin_mut!(work, timer);
-    futures::select_biased! {
-        result = work => Ok(result),
-        () = timer => Err(InfoEndpointError::Timeout(operation)),
-    }
+    deadline_after(INFO_OPERATION_TIMEOUT, future, || {
+        InfoEndpointError::Timeout(operation)
+    })
+    .await
 }
 
 fn ensure_peer_id(
@@ -233,27 +223,6 @@ fn ensure_peer_id(
             actual: Box::new(info.peer_id),
         })
     }
-}
-
-fn prefer_primary<T, E>(primary: Result<T, E>, cleanup: Result<(), E>) -> Result<T, E> {
-    match primary {
-        Err(error) => Err(error),
-        Ok(value) => cleanup.map(|()| value),
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn share_provider<P: InfoProvider>(provider: P) -> ProviderHandle {
-    Arc::new(provider)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn share_provider<P: InfoProvider>(provider: P) -> ProviderHandle {
-    Rc::new(provider)
-}
-
-fn clone_provider(provider: &ProviderHandle) -> ProviderHandle {
-    provider.clone()
 }
 
 /// One bounded participant-info endpoint operation.

@@ -6,11 +6,6 @@
 
 use std::{fmt, future::Future, time::Duration};
 
-#[cfg(target_arch = "wasm32")]
-use std::rc::Rc;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc;
-
 use auki_registry::{
     ClockRegistryEntry, DetectorRegistryEntry, DeviceModelRegistryEntry, FrameRegistryEntry,
     MapRegistryEntry, SensorRegistryEntry,
@@ -19,9 +14,10 @@ use auki_sdk::{
     AukiPeerProtocols, AukiProtocolError, AukiProtocolRegistration, AukiProtocolSpec,
     AuthenticatedPeer, AuthenticatedRouteStream, Multiaddr, PeerId,
 };
-use futures::{AsyncWriteExt, FutureExt, pin_mut};
-use futures_timer::Delay;
+use futures::AsyncWriteExt;
 use serde::de::DeserializeOwned;
+
+use crate::endpoint_support::{Shared, clone_shared, deadline_after, prefer_primary, share};
 
 use super::v3::{
     ID, MAX_REGISTRIES_FRAME_BYTES, RegistriesProtocolError, RegistryEntryEnvelope, RegistryKind,
@@ -35,10 +31,7 @@ pub const REGISTRY_MAX_CONCURRENCY: usize = 16;
 /// Fixed deadline for each open, exchange, and close operation.
 pub const REGISTRY_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 
-#[cfg(not(target_arch = "wasm32"))]
-type ProviderHandle = Arc<dyn RegistryProvider>;
-#[cfg(target_arch = "wasm32")]
-type ProviderHandle = Rc<dyn RegistryProvider>;
+type ProviderHandle = Shared<dyn RegistryProvider>;
 
 /// Application-owned source of Registry v3 responses.
 ///
@@ -280,9 +273,9 @@ impl RegistryEndpoint {
     where
         P: RegistryProvider,
     {
-        let provider = share_provider(provider);
+        let provider: ProviderHandle = share(provider);
         let registration = protocols.register(registry_protocol_spec()?, move |mut stream| {
-            let provider = clone_provider(&provider);
+            let provider = clone_shared(&provider);
             async move {
                 let requester = stream.remote_peer().clone();
                 let exchange = deadline(RegistryOperation::Exchange, async {
@@ -386,13 +379,10 @@ async fn deadline<T>(
     operation: RegistryOperation,
     future: impl Future<Output = T>,
 ) -> Result<T, RegistryEndpointError> {
-    let work = future.fuse();
-    let timer = Delay::new(REGISTRY_OPERATION_TIMEOUT).fuse();
-    pin_mut!(work, timer);
-    futures::select_biased! {
-        result = work => Ok(result),
-        () = timer => Err(RegistryEndpointError::Timeout(operation)),
-    }
+    deadline_after(REGISTRY_OPERATION_TIMEOUT, future, || {
+        RegistryEndpointError::Timeout(operation)
+    })
+    .await
 }
 
 fn validate_request(request: &RegistryRequest) -> Result<(), RegistryEndpointError> {
@@ -628,27 +618,6 @@ impl TypedRegistryEntry for DeviceModelRegistryEntry {
     fn validate_entry(&self) -> Result<(), String> {
         self.validate().map_err(|error| error.to_string())
     }
-}
-
-fn prefer_primary<T, E>(primary: Result<T, E>, cleanup: Result<(), E>) -> Result<T, E> {
-    match primary {
-        Err(error) => Err(error),
-        Ok(value) => cleanup.map(|()| value),
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn share_provider<P: RegistryProvider>(provider: P) -> ProviderHandle {
-    Arc::new(provider)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn share_provider<P: RegistryProvider>(provider: P) -> ProviderHandle {
-    Rc::new(provider)
-}
-
-fn clone_provider(provider: &ProviderHandle) -> ProviderHandle {
-    provider.clone()
 }
 
 /// One bounded Registry endpoint operation.

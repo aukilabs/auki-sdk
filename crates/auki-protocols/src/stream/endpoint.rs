@@ -10,11 +10,6 @@
 
 use std::{fmt, pin::Pin, time::Duration};
 
-#[cfg(target_arch = "wasm32")]
-use std::rc::Rc;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc;
-
 use auki_datatypes::{detection::DetectionFrame, map::MapUpdate, scalar};
 use auki_sdk::{
     AukiPeerProtocols, AukiProtocolError, AukiProtocolRegistration, AukiProtocolSpec,
@@ -23,8 +18,11 @@ use auki_sdk::{
 use futures::{
     AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, FutureExt, Stream, StreamExt, pin_mut,
 };
-use futures_timer::Delay;
 use prost::Message;
+
+use crate::endpoint_support::{
+    clone_shared, deadline_after as support_deadline_after, prefer_primary, share,
+};
 
 use super::v2::{
     CameraFrame, DeclineReason, EndReason, ID, MAX_FRAME_BYTES, StreamEntry as WireStreamEntry,
@@ -189,11 +187,6 @@ where
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-type SharedProvider<P> = Arc<P>;
-#[cfg(target_arch = "wasm32")]
-type SharedProvider<P> = Rc<P>;
-
 /// Provider for peers that consume Stream v2 but serve no local sources.
 pub fn decline_all_streams() -> impl StreamProvider {
     |_remote_peer: &AuthenticatedPeer, _request: StreamRequest| StreamDispatch::Decline {
@@ -290,9 +283,9 @@ impl StreamEndpoint {
     where
         P: StreamProvider,
     {
-        let provider = SharedProvider::new(provider);
+        let provider = share(provider);
         let registration = protocols.register(stream_protocol_spec()?, move |mut stream| {
-            let provider = SharedProvider::clone(&provider);
+            let provider = clone_shared(&provider);
             async move {
                 let _ = serve_and_close(&mut stream, provider.as_ref()).await;
             }
@@ -691,20 +684,7 @@ async fn deadline_after<T>(
     duration: Duration,
     future: impl std::future::Future<Output = T>,
 ) -> Result<T, StreamEndpointError> {
-    let work = future.fuse();
-    let timer = Delay::new(duration).fuse();
-    pin_mut!(work, timer);
-    futures::select_biased! {
-        result = work => Ok(result),
-        () = timer => Err(StreamEndpointError::Timeout(operation)),
-    }
-}
-
-fn prefer_primary<T, E>(primary: Result<T, E>, cleanup: Result<(), E>) -> Result<T, E> {
-    match primary {
-        Err(error) => Err(error),
-        Ok(value) => cleanup.map(|()| value),
-    }
+    support_deadline_after(duration, future, || StreamEndpointError::Timeout(operation)).await
 }
 
 /// One fixed-deadline Stream v2 operation.

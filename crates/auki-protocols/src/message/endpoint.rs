@@ -27,8 +27,9 @@ use auki_sdk::{
 use futures::{
     AsyncRead, AsyncWrite, AsyncWriteExt, FutureExt, lock::Mutex as AsyncMutex, pin_mut,
 };
-use futures_timer::Delay;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+use crate::endpoint_support::{deadline_after, prefer_primary};
 
 use super::{
     MessageChannelResource, MessageChannelResourceError,
@@ -898,20 +899,7 @@ async fn deadline<T>(
     timeout: Duration,
     future: impl Future<Output = T>,
 ) -> Result<T, MessageEndpointError> {
-    let work = future.fuse();
-    let timer = Delay::new(timeout).fuse();
-    pin_mut!(work, timer);
-    futures::select_biased! {
-        result = work => Ok(result),
-        () = timer => Err(MessageEndpointError::Timeout(operation)),
-    }
-}
-
-fn prefer_primary<T, E>(primary: Result<T, E>, cleanup: Result<(), E>) -> Result<T, E> {
-    match primary {
-        Err(error) => Err(error),
-        Ok(value) => cleanup.map(|()| value),
-    }
+    deadline_after(timeout, future, || MessageEndpointError::Timeout(operation)).await
 }
 
 fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

@@ -86,9 +86,10 @@ The Auki protocol is built around five questions any node should be able to answ
   with their target transport—for example TCP from native Rust and WSS from a
   browser—and the authenticated stream verifies the expected Peer ID and Domain.
 - **Direct-only may be outbound-only.** A native `direct_only()` peer can start
-  with no listeners or advertised routes and dial other peers. A peer that must
-  accept inbound direct connections supplies a listener and a matching
-  externally reachable advertised route.
+  with no listener or local route and dial other peers. Inbound direct
+  connections require a listener plus a dialable route shared by the
+  application. Configure an advertised direct route only when the application
+  publishes it from the SDK's local route catalog.
 - **Discovery and route distribution are not implemented yet.** The SDK exposes
   confirmed local routes, but it does not automatically publish them to other
   peers or discover remote peers. Applications currently exchange the remote

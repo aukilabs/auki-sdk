@@ -25,26 +25,29 @@ Native applications may authenticate a User or a trusted App. They normally
 persist one identity and reuse it on every launch:
 
 ```rust,no_run
+use std::env;
+
 use auki_auth::{AuthClient, AuthEnvironment, Credentials, DomainSelection};
 use auki_sdk::{AukiPeer, AukiPeerConfig, Identity};
 
-# async fn run() -> Result<(), Box<dyn std::error::Error>> {
-let identity = Identity::load_or_create("./state/auki-peer.identity")?;
-let session = AuthClient::new(AuthEnvironment::dev())?
-    .authenticate(Credentials::user_password(
-        "developer@example.com",
-        password_from_secret_store,
-    ))
-    .await?;
-let prepared = session
-    .authorize_peer(DomainSelection::new(domain_id), &identity.proof())
-    .await?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let email = env::var("AUKI_EMAIL")?;
+    let password = env::var("AUKI_PASSWORD")?;
+    let domain_id = env::var("AUKI_DOMAIN_ID")?.parse()?;
+    let identity = Identity::load_or_create("./state/auki-peer.identity")?;
+    let session = AuthClient::new(AuthEnvironment::dev())?
+        .authenticate(Credentials::user_password(email, password))
+        .await?;
+    let prepared = session
+        .authorize_peer(DomainSelection::new(domain_id), &identity.proof())
+        .await?;
 
-let peer = AukiPeer::start(identity, prepared, AukiPeerConfig::dev()).await?;
-// Mount product protocols through peer.protocols().
-peer.shutdown().await?;
-# Ok(())
-# }
+    let peer = AukiPeer::start(identity, prepared, AukiPeerConfig::dev()).await?;
+    // Mount product protocols through peer.protocols().
+    peer.shutdown().await?;
+    Ok(())
+}
 ```
 
 `authorize_peer` verifies that the authenticated principal can currently access
@@ -59,14 +62,20 @@ For a trusted native or headless application, only the authentication input
 changes:
 
 ```rust,no_run
-let client = auki_auth::AuthClient::new(auki_auth::AuthEnvironment::dev())?;
-let session = client
-    .authenticate(auki_auth::Credentials::app(
-        app_access_key,
-        app_secret_from_secret_store,
-    ))
-    .await?;
-# Ok::<(), Box<dyn std::error::Error>>(())
+use std::env;
+
+use auki_auth::{AuthClient, AuthEnvironment, Credentials};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let app_access_key = env::var("AUKI_APP_ACCESS_KEY")?;
+    let app_secret = env::var("AUKI_APP_SECRET")?;
+    let client = AuthClient::new(AuthEnvironment::dev())?;
+    let _session = client
+        .authenticate(Credentials::app(app_access_key, app_secret))
+        .await?;
+    Ok(())
+}
 ```
 
 Never embed an App secret in a browser, mobile binary, public repository,

@@ -53,7 +53,9 @@ booking, route state, supervision, fencing, and ordered shutdown. Native hosts
 may explicitly choose `AukiPeerConfig::direct_only()`, which makes no relay
 booking calls. A direct-only peer may use zero listeners and advertised routes
 for outbound-only operation. Inbound direct reachability requires a listener
-and a matching externally reachable advertised route.
+plus a dialable route shared by the application. Configure an advertised direct
+route only when the application publishes it from the SDK's local route
+catalog.
 
 ### Web
 

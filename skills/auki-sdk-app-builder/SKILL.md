@@ -66,9 +66,10 @@ still owns transport, relay, protocols, fencing, status, and shutdown. Keep
 task scheduling, heartbeat, and product safety policy in the host.
 
 Native hosts may explicitly choose `AukiPeerConfig::direct_only()` when they do
-not want DMS relay allocation. Provide listeners and advertised direct routes
-when inbound direct reachability is required. Browser peers have no direct-only
-mode.
+not want DMS relay allocation. Inbound direct reachability needs a listener plus
+a dialable route shared by the application. Configure an advertised direct
+route only when the application publishes from the SDK's local route catalog;
+outbound-only peers need neither. Browser peers have no direct-only mode.
 
 ## Routes, peers, and authority
 

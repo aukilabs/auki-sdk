@@ -22,15 +22,12 @@
 //!         "password-from-a-secret-store",
 //!     ))
 //!     .await?;
-//! let selected = session
-//!     .accessible_domains()
-//!     .await?
-//!     .into_iter()
-//!     .next()
-//!     .ok_or("no accessible Domain")?;
+//! // Select the UUID supplied by the caller or UI; never silently choose the
+//! // first accessible Domain.
+//! let domain_id = std::env::var("AUKI_DOMAIN_ID")?.parse()?;
 //! let prepared = session
 //!     .authorize_peer(
-//!         DomainSelection::new(selected.domain.id),
+//!         DomainSelection::new(domain_id),
 //!         &identity.proof(),
 //!     )
 //!     .await?;

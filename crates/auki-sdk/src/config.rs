@@ -218,11 +218,14 @@ impl AukiPeerConfig {
         Ok(self)
     }
 
-    /// Replace local direct routes advertised to other peers.
+    /// Replace direct routes exposed through the local route catalog.
     ///
-    /// These are publication addresses, not listeners. They must use the
-    /// exact `ip|dns/tcp[/p2p]` grammar and a non-zero port. If a terminal Peer
-    /// ID is supplied, the runtime also verifies it matches its local identity.
+    /// The runtime does not distribute these routes automatically. Configure
+    /// them only when the application reads the local route catalog and shares
+    /// those values itself. They are publication addresses, not listeners, and
+    /// must use the exact `ip|dns/tcp[/p2p]` grammar and a non-zero port. If a
+    /// terminal Peer ID is supplied, the runtime also verifies it matches its
+    /// local identity.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn with_advertised_direct_routes(
         mut self,
@@ -291,10 +294,11 @@ impl AukiPeerConfig {
     /// Relay-backed reachability is required by default. This is the sole
     /// opt-out and guarantees the runtime makes no relay-booking DMS calls.
     /// Zero listeners and advertised routes are valid for outbound-only
-    /// operation. Accepting inbound direct connections requires a listener and
-    /// a matching externally reachable advertised route. Call this before
-    /// configuring a direct-route set that uses capacity otherwise reserved
-    /// for the default relay.
+    /// operation. Accepting inbound direct connections requires a listener plus
+    /// a dialable route distributed by the application. Configure an advertised
+    /// direct route only when the application uses the local route catalog as
+    /// that distribution source. Call this before configuring a direct-route
+    /// set that uses capacity otherwise reserved for the default relay.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn direct_only(mut self) -> Self {
         self.relay = None;
@@ -326,7 +330,7 @@ impl AukiPeerConfig {
         &self.listen_addresses
     }
 
-    /// Local direct routes eligible for advertisement.
+    /// Local direct routes exposed for caller-managed publication.
     pub fn advertised_direct_routes(&self) -> &[Multiaddr] {
         &self.advertised_direct_routes
     }

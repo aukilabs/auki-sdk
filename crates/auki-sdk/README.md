@@ -11,9 +11,11 @@ after at least one relay reservation has produced a confirmed publication
 route. On native targets, `AukiPeerConfig::direct_only()` is the explicit
 opt-out and makes no DMS booking calls. Zero listeners and advertised routes
 are valid for an outbound-only direct peer; accepting inbound direct
-connections requires a listener and a matching externally reachable route.
-Browser peers always own one WSS relay reservation and use a
-session-ephemeral identity supplied by the application.
+connections requires a listener plus a dialable route shared by the
+application. Configure an advertised direct route only when the application
+uses the SDK's local route catalog as that sharing source. Browser peers always
+own one WSS relay reservation and use a session-ephemeral identity supplied by
+the application.
 
 Native and browser targets expose the same application-facing
 `AukiPeer`/`AukiPeerConfig` and

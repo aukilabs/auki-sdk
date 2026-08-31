@@ -77,16 +77,25 @@ let prepared = session
     .await?;
 let peer = AukiPeer::start(identity, prepared, AukiPeerConfig::dev()).await?;
 
-let endpoint = MyEndpoint::mount(peer.protocols())?;
-// Run product work against an expected Peer ID and exact route.
-let endpoint_cleanup = endpoint.close().await;
+let operation = async {
+    let endpoint = MyEndpoint::mount(peer.protocols())?;
+    let product_result = run_product(&endpoint).await;
+    let endpoint_cleanup = endpoint.close().await;
+
+    product_result?;
+    endpoint_cleanup?;
+    Ok::<_, anyhow::Error>(())
+}
+.await;
+
 let peer_cleanup = peer.shutdown().await;
-endpoint_cleanup?;
+operation?;
 peer_cleanup?;
 ```
 
-Real code captures the product-operation result before cleanup so both cleanup
-barriers are still attempted on failure. See
+Mounting and product work are captured before peer cleanup, so a mount failure
+still shuts the peer down and a product failure still closes its endpoint
+first. See
 [Build with an existing protocol](p2p/getting-started.md) for the complete
 failure-safe pattern.
 
@@ -128,8 +137,10 @@ Startup returns only after a confirmed relay route is available.
 A native host may explicitly choose `AukiPeerConfig::direct_only()`. That mode
 makes no DMS booking calls and may have zero listeners and advertised routes
 for outbound-only operation. A direct-only peer that must accept inbound
-connections supplies a listener and a matching externally reachable advertised
-route.
+connections needs a listener plus a dialable route shared through
+configuration, manual exchange, or a product control plane. Configure an
+advertised direct route only when the application publishes it from the SDK's
+local route catalog.
 
 Neither mode performs automatic peer discovery or route publication. The
 application currently receives a remote Peer ID, Domain ID, supported protocol
@@ -174,16 +185,18 @@ identity. Migrate one networking owner at a time.
 
 ## Prove the migration
 
-The canonical proof is
-[`examples/portable-echo`](../examples/portable-echo/README.md):
+The offline protocol contract is a useful first check:
 
 ```sh
 cargo test --locked -p auki-portable-echo
-cargo run --locked -p auki-portable-echo-native
 ```
 
-Its protected Web smoke proves browser-to-browser in both directions,
-native-to-browser, and browser-to-native over exact relay routes.
+That command does not prove a network exchange. Follow the credentialed
+[two-terminal guide](p2p/getting-started.md) to authenticate two native peers
+in one Domain and exchange through their confirmed routes. Then use the
+[protected direction matrix](../examples/portable-echo/web/README.md#live-direction-proof)
+to prove browser-to-browser in both directions, native-to-browser, and
+browser-to-native.
 
 [`examples/diagnostic-app`](../examples/diagnostic-app) remains useful for the
 retained low-level Domain path. Its local proof uses manually supplied direct

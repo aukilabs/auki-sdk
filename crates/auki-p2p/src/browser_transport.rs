@@ -162,16 +162,23 @@ pub struct BrowserAuthenticatedRouteStream {
 }
 
 impl BrowserAuthenticatedRouteStream {
-    fn new(
-        stream: AuthenticatedStream,
-        route: BrowserRelayRoute,
-        control: BrowserRouteControl,
-    ) -> Self {
+    fn pending(route: BrowserRelayRoute, control: BrowserRouteControl) -> Self {
         Self {
-            stream: Some(stream),
+            stream: None,
             route: Some(route),
             control,
         }
+    }
+
+    fn route(&self) -> &BrowserRelayRoute {
+        self.route
+            .as_ref()
+            .expect("a pending browser route remains present until authentication completes")
+    }
+
+    fn authenticate(&mut self, stream: AuthenticatedStream) {
+        debug_assert!(self.stream.is_none());
+        self.stream = Some(stream);
     }
 
     /// Mutually authenticated remote peer bound to this stream.
@@ -530,13 +537,13 @@ impl BrowserNode {
         protocol: ApplicationProtocol,
     ) -> Result<BrowserAuthenticatedRouteStream> {
         let route = self.connect_relayed(expected_peer_id, route).await?;
-        match self.open_relayed(&route, protocol).await {
-            Ok(stream) => Ok(BrowserAuthenticatedRouteStream::new(
-                stream,
-                route,
-                self.route_control(),
-            )),
-            Err(open_error) => match self.close_relay_route(&route).await {
+        let mut pending = BrowserAuthenticatedRouteStream::pending(route, self.route_control());
+        match self.open_relayed(pending.route(), protocol).await {
+            Ok(stream) => {
+                pending.authenticate(stream);
+                Ok(pending)
+            }
+            Err(open_error) => match pending.close().await {
                 Ok(()) => Err(open_error),
                 Err(close_error) => Err(close_error),
             },
@@ -1713,6 +1720,56 @@ async fn authenticate_stream(
     )
     .await?;
     Ok(AuthenticatedStream::new(stream, remote))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    #[wasm_bindgen_test(async)]
+    async fn cancelling_an_exact_open_schedules_its_connected_circuit_for_cleanup() {
+        let node_instance_id = Uuid::new_v4();
+        let relay_peer_id = Identity::generate().peer_id();
+        let target_peer_id = Identity::generate().peer_id();
+        let connection_id = ConnectionId::new_unchecked(7);
+        let route = format!(
+            "/dns4/relay.example/tcp/443/wss/p2p/{relay_peer_id}/p2p-circuit/p2p/{target_peer_id}"
+        )
+        .parse()
+        .expect("the test circuit route is valid");
+        let (commands, command_receiver) = async_channel::bounded(1);
+        let control = BrowserRouteControl {
+            node_instance_id,
+            commands,
+            _local_only: Rc::new(()),
+        };
+        let connected = BrowserRelayRoute {
+            node_instance_id,
+            relay_peer_id,
+            target_peer_id,
+            connection_id,
+            admission_expires_at: Utc::now(),
+            route,
+        };
+
+        drop(BrowserAuthenticatedRouteStream::pending(connected, control));
+
+        let command = command_receiver
+            .recv()
+            .await
+            .expect("dropping the pending open schedules circuit cleanup");
+        match command {
+            Command::CloseConnection {
+                connection_id: closed,
+                response,
+            } => {
+                assert_eq!(closed, connection_id);
+                let _ = response.send(Ok(()));
+            }
+            _ => panic!("pending exact-route drop scheduled an unexpected command"),
+        }
+    }
 }
 
 fn build_swarm(

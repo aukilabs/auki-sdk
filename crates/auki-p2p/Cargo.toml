@@ -43,5 +43,9 @@ libp2p-stream = { workspace = true }
 uuid = { workspace = true, features = ["js"] }
 wasm-bindgen-futures = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+wasm-bindgen-test = "0.3"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

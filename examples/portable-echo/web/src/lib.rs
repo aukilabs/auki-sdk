@@ -5,7 +5,7 @@
 
 use std::{cell::RefCell, fmt::Display};
 
-use auki_portable_echo_adapter::{
+use auki_portable_echo::{
     EchoClient, EchoEndpoint, EchoEventReceiver, EchoServeEvent, PROTOCOL_ID,
 };
 use auki_sdk::{Multiaddr, PeerId};

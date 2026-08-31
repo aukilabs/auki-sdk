@@ -2,7 +2,7 @@ use std::env;
 
 use anyhow::{Context, Result, bail};
 use auki_auth::{AuthClient, AuthEnvironment, Credentials, DomainSelection};
-use auki_portable_echo_adapter::EchoEndpoint;
+use auki_portable_echo::EchoEndpoint;
 use auki_sdk::{AukiPeer, AukiPeerConfig, Identity};
 
 #[tokio::main]

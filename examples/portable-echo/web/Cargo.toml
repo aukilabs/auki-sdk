@@ -14,7 +14,7 @@ readme = "README.md"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-auki-portable-echo-adapter = { path = "../adapter" }
+auki-portable-echo = { path = ".." }
 auki-sdk = { path = "../../../crates/auki-sdk" }
 auki-sdk-web = { path = "../../../bindings/web/auki-sdk-web" }
 js-sys = { workspace = true }

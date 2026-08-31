@@ -4,8 +4,8 @@ use std::{
     task::{Context, Poll},
 };
 
-use auki_portable_echo_protocol::{
-    EchoProtocolError, EchoRequest, ID, MAX_FRAME_BYTES, run_client, run_server,
+use auki_portable_echo::{
+    EchoProtocolError, EchoRequest, MAX_FRAME_BYTES, PROTOCOL_ID, run_client, run_server,
 };
 use futures::{AsyncRead, AsyncWrite, executor::block_on};
 
@@ -13,7 +13,7 @@ const PING_FRAME: &[u8] = b"\x00\x00\x00\x04ping";
 
 #[test]
 fn protocol_id_and_ping_wire_bytes_are_locked() {
-    assert_eq!(ID, "/example/echo/1.0.0");
+    assert_eq!(PROTOCOL_ID, "/example/echo/1.0.0");
 
     let request = EchoRequest::new(b"ping".to_vec()).unwrap();
     let mut stream = ScriptedStream {

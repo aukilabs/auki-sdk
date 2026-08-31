@@ -2,7 +2,7 @@ use std::{env, fs, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use auki_auth::{AuthClient, AuthEnvironment, Credentials, DomainSelection};
-use auki_portable_echo_adapter::{EchoEndpoint, EchoEventReceiver, EchoServeEvent, PROTOCOL_ID};
+use auki_portable_echo::{EchoEndpoint, EchoEventReceiver, EchoServeEvent, PROTOCOL_ID};
 use auki_sdk::{AukiPeer, AukiPeerConfig, Identity, Multiaddr, PeerId};
 use uuid::Uuid;
 
@@ -201,10 +201,10 @@ fn required_env(name: &'static str) -> Result<String> {
 mod tests {
     use super::*;
     use anyhow::anyhow;
-    use auki_portable_echo_adapter::{MAX_CONCURRENCY, protocol_spec};
+    use auki_portable_echo::{MAX_CONCURRENCY, protocol_spec};
 
     #[test]
-    fn native_adapter_mounts_the_exact_portable_contract() {
+    fn native_endpoint_mounts_the_exact_portable_contract() {
         let spec = protocol_spec().unwrap();
         assert_eq!(spec.protocol_id(), PROTOCOL_ID);
         assert_eq!(spec.max_concurrency(), MAX_CONCURRENCY);

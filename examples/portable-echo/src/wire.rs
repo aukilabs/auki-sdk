@@ -1,6 +1,6 @@
-//! Portable request/response echo protocol.
+//! Transport-neutral request/response echo protocol.
 //!
-//! This crate owns the exact wire contract and conversation, but no transport,
+//! This module owns the exact wire contract and conversation, but no transport,
 //! authentication, executor, or platform lifecycle. A runtime supplies one
 //! authenticated duplex stream and calls [`run_client`] or [`run_server`].
 
@@ -9,7 +9,7 @@
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 /// Exact product-owned application protocol identifier.
-pub const ID: &str = "/example/echo/1.0.0";
+pub const PROTOCOL_ID: &str = "/example/echo/1.0.0";
 
 /// Maximum request or response payload size.
 pub const MAX_FRAME_BYTES: usize = 1024;

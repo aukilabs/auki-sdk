@@ -1,5 +1,5 @@
 [package]
-name = "auki-portable-echo-adapter"
+name = "auki-portable-echo"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -7,13 +7,12 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 publish = false
-description = "Cross-platform AukiPeer adapter for the portable echo protocol."
+description = "Portable echo protocol and cross-platform AukiPeer endpoint."
 readme = "README.md"
 
 [dependencies]
 async-channel = { workspace = true }
-auki-portable-echo-protocol = { path = "../protocol" }
-auki-sdk = { path = "../../../crates/auki-sdk" }
+auki-sdk = { path = "../../crates/auki-sdk" }
 futures = { workspace = true }
 futures-timer = { workspace = true }
 thiserror = { workspace = true }

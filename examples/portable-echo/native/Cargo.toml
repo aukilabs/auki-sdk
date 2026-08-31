@@ -23,7 +23,7 @@ path = "src/bin/interop.rs"
 [dependencies]
 anyhow = { workspace = true }
 auki-auth = { path = "../../../crates/auki-auth" }
-auki-portable-echo-adapter = { path = "../adapter" }
+auki-portable-echo = { path = ".." }
 auki-sdk = { path = "../../../crates/auki-sdk" }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }

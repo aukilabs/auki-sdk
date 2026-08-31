@@ -658,11 +658,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "auki-portable-echo-adapter"
+name = "auki-portable-echo"
 version = "0.1.0"
 dependencies = [
  "async-channel",
- "auki-portable-echo-protocol",
  "auki-sdk",
  "futures",
  "futures-timer",
@@ -675,7 +674,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "auki-auth",
- "auki-portable-echo-adapter",
+ "auki-portable-echo",
  "auki-sdk",
  "serde_json",
  "tokio",
@@ -683,18 +682,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "auki-portable-echo-protocol"
-version = "0.1.0"
-dependencies = [
- "futures",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "auki-portable-echo-web"
 version = "0.1.0"
 dependencies = [
- "auki-portable-echo-adapter",
+ "auki-portable-echo",
  "auki-sdk",
  "auki-sdk-web",
  "js-sys",

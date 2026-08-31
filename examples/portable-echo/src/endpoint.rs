@@ -1,9 +1,9 @@
-//! Cross-platform Auki peer adapter for the portable echo protocol.
+//! Cross-platform Auki peer endpoint for the portable echo protocol.
 //!
-//! This crate owns the mechanical runtime glue shared by native and Web apps:
+//! This module owns the mechanical runtime glue shared by native and Web apps:
 //! protocol registration, bounded operation deadlines, stream cleanup, and
 //! nonblocking inbound observations. The wire contract remains in
-//! `auki-portable-echo-protocol` and has no SDK or platform dependency.
+//! [`crate::wire`] and has no platform dependency.
 
 #![forbid(unsafe_code)]
 
@@ -17,19 +17,16 @@ use std::{
     time::Duration,
 };
 
-use async_channel::{Receiver, Sender, TrySendError};
-use auki_portable_echo_protocol::{
-    EchoProtocolError, EchoRequest, ID, MAX_FRAME_BYTES, run_client, run_server,
+use crate::wire::{
+    EchoProtocolError, EchoRequest, MAX_FRAME_BYTES, PROTOCOL_ID, run_client, run_server,
 };
+use async_channel::{Receiver, Sender, TrySendError};
 use auki_sdk::{
     AukiPeerProtocols, AukiProtocolError, AukiProtocolRegistration, AukiProtocolSpec,
     AuthenticatedRouteStream, Multiaddr, PeerId,
 };
 use futures::{AsyncWriteExt, FutureExt, pin_mut};
 use futures_timer::Delay;
-
-/// Exact portable echo protocol identifier.
-pub const PROTOCOL_ID: &str = ID;
 
 /// Maximum number of concurrently served echo streams.
 pub const MAX_CONCURRENCY: usize = 32;
@@ -48,7 +45,7 @@ pub fn protocol_spec() -> Result<AukiProtocolSpec, AukiProtocolError> {
     )
 }
 
-/// Cloneable outbound half of the portable echo adapter.
+/// Cloneable outbound half of the portable echo endpoint.
 #[derive(Clone)]
 pub struct EchoClient {
     protocols: AukiPeerProtocols,
@@ -61,7 +58,7 @@ impl EchoClient {
         &self,
         remote_peer_id: PeerId,
         payload: impl Into<Vec<u8>>,
-    ) -> Result<EchoSendReceipt, EchoAdapterError> {
+    ) -> Result<EchoSendReceipt, EchoError> {
         let request = EchoRequest::new(payload)?;
         send_opened(
             remote_peer_id,
@@ -77,7 +74,7 @@ impl EchoClient {
         remote_peer_id: PeerId,
         route: Multiaddr,
         payload: impl Into<Vec<u8>>,
-    ) -> Result<EchoSendReceipt, EchoAdapterError> {
+    ) -> Result<EchoSendReceipt, EchoError> {
         let request = EchoRequest::new(payload)?;
         send_opened(
             remote_peer_id,
@@ -98,7 +95,7 @@ pub struct EchoEndpoint {
 
 impl EchoEndpoint {
     /// Mount the portable echo protocol on one running Auki peer.
-    pub fn mount(protocols: AukiPeerProtocols) -> Result<Self, EchoAdapterError> {
+    pub fn mount(protocols: AukiPeerProtocols) -> Result<Self, EchoError> {
         let (delivery, events) = event_channel(SERVED_EVENT_CAPACITY);
         let registration = protocols.register(protocol_spec()?, move |mut stream| {
             let delivery = delivery.clone();
@@ -106,12 +103,10 @@ impl EchoEndpoint {
                 let remote_peer_id = stream.remote_peer().peer_id;
                 let exchange = deadline(EchoOperation::Exchange, run_server(&mut stream))
                     .await
-                    .and_then(|result| result.map_err(EchoAdapterError::Protocol));
+                    .and_then(|result| result.map_err(EchoError::Protocol));
                 let cleanup = deadline(EchoOperation::Close, AsyncWriteExt::close(&mut stream))
                     .await
-                    .and_then(|result| {
-                        result.map_err(|error| EchoAdapterError::Close(error.to_string()))
-                    });
+                    .and_then(|result| result.map_err(|error| EchoError::Close(error.to_string())));
 
                 let event = match prefer_primary(exchange, cleanup) {
                     Ok(request) => EchoServeEvent::Served(EchoServeReceipt {
@@ -153,7 +148,7 @@ impl EchoEndpoint {
         &self,
         remote_peer_id: PeerId,
         payload: impl Into<Vec<u8>>,
-    ) -> Result<EchoSendReceipt, EchoAdapterError> {
+    ) -> Result<EchoSendReceipt, EchoError> {
         self.client.send(remote_peer_id, payload).await
     }
 
@@ -163,16 +158,13 @@ impl EchoEndpoint {
         remote_peer_id: PeerId,
         route: Multiaddr,
         payload: impl Into<Vec<u8>>,
-    ) -> Result<EchoSendReceipt, EchoAdapterError> {
+    ) -> Result<EchoSendReceipt, EchoError> {
         self.client.send_exact(remote_peer_id, route, payload).await
     }
 
     /// Stop accepting inbound echo streams and await admitted handlers.
-    pub async fn close(self) -> Result<(), EchoAdapterError> {
-        self.registration
-            .close()
-            .await
-            .map_err(EchoAdapterError::Sdk)
+    pub async fn close(self) -> Result<(), EchoError> {
+        self.registration.close().await.map_err(EchoError::Sdk)
     }
 }
 
@@ -296,20 +288,20 @@ async fn send_opened<F>(
     remote_peer_id: PeerId,
     request: EchoRequest,
     opening: F,
-) -> Result<EchoSendReceipt, EchoAdapterError>
+) -> Result<EchoSendReceipt, EchoError>
 where
     F: Future<Output = Result<AuthenticatedRouteStream, AukiProtocolError>>,
 {
     let mut stream = deadline(EchoOperation::Open, opening)
         .await?
-        .map_err(EchoAdapterError::Sdk)?;
+        .map_err(EchoError::Sdk)?;
     let relayed = stream.is_relayed();
     let exchange = deadline(EchoOperation::Exchange, run_client(&mut stream, request))
         .await
-        .and_then(|result| result.map_err(EchoAdapterError::Protocol));
+        .and_then(|result| result.map_err(EchoError::Protocol));
     let cleanup = deadline(EchoOperation::Close, stream.close())
         .await
-        .and_then(|result| result.map_err(|error| EchoAdapterError::Close(error.to_string())));
+        .and_then(|result| result.map_err(|error| EchoError::Close(error.to_string())));
     let response = prefer_primary(exchange, cleanup)?;
 
     Ok(EchoSendReceipt {
@@ -322,7 +314,7 @@ where
 async fn deadline<T>(
     operation: EchoOperation,
     future: impl Future<Output = T>,
-) -> Result<T, EchoAdapterError> {
+) -> Result<T, EchoError> {
     deadline_after(operation, OPERATION_TIMEOUT, future).await
 }
 
@@ -330,13 +322,13 @@ async fn deadline_after<T>(
     operation: EchoOperation,
     duration: Duration,
     future: impl Future<Output = T>,
-) -> Result<T, EchoAdapterError> {
+) -> Result<T, EchoError> {
     let work = future.fuse();
     let timer = Delay::new(duration).fuse();
     pin_mut!(work, timer);
     futures::select_biased! {
         result = work => Ok(result),
-        () = timer => Err(EchoAdapterError::Timeout(operation)),
+        () = timer => Err(EchoError::Timeout(operation)),
     }
 }
 
@@ -368,9 +360,9 @@ impl fmt::Display for EchoOperation {
     }
 }
 
-/// Failure from the shared portable echo runtime adapter.
+/// Failure from the shared portable echo runtime endpoint.
 #[derive(Debug, thiserror::Error)]
-pub enum EchoAdapterError {
+pub enum EchoError {
     /// The SDK protocol surface rejected registration or stream opening.
     #[error("Auki protocol operation failed: {0}")]
     Sdk(#[from] AukiProtocolError),
@@ -462,7 +454,7 @@ mod tests {
     }
 
     #[test]
-    fn expired_deadline_reports_the_interrupted_adapter_operation() {
+    fn expired_deadline_reports_the_interrupted_endpoint_operation() {
         let result = futures::executor::block_on(deadline_after(
             EchoOperation::Open,
             Duration::ZERO,
@@ -470,7 +462,7 @@ mod tests {
         ));
         assert!(matches!(
             result,
-            Err(EchoAdapterError::Timeout(EchoOperation::Open))
+            Err(EchoError::Timeout(EchoOperation::Open))
         ));
     }
 }

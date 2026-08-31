@@ -9,18 +9,109 @@ use std::{
     time::Duration,
 };
 
-use auki_auth::{AuthClient, AuthEnvironment, Credentials, DomainSelection};
+use auki_auth::{
+    AuthClient, AuthEnvironment, AuthSession, Credentials, DomainDescriptor, DomainSelection,
+};
 use auki_p2p::{ApplicationProtocol, BrowserIncomingAuthenticatedStreams, Identity};
 use auki_portable_echo_protocol::{ID as ECHO_PROTOCOL_ID, run_server};
 use auki_sdk_web::{AukiWebPeer, AukiWebPeerConfig};
 use futures::{AsyncWriteExt, FutureExt, pin_mut};
 use futures_timer::Delay;
-use js_sys::Error as JsError;
+use js_sys::{Array, Error as JsError};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
 
 const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Authenticated dev User session used to list Domains before starting a peer.
+#[wasm_bindgen]
+pub struct BrowserUserSession {
+    auth: AuthSession,
+}
+
+#[wasm_bindgen]
+impl BrowserUserSession {
+    /// Authenticate one User without creating a peer or booking a relay.
+    #[wasm_bindgen(js_name = loginDev)]
+    pub async fn login_dev(email: String, password: String) -> Result<BrowserUserSession, JsValue> {
+        let auth = AuthClient::new(AuthEnvironment::dev())
+            .map_err(|error| js_context("configure dev authentication", error))?;
+        let session = auth
+            .authenticate(Credentials::user_password(email, password))
+            .await
+            .map_err(|error| js_context("authenticate User", error))?;
+        Ok(Self { auth: session })
+    }
+
+    /// Public descriptors for every Domain this User can explicitly select.
+    #[wasm_bindgen(
+        js_name = accessibleDomains,
+        unchecked_return_type = "BrowserDomain[]"
+    )]
+    pub async fn accessible_domains(&self) -> Result<Array, JsValue> {
+        let choices = self
+            .auth
+            .accessible_domains()
+            .await
+            .map_err(|error| js_context("list accessible Domains", error))?;
+        let domains = Array::new();
+        for choice in choices {
+            domains.push(&BrowserDomain::from(choice.domain).into());
+        }
+        Ok(domains)
+    }
+
+    /// Authorize a fresh ephemeral peer in the selected Domain and acquire its
+    /// mandatory relay before opting into the exact echo protocol.
+    #[wasm_bindgen(js_name = startPeer)]
+    pub async fn start_peer(&self, domain_id: String) -> Result<BrowserEchoServer, JsValue> {
+        BrowserEchoServer::start(self.auth.clone(), domain_id).await
+    }
+}
+
+/// One public Domain choice returned by DDS.
+#[wasm_bindgen]
+pub struct BrowserDomain {
+    id: String,
+    name: Option<String>,
+    description: Option<String>,
+    organization_id: Option<String>,
+}
+
+impl From<DomainDescriptor> for BrowserDomain {
+    fn from(domain: DomainDescriptor) -> Self {
+        Self {
+            id: domain.id.to_string(),
+            name: domain.name,
+            description: domain.description,
+            organization_id: domain.organization_id.map(|id| id.to_string()),
+        }
+    }
+}
+
+#[wasm_bindgen]
+impl BrowserDomain {
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> String {
+        self.id.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> Option<String> {
+        self.name.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn description(&self) -> Option<String> {
+        self.description.clone()
+    }
+
+    #[wasm_bindgen(getter, js_name = organizationId)]
+    pub fn organization_id(&self) -> Option<String> {
+        self.organization_id.clone()
+    }
+}
 
 /// One explicitly opted-in echo server running on an ephemeral browser peer.
 #[wasm_bindgen]
@@ -38,24 +129,11 @@ pub struct BrowserEchoServer {
 
 #[wasm_bindgen]
 impl BrowserEchoServer {
-    /// Authenticate one User against dev, authorize a fresh session Peer ID,
-    /// acquire its mandatory relay, and opt into the exact echo protocol.
-    #[wasm_bindgen(js_name = startDev)]
-    pub async fn start_dev(
-        email: String,
-        password: String,
-        domain_id: String,
-    ) -> Result<BrowserEchoServer, JsValue> {
+    async fn start(auth: AuthSession, domain_id: String) -> Result<BrowserEchoServer, JsValue> {
         let domain_id =
             Uuid::parse_str(&domain_id).map_err(|_| js_failure("domain ID must be a UUID"))?;
         let identity = Identity::generate();
-        let auth = AuthClient::new(AuthEnvironment::dev())
-            .map_err(|error| js_context("configure dev authentication", error))?;
-        let session = auth
-            .authenticate(Credentials::user_password(email, password))
-            .await
-            .map_err(|error| js_context("authenticate User", error))?;
-        let prepared = session
+        let prepared = auth
             .authorize_peer(DomainSelection::new(domain_id), &identity.proof())
             .await
             .map_err(|error| js_context("authorize browser Peer", error))?;

@@ -1,13 +1,16 @@
 # Portable echo — Web/Wasm adapter
 
 This example mounts the same Rust echo protocol used by the native example on
-an authenticated browser peer. JavaScript sees a small `BrowserEchoServer`;
+an authenticated browser peer. JavaScript sees a small `BrowserUserSession`
+and `BrowserEchoServer`;
 credentials, DDS authority, relay booking, libp2p, authenticated streams, and
 echo framing stay inside Rust/Wasm.
 
-The browser Peer ID is intentionally ephemeral in v0.1. Every call to
-`BrowserEchoServer.startDev(...)` creates a fresh identity and relay route.
-Reloading the page therefore creates a new peer.
+The browser Peer ID is intentionally ephemeral in v0.1. Log in with
+`BrowserUserSession.loginDev(...)`, list the accessible Domains, and call
+`startPeer(...)` only after the developer has selected one. Every start creates
+a fresh identity and relay route. Reloading the page therefore creates a new
+peer.
 
 The first interoperability proof runs the browser as the echo server. Its
 `tcpRoute` is suitable for the existing native example, while `wssRoute` is

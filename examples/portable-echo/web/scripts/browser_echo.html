@@ -9,9 +9,7 @@
   <body>
     <main id="status">loading portable echo</main>
     <script type="module">
-      import init, {
-        BrowserEchoServer,
-      } from "/pkg-web/auki_portable_echo_web.js";
+      import init, { BrowserUserSession } from "/pkg-web/auki_portable_echo_web.js";
 
       const initialized = init();
       let server;
@@ -22,7 +20,24 @@
           if (server) {
             throw new Error("browser echo server is already running");
           }
-          server = await BrowserEchoServer.startDev(email, password, domainId);
+          const session = await BrowserUserSession.loginDev(email, password);
+          try {
+            const domains = await session.accessibleDomains();
+            let selected = false;
+            for (const domain of domains) {
+              try {
+                selected ||= domain.id === domainId;
+              } finally {
+                domain.free();
+              }
+            }
+            if (!selected) {
+              throw new Error("the authenticated User cannot access the selected Domain");
+            }
+            server = await session.startPeer(domainId);
+          } finally {
+            session.free();
+          }
           document.querySelector("#status").textContent = "ready";
           return {
             peerId: server.peerId,

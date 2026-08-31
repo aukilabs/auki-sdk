@@ -770,66 +770,73 @@ impl AukiPeer {
     ///
     /// Every cleanup stage is attempted even if an earlier stage fails. Await
     /// this method to completion when DMS booking deletion is required.
-    pub async fn shutdown(mut self) -> Result<(), AukiPeerShutdownError> {
+    #[allow(clippy::manual_async_fn)]
+    pub fn shutdown(
+        mut self,
+    ) -> impl std::future::Future<Output = Result<(), AukiPeerShutdownError>> {
+        // Fence while constructing the future. Retained protocol contexts must
+        // reject new work even if the caller delays or cancels polling cleanup.
         self.protocol_context.fence();
         self.status.begin_shutdown();
         self.monitor_shutdown.cancel();
-        let mut failures = ShutdownFailures::default();
-        if let Some(monitor) = self.monitor.take()
-            && let Err(error) = monitor.await
-        {
-            failures.supervisor = Some(error);
-        }
-
-        if let Some(relay) = self.relay.take() {
-            match relay.shutdown(true, RELAY_SHUTDOWN_TIMEOUT).await {
-                Ok(RelayCoordinatorShutdownOutcome::Graceful) => {}
-                Ok(RelayCoordinatorShutdownOutcome::ForcedAfterTimeout) => {
-                    failures.relay = Some(AukiPeerRelayError::forced_shutdown());
-                }
-                Err(error) => failures.relay = Some(AukiPeerRelayError::shutdown(error)),
+        async move {
+            let mut failures = ShutdownFailures::default();
+            if let Some(monitor) = self.monitor.take()
+                && let Err(error) = monitor.await
+            {
+                failures.supervisor = Some(error);
             }
-        }
-        self.relay_lifecycle.cancel();
-        if let Err(error) = self.route_catalog.tombstone_all() {
-            failures.routes.push(error);
-        }
-        if let Err(error) = self.route_catalog.replace_direct_routes(Vec::new()) {
-            failures.routes.push(error);
-        }
-        if let Err(error) = self.protocols.shutdown_all().await {
-            failures.protocols = Some(error);
-        }
-        if let Some(authority) = self.authority.take() {
-            authority.shutdown().await;
-        }
-        // Keep the owner slot populated across the asynchronous barrier. If
-        // this shutdown future is canceled, `Drop` can still force the node
-        // down even when public protocol handles retain their own clones.
-        if let Some(node) = self.node.as_ref() {
-            match tokio::time::timeout(NODE_SHUTDOWN_TIMEOUT, node.shutdown()).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    failures.transport = Some(AukiPeerTransportError(
-                        PeerTransportShutdownError::P2p(error),
-                    ));
-                }
-                Err(_) => {
-                    node.shutdown_now().await;
-                    failures.transport =
-                        Some(AukiPeerTransportError(PeerTransportShutdownError::Timeout));
+
+            if let Some(relay) = self.relay.take() {
+                match relay.shutdown(true, RELAY_SHUTDOWN_TIMEOUT).await {
+                    Ok(RelayCoordinatorShutdownOutcome::Graceful) => {}
+                    Ok(RelayCoordinatorShutdownOutcome::ForcedAfterTimeout) => {
+                        failures.relay = Some(AukiPeerRelayError::forced_shutdown());
+                    }
+                    Err(error) => failures.relay = Some(AukiPeerRelayError::shutdown(error)),
                 }
             }
-        }
-        drop(self.node.take());
+            self.relay_lifecycle.cancel();
+            if let Err(error) = self.route_catalog.tombstone_all() {
+                failures.routes.push(error);
+            }
+            if let Err(error) = self.route_catalog.replace_direct_routes(Vec::new()) {
+                failures.routes.push(error);
+            }
+            if let Err(error) = self.protocols.shutdown_all().await {
+                failures.protocols = Some(error);
+            }
+            if let Some(authority) = self.authority.take() {
+                authority.shutdown().await;
+            }
+            // Keep the owner slot populated across the asynchronous barrier. If
+            // this shutdown future is canceled, `Drop` can still force the node
+            // down even when public protocol handles retain their own clones.
+            if let Some(node) = self.node.as_ref() {
+                match tokio::time::timeout(NODE_SHUTDOWN_TIMEOUT, node.shutdown()).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        failures.transport = Some(AukiPeerTransportError(
+                            PeerTransportShutdownError::P2p(error),
+                        ));
+                    }
+                    Err(_) => {
+                        node.shutdown_now().await;
+                        failures.transport =
+                            Some(AukiPeerTransportError(PeerTransportShutdownError::Timeout));
+                    }
+                }
+            }
+            drop(self.node.take());
 
-        let clean = failures.is_empty();
-        self.status.finish_shutdown(clean);
-        self.closed = true;
-        if clean {
-            Ok(())
-        } else {
-            Err(AukiPeerShutdownError { failures })
+            let clean = failures.is_empty();
+            self.status.finish_shutdown(clean);
+            self.closed = true;
+            if clean {
+                Ok(())
+            } else {
+                Err(AukiPeerShutdownError { failures })
+            }
         }
     }
 }
@@ -1297,6 +1304,39 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             context.routes().snapshot(),
             Err(AukiPeerRoutesError::Stopped)
         ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn constructing_shutdown_future_synchronously_fences_every_context_view() {
+        let identity = auki_p2p::Identity::generate();
+        let prepared = fixture(&identity, Uuid::new_v4());
+        let runtime = AukiPeer::start(identity, prepared, direct_config())
+            .await
+            .unwrap();
+        let context = runtime.protocol_context();
+        let protocols = runtime.protocols();
+        let status = runtime.subscribe_status();
+
+        let shutdown = runtime.shutdown();
+
+        assert_eq!(*status.borrow(), AukiPeerStatus::Stopping);
+        assert!(matches!(
+            protocols.register(
+                crate::AukiProtocolSpec::new("/example/shutdown-fence/1.0.0", 1, 32).unwrap(),
+                |_stream| async {},
+            ),
+            Err(AukiProtocolError::Stopped)
+        ));
+        assert!(matches!(
+            context.authorization().current(),
+            Err(AukiPeerAuthorizationError::Stopped)
+        ));
+        assert!(matches!(
+            context.routes().snapshot(),
+            Err(AukiPeerRoutesError::Stopped)
+        ));
+
+        drop(shutdown);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

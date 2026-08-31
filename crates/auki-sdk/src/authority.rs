@@ -258,10 +258,6 @@ impl ExternalAuthorityUpdate {
     pub(crate) fn verification_keys(&self) -> &DdsVerificationKeys {
         &self.verification_keys
     }
-
-    pub(crate) fn credential(&self) -> &SignedP2pCredential {
-        &self.credential
-    }
 }
 
 impl fmt::Debug for ExternalAuthorityUpdate {
@@ -1248,11 +1244,6 @@ impl AuthoritySupervisor {
         Arc::new(AuthorityPublicAuthorization {
             inner: Arc::downgrade(&self.inner),
         })
-    }
-
-    pub(crate) fn status(&self) -> AuthorityStatus {
-        self.inner.expire_if_due();
-        self.inner.status.borrow().clone()
     }
 
     pub(crate) fn subscribe_status(&self) -> watch::Receiver<AuthorityStatus> {
@@ -2444,6 +2435,7 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
             .await
             .unwrap();
         let relay = supervisor.relay_authorization();
+        let status = supervisor.subscribe_status();
         let waiter_relay = relay.clone();
         let waiter = tokio::spawn(async move { waiter_relay.refresh_after_unauthorized(1).await });
         tokio::time::timeout(Duration::from_secs(1), requests.recv())
@@ -2453,7 +2445,7 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
 
         shutdown.cancel();
         assert!(waiter.await.unwrap().is_err());
-        assert_eq!(supervisor.status(), AuthorityStatus::Stopped);
+        assert_eq!(*status.borrow(), AuthorityStatus::Stopped);
         assert!(relay.authorization().await.is_err());
         assert_eq!(requests.recv().await, None);
         supervisor.shutdown().await;

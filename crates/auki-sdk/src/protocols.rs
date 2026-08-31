@@ -14,7 +14,7 @@ use auki_p2p::{
     validate_direct_route,
 };
 use parking_lot::Mutex;
-use tokio::time::{Instant, timeout_at};
+use tokio::time::timeout;
 
 use crate::{
     context::ContextLifecycle,
@@ -220,23 +220,7 @@ impl AukiPeerProtocols {
             .drain()
             .filter_map(|(_, entry)| entry.server.lock().take())
             .collect::<Vec<_>>();
-        let deadline = Instant::now() + PROTOCOL_SHUTDOWN_TIMEOUT;
-        let mut first_error = None;
-        for server in servers {
-            match timeout_at(deadline, server.shutdown()).await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    first_error.get_or_insert(AukiProtocolError::P2p(error));
-                }
-                Err(_) => {
-                    first_error.get_or_insert(AukiProtocolError::CleanupTimeout);
-                }
-            }
-        }
-        match first_error {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
+        shutdown_servers(servers).await
     }
 
     pub(crate) fn abort_all(&self) {
@@ -250,6 +234,33 @@ impl AukiPeerProtocols {
             .collect::<Vec<_>>();
         drop(servers);
     }
+}
+
+async fn shutdown_servers(
+    servers: Vec<ApplicationProtocolServer>,
+) -> Result<(), AukiProtocolError> {
+    let shutdown = async move {
+        let mut first_error = None;
+        for server in servers {
+            if let Err(error) = server.shutdown().await {
+                first_error.get_or_insert(AukiProtocolError::P2p(error));
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    };
+    cleanup_before_deadline(shutdown, PROTOCOL_SHUTDOWN_TIMEOUT)
+        .await
+        .unwrap_or(Err(AukiProtocolError::CleanupTimeout))
+}
+
+async fn cleanup_before_deadline<T>(
+    cleanup: impl Future<Output = T>,
+    timeout_duration: Duration,
+) -> Option<T> {
+    timeout(timeout_duration, cleanup).await.ok()
 }
 
 struct ProtocolRuntime {
@@ -280,7 +291,7 @@ impl AukiProtocolRegistration {
         let server = self.take_server();
         self.closed = true;
         match server {
-            Some(server) => server.shutdown().await.map_err(AukiProtocolError::P2p),
+            Some(server) => shutdown_servers(vec![server]).await,
             None => Ok(()),
         }
     }
@@ -324,5 +335,42 @@ fn canonicalize_candidate(
                 peer_id: expected_peer,
                 reason: format!("direct: {direct}; circuit: {circuit}"),
             }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use super::*;
+
+    struct DropProbe(Arc<AtomicBool>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_deadline_drops_pending_cleanup() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let cleanup = {
+            let probe = DropProbe(Arc::clone(&dropped));
+            async move {
+                let _probe = probe;
+                std::future::pending::<()>().await;
+            }
+        };
+
+        assert!(
+            cleanup_before_deadline(cleanup, Duration::ZERO)
+                .await
+                .is_none()
+        );
+        assert!(dropped.load(Ordering::SeqCst));
     }
 }

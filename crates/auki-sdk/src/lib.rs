@@ -26,11 +26,9 @@ mod peer_runtime;
 mod protocols;
 
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(dead_code)]
 mod authority;
 
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(dead_code)]
 mod relay;
 
 pub use auki_auth::PreparedPeer;

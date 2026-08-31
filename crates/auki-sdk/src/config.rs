@@ -1,21 +1,29 @@
-use std::{collections::HashSet, net::IpAddr, time::Duration};
+use std::{net::IpAddr, time::Duration};
 
-use auki_p2p::{
-    Multiaddr, PeerId, Protocol, RouteCatalogLimits, canonicalize_circuit_route,
-    validate_direct_route,
-};
+use auki_p2p::{Multiaddr, PeerId};
+#[cfg(not(target_arch = "wasm32"))]
+use auki_p2p::{Protocol, RouteCatalogLimits, canonicalize_circuit_route, validate_direct_route};
 use reqwest::Url;
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashSet;
 
 /// DMS HTTP base used by [`AukiPeerConfig::dev`].
 pub const DEV_DMS_BASE_URL: &str = "https://dms.dev.aukiverse.com/v1/";
 
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_LISTEN_ADDRESSES: usize = 16;
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_ADVERTISED_DIRECT_ROUTES: usize = 16;
 const MAX_LOCAL_ROUTES: usize = 16;
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_INITIAL_ROUTE_PEERS: usize = 1_024;
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_INITIAL_ROUTES_PER_PEER: usize = 16;
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_INITIAL_ROUTE_INPUT_PER_PEER: usize = 4_096;
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_INITIAL_ROUTES: usize = 4_096;
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_MULTIADDR_BYTES: usize = 1_024;
 const MIN_RELAY_COUNT: u8 = 1;
 const MAX_RELAY_COUNT: u8 = 3;
@@ -200,6 +208,7 @@ impl AukiPeerConfig {
     ///
     /// Zero listeners is valid. The runtime reports the concrete addresses
     /// that actually bound; a requested TCP port may therefore be zero.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_listen_addresses(
         mut self,
         addresses: impl IntoIterator<Item = Multiaddr>,
@@ -214,6 +223,7 @@ impl AukiPeerConfig {
     /// These are publication addresses, not listeners. They must use the
     /// exact `ip|dns/tcp[/p2p]` grammar and a non-zero port. If a terminal Peer
     /// ID is supplied, the runtime also verifies it matches its local identity.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_advertised_direct_routes(
         mut self,
         routes: impl IntoIterator<Item = Multiaddr>,
@@ -228,6 +238,7 @@ impl AukiPeerConfig {
     ///
     /// Supplying no routes removes that peer. Repeating the method for the
     /// same peer replaces its prior hints atomically in the configuration.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn with_peer_routes(
         mut self,
         peer_id: PeerId,
@@ -281,6 +292,7 @@ impl AukiPeerConfig {
     /// opt-out and guarantees the runtime makes no relay-booking DMS calls.
     /// Call it before configuring a direct-route set that uses capacity
     /// otherwise reserved for the default relay.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn direct_only(mut self) -> Self {
         self.relay = None;
         self
@@ -288,9 +300,14 @@ impl AukiPeerConfig {
 
     /// Require relay-backed reachability using an explicit validated policy.
     ///
-    /// This also re-enables relay allocation after [`Self::direct_only`].
+    /// On native targets this also re-enables relay allocation after opting
+    /// into direct-only operation. Browser peers always require one relay.
     pub fn with_relay(mut self, relay: AukiRelayConfig) -> Result<Self, AukiPeerConfigError> {
         relay.validate()?;
+        #[cfg(target_arch = "wasm32")]
+        if relay.relay_count != 1 {
+            return Err(AukiPeerConfigError::BrowserRelayCount);
+        }
         validate_local_route_capacity(self.advertised_direct_routes.len(), Some(relay))?;
         self.relay = Some(relay);
         Ok(self)
@@ -330,6 +347,7 @@ impl AukiPeerConfig {
         &self.dms_base_url
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn route_catalog_limits(&self) -> RouteCatalogLimits {
         RouteCatalogLimits::new(
             MAX_LOCAL_ROUTES,
@@ -361,6 +379,9 @@ pub enum AukiPeerConfigError {
     /// The supplied relay policy violates the DMS contract.
     #[error(transparent)]
     Relay(#[from] AukiRelayConfigError),
+    /// The first browser transport owns exactly one relay reservation.
+    #[error("browser peers require exactly one relay")]
+    BrowserRelayCount,
     /// A bounded address set exceeded its maximum size.
     #[error("{kind} contains more than {maximum} addresses")]
     AddressLimit {
@@ -426,11 +447,13 @@ fn validate_local_route_capacity(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy)]
 enum AddressSet {
     Listeners,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl AddressSet {
     const fn label(self) -> &'static str {
         match self {
@@ -465,6 +488,7 @@ fn parse_dms_base_url(value: &str) -> Result<Url, AukiPeerConfigError> {
     Ok(url)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn bounded_sorted_addresses(
     addresses: impl IntoIterator<Item = Multiaddr>,
     maximum: usize,
@@ -491,6 +515,7 @@ fn bounded_sorted_addresses(
     Ok(addresses)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn canonicalize_advertised_routes(
     routes: impl IntoIterator<Item = Multiaddr>,
 ) -> Result<Vec<Multiaddr>, AukiPeerConfigError> {
@@ -516,6 +541,7 @@ fn canonicalize_advertised_routes(
     Ok(canonical)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn validate_identity_independent_direct_route(
     route: &Multiaddr,
 ) -> Result<(), AukiPeerConfigError> {
@@ -557,6 +583,7 @@ fn validate_identity_independent_direct_route(
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn canonicalize_peer_routes(
     peer_id: PeerId,
     routes: impl IntoIterator<Item = Multiaddr>,

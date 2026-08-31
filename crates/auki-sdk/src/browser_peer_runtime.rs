@@ -28,32 +28,34 @@ use uuid::Uuid;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::{
-    AukiWebPeerConfig,
-    booking::{
-        BOOKING_DURATION_SECONDS, BOOKING_MODE, RELAY_COUNT, ReadyRelay, ReadyRelayError,
-        booking_renewal_delay_at, matches_ready_relay, pull_booking_renewal_forward, ready_relay,
-        relay_renewal_start_deadline, relay_usable_until,
+    AukiPeerConfig, AukiRelayConfig,
+    browser_booking::{
+        ReadyRelay, ReadyRelayError, booking_mode, booking_renewal_delay_at, matches_ready_relay,
+        pull_booking_renewal_forward, ready_relay, relay_renewal_start_deadline,
+        relay_usable_until,
     },
+    browser_protocols::{AukiPeerProtocols, AukiProtocolError},
 };
 
-const RELAY_STATUS_POLL: Duration = Duration::from_secs(5);
 const RELAY_RETRY: Duration = Duration::from_secs(2);
 
 /// One browser Peer with renewable DDS authority and mandatory relay reachability.
-pub struct AukiWebPeer {
+pub struct AukiPeer {
     node: Rc<BrowserNode>,
-    reachability: AukiWebReachability,
+    reachability: AukiPeerReachability,
+    protocols: AukiPeerProtocols,
     relay: RelaySupervisor,
+    closed: bool,
 }
 
 /// Confirmed routes for reaching one browser Peer through its relay.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AukiWebReachability {
+pub struct AukiPeerReachability {
     wss: Multiaddr,
     tcp: Option<Multiaddr>,
 }
 
-impl AukiWebReachability {
+impl AukiPeerReachability {
     /// Exact WSS circuit route suitable for another browser Peer.
     pub fn wss(&self) -> &Multiaddr {
         &self.wss
@@ -76,11 +78,11 @@ impl AukiWebReachability {
 }
 
 /// One source-admitted, exact browser circuit pinned to a remote Peer.
-pub struct AukiWebRoute {
+pub struct AukiPeerRoute {
     inner: BrowserRelayRoute,
 }
 
-impl AukiWebRoute {
+impl AukiPeerRoute {
     pub fn relay_peer_id(&self) -> PeerId {
         self.inner.relay_peer_id()
     }
@@ -98,16 +100,16 @@ impl AukiWebRoute {
     }
 }
 
-impl AukiWebPeer {
+impl AukiPeer {
     /// Start one browser Peer and return only after its WSS relay reservation is publishable.
     pub async fn start(
         identity: Identity,
         prepared: PreparedPeer,
-        config: AukiWebPeerConfig,
-    ) -> Result<Self, AukiWebPeerError> {
+        config: AukiPeerConfig,
+    ) -> Result<Self, AukiPeerError> {
         let identity_peer_id = identity.peer_id();
         if prepared.peer_id != identity_peer_id {
-            return Err(AukiWebPeerError::IdentityMismatch {
+            return Err(AukiPeerError::IdentityMismatch {
                 identity: identity_peer_id.to_string(),
                 authorized: prepared.peer_id.to_string(),
             });
@@ -141,10 +143,12 @@ impl AukiWebPeer {
                 expires_at: credential_expires_at,
             },
         ));
+        let relay_policy = config.relay().ok_or(AukiPeerError::RelayRequired)?;
         let relay_client = RelayBookingClient::new(config.dms_base().clone(), authority.clone())?;
         let acquisition_booking_id = Cell::new(None);
         let ready = {
-            let acquisition = acquire_ready_relay(&relay_client, &acquisition_booking_id).fuse();
+            let acquisition =
+                acquire_ready_relay(&relay_client, &acquisition_booking_id, relay_policy).fuse();
             let stopped = node.wait_stopped().fuse();
             pin_mut!(acquisition, stopped);
             match select(acquisition, stopped).await {
@@ -167,7 +171,7 @@ impl AukiWebPeer {
                         acquisition_booking_id.get(),
                     )
                     .await;
-                    return Err(AukiWebPeerError::NodeStoppedDuringStartup { status });
+                    return Err(AukiPeerError::NodeStoppedDuringStartup { status });
                 }
             }
         };
@@ -191,16 +195,16 @@ impl AukiWebPeer {
                 }
                 Either::Right((status, _)) => {
                     cleanup_startup(&node, &relay_client, &authority, Some(ready.booking_id)).await;
-                    return Err(AukiWebPeerError::NodeStoppedDuringStartup { status });
+                    return Err(AukiPeerError::NodeStoppedDuringStartup { status });
                 }
             }
         };
         if reservation.publishable_route() != Some(&wss) {
             cleanup_startup(&node, &relay_client, &authority, Some(ready.booking_id)).await;
-            return Err(AukiWebPeerError::RelayReservationMismatch);
+            return Err(AukiPeerError::RelayReservationMismatch);
         }
         let ready = {
-            let confirmation = confirm_ready_relay(&relay_client, &ready).fuse();
+            let confirmation = confirm_ready_relay(&relay_client, &ready, relay_policy).fuse();
             let stopped = node.wait_stopped().fuse();
             pin_mut!(confirmation, stopped);
             match select(confirmation, stopped).await {
@@ -211,21 +215,27 @@ impl AukiWebPeer {
                 }
                 Either::Right((status, _)) => {
                     cleanup_startup(&node, &relay_client, &authority, Some(ready.booking_id)).await;
-                    return Err(AukiWebPeerError::NodeStoppedDuringStartup { status });
+                    return Err(AukiPeerError::NodeStoppedDuringStartup { status });
                 }
             }
         };
+        let reachability = AukiPeerReachability { wss, tcp };
+        let protocols =
+            AukiPeerProtocols::new(Rc::clone(&node), node.domain_id(), reachability.clone());
         let relay = RelaySupervisor::start(
             relay_client,
             Arc::clone(&authority),
             Rc::clone(&node),
             ready,
+            relay_policy,
         );
 
         Ok(Self {
             node,
-            reachability: AukiWebReachability { wss, tcp },
+            reachability,
+            protocols,
             relay,
+            closed: false,
         })
     }
 
@@ -237,14 +247,19 @@ impl AukiWebPeer {
         self.node.domain_id()
     }
 
-    pub fn reachability(&self) -> &AukiWebReachability {
+    pub fn reachability(&self) -> &AukiPeerReachability {
         &self.reachability
+    }
+
+    /// Authenticated application protocol registration and opening surface.
+    pub fn protocols(&self) -> AukiPeerProtocols {
+        self.protocols.clone()
     }
 
     pub fn accept(
         &self,
         protocol: ApplicationProtocol,
-    ) -> Result<BrowserIncomingAuthenticatedStreams, AukiWebPeerError> {
+    ) -> Result<BrowserIncomingAuthenticatedStreams, AukiPeerError> {
         Ok(self.node.accept(protocol)?)
     }
 
@@ -253,61 +268,78 @@ impl AukiWebPeer {
     ///
     /// Trusted multi-relay discovery is deliberately outside the v0.1
     /// facade; callers provide only the expected target Peer ID.
-    pub async fn connect(&self, expected_peer: PeerId) -> Result<AukiWebRoute, AukiWebPeerError> {
+    pub async fn connect(&self, expected_peer: PeerId) -> Result<AukiPeerRoute, AukiPeerError> {
         let route = self.reachability.wss_route_to(expected_peer);
         let route = self.node.connect_relayed(expected_peer, route).await?;
-        Ok(AukiWebRoute { inner: route })
+        Ok(AukiPeerRoute { inner: route })
     }
 
     /// Open one exact opted-in protocol and complete mutual DDS authentication.
     pub async fn open(
         &self,
-        route: &AukiWebRoute,
+        route: &AukiPeerRoute,
         protocol: ApplicationProtocol,
-    ) -> Result<AuthenticatedStream, AukiWebPeerError> {
+    ) -> Result<AuthenticatedStream, AukiPeerError> {
         Ok(self.node.open_relayed(&route.inner, protocol).await?)
     }
 
-    pub async fn close_route(&self, route: &AukiWebRoute) -> Result<(), AukiWebPeerError> {
+    pub async fn close_route(&self, route: &AukiPeerRoute) -> Result<(), AukiPeerError> {
         Ok(self.node.close_relay_route(&route.inner).await?)
     }
 
     /// Wait until either the browser swarm or its authority/booking supervisor stops.
-    pub async fn wait_stopped(&self) -> AukiWebPeerExit {
+    pub async fn wait_stopped(&self) -> AukiPeerExit {
         match self.relay.wait_stopped().await {
-            SupervisorExit::Node(status) => AukiWebPeerExit::Node(status),
-            SupervisorExit::Failed { reason } => AukiWebPeerExit::SupervisorFailed { reason },
+            SupervisorExit::Node(status) => AukiPeerExit::Node(status),
+            SupervisorExit::Failed { reason } => AukiPeerExit::SupervisorFailed { reason },
             SupervisorExit::Shutdown | SupervisorExit::OwnersDropped => {
-                AukiWebPeerExit::SupervisorStopped
+                AukiPeerExit::SupervisorStopped
             }
         }
     }
 
     /// Stop the node, delete the booking, and clear authority.
     ///
-    /// The terminal result is shared, so repeated calls observe the same
-    /// completed shutdown. Operations racing with shutdown fail normally.
-    pub async fn shutdown(&self) -> Result<(), AukiWebPeerError> {
-        match self.relay.stop().await {
-            SupervisorExit::Failed { reason } => {
-                Err(AukiWebPeerError::Shutdown { details: reason })
-            }
+    /// Protocol handlers stop before the relay booking, authority, and browser
+    /// transport are torn down. The owner is consumed so successful return is
+    /// the cleanup barrier.
+    pub async fn shutdown(mut self) -> Result<(), AukiPeerShutdownError> {
+        let protocol_failure = self.protocols.shutdown_all().await.err();
+        let relay_failure = match self.relay.stop().await {
+            SupervisorExit::Failed { reason } => Some(reason),
             SupervisorExit::Shutdown | SupervisorExit::OwnersDropped | SupervisorExit::Node(_) => {
-                Ok(())
+                None
             }
+        };
+        self.closed = true;
+        match (protocol_failure, relay_failure) {
+            (None, None) => Ok(()),
+            (protocols, relay) => Err(AukiPeerError::Shutdown {
+                details: shutdown_details(protocols, relay),
+            }),
+        }
+    }
+}
+
+impl Drop for AukiPeer {
+    fn drop(&mut self) {
+        if !self.closed {
+            self.protocols.abort_all();
         }
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AukiWebPeerExit {
+pub enum AukiPeerExit {
     Node(BrowserNodeExit),
     SupervisorFailed { reason: String },
     SupervisorStopped,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum AukiWebPeerError {
+pub enum AukiPeerError {
+    #[error("the browser Auki peer has stopped")]
+    Stopped,
     #[error("authorized Peer ID {authorized} does not match identity Peer ID {identity}")]
     IdentityMismatch {
         identity: String,
@@ -321,6 +353,8 @@ pub enum AukiWebPeerError {
     RelaySelection { reason: String },
     #[error("relay route construction failed: {0}")]
     RelayRoute(#[from] RelayReservationError),
+    #[error("browser peers require relay-backed reachability")]
+    RelayRequired,
     #[error("confirmed relay reservation route differs from its selected provider")]
     RelayReservationMismatch,
     #[error("browser P2P node stopped during startup: {status:?}")]
@@ -333,7 +367,21 @@ pub enum AukiWebPeerError {
     Shutdown { details: String },
 }
 
-impl From<ReadyRelayError> for AukiWebPeerError {
+pub type AukiPeerStartError = AukiPeerError;
+pub type AukiPeerShutdownError = AukiPeerError;
+
+fn shutdown_details(protocols: Option<AukiProtocolError>, relay: Option<String>) -> String {
+    match (protocols, relay) {
+        (Some(protocols), Some(relay)) => {
+            format!("protocol cleanup failed: {protocols}; relay cleanup failed: {relay}")
+        }
+        (Some(protocols), None) => format!("protocol cleanup failed: {protocols}"),
+        (None, Some(relay)) => format!("relay cleanup failed: {relay}"),
+        (None, None) => unreachable!("shutdown details require at least one failure"),
+    }
+}
+
+impl From<ReadyRelayError> for AukiPeerError {
     fn from(error: ReadyRelayError) -> Self {
         Self::RelaySelection {
             reason: error.to_string(),
@@ -344,11 +392,15 @@ impl From<ReadyRelayError> for AukiWebPeerError {
 async fn acquire_ready_relay(
     client: &RelayBookingClient,
     adopted_booking_id: &Cell<Option<Uuid>>,
-) -> Result<ReadyRelay, AukiWebPeerError> {
-    let request =
-        CreateRelayBookingRequest::new(BOOKING_MODE, BOOKING_DURATION_SECONDS, RELAY_COUNT)?;
+    policy: AukiRelayConfig,
+) -> Result<ReadyRelay, AukiPeerError> {
+    let request = CreateRelayBookingRequest::new(
+        booking_mode(policy),
+        policy.requested_duration.as_secs(),
+        policy.relay_count,
+    )?;
     let idempotency_key =
-        RelayIdempotencyKey::new(format!("auki-sdk-web-relay-{}", Uuid::new_v4()))?;
+        RelayIdempotencyKey::new(format!("auki-sdk-browser-relay-{}", Uuid::new_v4()))?;
 
     loop {
         let (snapshot, created_by_this_attempt) = match client.active().await {
@@ -373,19 +425,19 @@ async fn acquire_ready_relay(
         if created_by_this_attempt {
             adopted_booking_id.set(Some(snapshot.booking_id));
         }
-        let ready = ready_relay(&snapshot)?;
+        let ready = ready_relay(&snapshot, policy)?;
         adopted_booking_id.set(Some(snapshot.booking_id));
         if let Some(ready) = ready {
             return Ok(ready);
         }
-        Delay::new(RELAY_STATUS_POLL).await;
+        Delay::new(policy.status_poll_interval).await;
     }
 }
 
 fn relay_routes(
     ready: &ReadyRelay,
     peer_id: PeerId,
-) -> Result<(Multiaddr, Option<Multiaddr>), AukiWebPeerError> {
+) -> Result<(Multiaddr, Option<Multiaddr>), AukiPeerError> {
     let wss = ready
         .provider
         .circuit_route_for_transport(RelayBaseTransport::Wss, peer_id)?;
@@ -404,17 +456,18 @@ fn relay_routes(
 async fn confirm_ready_relay(
     client: &RelayBookingClient,
     pinned: &ReadyRelay,
-) -> Result<ReadyRelay, AukiWebPeerError> {
+    policy: AukiRelayConfig,
+) -> Result<ReadyRelay, AukiPeerError> {
     let snapshot = client
         .active()
         .await?
-        .ok_or(AukiWebPeerError::RelayChangedDuringStartup)?;
-    if !matches_ready_relay(pinned, &snapshot)? {
-        return Err(AukiWebPeerError::RelayChangedDuringStartup);
+        .ok_or(AukiPeerError::RelayChangedDuringStartup)?;
+    if !matches_ready_relay(pinned, &snapshot, policy)? {
+        return Err(AukiPeerError::RelayChangedDuringStartup);
     }
-    let ready = ready_relay(&snapshot)?.ok_or(AukiWebPeerError::RelayChangedDuringStartup)?;
+    let ready = ready_relay(&snapshot, policy)?.ok_or(AukiPeerError::RelayChangedDuringStartup)?;
     if Utc::now() >= relay_usable_until(&ready) {
-        return Err(AukiWebPeerError::RelayAuthorityEndedDuringStartup);
+        return Err(AukiPeerError::RelayAuthorityEndedDuringStartup);
     }
     Ok(ready)
 }
@@ -630,6 +683,7 @@ impl RelaySupervisor {
         authority: Arc<AuthorityManager>,
         node: Rc<BrowserNode>,
         ready: ReadyRelay,
+        policy: AukiRelayConfig,
     ) -> Self {
         let (stop, stop_receiver) = async_channel::bounded(1);
         let (stopped_sender, stopped_receiver) = oneshot::channel();
@@ -641,6 +695,7 @@ impl RelaySupervisor {
                 Arc::clone(&task_authority),
                 Rc::clone(&node),
                 ready,
+                policy,
                 stop_receiver,
             )
             .await;
@@ -698,11 +753,12 @@ async fn supervise_relay(
     authority: Arc<AuthorityManager>,
     node: Rc<BrowserNode>,
     mut pinned: ReadyRelay,
+    policy: AukiRelayConfig,
     stop: async_channel::Receiver<()>,
 ) -> SupervisionEnd {
     let now = Utc::now();
     let mut next_renew = now + chrono_duration(booking_renewal_delay_at(&pinned, now));
-    let mut next_poll = now + chrono_duration(RELAY_STATUS_POLL);
+    let mut next_poll = now + chrono_duration(policy.status_poll_interval);
     loop {
         let iteration = relay_iteration(
             client,
@@ -710,6 +766,7 @@ async fn supervise_relay(
             &mut pinned,
             &mut next_renew,
             &mut next_poll,
+            policy,
         )
         .fuse();
         let shutdown = stop.recv().fuse();
@@ -739,6 +796,7 @@ async fn relay_iteration(
     pinned: &mut ReadyRelay,
     next_renew: &mut DateTime<Utc>,
     next_poll: &mut DateTime<Utc>,
+    policy: AukiRelayConfig,
 ) -> Result<(), SupervisorError> {
     let now = Utc::now();
     ensure_relay_usable(pinned, now)?;
@@ -761,11 +819,11 @@ async fn relay_iteration(
     if should_renew {
         match client.renew(pinned.booking_id).await {
             Ok(snapshot) => {
-                apply_relay_snapshot(pinned, &snapshot)?;
+                apply_relay_snapshot(pinned, &snapshot, policy)?;
                 let now = Utc::now();
                 ensure_relay_usable(pinned, now)?;
                 *next_renew = now + chrono_duration(booking_renewal_delay_at(pinned, now));
-                *next_poll = now + chrono_duration(RELAY_STATUS_POLL);
+                *next_poll = now + chrono_duration(policy.status_poll_interval);
             }
             Err(error) if error.is_retryable() => {
                 let retry = error.retry_after().unwrap_or(RELAY_RETRY);
@@ -785,11 +843,11 @@ async fn relay_iteration(
     if now >= *next_poll {
         match client.active().await {
             Ok(Some(snapshot)) => {
-                apply_relay_snapshot(pinned, &snapshot)?;
+                apply_relay_snapshot(pinned, &snapshot, policy)?;
                 let now = Utc::now();
                 ensure_relay_usable(pinned, now)?;
                 *next_renew = pull_booking_renewal_forward(*next_renew, pinned, now);
-                *next_poll = now + chrono_duration(RELAY_STATUS_POLL);
+                *next_poll = now + chrono_duration(policy.status_poll_interval);
             }
             Ok(None) => return Err(SupervisorError::BookingDisappeared),
             Err(error) if error.is_retryable() => {
@@ -806,11 +864,12 @@ async fn relay_iteration(
 fn apply_relay_snapshot(
     pinned: &mut ReadyRelay,
     snapshot: &auki_relay_booking::RelayBookingSnapshot,
+    policy: AukiRelayConfig,
 ) -> Result<(), SupervisorError> {
-    if !matches_ready_relay(pinned, snapshot)? {
+    if !matches_ready_relay(pinned, snapshot, policy)? {
         return Err(SupervisorError::RelayChanged);
     }
-    *pinned = ready_relay(snapshot)?.ok_or(SupervisorError::RelayChanged)?;
+    *pinned = ready_relay(snapshot, policy)?.ok_or(SupervisorError::RelayChanged)?;
     Ok(())
 }
 

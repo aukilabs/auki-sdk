@@ -793,11 +793,14 @@ dependencies = [
 name = "auki-sdk"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "async-trait",
  "auki-auth",
  "auki-p2p",
  "auki-relay-booking",
  "chrono",
+ "futures",
+ "futures-timer",
  "httpmock",
  "jsonwebtoken 9.3.1",
  "parking_lot",
@@ -810,26 +813,16 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]
 name = "auki-sdk-web"
 version = "0.1.0"
 dependencies = [
- "async-channel",
- "async-trait",
- "auki-auth",
  "auki-p2p",
- "auki-relay-booking",
- "chrono",
- "futures",
- "futures-timer",
- "reqwest",
- "thiserror 2.0.18",
- "tokio-util",
- "tracing",
+ "auki-sdk",
  "uuid",
- "wasm-bindgen-futures",
 ]
 
 [[package]]

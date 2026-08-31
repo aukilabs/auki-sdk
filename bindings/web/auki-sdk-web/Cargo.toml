@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Mechanical browser facade for authenticated relay-backed Auki peers"
+description = "Temporary Web adapter bridge to the canonical auki-sdk browser facade"
 readme = "README.md"
 publish = false
 
@@ -14,20 +14,8 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-async-channel = { workspace = true }
-async-trait = { workspace = true }
-auki-auth = { path = "../../../crates/auki-auth" }
-auki-p2p = { path = "../../../crates/auki-p2p" }
-auki-relay-booking = { path = "../../../crates/auki-relay-booking" }
-chrono = { workspace = true }
-futures = { workspace = true }
-futures-timer = { workspace = true }
-reqwest = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
-tokio-util = { workspace = true, features = ["rt"] }
-uuid = { workspace = true }
-wasm-bindgen-futures = { workspace = true }
+auki-sdk = { path = "../../../crates/auki-sdk" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+auki-p2p = { path = "../../../crates/auki-p2p" }
 uuid = { workspace = true, features = ["js"] }

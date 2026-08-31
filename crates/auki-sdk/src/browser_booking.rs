@@ -9,10 +9,16 @@ use auki_relay_booking::{
 };
 use uuid::Uuid;
 
-pub(crate) const BOOKING_MODE: RelayBookingMode = RelayBookingMode::Public;
-pub(crate) const BOOKING_DURATION_SECONDS: u64 = 86_400;
-pub(crate) const RELAY_COUNT: u8 = 1;
+use crate::{AukiRelayConfig, AukiRelayMode};
+
 pub(crate) const RELAY_AUTHORITY_SAFETY: Duration = Duration::from_secs(20);
+
+pub(crate) fn booking_mode(policy: AukiRelayConfig) -> RelayBookingMode {
+    match policy.mode {
+        AukiRelayMode::Public => RelayBookingMode::Public,
+        AukiRelayMode::Dedicated => RelayBookingMode::Dedicated,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RelayFence {
@@ -33,8 +39,9 @@ pub(crate) struct ReadyRelay {
 
 pub(crate) fn ready_relay(
     snapshot: &RelayBookingSnapshot,
+    policy: AukiRelayConfig,
 ) -> Result<Option<ReadyRelay>, ReadyRelayError> {
-    validate_policy(snapshot)?;
+    validate_policy(snapshot, policy)?;
     let slot = snapshot
         .slots
         .first()
@@ -95,8 +102,9 @@ pub(crate) fn ready_relay(
 pub(crate) fn matches_ready_relay(
     pinned: &ReadyRelay,
     snapshot: &RelayBookingSnapshot,
+    policy: AukiRelayConfig,
 ) -> Result<bool, ReadyRelayError> {
-    Ok(ready_relay(snapshot)?.is_some_and(|current| {
+    Ok(ready_relay(snapshot, policy)?.is_some_and(|current| {
         current.booking_id == pinned.booking_id
             && current.fence == pinned.fence
             && current.provider == pinned.provider
@@ -145,12 +153,15 @@ pub(crate) fn pull_booking_renewal_forward(
     scheduled.min(candidate)
 }
 
-fn validate_policy(snapshot: &RelayBookingSnapshot) -> Result<(), ReadyRelayError> {
-    if snapshot.mode != BOOKING_MODE
-        || snapshot.requested_duration_seconds != BOOKING_DURATION_SECONDS
-        || snapshot.relay_count != RELAY_COUNT
+fn validate_policy(
+    snapshot: &RelayBookingSnapshot,
+    policy: AukiRelayConfig,
+) -> Result<(), ReadyRelayError> {
+    if snapshot.mode != booking_mode(policy)
+        || snapshot.requested_duration_seconds != policy.requested_duration.as_secs()
+        || snapshot.relay_count != policy.relay_count
         || snapshot.state != RelayBookingState::Active
-        || snapshot.slots.len() != usize::from(RELAY_COUNT)
+        || snapshot.slots.len() != usize::from(policy.relay_count)
     {
         return Err(ReadyRelayError::Invalid(
             "active relay booking does not match the browser policy",
@@ -175,16 +186,20 @@ mod tests {
 
     use super::*;
 
+    fn policy() -> AukiRelayConfig {
+        AukiRelayConfig::default()
+    }
+
     fn snapshot(slot_state: RelaySlotState) -> RelayBookingSnapshot {
         let now = chrono::Utc::now();
         let relay = Identity::generate().peer_id();
         let assigned = slot_state == RelaySlotState::Ready;
         RelayBookingSnapshot {
             booking_id: Uuid::new_v4(),
-            mode: BOOKING_MODE,
+            mode: booking_mode(policy()),
             state: RelayBookingState::Active,
-            relay_count: RELAY_COUNT,
-            requested_duration_seconds: BOOKING_DURATION_SECONDS,
+            relay_count: policy().relay_count,
+            requested_duration_seconds: policy().requested_duration.as_secs(),
             requested_until: now + ChronoDuration::hours(24),
             authority_expires_at: now + ChronoDuration::minutes(5),
             assigned_count: u8::from(assigned),
@@ -218,7 +233,7 @@ mod tests {
     #[test]
     fn selects_one_ready_wss_provider_with_native_counterpart() {
         let snapshot = snapshot(RelaySlotState::Ready);
-        let ready = ready_relay(&snapshot).unwrap().unwrap();
+        let ready = ready_relay(&snapshot, policy()).unwrap().unwrap();
         let target = Identity::generate().peer_id();
 
         assert_eq!(ready.booking_id, snapshot.booking_id);
@@ -250,7 +265,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .remove(0);
-        let ready = ready_relay(&wss_only).unwrap().unwrap();
+        let ready = ready_relay(&wss_only, policy()).unwrap().unwrap();
         assert!(
             ready
                 .provider
@@ -270,7 +285,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .remove(1);
-        assert!(ready_relay(&tcp_only).is_err());
+        assert!(ready_relay(&tcp_only, policy()).is_err());
     }
 
     #[test]
@@ -282,14 +297,14 @@ mod tests {
             RelaySlotState::Reassigning,
             RelaySlotState::Ended,
         ] {
-            assert!(ready_relay(&snapshot(state)).unwrap().is_none());
+            assert!(ready_relay(&snapshot(state), policy()).unwrap().is_none());
         }
     }
 
     #[test]
     fn booking_fence_or_provider_replacement_breaks_the_pin() {
         let original = snapshot(RelaySlotState::Ready);
-        let pinned = ready_relay(&original).unwrap().unwrap();
+        let pinned = ready_relay(&original, policy()).unwrap().unwrap();
         let mut replacements = Vec::new();
 
         let mut booking = original.clone();
@@ -313,7 +328,7 @@ mod tests {
         replacements.push(provider);
 
         for replacement in replacements {
-            assert!(!matches_ready_relay(&pinned, &replacement).unwrap());
+            assert!(!matches_ready_relay(&pinned, &replacement, policy()).unwrap());
         }
 
         let mut refreshed_deadlines = original;
@@ -321,13 +336,13 @@ mod tests {
         refreshed_deadlines.slots[0].provider_lease_expires_at = refreshed_deadlines.slots[0]
             .provider_lease_expires_at
             .map(|deadline| deadline + ChronoDuration::minutes(1));
-        assert!(matches_ready_relay(&pinned, &refreshed_deadlines).unwrap());
+        assert!(matches_ready_relay(&pinned, &refreshed_deadlines, policy()).unwrap());
     }
 
     #[test]
     fn renewal_delay_uses_quarter_life_without_crossing_the_safety_margin() {
         let now = chrono::Utc::now();
-        let mut ready = ready_relay(&snapshot(RelaySlotState::Ready))
+        let mut ready = ready_relay(&snapshot(RelaySlotState::Ready), policy())
             .unwrap()
             .unwrap();
 
@@ -353,7 +368,7 @@ mod tests {
     #[test]
     fn usable_deadline_uses_the_earliest_authority_with_safety_margin() {
         let now = chrono::Utc::now();
-        let mut ready = ready_relay(&snapshot(RelaySlotState::Ready))
+        let mut ready = ready_relay(&snapshot(RelaySlotState::Ready), policy())
             .unwrap()
             .unwrap();
         ready.requested_until = now + ChronoDuration::seconds(300);
@@ -374,7 +389,7 @@ mod tests {
     fn an_earlier_snapshot_deadline_pulls_renewal_forward_only() {
         let now = chrono::Utc::now();
         let scheduled = now + ChronoDuration::seconds(60);
-        let mut ready = ready_relay(&snapshot(RelaySlotState::Ready))
+        let mut ready = ready_relay(&snapshot(RelaySlotState::Ready), policy())
             .unwrap()
             .unwrap();
 

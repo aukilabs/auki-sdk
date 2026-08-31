@@ -26,6 +26,13 @@ tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+async-channel = { workspace = true }
+futures = { workspace = true }
+futures-timer = { workspace = true }
+uuid = { workspace = true, features = ["js"] }
+wasm-bindgen-futures = { workspace = true }
+
 [dev-dependencies]
 httpmock = "0.8.2"
 jsonwebtoken = "9.3.1"

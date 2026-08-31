@@ -61,6 +61,14 @@ message = [
     "dep:prost",
     "dep:thiserror",
 ]
+message-endpoint = [
+    "message",
+    "catalog",
+    "dep:async-channel",
+    "dep:auki-sdk",
+    "dep:futures-timer",
+    "dep:tokio",
+]
 stream = [
     "dep:auki-datatypes",
     "dep:futures",
@@ -71,6 +79,7 @@ stream = [
 stream-endpoint = ["stream", "dep:auki-sdk", "dep:futures-timer"]
 
 [dependencies]
+async-channel = { workspace = true, optional = true }
 auki-datatypes = { path = "../auki-datatypes", optional = true }
 auki-hash = { path = "../auki-hash", optional = true }
 auki-jcs = { path = "../auki-jcs", optional = true }
@@ -84,6 +93,7 @@ prost = { version = "0.13", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 thiserror = { version = "2", optional = true }
+tokio = { workspace = true, features = ["sync"], optional = true }
 
 [dev-dependencies]
 auki-p2p = { path = "../auki-p2p" }

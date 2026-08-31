@@ -41,6 +41,7 @@ getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 libp2p = { workspace = true, features = ["ed25519", "macros", "noise", "relay", "wasm-bindgen", "websocket-websys", "yamux"] }
 libp2p-stream = { workspace = true }
 uuid = { workspace = true, features = ["js"] }
+wasm-bindgen-futures = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -16,10 +16,10 @@ mod authentication;
 mod authority;
 mod authority_update;
 #[cfg(target_arch = "wasm32")]
-#[allow(dead_code)]
 mod browser_authority;
+#[cfg(any(test, target_arch = "wasm32"))]
+mod browser_route;
 #[cfg(target_arch = "wasm32")]
-#[allow(dead_code)]
 mod browser_transport;
 mod error;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -55,6 +55,10 @@ pub use authority::{DomainAuthority, P2pCredentialError, P2pCredentialResult};
 pub use authority_update::PeerAuthorityUpdate;
 #[cfg(target_arch = "wasm32")]
 pub use browser_authority::BrowserAuthority;
+#[cfg(target_arch = "wasm32")]
+pub use browser_transport::{
+    BrowserIncomingAuthenticatedStreams, BrowserNode, BrowserNodeExit, BrowserRelayRoute,
+};
 pub use error::{Error, Result};
 pub use identity::{Identity, PeerIdentityProof};
 pub use libp2p::{multiaddr::Protocol, swarm::ConnectionId, Multiaddr};

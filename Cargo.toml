@@ -72,4 +72,5 @@ tokio-util = "0.7.16"
 tracing = "0.1.40"
 uuid = { version = "1.10.1", features = ["v4", "serde"] }
 web-time = "1.1.0"
+wasm-bindgen-futures = "0.4.71"
 zeroize = "1.8.1"

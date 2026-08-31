@@ -96,7 +96,6 @@ pub enum Error {
     Listen { address: String, reason: String },
     #[error("failed to open libp2p stream: {0}")]
     OpenStream(String),
-    #[cfg(not(target_arch = "wasm32"))]
     #[error(transparent)]
     TargetedStream(#[from] crate::targeted_stream::TargetedStreamError),
     #[error("failed to dial libp2p peer: {0}")]

@@ -389,6 +389,8 @@ async function buildNativeBinary(environment) {
       "--locked",
       "-p",
       "auki-portable-echo-native",
+      "--bin",
+      "auki-portable-echo-interop",
       "--message-format=json-render-diagnostics",
     ],
     {
@@ -402,7 +404,7 @@ async function buildNativeBinary(environment) {
       const message = JSON.parse(line);
       if (
         message.reason === "compiler-artifact" &&
-        message.target?.name === "auki-portable-echo-native" &&
+        message.target?.name === "auki-portable-echo-interop" &&
         message.executable
       ) {
         return message.executable;
@@ -411,7 +413,7 @@ async function buildNativeBinary(environment) {
       // Cargo may emit an empty or non-JSON informational line.
     }
   }
-  throw new Error("Cargo did not report the native echo executable");
+  throw new Error("Cargo did not report the native interop executable");
 }
 
 function runNativeClient({

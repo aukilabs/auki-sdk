@@ -1,70 +1,81 @@
-# Portable echo — native AukiPeer adapter
+# Portable echo in native Rust
 
-This thin host authenticates and starts a native `AukiPeer`, then mounts the
-shared [`auki-portable-echo-adapter`](../adapter) implementation. The adapter
-owns the exact protocol registration, five-second stream-operation deadlines,
-the registration shutdown barrier, conversation, stream cleanup, and bounded
-inbound observations on every Rust target. This executable supplies only
-credentials, peer configuration, console output, and ordered shutdown on both
-success and failure paths.
+This is the smallest complete native application built from the high-level
+`AukiPeer` facade and the shared portable echo adapter. It authenticates a User,
+authorizes one exact Domain, starts a relay-reachable peer, mounts the Rust echo
+protocol, and shuts the protocol and peer down in order.
+
+The default application contains the developer-facing path only. The more
+verbose machine-readable executable used by the protected Web/native smoke test
+is kept separately as `auki-portable-echo-interop`.
 
 ## Run two peers
 
-Both processes need access to the same dev Domain. Use separate state
-directories so they have distinct persistent Peer IDs.
+Both peers need User access to the same dev Domain and separate identity files.
+`Identity::load_or_create` creates the parent directory and reuses the same Peer
+ID on later launches.
 
-Terminal A:
-
-```sh
-export AUKI_EMAIL='you@example.com'
-export AUKI_PASSWORD='...'
-export AUKI_DOMAIN_ID='00000000-0000-0000-0000-000000000000'
-export AUKI_STATE_DIR='/tmp/auki-portable-echo-a'
-cargo run --locked -p auki-portable-echo-native
-```
-
-Copy the printed `PEER_ID` and complete `RELAY_ROUTE`, then start terminal B:
+In terminal A:
 
 ```sh
 export AUKI_EMAIL='you@example.com'
 export AUKI_PASSWORD='...'
 export AUKI_DOMAIN_ID='00000000-0000-0000-0000-000000000000'
-export AUKI_STATE_DIR='/tmp/auki-portable-echo-b'
-export AUKI_REMOTE_PEER_ID='<PEER_ID from terminal A>'
-export AUKI_REMOTE_ROUTE='<RELAY_ROUTE from terminal A>'
-export AUKI_ECHO_MESSAGE='hello from the shared Rust protocol'
+export AUKI_IDENTITY_FILE='/tmp/auki-echo-a/peer.identity'
 cargo run --locked -p auki-portable-echo-native
 ```
 
-Terminal B prints `ECHO_OK`, closes its stream, and shuts down. Stop terminal A
-with Ctrl-C. Both processes await the facade's ordered shutdown.
+The application prints its Peer ID and confirmed TCP relay route, then serves
+echo requests until Ctrl-C:
 
-## Round trip with the browser playground
-
-Start a browser peer from the
-[Peer Playground](../web/README.md), then copy its Peer ID and the `tcp` route
-from its public Peer Card. Run the native peer with those values and keep it
-serving after its first outbound echo:
-
-```sh
-export AUKI_REMOTE_PEER_ID='<browser Peer ID>'
-export AUKI_REMOTE_ROUTE='<browser Peer Card tcp route>'
-export AUKI_KEEP_RUNNING=1
-cargo run --locked -p auki-portable-echo-native
+```text
+peer: 12D3KooW...
+route: /dns4/relay.dev.aukiverse.com/tcp/443/p2p/.../p2p-circuit/p2p/12D3KooW...
+serving; press Ctrl-C to stop
 ```
 
-The terminal first prints `ECHO_OK`, then `WAITING_FOR_PEER`. Paste its printed
-`PEER_CARD` into the playground and send an echo back. The browser currently
-dials through its own DMS-confirmed relay, so this manual v0.1 round trip
-requires both peers to receive a slot on the same relay. Stop the terminal with
-Ctrl-C when finished.
-
-A trusted native application can use App credentials instead:
+In terminal B, use a different identity file and pass both values printed by A:
 
 ```sh
-unset AUKI_EMAIL AUKI_PASSWORD
-export AUKI_APP_ACCESS_KEY='...'
-export AUKI_APP_SECRET='...'
+export AUKI_EMAIL='you@example.com'
+export AUKI_PASSWORD='...'
+export AUKI_DOMAIN_ID='00000000-0000-0000-0000-000000000000'
+export AUKI_IDENTITY_FILE='/tmp/auki-echo-b/peer.identity'
+cargo run --locked -p auki-portable-echo-native -- \
+  '<PEER_ID from terminal A>' \
+  '<complete route from terminal A>'
 ```
 
-Do not place App credentials in the future browser example.
+Terminal B sends `hello from Auki`, prints the echoed payload, closes its
+protocol endpoint, and shuts down its peer. Stop terminal A with Ctrl-C; it
+performs the same ordered cleanup.
+
+The reference program intentionally shows User credentials only. A trusted
+native or headless application can instead authenticate with
+`Credentials::app(access_key, secret)`. Never embed an App secret in a browser
+or distributed client.
+
+## Web/native interoperability proof
+
+The protected smoke test needs additional peer-card output, inbound event
+markers, flexible credential parsing, and keep-running controls. Those concerns
+remain in the explicit interop binary instead of obscuring the copyable app:
+
+```sh
+cargo run --locked -p auki-portable-echo-native \
+  --bin auki-portable-echo-interop
+```
+
+Normally, run it through the [Web/Wasm example](../web/README.md):
+
+```sh
+cd examples/portable-echo/web
+export AUKI_EMAIL='you@example.com'
+export AUKI_PASSWORD='...'
+export AUKI_DOMAIN_ID='00000000-0000-0000-0000-000000000000'
+npm run smoke:dev
+```
+
+That proof covers browser-to-browser in both directions, native-to-browser, and
+browser-to-native using each remote peer's exact advertised route. Peers do not
+need to receive reservations on the same relay.

@@ -9,6 +9,16 @@ authors.workspace = true
 publish = false
 description = "Native AukiPeer adapter for the portable echo protocol."
 readme = "README.md"
+default-run = "auki-portable-echo-native"
+autobins = false
+
+[[bin]]
+name = "auki-portable-echo-native"
+path = "src/main.rs"
+
+[[bin]]
+name = "auki-portable-echo-interop"
+path = "src/bin/interop.rs"
 
 [dependencies]
 anyhow = { workspace = true }

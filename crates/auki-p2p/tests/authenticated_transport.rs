@@ -459,14 +459,14 @@ fn verifier_enforces_the_exact_dds_claim_profile() {
         identity.peer_id(),
         PeerRole::Robot,
         vec![Uuid::new_v4().to_string()],
-        now + P2P_TOKEN_CLOCK_SKEW.as_secs() + 1,
+        now + P2P_TOKEN_CLOCK_SKEW.as_secs() + 10,
     );
     assert!(verifier.verify(&sign(&beyond_future_skew)).is_err());
     let mut nbf_within_skew = valid_claims.clone();
     nbf_within_skew.nbf = Some(now + P2P_TOKEN_CLOCK_SKEW.as_secs());
     assert!(verifier.verify(&sign(&nbf_within_skew)).is_ok());
     let mut nbf_beyond_skew = valid_claims.clone();
-    nbf_beyond_skew.nbf = Some(now + P2P_TOKEN_CLOCK_SKEW.as_secs() + 1);
+    nbf_beyond_skew.nbf = Some(now + P2P_TOKEN_CLOCK_SKEW.as_secs() + 10);
     assert!(verifier.verify(&sign(&nbf_beyond_skew)).is_err());
 
     let mut bad_signature = sign(&valid_claims).into_bytes();

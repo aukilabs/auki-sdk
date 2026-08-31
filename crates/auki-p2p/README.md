@@ -1,6 +1,7 @@
 # auki-p2p
 
-`auki-p2p` is the shared authenticated P2P runtime. It owns:
+`auki-p2p` owns the shared P2P identity and authentication core plus the native
+authenticated P2P runtime. It owns:
 
 - the persistent libp2p identity and peer ID;
 - DDS-token verification and the process-local credential authority;
@@ -11,6 +12,11 @@
 
 It deliberately does not own DDS/DMS HTTP clients, task scheduling, or an
 application protocol's wire format.
+
+The identity, DDS token verification, session requirements, and bounded mutual
+authentication conversation compile for native Rust and browser Wasm. TCP,
+DNS, relay booking, route management, and the current libp2p runtime remain
+native-only. Browser transport and JavaScript bindings are not implemented yet.
 
 ## Stable identity
 

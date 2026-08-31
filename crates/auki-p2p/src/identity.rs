@@ -1,6 +1,6 @@
 use std::fmt;
 
-use libp2p::{identity, PeerId};
+use libp2p_identity::{self as identity, PeerId};
 
 use crate::{Error, Result};
 

@@ -12,24 +12,32 @@ readme = "README.md"
 [dependencies]
 chrono = { workspace = true }
 futures = { workspace = true }
-hickory-resolver = "0.25.2"
+futures-timer = { workspace = true }
 http = { workspace = true }
-jsonwebtoken = "9.3.0"
-libp2p = { workspace = true, features = ["tokio", "macros", "noise", "tcp", "yamux", "dns", "relay"] }
-libp2p-stream = { workspace = true }
+jsonwebtoken = { version = "10.4.0", default-features = false, features = ["rust_crypto", "use_pem"] }
+libp2p-identity = { workspace = true }
 parking_lot = { workspace = true }
 p256 = "0.13.2"
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
+uuid = { workspace = true }
+web-time = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+hickory-resolver = "0.25.2"
+libp2p = { workspace = true, features = ["tokio", "macros", "noise", "tcp", "yamux", "dns", "relay"] }
+libp2p-stream = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
-uuid = { workspace = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-tempfile = { workspace = true }
 zeroize = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+uuid = { workspace = true, features = ["js"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -1,18 +1,13 @@
-use std::{
-    collections::HashSet,
-    str::FromStr,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::HashSet, str::FromStr, sync::Arc, time::Duration};
 
 use http::HeaderValue;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
-use libp2p::PeerId;
+use libp2p_identity::PeerId;
 use p256::pkcs8::DecodePublicKey;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock as AsyncRwLock;
 use uuid::Uuid;
+use web_time::Instant;
 
 use crate::{Error, Result};
 
@@ -604,7 +599,7 @@ struct StoredCredential {
 
 #[derive(Clone, Default)]
 pub(crate) struct TokenStore {
-    current: Arc<AsyncRwLock<Option<StoredCredential>>>,
+    current: Arc<RwLock<Option<StoredCredential>>>,
 }
 
 impl TokenStore {
@@ -633,7 +628,7 @@ impl TokenStore {
                 });
             }
         }
-        let mut current = self.current.write().await;
+        let mut current = self.current.write();
         if let Some(installed) = current.as_ref() {
             if claims.iat < installed.claims.iat {
                 return Err(Error::StaleCredential {
@@ -659,13 +654,12 @@ impl TokenStore {
     }
 
     pub async fn clear(&self) {
-        *self.current.write().await = None;
+        *self.current.write() = None;
     }
 
     pub async fn snapshot(&self) -> Option<SignedP2pCredential> {
         self.current
             .read()
-            .await
             .as_ref()
             .map(|current| current.signed.clone())
     }
@@ -673,7 +667,6 @@ impl TokenStore {
     pub async fn snapshot_with_claims(&self) -> Option<(SignedP2pCredential, P2PAccessClaims)> {
         self.current
             .read()
-            .await
             .as_ref()
             .map(|current| (current.signed.clone(), current.claims.clone()))
     }

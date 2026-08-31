@@ -1,46 +1,67 @@
-//! Native, direct libp2p transport gated by mutual DDS authorization.
+//! Shared P2P identity and DDS mutual-authentication core, plus the native
+//! libp2p runtime.
 //!
-//! libp2p owns Ed25519 identities, Peer IDs, TCP, Noise, Yamux, dialing, and
-//! versioned streams. This crate adds only the DDS P2P JWT checks required
-//! before one of those streams becomes an [`AuthenticatedStream`]. It does not
+//! The identity, token verification, session requirements, and bounded
+//! authentication conversation compile for native and browser Wasm. The
+//! current TCP/Noise/Yamux transport remains native-only. This crate does not
 //! fetch credentials or understand tasks, datasets, or machine-auth flows.
 
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod authentication;
+#[cfg(not(target_arch = "wasm32"))]
 mod authority;
 mod error;
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod identity;
 #[cfg(not(target_arch = "wasm32"))]
 mod identity_store;
+#[cfg(not(target_arch = "wasm32"))]
 mod observation;
+#[cfg(not(target_arch = "wasm32"))]
 mod relay;
+#[cfg(not(target_arch = "wasm32"))]
 mod relay_client;
+#[cfg(not(target_arch = "wasm32"))]
 mod routing;
+#[cfg(not(target_arch = "wasm32"))]
 mod runtime;
+#[cfg(not(target_arch = "wasm32"))]
 mod source_admission;
+#[cfg(not(target_arch = "wasm32"))]
 mod targeted_stream;
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod token;
+#[cfg(not(target_arch = "wasm32"))]
 mod transport;
 
 pub use authentication::{AuthenticatedPeer, SessionRequirements};
+#[cfg(not(target_arch = "wasm32"))]
 pub use authority::{DomainAuthority, P2pCredentialError, P2pCredentialResult};
 pub use error::{Error, Result};
 pub use identity::{Identity, PeerIdentityProof};
-pub use libp2p::{multiaddr::Protocol, swarm::ConnectionId, Multiaddr, PeerId};
+#[cfg(not(target_arch = "wasm32"))]
+pub use libp2p::{multiaddr::Protocol, swarm::ConnectionId, Multiaddr};
+pub use libp2p_identity::PeerId;
+#[cfg(not(target_arch = "wasm32"))]
 pub use observation::{
     AuthenticatedPeerObservation, NodeFailure, NodeObservationEvent, NodeObservationSnapshot,
     NodeObservationStatus, NodeObservations, PeerDisappearanceReason,
     PEER_OBSERVATION_CHANNEL_CAPACITY,
 };
+#[cfg(not(target_arch = "wasm32"))]
 pub use relay::{
     ExpectedRelayLimits, RelayConfirmationRejection, RelayProvider, RelayReservationError,
     RelayReservationHandle, RelayReservationSnapshot, RelayReservationState, ReservationGeneration,
 };
+#[cfg(not(target_arch = "wasm32"))]
 pub use routing::{
     canonicalize_circuit_route, validate_direct_route, CanonicalCircuitRoute, ConfirmedRoute,
     PublishedRoute, RouteCatalog, RouteCatalogError, RouteCatalogLimits, RouteCatalogResult,
     RouteCatalogStatus, RouteFence, RouteSnapshot,
 };
+#[cfg(not(target_arch = "wasm32"))]
 pub use runtime::{AuthenticatedRouteStream, ExactRoute, ProtocolServer, ProtocolSpec};
+#[cfg(not(target_arch = "wasm32"))]
 pub use targeted_stream::TargetedStreamError;
 pub use token::{
     DdsTokenVerifier, DdsVerificationKeys, P2PAccessClaims, PeerRole, SignedApplicationMetadata,
@@ -51,6 +72,7 @@ pub use token::{
     P2P_TOKEN_MAX_SCOPES, P2P_TOKEN_MAX_SCOPE_BYTES, P2P_TOKEN_SCOPE, P2P_TOKEN_TTL,
     P2P_TOKEN_TYPE,
 };
+#[cfg(not(target_arch = "wasm32"))]
 pub use transport::{
     ApplicationProtocol, AuthenticatedStream, IncomingAuthenticatedStreams, Node, RelayRouteHandle,
     RelayTransportEvent,

@@ -83,12 +83,14 @@ pub enum Error {
     TransportBuild(String),
     #[error("auki-p2p requires an active Tokio runtime")]
     RuntimeUnavailable,
+    #[cfg(not(target_arch = "wasm32"))]
     #[error("authenticated application protocol task failed")]
     ProtocolTask(#[source] tokio::task::JoinError),
     #[error("failed to listen on {address}: {reason}")]
     Listen { address: String, reason: String },
     #[error("failed to open libp2p stream: {0}")]
     OpenStream(String),
+    #[cfg(not(target_arch = "wasm32"))]
     #[error(transparent)]
     TargetedStream(#[from] crate::targeted_stream::TargetedStreamError),
     #[error("failed to dial libp2p peer: {0}")]
@@ -109,8 +111,10 @@ pub enum Error {
     RelayAdmissionExpired,
     #[error("relay admission timed out")]
     RelayAdmissionTimeout,
+    #[cfg(not(target_arch = "wasm32"))]
     #[error(transparent)]
     RelayReservation(#[from] crate::relay::RelayReservationError),
+    #[cfg(not(target_arch = "wasm32"))]
     #[error("relay reservation confirmation was rejected: {0}")]
     RelayConfirmationRejected(crate::relay::RelayConfirmationRejection),
     #[error("relay reservation listener closed before confirmation: {0}")]

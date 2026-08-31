@@ -1,8 +1,13 @@
 use std::{future::Future, time::Duration};
 
 use chrono::Utc;
-use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use libp2p::PeerId;
+use futures::{
+    future::{select, Either},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    pin_mut,
+};
+use futures_timer::Delay;
+use libp2p_identity::PeerId;
 use uuid::Uuid;
 
 use crate::{
@@ -248,9 +253,12 @@ async fn authentication_phase<T>(
     timeout: Duration,
     future: impl Future<Output = Result<T>>,
 ) -> Result<T> {
-    tokio::time::timeout(timeout, future)
-        .await
-        .map_err(|_| Error::AuthenticationTimeout)?
+    let delay = Delay::new(timeout);
+    pin_mut!(future, delay);
+    match select(future, delay).await {
+        Either::Left((result, _)) => result,
+        Either::Right(((), _)) => Err(Error::AuthenticationTimeout),
+    }
 }
 
 async fn write_token_frame<S>(stream: &mut S, token: &[u8]) -> Result<()>

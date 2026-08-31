@@ -139,18 +139,61 @@ impl ObservedRelayLimits {
 pub struct RelayProvider {
     relay_peer_id: PeerId,
     bases: Box<[Multiaddr]>,
+    selected_transport: RelayBaseTransport,
     expected_limits: ExpectedRelayLimits,
 }
 
+/// Transport carried by one canonical relay provider base.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RelayBaseTransport {
+    Tcp,
+    Wss,
+}
+
+impl fmt::Display for RelayBaseTransport {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Tcp => formatter.write_str("TCP"),
+            Self::Wss => formatter.write_str("WSS"),
+        }
+    }
+}
+
 impl RelayProvider {
-    /// Validates and canonicalizes the exact v1 base grammar:
-    /// `/dns4/<lowercase-fqdn>/tcp/<1-65535>/p2p/<relay-peer-id>`.
+    /// Validates every TCP/WSS base and selects native TCP transport.
+    ///
+    /// This backwards-compatible constructor is equivalent to
+    /// [`Self::new_for_transport`] with [`RelayBaseTransport::Tcp`].
     ///
     /// Host case, trailing root dots, and decimal port spelling are
     /// canonicalized. A duplicate created by that normalization is rejected.
     pub fn new<I, S>(
         relay_peer_id: PeerId,
         raw_bases: I,
+        expected_limits: ExpectedRelayLimits,
+    ) -> RelayReservationResult<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self::new_for_transport(
+            relay_peer_id,
+            raw_bases,
+            RelayBaseTransport::Tcp,
+            expected_limits,
+        )
+    }
+
+    /// Validate all advertised bases and select the first base for one exact
+    /// runtime transport.
+    ///
+    /// Accepted grammars are
+    /// `/dns4/<fqdn>/tcp/<port>/p2p/<relay-peer-id>` and
+    /// `/dns4/<fqdn>/tcp/<port>/wss/p2p/<relay-peer-id>`.
+    pub fn new_for_transport<I, S>(
+        relay_peer_id: PeerId,
+        raw_bases: I,
+        selected_transport: RelayBaseTransport,
         expected_limits: ExpectedRelayLimits,
     ) -> RelayReservationResult<Self>
     where
@@ -172,9 +215,18 @@ impl RelayProvider {
         }
 
         canonical.sort_unstable_by_key(ToString::to_string);
+        if !canonical
+            .iter()
+            .any(|base| provider_base_transport(base) == Some(selected_transport))
+        {
+            return Err(RelayReservationError::MissingTransportBase(
+                selected_transport,
+            ));
+        }
         Ok(Self {
             relay_peer_id,
             bases: canonical.into_boxed_slice(),
+            selected_transport,
             expected_limits,
         })
     }
@@ -191,10 +243,17 @@ impl RelayProvider {
         self.expected_limits
     }
 
-    /// The lexicographically first canonical base is the deterministic v1
-    /// selection. Several bases from this provider still represent one relay.
+    pub fn selected_transport(&self) -> RelayBaseTransport {
+        self.selected_transport
+    }
+
+    /// The lexicographically first canonical base compatible with this
+    /// provider's selected transport.
     pub fn selected_base(&self) -> &Multiaddr {
-        &self.bases[0]
+        self.bases
+            .iter()
+            .find(|base| provider_base_transport(base) == Some(self.selected_transport))
+            .expect("RelayProvider construction requires a compatible base")
     }
 
     /// Address passed to `Swarm::listen_on` for a reservation.
@@ -391,6 +450,8 @@ pub enum RelayReservationError {
     BasePeerMismatch { expected: PeerId, actual: String },
     #[error("duplicate relay provider base after normalization: {0}")]
     DuplicateBase(Multiaddr),
+    #[error("relay provider has no {0} base")]
+    MissingTransportBase(RelayBaseTransport),
     #[error("invalid relay limits: {0}")]
     InvalidLimits(String),
     #[error("relay {0} already has an active or canceling generation")]
@@ -858,36 +919,69 @@ pub(crate) fn canonicalize_provider_base(
     expected_peer_id: PeerId,
 ) -> RelayReservationResult<Multiaddr> {
     let parts = raw.split('/').collect::<Vec<_>>();
-    if parts.len() != 7
-        || !parts[0].is_empty()
-        || parts[1] != "dns4"
-        || parts[3] != "tcp"
-        || parts[5] != "p2p"
-    {
-        return Err(invalid_base(raw, "expected exact dns4/tcp/p2p grammar"));
-    }
+    let (raw_host, raw_port, transport, raw_peer_id) = match parts.as_slice() {
+        ["", "dns4", host, "tcp", port, "p2p", peer_id] => {
+            (*host, *port, RelayBaseTransport::Tcp, *peer_id)
+        }
+        ["", "dns4", host, "tcp", port, "wss", "p2p", peer_id] => {
+            (*host, *port, RelayBaseTransport::Wss, *peer_id)
+        }
+        _ => {
+            return Err(invalid_base(
+                raw,
+                "expected exact dns4/tcp[/wss]/p2p grammar",
+            ));
+        }
+    };
 
-    let host = canonicalize_fqdn(parts[2])
+    let host = canonicalize_fqdn(raw_host)
         .ok_or_else(|| invalid_base(raw, "host is not an allowed public FQDN"))?;
-    let port = parts[4]
+    let port = raw_port
         .parse::<u16>()
         .ok()
         .filter(|port| *port != 0)
         .ok_or_else(|| invalid_base(raw, "TCP port must be in 1..=65535"))?;
 
-    let actual_peer_id = PeerId::from_str(parts[6])
+    let actual_peer_id = PeerId::from_str(raw_peer_id)
         .map_err(|_| invalid_base(raw, "terminal p2p component is not a Peer ID"))?;
-    if actual_peer_id != expected_peer_id || parts[6] != expected_peer_id.to_string() {
+    if actual_peer_id != expected_peer_id || raw_peer_id != expected_peer_id.to_string() {
         return Err(RelayReservationError::BasePeerMismatch {
             expected: expected_peer_id,
-            actual: parts[6].to_string(),
+            actual: raw_peer_id.to_string(),
         });
     }
 
-    let canonical = format!("/dns4/{host}/tcp/{port}/p2p/{expected_peer_id}");
+    let transport_component = match transport {
+        RelayBaseTransport::Tcp => "",
+        RelayBaseTransport::Wss => "/wss",
+    };
+    let canonical = format!("/dns4/{host}/tcp/{port}{transport_component}/p2p/{expected_peer_id}");
     canonical
         .parse()
         .map_err(|error| invalid_base(raw, format!("invalid canonical multiaddr: {error}")))
+}
+
+fn provider_base_transport(base: &Multiaddr) -> Option<RelayBaseTransport> {
+    let mut protocols = base.iter();
+    match (
+        protocols.next(),
+        protocols.next(),
+        protocols.next(),
+        protocols.next(),
+        protocols.next(),
+    ) {
+        (Some(Protocol::Dns4(_)), Some(Protocol::Tcp(_)), Some(Protocol::P2p(_)), None, None) => {
+            Some(RelayBaseTransport::Tcp)
+        }
+        (
+            Some(Protocol::Dns4(_)),
+            Some(Protocol::Tcp(_)),
+            Some(Protocol::Wss(path)),
+            Some(Protocol::P2p(_)),
+            None,
+        ) if path.as_ref() == "/" => Some(RelayBaseTransport::Wss),
+        _ => None,
+    }
 }
 
 fn canonicalize_fqdn(raw: &str) -> Option<String> {
@@ -1009,6 +1103,68 @@ mod tests {
     }
 
     #[test]
+    fn mixed_provider_bases_are_retained_and_selected_by_transport() {
+        let relay = peer_id();
+        let bases = [
+            format!("/dns4/browser-a.dev.aukiverse.com/tcp/04443/wss/p2p/{relay}"),
+            format!("/dns4/native-z.dev.aukiverse.com./tcp/0443/p2p/{relay}"),
+            format!("/dns4/browser-b.dev.aukiverse.com/tcp/4443/wss/p2p/{relay}"),
+        ];
+
+        let native = RelayProvider::new(relay, &bases, limits()).unwrap();
+        assert_eq!(native.selected_transport(), RelayBaseTransport::Tcp);
+        assert_eq!(
+            native.selected_base().to_string(),
+            format!("/dns4/native-z.dev.aukiverse.com/tcp/443/p2p/{relay}")
+        );
+        assert_eq!(
+            native
+                .bases()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            vec![
+                format!("/dns4/browser-a.dev.aukiverse.com/tcp/4443/wss/p2p/{relay}"),
+                format!("/dns4/browser-b.dev.aukiverse.com/tcp/4443/wss/p2p/{relay}"),
+                format!("/dns4/native-z.dev.aukiverse.com/tcp/443/p2p/{relay}"),
+            ]
+        );
+
+        let browser =
+            RelayProvider::new_for_transport(relay, &bases, RelayBaseTransport::Wss, limits())
+                .unwrap();
+        assert_eq!(browser.selected_transport(), RelayBaseTransport::Wss);
+        assert_eq!(
+            browser.selected_base().to_string(),
+            format!("/dns4/browser-a.dev.aukiverse.com/tcp/4443/wss/p2p/{relay}")
+        );
+        assert_eq!(
+            browser.reservation_listen_address().to_string(),
+            format!("/dns4/browser-a.dev.aukiverse.com/tcp/4443/wss/p2p/{relay}/p2p-circuit")
+        );
+    }
+
+    #[test]
+    fn provider_fails_closed_without_a_base_for_the_selected_transport() {
+        let relay = peer_id();
+        let tcp = format!("/dns4/relay.dev.aukiverse.com/tcp/443/p2p/{relay}");
+        let wss = format!("/dns4/relay.dev.aukiverse.com/tcp/4443/wss/p2p/{relay}");
+
+        assert!(matches!(
+            RelayProvider::new(relay, [&wss], limits()),
+            Err(RelayReservationError::MissingTransportBase(
+                RelayBaseTransport::Tcp
+            ))
+        ));
+        assert!(matches!(
+            RelayProvider::new_for_transport(relay, [&tcp], RelayBaseTransport::Wss, limits(),),
+            Err(RelayReservationError::MissingTransportBase(
+                RelayBaseTransport::Wss
+            ))
+        ));
+    }
+
+    #[test]
     fn duplicate_after_normalization_is_rejected() {
         let relay = peer_id();
         let error = RelayProvider::new(
@@ -1021,6 +1177,29 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(error, RelayReservationError::DuplicateBase(_)));
+
+        let wss_error = RelayProvider::new_for_transport(
+            relay,
+            [
+                format!("/dns4/RELAY.dev.aukiverse.com/tcp/04443/wss/p2p/{relay}"),
+                format!("/dns4/relay.dev.aukiverse.com./tcp/4443/wss/p2p/{relay}"),
+            ],
+            RelayBaseTransport::Wss,
+            limits(),
+        )
+        .unwrap_err();
+        assert!(matches!(wss_error, RelayReservationError::DuplicateBase(_)));
+
+        let distinct_transports = RelayProvider::new(
+            relay,
+            [
+                format!("/dns4/relay.dev.aukiverse.com/tcp/443/p2p/{relay}"),
+                format!("/dns4/relay.dev.aukiverse.com/tcp/443/wss/p2p/{relay}"),
+            ],
+            limits(),
+        )
+        .unwrap();
+        assert_eq!(distinct_transports.bases().len(), 2);
     }
 
     #[test]
@@ -1033,6 +1212,8 @@ mod tests {
             format!("/dns6/relay.dev.aukiverse.com/tcp/443/p2p/{relay}"),
             format!("/dnsaddr/relay.dev.aukiverse.com/tcp/443/p2p/{relay}"),
             format!("/dns4/relay.dev.aukiverse.com/udp/443/p2p/{relay}"),
+            format!("/dns4/relay.dev.aukiverse.com/tcp/4443/ws/p2p/{relay}"),
+            format!("/dns4/relay.dev.aukiverse.com/tcp/4443/wss/extra/p2p/{relay}"),
             format!("/dns4/relay.dev.aukiverse.com/tcp/0/p2p/{relay}"),
             format!("/dns4/relay.dev.aukiverse.com/tcp/65536/p2p/{relay}"),
             "/dns4/relay.dev.aukiverse.com/tcp/443".to_string(),

@@ -682,7 +682,10 @@ fn provider_construction_uses_the_exact_dms_limits_and_canonical_base() {
     let peer = auki_p2p::PeerId::random();
     let provider = relay_provider(
         &peer.to_string(),
-        &[format!("/dns4/RELAY.Example.COM./tcp/0443/p2p/{peer}")],
+        &[
+            format!("/dns4/RELAY.Example.COM./tcp/0443/p2p/{peer}"),
+            format!("/dns4/relay.example.com/tcp/04443/wss/p2p/{peer}"),
+        ],
         900,
         1_048_576,
     )
@@ -693,6 +696,7 @@ fn provider_construction_uses_the_exact_dms_limits_and_canonical_base() {
         provider.selected_base().to_string(),
         format!("/dns4/relay.example.com/tcp/443/p2p/{peer}")
     );
+    assert_eq!(provider.bases().len(), 2);
     assert_eq!(
         provider.expected_limits().duration(),
         Duration::from_secs(900)
@@ -1306,6 +1310,15 @@ fn failure_mapping_distinguishes_configuration_dial_and_loss() {
         ReservationFailureReason::LimitMismatch
     );
     assert!(!reservation_failure_is_retryable(&mismatch));
+
+    let missing_transport = DomainRelayError::P2p(auki_p2p::Error::RelayReservation(
+        auki_p2p::RelayReservationError::MissingTransportBase(auki_p2p::RelayBaseTransport::Tcp),
+    ));
+    assert_eq!(
+        reservation_failure_reason(&missing_transport, false),
+        ReservationFailureReason::AddressMismatch
+    );
+    assert!(!reservation_failure_is_retryable(&missing_transport));
 
     let dns = DomainRelayError::P2p(auki_p2p::Error::Dns("NXDOMAIN".to_string()));
     assert_eq!(

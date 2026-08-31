@@ -20,6 +20,10 @@ native-only. An internal compile spike proves the SDK identity can build a WSS,
 Noise/Yamux, Circuit Relay v2, and stream-protocol browser swarm. It does not
 yet drive that swarm, authenticate it, or expose JavaScript bindings.
 
+Relay provider snapshots may contain both raw TCP and WSS bases. Native callers
+keep using `RelayProvider::new`, which selects TCP; browser transport explicitly
+uses `RelayProvider::new_for_transport(..., RelayBaseTransport::Wss, ...)`.
+
 ## Stable identity
 
 `auki_p2p::Identity` is the canonical owner of the Ed25519 private key used by

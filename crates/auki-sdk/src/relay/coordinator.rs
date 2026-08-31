@@ -160,6 +160,7 @@ fn reservation_failure_reason(
             auki_p2p::RelayReservationError::InvalidBase { .. }
             | auki_p2p::RelayReservationError::BasePeerMismatch { .. }
             | auki_p2p::RelayReservationError::DuplicateBase(_)
+            | auki_p2p::RelayReservationError::MissingTransportBase(_)
             | auki_p2p::RelayReservationError::EmptyBases,
         ) => ReservationFailureReason::AddressMismatch,
         Error::RelayConfirmationRejected(

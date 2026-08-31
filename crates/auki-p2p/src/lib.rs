@@ -20,7 +20,7 @@ mod identity;
 mod identity_store;
 #[cfg(not(target_arch = "wasm32"))]
 mod observation;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod relay;
 #[cfg(not(target_arch = "wasm32"))]
 mod relay_client;
@@ -51,10 +51,10 @@ pub use observation::{
     NodeObservationStatus, NodeObservations, PeerDisappearanceReason,
     PEER_OBSERVATION_CHANNEL_CAPACITY,
 };
-#[cfg(not(target_arch = "wasm32"))]
 pub use relay::{
-    ExpectedRelayLimits, RelayConfirmationRejection, RelayProvider, RelayReservationError,
-    RelayReservationHandle, RelayReservationSnapshot, RelayReservationState, ReservationGeneration,
+    ExpectedRelayLimits, RelayBaseTransport, RelayConfirmationRejection, RelayProvider,
+    RelayReservationError, RelayReservationHandle, RelayReservationSnapshot, RelayReservationState,
+    ReservationGeneration,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use routing::{

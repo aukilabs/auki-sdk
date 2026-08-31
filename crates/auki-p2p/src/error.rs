@@ -111,10 +111,8 @@ pub enum Error {
     RelayAdmissionExpired,
     #[error("relay admission timed out")]
     RelayAdmissionTimeout,
-    #[cfg(not(target_arch = "wasm32"))]
     #[error(transparent)]
     RelayReservation(#[from] crate::relay::RelayReservationError),
-    #[cfg(not(target_arch = "wasm32"))]
     #[error("relay reservation confirmation was rejected: {0}")]
     RelayConfirmationRejected(crate::relay::RelayConfirmationRejection),
     #[error("relay reservation listener closed before confirmation: {0}")]

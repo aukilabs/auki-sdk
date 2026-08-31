@@ -84,7 +84,7 @@ pub use auki_datatypes::stream::{
 pub use auki_datatypes::{audio, joint_encoders, map, point_cloud, pose};
 
 /// Exact authenticated typed-stream 0.2.0 protocol identifier.
-pub const ID: &str = crate::ids::STREAM_V0_2_0;
+pub const ID: &str = "/auki/auth/1/stream/0.2.0";
 
 // ─── StreamRequest + ReadFrom ─────────────────────────────────────────────────
 

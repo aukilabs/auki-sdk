@@ -7,8 +7,6 @@
 
 #![forbid(unsafe_code)]
 
-pub mod ids;
-
 #[cfg(any(
     feature = "blob-endpoint",
     feature = "catalog-endpoint",
@@ -33,28 +31,3 @@ pub mod registry;
 pub mod session_adapter;
 #[cfg(feature = "stream")]
 pub mod stream;
-
-/// Exact protocol identifiers compiled into this crate instance.
-///
-/// This reports compile-time wire support only. A runtime must still opt in to
-/// serving each exact protocol version.
-pub const SUPPORTED_IDS: &[&str] = &[
-    #[cfg(feature = "info")]
-    info::v1::ID,
-    #[cfg(feature = "catalog")]
-    catalog::v2::ID,
-    #[cfg(feature = "catalog")]
-    catalog::v3::ID,
-    #[cfg(feature = "catalog")]
-    catalog::v4::ID,
-    #[cfg(feature = "registry")]
-    registry::v2::ID,
-    #[cfg(feature = "registry")]
-    registry::v3::ID,
-    #[cfg(feature = "blob")]
-    blob::v1::ID,
-    #[cfg(feature = "message")]
-    message::v1::ID,
-    #[cfg(feature = "stream")]
-    stream::v2::ID,
-];

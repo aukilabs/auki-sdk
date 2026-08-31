@@ -1,5 +1,4 @@
-//! Shared payload codec for the authenticated registry protocol versions.
-//! peer's content-addressed registry entries.
+//! Payload codec for authenticated Registry v3.
 //!
 //! ## Why this exists
 //!
@@ -7,8 +6,8 @@
 //! the Sensor / Clock / Frame registries. Consumers need the matching
 //! registry entry to interpret stream bytes: sensor body for payload
 //! shape, clock body for timestamps, frame body for coordinate
-//! convention. The authenticated Domain path carries the same resolution over
-//! P2P without a separate HTTP side channel.
+//! convention. Registry v3 carries that resolution over an authenticated P2P
+//! stream without a separate HTTP side channel.
 //!
 //! Device models are the same kind of object: immutable, content-addressed
 //! registry JSON. Discovery is a [`RegistryRequest::List`], not a resource
@@ -27,14 +26,6 @@
 //!         or RegistryResponse::Error { reason } when List is unsupported
 //! ```
 //!
-//! Peers can also use authenticated v0.2 untagged Get payloads
-//! (`RegistryRequestV2` / `RegistryResponseV2`) so mixed SDK versions can
-//! resolve sensor/clock/frame/detector/map entries. List and
-//! `device_model` require 0.3. Inbound v2 `device_model` Gets close the
-//! substream with no body (not `{entry: null}`). Outbound clients dial
-//! 0.3 first and fall back to 0.2 only for non-`device_model` Get when
-//! the peer lacks 0.3.
-//!
 //! For `device_model`, List is tip-per-id (last successful
 //! `write_device_model` via the on-disk TIP pointer; mtime is only a
 //! fallback for pre-TIP trees). Older content-addressed siblings remain
@@ -45,7 +36,7 @@
 //!
 //! ## Wire format
 //!
-//! Length-prefixed JSON, same framing as the other Hagall protocols.
+//! Length-prefixed JSON, matching the other SDK-owned protocols.
 //! The inner `canonical_json` is the registry entry's canonical UTF-8
 //! JSON string — the bytes whose XXH3-128 hash is named by `hash`.
 
@@ -132,24 +123,6 @@ impl RegistryRequest {
     pub fn list(kind: RegistryKind) -> Self {
         Self::List { kind }
     }
-}
-
-/// Untagged 0.2 Get request (`{ kind, id, hash }` — no `op` field).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RegistryRequestV2 {
-    /// Registry namespace.
-    pub kind: RegistryKind,
-    /// Registry id.
-    pub id: String,
-    /// Expected XXH3-128 hash of the canonical JSON entry bytes.
-    pub hash: String,
-}
-
-/// Untagged 0.2 Get response (`{ entry }` — no `op` field).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RegistryResponseV2 {
-    /// `Some` when the peer has the exact entry.
-    pub entry: Option<RegistryEntryEnvelope>,
 }
 
 /// One row returned by [`RegistryResponse::List`].
@@ -243,28 +216,6 @@ where
     write_json(stream, msg).await
 }
 
-/// Write a legacy 0.2 Get request.
-pub async fn write_registry_request_v2<S>(
-    stream: &mut S,
-    msg: &RegistryRequestV2,
-) -> Result<(), RegistriesProtocolError>
-where
-    S: AsyncWriteExt + Unpin,
-{
-    write_json(stream, msg).await
-}
-
-/// Write a legacy 0.2 Get response.
-pub async fn write_registry_response_v2<S>(
-    stream: &mut S,
-    msg: &RegistryResponseV2,
-) -> Result<(), RegistriesProtocolError>
-where
-    S: AsyncWriteExt + Unpin,
-{
-    write_json(stream, msg).await
-}
-
 /// Read a [`RegistryRequest`] from `stream`.
 pub async fn read_registry_request<S>(
     stream: &mut S,
@@ -279,26 +230,6 @@ where
 pub async fn read_registry_response<S>(
     stream: &mut S,
 ) -> Result<RegistryResponse, RegistriesProtocolError>
-where
-    S: AsyncReadExt + Unpin,
-{
-    read_json(stream).await
-}
-
-/// Read a legacy 0.2 Get request.
-pub async fn read_registry_request_v2<S>(
-    stream: &mut S,
-) -> Result<RegistryRequestV2, RegistriesProtocolError>
-where
-    S: AsyncReadExt + Unpin,
-{
-    read_json(stream).await
-}
-
-/// Read a legacy 0.2 Get response.
-pub async fn read_registry_response_v2<S>(
-    stream: &mut S,
-) -> Result<RegistryResponseV2, RegistriesProtocolError>
 where
     S: AsyncReadExt + Unpin,
 {
@@ -427,55 +358,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v2_request_round_trips_without_op() {
-        let req = RegistryRequestV2 {
-            kind: RegistryKind::Frame,
-            id: "frame".into(),
-            hash: "hash".into(),
-        };
-        let mut buf = Vec::new();
-        write_registry_request_v2(&mut buf, &req).await.unwrap();
-        let mut cursor = futures::io::Cursor::new(buf);
-        let back = read_registry_request_v2(&mut cursor).await.unwrap();
-        assert_eq!(req, back);
-    }
-
-    #[tokio::test]
-    async fn v2_response_round_trips_without_op() {
-        let resp = RegistryResponseV2 {
-            entry: Some(RegistryEntryEnvelope {
-                kind: RegistryKind::Clock,
-                id: "clk".into(),
-                hash: "h".into(),
-                canonical_json: "{}".into(),
-            }),
-        };
-        let mut buf = Vec::new();
-        write_registry_response_v2(&mut buf, &resp).await.unwrap();
-        let mut cursor = futures::io::Cursor::new(buf);
-        let back = read_registry_response_v2(&mut cursor).await.unwrap();
-        assert_eq!(resp, back);
-    }
-
-    #[tokio::test]
-    async fn v2_and_v3_get_request_framed_bytes_are_locked() {
-        const V2_JSON: &str = r#"{"kind":"frame","id":"frame","hash":"hash"}"#;
-        let mut expected_v2 = (V2_JSON.len() as u32).to_be_bytes().to_vec();
-        expected_v2.extend_from_slice(V2_JSON.as_bytes());
-
-        let mut v2 = Vec::new();
-        write_registry_request_v2(
-            &mut v2,
-            &RegistryRequestV2 {
-                kind: RegistryKind::Frame,
-                id: "frame".into(),
-                hash: "hash".into(),
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(v2, expected_v2);
-
+    async fn v3_get_request_framed_bytes_are_locked() {
         const V3_JSON: &str = r#"{"op":"get","kind":"frame","id":"frame","hash":"hash"}"#;
         let mut expected_v3 = (V3_JSON.len() as u32).to_be_bytes().to_vec();
         expected_v3.extend_from_slice(V3_JSON.as_bytes());
@@ -524,32 +407,5 @@ mod tests {
             err.contains(r#""reason":"list is only implemented for device_model""#),
             "{err}"
         );
-
-        let v2 = serde_json::to_string(&RegistryRequestV2 {
-            kind: RegistryKind::Frame,
-            id: "frame".into(),
-            hash: "hash".into(),
-        })
-        .unwrap();
-        assert!(!v2.contains(r#""op""#), "{v2}");
-        assert!(v2.contains(r#""kind":"frame""#), "{v2}");
-    }
-
-    #[test]
-    fn v2_get_maps_to_v3_get_shape() {
-        let v2 = RegistryRequestV2 {
-            kind: RegistryKind::Sensor,
-            id: "cam".into(),
-            hash: "abc".into(),
-        };
-        let v3 = RegistryRequest::get(v2.kind, v2.id.clone(), v2.hash.clone());
-        match v3 {
-            RegistryRequest::Get { kind, id, hash } => {
-                assert_eq!(kind, RegistryKind::Sensor);
-                assert_eq!(id, "cam");
-                assert_eq!(hash, "abc");
-            }
-            RegistryRequest::List { .. } => panic!("Get must not become List"),
-        }
     }
 }

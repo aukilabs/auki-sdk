@@ -32,7 +32,7 @@ pub use endpoint::{
 pub use fs::FsBlobProvider;
 
 /// Exact authenticated blob 0.1.0 protocol identifier.
-pub const ID: &str = crate::ids::BLOBS_V0_1_0;
+pub const ID: &str = "/auki/auth/1/blobs/0.1.0";
 
 /// Cap on a single raw chunk payload.
 pub const MAX_BLOB_CHUNK_BYTES: u32 = 1024 * 1024;

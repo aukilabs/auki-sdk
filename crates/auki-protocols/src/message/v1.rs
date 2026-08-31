@@ -13,7 +13,7 @@ use prost::Message as ProstMessage;
 use thiserror::Error;
 
 /// Exact authenticated message 0.1.0 protocol identifier.
-pub const ID: &str = crate::ids::MESSAGE_V0_1_0;
+pub const ID: &str = "/auki/auth/1/message/0.1.0";
 
 /// Maximum encoded message frame size.
 pub const MAX_MESSAGE_FRAME_BYTES: u32 = 16 * 1024 * 1024;

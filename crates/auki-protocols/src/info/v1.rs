@@ -38,7 +38,7 @@ use thiserror::Error;
 pub use auki_datatypes::info::{InfoRequest, InfoResponse};
 
 /// Exact authenticated participant-info 1.0.0 protocol identifier.
-pub const ID: &str = crate::ids::INFO_V1_0_0;
+pub const ID: &str = "/auki/auth/1/info/1.0.0";
 
 /// Cap on a single framed message. 64 KiB — `ParticipantInfo` is
 /// under 1 KiB at demo scale; the cap is defense against malformed

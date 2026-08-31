@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Exact authenticated resource-catalog 0.4.0 protocol identifier.
-pub const ID: &str = crate::ids::RESOURCES_V0_4_0;
+pub const ID: &str = "/auki/auth/1/resources/0.4.0";
 
 pub const MAX_RESOURCES_FRAME_BYTES: u32 = 1024 * 1024;
 

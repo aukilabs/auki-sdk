@@ -11,7 +11,7 @@ use thiserror::Error;
 pub use crate::message::MessageChannelResource;
 
 /// Exact authenticated resource-catalog 0.3.0 protocol identifier.
-pub const ID: &str = crate::ids::RESOURCES_V0_3_0;
+pub const ID: &str = "/auki/auth/1/resources/0.3.0";
 
 /// Maximum encoded request or response frame size.
 pub const MAX_RESOURCES_FRAME_BYTES: u32 = 1024 * 1024;

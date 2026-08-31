@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// Exact authenticated resource-catalog 0.2.0 protocol identifier.
-pub const ID: &str = crate::ids::RESOURCES_V0_2_0;
+pub const ID: &str = "/auki/auth/1/resources/0.2.0";
 
 /// Cap on a single framed message. 1 MiB leaves room for catalogs with
 /// embedded registry JSON and several transform edges while bounding

@@ -34,7 +34,7 @@ use super::v2::{
 };
 
 /// Maximum number of concurrently served Stream v2 subscriptions.
-pub const MAX_CONCURRENCY: usize = 16;
+pub const STREAM_MAX_CONCURRENCY: usize = 16;
 
 /// Fixed deadline for every pre-live network open, request, or reply phase.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -46,8 +46,8 @@ pub const LIVE_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 pub const CLOSE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Build the exact bounded Stream v2 registration.
-pub fn protocol_spec() -> Result<AukiProtocolSpec, AukiProtocolError> {
-    AukiProtocolSpec::new(ID, MAX_CONCURRENCY, MAX_FRAME_BYTES)
+pub fn stream_protocol_spec() -> Result<AukiProtocolSpec, AukiProtocolError> {
+    AukiProtocolSpec::new(ID, STREAM_MAX_CONCURRENCY, MAX_FRAME_BYTES)
 }
 
 /// One producer item before the endpoint stamps its wire sequence number.
@@ -291,7 +291,7 @@ impl StreamEndpoint {
         P: StreamProvider,
     {
         let provider = SharedProvider::new(provider);
-        let registration = protocols.register(protocol_spec()?, move |mut stream| {
+        let registration = protocols.register(stream_protocol_spec()?, move |mut stream| {
             let provider = SharedProvider::clone(&provider);
             async move {
                 let _ = serve_and_close(&mut stream, provider.as_ref()).await;
@@ -307,34 +307,6 @@ impl StreamEndpoint {
     /// Clone the outbound client without cloning registration ownership.
     pub fn client(&self) -> StreamClient {
         self.client.clone()
-    }
-
-    /// Open a typed subscription through the owning native peer's routes.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub async fn subscribe<T>(
-        &self,
-        remote_peer_id: PeerId,
-        request: StreamRequest,
-    ) -> Result<StreamSubscription<T>, StreamEndpointError>
-    where
-        T: StreamPayload,
-    {
-        self.client.subscribe(remote_peer_id, request).await
-    }
-
-    /// Open a typed subscription through one exact advertised route.
-    pub async fn subscribe_exact<T>(
-        &self,
-        remote_peer_id: PeerId,
-        route: Multiaddr,
-        request: StreamRequest,
-    ) -> Result<StreamSubscription<T>, StreamEndpointError>
-    where
-        T: StreamPayload,
-    {
-        self.client
-            .subscribe_exact(remote_peer_id, route, request)
-            .await
     }
 
     /// Stop accepting subscriptions and await already-admitted handlers.
@@ -977,9 +949,9 @@ mod tests {
 
     #[test]
     fn spec_mounts_the_exact_stream_contract() {
-        let spec = protocol_spec().unwrap();
+        let spec = stream_protocol_spec().unwrap();
         assert_eq!(spec.protocol_id(), ID);
-        assert_eq!(spec.max_concurrency(), MAX_CONCURRENCY);
+        assert_eq!(spec.max_concurrency(), STREAM_MAX_CONCURRENCY);
         assert_eq!(spec.max_frame_bytes(), MAX_FRAME_BYTES);
     }
 

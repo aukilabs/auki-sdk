@@ -28,7 +28,7 @@ use super::{
 };
 
 /// Maximum number of concurrently served Blob v1 streams.
-pub const MAX_CONCURRENCY: usize = 16;
+pub const BLOB_MAX_CONCURRENCY: usize = 16;
 
 /// Fixed deadline for opening one authenticated Blob v1 stream.
 pub const OPEN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -43,8 +43,8 @@ pub const FETCH_TIMEOUT: Duration = Duration::from_secs(180);
 pub const CLOSE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Build the exact bounded Blob v1 registration.
-pub fn protocol_spec() -> Result<AukiProtocolSpec, AukiProtocolError> {
-    AukiProtocolSpec::new(ID, MAX_CONCURRENCY, MAX_BLOB_META_BYTES)
+pub fn blob_protocol_spec() -> Result<AukiProtocolSpec, AukiProtocolError> {
+    AukiProtocolSpec::new(ID, BLOB_MAX_CONCURRENCY, MAX_BLOB_META_BYTES)
 }
 
 /// One provider-owned range returned to the Blob v1 endpoint.
@@ -192,7 +192,7 @@ impl BlobEndpoint {
         P: BlobProvider,
     {
         let provider = SharedProvider::new(provider);
-        let registration = protocols.register(protocol_spec()?, move |mut stream| {
+        let registration = protocols.register(blob_protocol_spec()?, move |mut stream| {
             let provider = SharedProvider::clone(&provider);
             async move {
                 let _ = serve_and_close(&mut stream, provider.as_ref()).await;
@@ -208,26 +208,6 @@ impl BlobEndpoint {
     /// Clone the outbound client without cloning registration ownership.
     pub fn client(&self) -> BlobClient {
         self.client.clone()
-    }
-
-    /// Fetch and verify one complete blob through the owning native peer's routes.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub async fn fetch(
-        &self,
-        remote_peer_id: PeerId,
-        sha256: impl Into<String>,
-    ) -> Result<BlobFetchReceipt, BlobEndpointError> {
-        self.client.fetch(remote_peer_id, sha256).await
-    }
-
-    /// Fetch and verify one complete blob through one exact advertised route.
-    pub async fn fetch_exact(
-        &self,
-        remote_peer_id: PeerId,
-        route: Multiaddr,
-        sha256: impl Into<String>,
-    ) -> Result<BlobFetchReceipt, BlobEndpointError> {
-        self.client.fetch_exact(remote_peer_id, route, sha256).await
     }
 
     /// Stop accepting Blob v1 streams and await already-admitted handlers.
@@ -743,9 +723,9 @@ mod tests {
 
     #[test]
     fn spec_mounts_the_exact_blob_contract() {
-        let spec = protocol_spec().unwrap();
+        let spec = blob_protocol_spec().unwrap();
         assert_eq!(spec.protocol_id(), ID);
-        assert_eq!(spec.max_concurrency(), MAX_CONCURRENCY);
+        assert_eq!(spec.max_concurrency(), BLOB_MAX_CONCURRENCY);
         assert_eq!(spec.max_frame_bytes(), MAX_BLOB_META_BYTES);
     }
 

@@ -65,7 +65,6 @@ message = [
 ]
 message-endpoint = [
     "message",
-    "catalog",
     "dep:async-channel",
     "dep:auki-sdk",
     "dep:futures-timer",

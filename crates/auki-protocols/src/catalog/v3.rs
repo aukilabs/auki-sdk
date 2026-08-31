@@ -8,6 +8,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashSet;
 use thiserror::Error;
 
+pub use crate::message::MessageChannelResource;
+
 /// Exact authenticated resource-catalog 0.3.0 protocol identifier.
 pub const ID: &str = crate::ids::RESOURCES_V0_3_0;
 
@@ -63,42 +65,6 @@ impl ResourcesRequest {
     }
 }
 
-/// Atomic catalog identity for a live, receiver-owned message channel.
-///
-/// Message transport has no storage path or persistence configuration:
-/// registration binds only this identity and clock to a bounded live receiver.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MessageChannelResource {
-    /// Peer that owns and receives the channel.
-    pub owner_peer_id: PeerId,
-    /// Resource identifier scoped to `owner_peer_id`.
-    pub resource_id: String,
-    /// Clock declaration defining the meaning of message timestamps.
-    pub clock: RegistryRef,
-}
-
-impl MessageChannelResource {
-    /// Validate the resource identity and clock reference.
-    pub fn validate(&self) -> Result<(), ResourcesProtocolError> {
-        if self.resource_id.is_empty() {
-            return Err(ResourcesProtocolError::Validation(
-                "message channel resource_id is empty".into(),
-            ));
-        }
-        if self.clock.peer_id.is_empty() || self.clock.id.is_empty() || self.clock.hash.is_empty() {
-            return Err(ResourcesProtocolError::Validation(
-                "message channel clock RegistryRef contains an empty field".into(),
-            ));
-        }
-        self.clock.peer_id.parse::<PeerId>().map_err(|_| {
-            ResourcesProtocolError::Validation(
-                "message channel clock peer_id is not a valid PeerId".into(),
-            )
-        })?;
-        Ok(())
-    }
-}
-
 /// One v0.3 catalog row: either an unchanged v0.2 row or a message channel.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResourceEntry {
@@ -126,7 +92,9 @@ impl ResourceEntry {
     pub fn validate(&self) -> Result<(), ResourcesProtocolError> {
         match self {
             Self::V2(_) => Ok(()),
-            Self::MessageChannel(channel) => channel.validate(),
+            Self::MessageChannel(channel) => channel
+                .validate()
+                .map_err(|error| ResourcesProtocolError::Validation(error.to_string())),
         }
     }
 }

@@ -9,9 +9,9 @@ use std::{
 
 use auki_datatypes::message::Message;
 use auki_p2p::PeerId;
-use auki_protocols::{
-    catalog::v3::{MessageChannelResource, ResourcesProtocolError},
-    message::v1::{
+use auki_protocols::message::{
+    MessageChannelResource, MessageChannelResourceError,
+    v1::{
         ID as MESSAGE_V0_1_0, MAX_MESSAGE_FRAME_BYTES, MessageProtocolError, decode_message_frame,
         read_ack_frame, read_frame_body, read_frame_length, read_open_response, write_ack_frame,
         write_message_frame, write_open_frame, write_open_response,
@@ -738,7 +738,7 @@ pub enum MessageChannelRegistrationError {
         resource_id: String,
     },
     #[error("invalid message channel resource: {0}")]
-    InvalidResource(#[source] ResourcesProtocolError),
+    InvalidResource(#[source] MessageChannelResourceError),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -751,7 +751,7 @@ pub enum OpenMessageChannelError {
         resource_owner: Box<PeerId>,
     },
     #[error("invalid message channel resource: {0}")]
-    InvalidResource(#[source] ResourcesProtocolError),
+    InvalidResource(#[source] MessageChannelResourceError),
     #[error("authenticated message protocol failed: {0}")]
     Protocol(#[source] DomainProtocolError),
     #[error("message codec failed: {0}")]

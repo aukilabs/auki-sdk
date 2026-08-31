@@ -30,13 +30,13 @@ use futures::{
 use futures_timer::Delay;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-pub use crate::catalog::v3::MessageChannelResource;
-use crate::catalog::v3::ResourcesProtocolError;
-
-use super::v1::{
-    ID, MAX_MESSAGE_FRAME_BYTES, Message, MessageProtocolError, decode_message_frame,
-    read_ack_frame, read_frame_body, read_frame_length, read_open_response, write_ack_frame,
-    write_message_frame, write_open_frame, write_open_response,
+use super::{
+    MessageChannelResource, MessageChannelResourceError,
+    v1::{
+        ID, MAX_MESSAGE_FRAME_BYTES, Message, MessageProtocolError, decode_message_frame,
+        read_ack_frame, read_frame_body, read_frame_length, read_open_response, write_ack_frame,
+        write_message_frame, write_open_frame, write_open_response,
+    },
 };
 
 /// Maximum number of concurrently served message streams across all peers.
@@ -1005,7 +1005,7 @@ pub enum MessageChannelRegistrationError {
     },
     /// The supplied catalog row is malformed.
     #[error("invalid message channel resource: {0}")]
-    InvalidResource(#[source] ResourcesProtocolError),
+    InvalidResource(#[source] MessageChannelResourceError),
 }
 
 /// Failure to open one exact persistent receiver-owned channel.
@@ -1013,7 +1013,7 @@ pub enum MessageChannelRegistrationError {
 pub enum OpenMessageChannelError {
     /// The catalog row is malformed.
     #[error("invalid message channel resource: {0}")]
-    InvalidResource(#[source] ResourcesProtocolError),
+    InvalidResource(#[source] MessageChannelResourceError),
     /// The selected catalog owner differs from the expected authenticated peer.
     #[error("message channel owner {resource_owner} does not match expected peer {expected_peer}")]
     OwnerMismatch {

@@ -312,7 +312,7 @@ pub enum DomainBuilderError {
     },
     /// The v0.3 catalog row is malformed.
     #[error("invalid message channel resource: {0}")]
-    InvalidMessageChannel(#[source] auki_protocols::catalog::v3::ResourcesProtocolError),
+    InvalidMessageChannel(#[source] auki_protocols::message::MessageChannelResourceError),
 }
 
 /// Domain join and ordered-leave failures.

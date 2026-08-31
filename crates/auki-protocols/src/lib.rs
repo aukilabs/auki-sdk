@@ -15,7 +15,7 @@ pub mod blob;
 pub mod catalog;
 #[cfg(feature = "info")]
 pub mod info;
-#[cfg(feature = "message")]
+#[cfg(any(feature = "catalog", feature = "message"))]
 pub mod message;
 #[cfg(feature = "registry")]
 pub mod registry;

@@ -10,8 +10,14 @@
     <main>
       <h1>Auki echo peer</h1>
       <form id="login">
-        <input id="email" type="email" placeholder="Email" required />
-        <input id="password" type="password" placeholder="Password" required />
+        <input id="email" type="email" autocomplete="username" placeholder="Email" required />
+        <input
+          id="password"
+          type="password"
+          autocomplete="current-password"
+          placeholder="Password"
+          required
+        />
         <button id="login-button" type="submit" disabled>Log in</button>
       </form>
 

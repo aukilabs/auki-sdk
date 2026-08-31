@@ -49,6 +49,16 @@ impl AukiPeerProtocols {
         }
     }
 
+    /// Stable local libp2p Peer ID shared by every mounted protocol.
+    pub fn peer_id(&self) -> PeerId {
+        self.inner.node.peer_id()
+    }
+
+    /// Exact authenticated DDS Domain UUID shared by every mounted protocol.
+    pub fn domain_id(&self) -> uuid::Uuid {
+        self.inner.domain_id
+    }
+
     /// Register one exact inbound application protocol and bounded handler.
     pub fn register<H, F>(
         &self,

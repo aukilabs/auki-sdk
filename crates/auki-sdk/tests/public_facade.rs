@@ -40,6 +40,8 @@ fn facade_reexports_the_complete_safe_custom_protocol_surface() {
     let _status: fn(&AukiPeer) -> AukiPeerStatus = AukiPeer::status;
     let _context: fn(&AukiPeer) -> AukiPeerProtocolContext = AukiPeer::protocol_context;
     let _protocols: fn(&AukiPeer) -> AukiPeerProtocols = AukiPeer::protocols;
+    let _protocol_peer_id: fn(&AukiPeerProtocols) -> auki_sdk::PeerId = AukiPeerProtocols::peer_id;
+    let _protocol_domain_id: fn(&AukiPeerProtocols) -> Uuid = AukiPeerProtocols::domain_id;
     let _known_peers: fn(&AukiPeer) -> AukiKnownPeers = AukiPeer::known_peers;
     let _known_snapshot: Option<AukiKnownPeerSnapshot> = None;
     let _known_event: Option<AukiKnownPeerEvent> = None;

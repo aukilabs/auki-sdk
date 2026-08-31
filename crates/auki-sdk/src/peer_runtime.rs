@@ -1250,6 +1250,8 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         );
         assert_eq!(runtime.known_peers().peer_count(), 0);
         let protocols = runtime.protocols();
+        assert_eq!(protocols.peer_id(), peer_id);
+        assert_eq!(protocols.domain_id(), domain_id);
         let registration = protocols
             .register(
                 crate::AukiProtocolSpec::new("/example/runtime/1.0.0", 1, 32).unwrap(),

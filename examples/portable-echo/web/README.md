@@ -1,6 +1,6 @@
-# Portable echo — Web/Wasm adapter
+# Portable echo in Web/Wasm
 
-This example mounts the same Rust echo adapter used by the native example on
+This example mounts the same Rust echo endpoint used by the native example on
 an authenticated browser peer. JavaScript composes the generic
 `AukiUserSession` and `AukiPeer` facade with the tiny `AukiEcho` protocol
 binding. Credential values enter through the login call but are not persisted;
@@ -17,40 +17,19 @@ The peer can serve and initiate the exact `/example/echo/1.0.0` protocol. Its
 `tcpRoute` is suitable for the native example, while `wssRoute` is suitable for
 another browser peer. Every outbound exchange uses the exact WSS route from
 the remote peer card, so peers selected onto different DMS relays can connect.
-The shared adapter authenticates the stream, runs the Rust protocol, and owns
+The shared endpoint authenticates the stream, runs the Rust protocol, and owns
 bounded cleanup. `AukiEcho.close()` is the awaited protocol-unmount barrier and
 runs before `AukiPeer.shutdown()`. Trusted discovery from only a Peer ID remains
 separate work.
 
-Protocol authors should start with the
-[portable authoring workflow](../../../docs/p2p/authoring-protocols.md). This
+Application developers should start with
+[Build with an existing protocol](../../../docs/p2p/getting-started.md).
+Protocol authors can continue with the
+[one-crate authoring workflow](../../../docs/p2p/authoring-protocols.md). This
 README keeps the minimal application, richer playground, and protected smoke
 test separate on purpose.
 
-## Copy the minimal app
-
-[`minimal.html`](minimal.html) and [`src/minimal.ts`](src/minimal.ts) are the
-copyable reference surface. They use the public bindings directly: authenticate
-a User, enter an accessible Domain UUID, start an ephemeral relay-backed peer,
-mount echo, dial an exact advertised WSS route, and shut the protocol and peer
-down in order. There is no peer-card or application framework hidden around
-those calls.
-
-Run the development server and open `/minimal.html` in two tabs:
-
-```sh
-cd examples/portable-echo/web
-npm ci
-npm run dev
-```
-
-Start both tabs in the same Domain, then copy the Peer ID and WSS route printed
-by each tab into the other. Use **Stop peer** to await protocol shutdown and
-relay release.
-
-## Run the Peer Playground
-
-Prerequisites:
+## Prerequisites
 
 - Rust 1.89.0 or newer
 - Node.js 20.19 or newer (or 22.12 or newer)
@@ -64,9 +43,35 @@ cargo install wasm-pack --version 0.13.1 --locked
 rustup target add wasm32-unknown-unknown
 ```
 
+Install the Web dependencies from the SDK repository root:
+
 ```sh
 cd examples/portable-echo/web
 npm ci
+```
+
+## Copy the minimal app
+
+[`minimal.html`](minimal.html) and [`src/minimal.ts`](src/minimal.ts) are the
+copyable reference surface. They use the public bindings directly: authenticate
+a User, enter an accessible Domain UUID, start an ephemeral relay-backed peer,
+mount echo, dial an exact advertised WSS route, and shut the protocol and peer
+down in order. There is no peer-card or application framework hidden around
+those calls.
+
+Run the development server and open `/minimal.html` in two tabs:
+
+```sh
+npm run dev
+```
+
+Start both tabs in the same Domain, then copy the Peer ID and WSS route printed
+by each tab into the other. Use **Stop peer** to await protocol shutdown and
+relay release.
+
+## Run the Peer Playground
+
+```sh
 npm run dev
 ```
 

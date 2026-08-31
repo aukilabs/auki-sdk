@@ -4,7 +4,7 @@
 //! asks DDS which Domains that principal may enter, proves ownership of one
 //! libp2p identity, and returns a validated [`PreparedPeer`].
 //!
-//! The high-level `auki-sdk` `AukiPeer::start` operation consumes the identity
+//! The high-level `auki_sdk::AukiPeer::start` operation consumes the identity
 //! and prepared authority, then owns credential renewal, relay booking,
 //! authenticated transport, protocols, fencing, and shutdown. This crate alone
 //! does not discover peers, resolve or publish routes, contact DMS, book a

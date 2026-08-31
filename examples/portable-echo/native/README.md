@@ -1,12 +1,14 @@
 # Portable echo in native Rust
 
 This is the smallest complete native application built from the high-level
-`AukiPeer` facade and the shared portable echo adapter. It authenticates a User,
-authorizes one exact Domain, starts a relay-reachable peer, mounts the Rust echo
-protocol, and shuts the protocol and peer down in order.
+`AukiPeer` facade and the single portable echo protocol crate. It authenticates
+a User, authorizes one exact Domain, starts a relay-reachable peer, mounts the
+crate's endpoint, and shuts the endpoint and peer down in order.
 
-Protocol authors should start with the
-[portable authoring workflow](../../../docs/p2p/authoring-protocols.md); this
+Application developers should start with
+[Build with an existing protocol](../../../docs/p2p/getting-started.md).
+Protocol authors can continue with the
+[one-crate authoring workflow](../../../docs/p2p/authoring-protocols.md). This
 file focuses only on running the native host.
 
 The default application contains the developer-facing path only. The more

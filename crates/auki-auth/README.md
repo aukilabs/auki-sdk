@@ -15,7 +15,7 @@ proof, verification keys, and the initial signed credential. It deliberately
 does not discover peers, resolve or publish routes, contact DMS, book a relay,
 or spawn an authority-renewal task.
 
-The high-level `auki-sdk::AukiPeer` consumes `PreparedPeer` and owns renewable
+The high-level `auki_sdk::AukiPeer` consumes `PreparedPeer` and owns renewable
 authority, transport, relay-backed reachability, protocols, fencing, and
 shutdown.
 
@@ -59,6 +59,7 @@ For a trusted native or headless application, only the authentication input
 changes:
 
 ```rust,no_run
+let client = auki_auth::AuthClient::new(auki_auth::AuthEnvironment::dev())?;
 let session = client
     .authenticate(auki_auth::Credentials::app(
         app_access_key,

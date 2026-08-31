@@ -3,7 +3,12 @@
 On-device SDK for the Auki spatial-computing protocol — a Cargo workspace of
 Rust crates plus Python (PyO3), Swift (UniFFI), and Web/Wasm source bindings.
 
-See [VISION.md](VISION.md) for the aspirational spec; this file describes what's actually in the repo today. [GLOSSARY.md](GLOSSARY.md) defines the domain terms. Existing Manager-era consumers should start with the [authenticated Domain migration guide](docs/authenticated-domain-migration.md).
+See [VISION.md](VISION.md) for the aspirational spec; this file describes
+what's actually in the repo today. [GLOSSARY.md](GLOSSARY.md) defines the domain
+terms. New P2P applications and Manager-era migrations should start with the
+[Auki P2P guide](docs/p2p/README.md); the
+[Manager migration guide](docs/authenticated-domain-migration.md) also records
+the retained low-level compatibility path.
 
 ## Stage 1 release line
 
@@ -80,6 +85,10 @@ The Auki protocol is built around five questions any node should be able to answ
   peers always receive one relay. Applications dial an exact route compatible
   with their target transport—for example TCP from native Rust and WSS from a
   browser—and the authenticated stream verifies the expected Peer ID and Domain.
+- **Direct-only may be outbound-only.** A native `direct_only()` peer can start
+  with no listeners or advertised routes and dial other peers. A peer that must
+  accept inbound direct connections supplies a listener and a matching
+  externally reachable advertised route.
 - **Discovery and route distribution are not implemented yet.** The SDK exposes
   confirmed local routes, but it does not automatically publish them to other
   peers or discover remote peers. Applications currently exchange the remote
@@ -87,9 +96,10 @@ The Auki protocol is built around five questions any node should be able to answ
   their own control plane.
 - **Application protocols are explicit and portable.** `AukiPeer` serves no
   product protocol until the application registers an exact version through
-  `peer.protocols()`. Transport-neutral Rust protocol code can run behind both
-  native and Web/Wasm adapters; target-specific code only selects compatible
-  routes and hosts the shared conversation.
+  `peer.protocols()`. One product-owned Rust crate can keep its wire contract
+  and `AukiPeer` endpoint in private modules shared by native and Web/Wasm
+  hosts; target-specific code only selects compatible routes and presents the
+  shared conversation.
 - **`auki-p2p` remains the lower transport layer.** It owns mutual Domain/Peer
   authentication, exact direct and relay streams, and authenticated-peer
   observations. Most applications should use it through `AukiPeer` rather than
@@ -186,9 +196,8 @@ their dedicated `AukiPeer` facades rather than reviving Manager semantics.
 
 - [`diagnostic-app`](examples/diagnostic-app) retains a low-level authenticated
   native Domain transport diagnostic over direct TCP.
-- [`portable-echo`](examples/portable-echo) defines one bounded protocol and its
-  runtime adapter once in platform-neutral Rust, then mounts both through the
-  canonical `AukiPeer` protocol surface.
+- [`portable-echo`](examples/portable-echo) keeps one bounded wire contract and
+  its `AukiPeer` endpoint in one Rust crate consumed by both platform hosts.
   - The [native reference app](examples/portable-echo/native) is a small,
     copyable User-authenticated peer with a stable identity, default DMS relay,
     exact-route send, inbound serving, and ordered shutdown.

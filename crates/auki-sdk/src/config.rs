@@ -290,8 +290,11 @@ impl AukiPeerConfig {
     ///
     /// Relay-backed reachability is required by default. This is the sole
     /// opt-out and guarantees the runtime makes no relay-booking DMS calls.
-    /// Call it before configuring a direct-route set that uses capacity
-    /// otherwise reserved for the default relay.
+    /// Zero listeners and advertised routes are valid for outbound-only
+    /// operation. Accepting inbound direct connections requires a listener and
+    /// a matching externally reachable advertised route. Call this before
+    /// configuring a direct-route set that uses capacity otherwise reserved
+    /// for the default relay.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn direct_only(mut self) -> Self {
         self.relay = None;

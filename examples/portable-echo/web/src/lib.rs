@@ -1,4 +1,4 @@
-//! Thin browser binding for the shared portable echo adapter.
+//! Thin browser binding for the shared portable echo endpoint.
 
 #![cfg(target_arch = "wasm32")]
 #![forbid(unsafe_code)]

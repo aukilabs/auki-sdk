@@ -16,7 +16,9 @@ protocol-specific runtime glue once on the canonical cross-target `AukiPeer`
 surface. Both platform hosts consume the same crate; neither reimplements the
 echo wire contract.
 
-Start with [Author a portable Auki protocol](../../docs/p2p/authoring-protocols.md)
+Start with [Build with an existing protocol](../../docs/p2p/getting-started.md)
+when writing an application. Use
+[Author one portable Auki protocol crate](../../docs/p2p/authoring-protocols.md)
 for the create, version, test, mount, dial, advertise, and release workflow.
 
 ## Validate the shared implementation

@@ -3,8 +3,8 @@
 Build authenticated peer-to-peer applications without assembling authority,
 libp2p, relay booking, or shutdown machinery yourself.
 
-**[Run the Rust quickstart](getting-started.md)** ·
-**[Author a portable protocol](authoring-protocols.md)** ·
+**[Build with an existing protocol](getting-started.md)** ·
+**[Author one protocol crate](authoring-protocols.md)** ·
 **[Try the Web peer](../../examples/portable-echo/web/README.md)**
 
 ## The mental model
@@ -50,8 +50,10 @@ Authority and reachability are separate:
 
 `AukiPeer::start` owns credential renewal, authenticated transport, DMS relay
 booking, route state, supervision, fencing, and ordered shutdown. Native hosts
-may explicitly choose `AukiPeerConfig::direct_only()` when they provide their
-own reachable listener and route.
+may explicitly choose `AukiPeerConfig::direct_only()`, which makes no relay
+booking calls. A direct-only peer may use zero listeners and advertised routes
+for outbound-only operation. Inbound direct reachability requires a listener
+and a matching externally reachable advertised route.
 
 ### Web
 
@@ -61,7 +63,8 @@ starts an ephemeral `AukiPeer`. Browser peers always acquire one confirmed WSS
 relay route; there is no direct-only browser mode in `0.1`.
 
 Protocol implementations remain in Rust. A thin binding such as `AukiEcho`
-mounts a shared Rust adapter on the generic browser peer. See the
+mounts the same Rust endpoint used by native hosts on the generic browser peer.
+See the
 [minimal browser echo](../../examples/portable-echo/web/README.md#copy-the-minimal-app).
 App access keys and secrets are never accepted by the browser facade.
 
@@ -95,11 +98,12 @@ let endpoint = MyProtocolEndpoint::mount(peer.protocols())?;
 ```
 
 Keep the endpoint alive while serving. A client-only peer does not need to
-mount the corresponding inbound protocol. The portable protocol owns its wire
-types, codec, bounds, and conversation; the shared adapter owns mounting,
-dialing, deadlines, and stream cleanup.
+mount the corresponding inbound protocol. One product-owned protocol crate
+keeps its wire contract in a transport-neutral private module and its mounting,
+dialing, deadlines, events, and cleanup in a private endpoint module. Native
+and Web hosts consume that one public endpoint API.
 
-Follow [Author a portable protocol](authoring-protocols.md) before assigning a
+Follow [Author one protocol crate](authoring-protocols.md) before assigning a
 new ID. An exact ID must never acquire a second wire format.
 
 ## Safe defaults and limits

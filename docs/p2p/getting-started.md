@@ -1,11 +1,12 @@
-# Get started with Auki P2P in Rust
+# Build with an existing Auki protocol
 
-This quickstart runs the small native reference application against the Auki
-dev environment. It uses the real portable echo protocol and shared adapter;
-there is no second tutorial-only wire implementation.
+This quickstart consumes the existing `auki-portable-echo` protocol crate. The
+application does not implement framing, libp2p, authentication, relay booking,
+or protocol cleanup.
 
-By the end, two peers will have distinct persistent Peer IDs, authority for the
-same Domain, confirmed relay routes, and one authenticated echo exchange.
+By the end, two native peers will have distinct persistent Peer IDs, authority
+for the same Domain, confirmed relay routes, and one authenticated echo
+exchange. The same protocol crate also powers the tiny Web host.
 
 ## Prerequisites
 
@@ -15,10 +16,10 @@ same Domain, confirmed relay routes, and one authenticated echo exchange.
 - that Domain's UUID
 - two terminals
 
-The reference source is
+The copyable native host is
 [`examples/portable-echo/native/src/main.rs`](../../examples/portable-echo/native/src/main.rs).
-Its developer-facing path is intentionally small; the more verbose interop
-binary is protected test machinery.
+Its protocol dependency is the single
+[`auki-portable-echo`](../../examples/portable-echo/README.md) crate.
 
 ## 1. Start the serving peer
 
@@ -37,8 +38,8 @@ the identity file's parent directory and reuses the same Peer ID on later
 launches.
 
 Startup returns only after authority, transport, and one relay reservation are
-ready. The application mounts `/example/echo/1.0.0`, then prints its public
-Peer ID and confirmed native TCP circuit route:
+ready. The host mounts `/example/echo/1.0.0`, then prints its public Peer ID and
+confirmed native TCP circuit route:
 
 ```text
 peer: 12D3KooW...
@@ -50,7 +51,7 @@ Keep it running and copy the complete `peer` and `route` values.
 
 ## 2. Dial it from a second peer
 
-In terminal B, use a different identity file and pass A's two printed values:
+In terminal B, use a different identity file and pass A's printed values:
 
 ```sh
 export AUKI_EMAIL='you@example.com'
@@ -63,22 +64,29 @@ cargo run --locked -p auki-portable-echo-native -- \
 ```
 
 Using the same User is fine; the separate identity files create distinct Peer
-IDs. Terminal B opens the exact advertised route, authenticates A's expected
-Peer ID and Domain, runs the shared Rust echo conversation, and prints:
+IDs. Terminal B authenticates A's expected Peer ID and Domain through the
+supplied route, then prints:
 
 ```text
 echo: hello from Auki
 ```
 
-It then closes the echo endpoint and the peer in order. Press Ctrl-C in terminal
-A to perform the same ordered cleanup and release its relay booking.
+It closes the echo endpoint and peer in order. Press Ctrl-C in terminal A to do
+the same and release its relay booking.
 
 Environment variables are convenient for this experiment, not a production
 secret-management strategy.
 
-## The application-facing code
+## The application code
 
-The complete composition is:
+An application imports the endpoint from the existing protocol crate:
+
+```rust
+use auki_portable_echo::EchoEndpoint;
+```
+
+It then chooses credentials, Domain, native identity path, whether to mount the
+protocol, and the remote peer information. The failure-safe lifecycle is:
 
 ```rust
 let identity = Identity::load_or_create(identity_file)?;
@@ -90,27 +98,51 @@ let prepared = session
     .await?;
 let peer = AukiPeer::start(identity, prepared, AukiPeerConfig::dev()).await?;
 
-let echo = EchoEndpoint::mount(peer.protocols())?;
-let receipt = echo
-    .send_exact(remote_peer_id, remote_route, b"hello from Auki")
-    .await?;
+let operation = async {
+    let echo = EchoEndpoint::mount(peer.protocols())?;
+    let exchange = echo
+        .send_exact(remote_peer_id, remote_route, b"hello from Auki")
+        .await;
+    let endpoint_cleanup = echo.close().await;
 
-echo.close().await?;
-peer.shutdown().await?;
+    let receipt = exchange?;
+    endpoint_cleanup?;
+    Ok::<_, anyhow::Error>(receipt)
+}
+.await;
+
+let peer_cleanup = peer.shutdown().await;
+let receipt = operation?;
+peer_cleanup?;
 ```
 
-The application chooses credentials, Domain, identity storage, protocol opt-in,
-and the remote peer information. `auki-auth`, `AukiPeer`, and the shared echo
-adapter own the API/DDS exchanges, renewable authority, libp2p transport, relay
-booking, exact-route authentication, bounded wire conversation, and cleanup.
+The result is captured before cleanup, so an exchange failure still attempts
+endpoint close and every outcome still attempts peer shutdown. Endpoint close
+always precedes peer shutdown. The
+[native reference](../../examples/portable-echo/native/src/main.rs) uses this
+same pattern around both client and serving modes.
 
-Production code should preserve the reference application's finally-style
-cleanup: attempt endpoint close and peer shutdown even when the operation
-fails.
+The `auki-portable-echo` crate owns its immutable protocol ID, bounded wire
+conversation, registration, deadlines, exact-route send, inbound events, and
+stream cleanup. `auki-auth` and `AukiPeer` own the API/DDS exchange, renewable
+authority, authenticated transport, relay booking, route validation, fencing,
+and peer shutdown.
+
+## Use the same protocol from Web
+
+The Web host compiles the same `auki-portable-echo` crate into Wasm. JavaScript
+only logs in a User, selects a Domain, starts an ephemeral `AukiPeer`, constructs
+`AukiEcho`, and supplies the remote Peer ID plus WSS route. It closes
+`AukiEcho` before shutting down the peer.
+
+Run the [minimal browser app](../../examples/portable-echo/web/README.md#copy-the-minimal-app)
+to try that surface. The larger playground and protected four-direction smoke
+test remain separate so their UI and test machinery do not become the SDK
+example.
 
 ## App credentials
 
-A trusted native or headless process can authenticate with:
+A trusted native or headless process can replace User credentials with:
 
 ```rust
 Credentials::app(app_access_key, app_secret)
@@ -132,11 +164,9 @@ authenticates the expected remote Peer ID in the selected Domain.
 
 ## Continue
 
-- [Author a portable protocol](authoring-protocols.md) using the same split as
-  echo.
-- Run the [minimal Web app](../../examples/portable-echo/web/README.md#copy-the-minimal-app)
-  for browser-to-browser communication.
+- [Author one portable protocol crate](authoring-protocols.md).
 - Run the [protected interop proof](../../examples/portable-echo/web/README.md#live-direction-proof)
-  for both browser directions plus native-to-browser and browser-to-native.
+  for browser-to-browser in both directions plus native-to-browser and
+  browser-to-native.
 - Use [`auki-p2p`](../../crates/auki-p2p/README.md) directly only when building a
   custom runtime or transport integration.

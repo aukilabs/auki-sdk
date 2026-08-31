@@ -231,7 +231,14 @@ impl AukiPeerProtocols {
 
     pub(crate) fn abort_all(&self) {
         self.inner.lifecycle.fence();
-        self.inner.registrations.lock().clear();
+        let servers = self
+            .inner
+            .registrations
+            .lock()
+            .drain()
+            .filter_map(|(_, entry)| entry.server.lock().take())
+            .collect::<Vec<_>>();
+        drop(servers);
     }
 }
 
@@ -279,6 +286,11 @@ impl AukiProtocolRegistration {
             }
         }
         self.entry.server.lock().take()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn owns_server_for_test(&self) -> bool {
+        self.entry.server.lock().is_some()
     }
 }
 

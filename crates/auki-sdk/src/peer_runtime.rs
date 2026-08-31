@@ -1570,9 +1570,22 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             .unwrap();
         let context = runtime.protocol_context();
         let status = runtime.subscribe_status();
+        let registration = runtime
+            .protocols()
+            .register(
+                crate::AukiProtocolSpec::new("/example/drop-fence/1.0.0", 1, 32).unwrap(),
+                |_stream| async {},
+            )
+            .unwrap();
+        assert!(registration.owns_server_for_test());
 
         drop(runtime);
 
+        assert!(!registration.owns_server_for_test());
+        tokio::time::timeout(Duration::from_secs(1), registration.close())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(*status.borrow(), AukiPeerStatus::Stopping);
         assert!(matches!(
             context.authorization().current(),

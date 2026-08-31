@@ -580,15 +580,15 @@ impl AuthorityInner {
                 .as_ref()
                 .filter(|current| current.available)
                 .ok_or(AuthoritySupervisorError::RefreshUnavailable)?;
-            RelayAuthorizationSnapshot {
-                header: current.authorization.clone(),
-                revision: current.credential_revision,
-            }
+            RelayAuthorizationSnapshot::new(
+                current.authorization.clone(),
+                current.credential_revision,
+            )
         };
         self.expire_if_due();
         let still_current = self.state.read().current.as_ref().is_some_and(|current| {
             current.available
-                && current.credential_revision == snapshot.revision
+                && current.credential_revision == snapshot.revision()
                 && current.credential_expires_at > Utc::now()
         });
         if still_current {
@@ -1791,9 +1791,11 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
             .authorization()
             .await
             .unwrap();
-        assert_eq!(snapshot.revision, 2);
-        assert_eq!(snapshot.header.as_bytes(), expected_header.as_bytes());
-        assert!(snapshot.header.is_sensitive());
+        assert_eq!(
+            snapshot,
+            RelayAuthorizationSnapshot::new(expected_header.clone(), 2)
+        );
+        assert!(snapshot.is_sensitive());
 
         installer.clear_events();
         assert_eq!(
@@ -1815,8 +1817,10 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
             .authorization()
             .await
             .unwrap();
-        assert_eq!(snapshot.revision, 2);
-        assert_eq!(snapshot.header.as_bytes(), expected_header.as_bytes());
+        assert_eq!(
+            snapshot,
+            RelayAuthorizationSnapshot::new(expected_header, 2)
+        );
         supervisor.shutdown().await;
     }
 
@@ -1868,10 +1872,9 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
             .authorization()
             .await
             .unwrap();
-        assert_eq!(snapshot.revision, 1);
         assert_eq!(
-            snapshot.header.as_bytes(),
-            expected_initial_header.as_bytes()
+            snapshot,
+            RelayAuthorizationSnapshot::new(expected_initial_header, 1)
         );
         supervisor.shutdown().await;
     }
@@ -2180,7 +2183,7 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
         .await
         .unwrap();
         let relay = supervisor.relay_authorization();
-        let rejected_revision = relay.authorization().await.unwrap().revision;
+        let rejected_revision = relay.authorization().await.unwrap().revision();
         let first = relay.refresh_after_unauthorized(rejected_revision);
         let second = relay.refresh_after_unauthorized(rejected_revision);
 
@@ -2188,7 +2191,7 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
         first.unwrap();
         second.unwrap();
         assert_eq!(renewal.calls(), 1);
-        assert_eq!(relay.authorization().await.unwrap().revision, 2);
+        assert_eq!(relay.authorization().await.unwrap().revision(), 2);
         supervisor.shutdown().await;
     }
 
@@ -2524,7 +2527,7 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
 
         wait_for_ready_revision(&supervisor, 2).await;
         assert_eq!(renewal.calls(), 2);
-        assert_eq!(relay.authorization().await.unwrap().revision, 2);
+        assert_eq!(relay.authorization().await.unwrap().revision(), 2);
         supervisor.shutdown().await;
     }
 
@@ -2587,7 +2590,7 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
                 .authorization()
                 .await
                 .unwrap()
-                .revision,
+                .revision(),
             2
         );
         assert_eq!(domain.status(), DomainStatus::Ready);

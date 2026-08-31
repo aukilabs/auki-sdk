@@ -742,6 +742,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-relay-booking"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "httpmock",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "auki-ros-adapter"
 version = "0.0.0"
 dependencies = [
@@ -763,6 +778,7 @@ dependencies = [
  "auki-auth",
  "auki-domain",
  "auki-p2p",
+ "auki-relay-booking",
  "auki-session",
  "chrono",
  "httpmock",

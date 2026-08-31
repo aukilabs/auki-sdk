@@ -17,7 +17,10 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{collections::HashSet, fmt, sync::Arc, time::Duration};
 use uuid::Uuid;
 
-const RELAY_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
+/// Maximum duration of one relay-booking HTTP request.
+///
+/// Supervisors use the same bound when choosing their latest safe renewal start.
+pub const RELAY_HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RELAY_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 128;
 const MIN_BOOKING_DURATION_SECONDS: u64 = 300;
@@ -190,7 +193,7 @@ impl RelayBookingClient {
             let mut request = self
                 .http
                 .request(method.clone(), url.clone())
-                .timeout(RELAY_HTTP_TIMEOUT)
+                .timeout(RELAY_HTTP_REQUEST_TIMEOUT)
                 .header(AUTHORIZATION, authorization.header)
                 .header(ACCEPT, HeaderValue::from_static("application/json"));
             if let Some(key) = idempotency_key {

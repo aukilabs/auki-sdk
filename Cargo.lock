@@ -657,14 +657,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-portable-echo-adapter"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "auki-portable-echo-protocol",
+ "auki-sdk",
+ "futures",
+ "futures-timer",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "auki-portable-echo-native"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "auki-auth",
- "auki-portable-echo-protocol",
+ "auki-portable-echo-adapter",
  "auki-sdk",
- "futures",
  "serde_json",
  "tokio",
  "uuid",

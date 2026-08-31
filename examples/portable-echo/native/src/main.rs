@@ -1,19 +1,10 @@
-use std::{env, fs, path::PathBuf, time::Duration};
+use std::{env, fs, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use auki_auth::{AuthClient, AuthEnvironment, Credentials, DomainSelection};
-use auki_portable_echo_protocol::{
-    EchoRequest, ID as ECHO_PROTOCOL_ID, MAX_FRAME_BYTES, run_client, run_server,
-};
-use auki_sdk::{
-    AukiPeer, AukiPeerConfig, AukiProtocolError, AukiProtocolSpec, Identity, Multiaddr, PeerId,
-};
-use futures::AsyncWriteExt;
-use tokio::time::timeout;
+use auki_portable_echo_adapter::{EchoEndpoint, EchoEventReceiver, EchoServeEvent, PROTOCOL_ID};
+use auki_sdk::{AukiPeer, AukiPeerConfig, Identity, Multiaddr, PeerId};
 use uuid::Uuid;
-
-const MAX_CONCURRENCY: usize = 32;
-const OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -37,27 +28,11 @@ async fn main() -> Result<()> {
         .authorize_peer(DomainSelection::new(selected.domain.id), &identity.proof())
         .await?;
 
-    let config = AukiPeerConfig::dev();
-    let (config, remote_peer) = remote_peer_from_env(config)?;
-    let peer = AukiPeer::start(identity, prepared, config).await?;
+    let remote_peer = remote_peer_from_env()?;
+    let peer = AukiPeer::start(identity, prepared, AukiPeerConfig::dev()).await?;
     let context = peer.protocol_context();
-    let protocols = peer.protocols();
-
-    let _echo_registration =
-        protocols.register(echo_protocol_spec()?, |mut stream| async move {
-            let remote_peer = stream.remote_peer().peer_id;
-            match timeout(OPERATION_TIMEOUT, run_server(&mut stream)).await {
-                Ok(Ok(request)) => println!(
-                    "ECHO_SERVED remote_peer={remote_peer} bytes={}",
-                    request.as_bytes().len()
-                ),
-                Ok(Err(error)) => {
-                    eprintln!("ECHO_SERVER_FAILED remote_peer={remote_peer} error={error}")
-                }
-                Err(_) => eprintln!("ECHO_SERVER_TIMEOUT remote_peer={remote_peer}"),
-            }
-            let _ = stream.close().await;
-        })?;
+    let echo = EchoEndpoint::mount(peer.protocols())?;
+    let echo_events = echo.events();
 
     println!("READY");
     println!("PEER_ID={}", peer.peer_id());
@@ -71,7 +46,7 @@ async fn main() -> Result<()> {
                     "version": 1,
                     "domainId": peer.domain_id().to_string(),
                     "peerId": peer.peer_id().to_string(),
-                    "protocols": [ECHO_PROTOCOL_ID],
+                    "protocols": [PROTOCOL_ID],
                     "routes": {
                         "wss": wss_route.to_string(),
                         "tcp": published.route.to_string(),
@@ -84,50 +59,54 @@ async fn main() -> Result<()> {
         println!("PEER_CARD={card}");
     }
 
-    if let Some(remote_peer) = remote_peer {
-        run_echo_client(&protocols, remote_peer).await?;
+    if let Some(remote) = remote_peer.as_ref() {
+        let message = env::var("AUKI_ECHO_MESSAGE")
+            .unwrap_or_else(|_| "hello from the shared Rust protocol".to_owned());
+        let receipt = echo
+            .send_exact(remote.peer_id, remote.route.clone(), message.into_bytes())
+            .await?;
+        println!(
+            "ECHO_OK remote_peer={} relayed={} bytes={}",
+            receipt.remote_peer_id,
+            receipt.relayed,
+            receipt.payload.len()
+        );
     }
     if remote_peer.is_none() || env::var_os("AUKI_KEEP_RUNNING").is_some() {
         println!("WAITING_FOR_PEER");
-        tokio::signal::ctrl_c().await?;
+        serve_until_shutdown(&echo_events).await?;
     }
 
-    peer.shutdown().await?;
+    let echo_shutdown = echo.close().await;
+    let peer_shutdown = peer.shutdown().await;
+    echo_shutdown?;
+    peer_shutdown?;
     println!("STOPPED");
     Ok(())
 }
 
-fn echo_protocol_spec() -> Result<AukiProtocolSpec, AukiProtocolError> {
-    AukiProtocolSpec::new(
-        ECHO_PROTOCOL_ID,
-        MAX_CONCURRENCY,
-        u32::try_from(MAX_FRAME_BYTES).expect("the portable frame bound fits in u32"),
-    )
-}
-
-async fn run_echo_client(
-    protocols: &auki_sdk::AukiPeerProtocols,
-    remote_peer: PeerId,
-) -> Result<()> {
-    let message = env::var("AUKI_ECHO_MESSAGE")
-        .unwrap_or_else(|_| "hello from the shared Rust protocol".to_owned());
-    let request = EchoRequest::new(message.into_bytes())?;
-    let mut stream = protocols
-        .open(remote_peer, ECHO_PROTOCOL_ID)
-        .await
-        .context("open authenticated echo stream")?;
-    let relayed = stream.is_relayed();
-
-    let exchange = timeout(OPERATION_TIMEOUT, run_client(&mut stream, request)).await;
-    let close = stream.close().await;
-    let response = exchange.context("echo exchange timed out")??;
-    close.context("close authenticated echo stream")?;
-
-    println!(
-        "ECHO_OK remote_peer={remote_peer} relayed={relayed} bytes={}",
-        response.as_bytes().len()
-    );
-    Ok(())
+async fn serve_until_shutdown(events: &EchoEventReceiver) -> Result<()> {
+    let shutdown = tokio::signal::ctrl_c();
+    tokio::pin!(shutdown);
+    loop {
+        tokio::select! {
+            result = &mut shutdown => return result.context("wait for Ctrl-C"),
+            event = events.recv() => match event {
+                Some(EchoServeEvent::Served(receipt)) => println!(
+                    "ECHO_SERVED remote_peer={} bytes={}",
+                    receipt.remote_peer_id,
+                    receipt.payload.len()
+                ),
+                Some(EchoServeEvent::Failed { remote_peer_id, error }) => eprintln!(
+                    "ECHO_SERVER_FAILED remote_peer={remote_peer_id} error={error}"
+                ),
+                Some(EchoServeEvent::Lagged { dropped }) => {
+                    eprintln!("ECHO_EVENTS_LAGGED dropped={dropped}")
+                }
+                None => bail!("portable echo endpoint stopped while waiting for a peer"),
+            },
+        }
+    }
 }
 
 fn credentials_from_env() -> Result<Credentials> {
@@ -143,7 +122,12 @@ fn credentials_from_env() -> Result<Credentials> {
     }
 }
 
-fn remote_peer_from_env(config: AukiPeerConfig) -> Result<(AukiPeerConfig, Option<PeerId>)> {
+struct RemotePeer {
+    peer_id: PeerId,
+    route: Multiaddr,
+}
+
+fn remote_peer_from_env() -> Result<Option<RemotePeer>> {
     match optional_pair("AUKI_REMOTE_PEER_ID", "AUKI_REMOTE_ROUTE")? {
         Some((peer_id, route)) => {
             let peer_id = peer_id
@@ -152,10 +136,9 @@ fn remote_peer_from_env(config: AukiPeerConfig) -> Result<(AukiPeerConfig, Optio
             let route = route
                 .parse::<Multiaddr>()
                 .context("invalid remote relay route")?;
-            let config = config.with_peer_routes(peer_id, [route])?;
-            Ok((config, Some(peer_id)))
+            Ok(Some(RemotePeer { peer_id, route }))
         }
-        None => Ok((config, None)),
+        None => Ok(None),
     }
 }
 
@@ -175,12 +158,12 @@ fn required_env(name: &'static str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use auki_portable_echo_adapter::{MAX_CONCURRENCY, protocol_spec};
 
     #[test]
     fn native_adapter_mounts_the_exact_portable_contract() {
-        let spec = echo_protocol_spec().unwrap();
-        assert_eq!(spec.protocol_id(), ECHO_PROTOCOL_ID);
+        let spec = protocol_spec().unwrap();
+        assert_eq!(spec.protocol_id(), PROTOCOL_ID);
         assert_eq!(spec.max_concurrency(), MAX_CONCURRENCY);
-        assert_eq!(spec.max_frame_bytes(), MAX_FRAME_BYTES as u32);
     }
 }

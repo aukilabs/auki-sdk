@@ -1,9 +1,11 @@
 # Portable echo — native AukiPeer adapter
 
-This example mounts the shared
-[`auki-portable-echo-protocol`](../protocol/README.md) implementation on a real
-native `AukiPeer`. It adds authentication, relay-backed reachability, operation
-timeouts, and peer lifecycle without reimplementing the echo wire format.
+This thin host authenticates and starts a native `AukiPeer`, then mounts the
+shared [`auki-portable-echo-adapter`](../adapter) implementation. The adapter
+owns the exact protocol registration, five-second operation deadlines,
+conversation, stream cleanup, and bounded inbound observations on every Rust
+target. This executable supplies only credentials, peer configuration, console
+output, and shutdown.
 
 ## Run two peers
 

@@ -57,7 +57,8 @@ pub use authority_update::PeerAuthorityUpdate;
 pub use browser_authority::BrowserAuthority;
 #[cfg(target_arch = "wasm32")]
 pub use browser_transport::{
-    BrowserIncomingAuthenticatedStreams, BrowserNode, BrowserNodeExit, BrowserRelayRoute,
+    BrowserAuthenticatedRouteStream, BrowserIncomingAuthenticatedStreams, BrowserNode,
+    BrowserNodeExit, BrowserRelayRoute,
 };
 pub use error::{Error, Result};
 pub use identity::{Identity, PeerIdentityProof};

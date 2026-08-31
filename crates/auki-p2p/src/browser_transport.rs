@@ -9,6 +9,7 @@ use std::{
     error::Error as StdError,
     pin::Pin,
     rc::Rc,
+    task::{Context, Poll},
     time::Duration,
 };
 
@@ -17,6 +18,7 @@ use chrono::{DateTime, Utc};
 use futures::{
     channel::oneshot,
     future::{poll_fn, FutureExt, Shared},
+    io::{AsyncRead, AsyncWrite},
     Stream as FuturesStream, StreamExt,
 };
 use libp2p::{
@@ -110,6 +112,144 @@ impl BrowserRelayRoute {
 
     pub fn admission_expires_at(&self) -> DateTime<Utc> {
         self.admission_expires_at
+    }
+}
+
+/// Authenticated browser stream retaining ownership of its exact relay circuit.
+///
+/// Explicit [`Self::close`] waits for circuit cleanup. Dropping an open stream
+/// schedules the same cleanup on the browser's local executor so application
+/// code cannot accidentally leave a connected circuit behind.
+pub struct BrowserAuthenticatedRouteStream {
+    stream: Option<AuthenticatedStream>,
+    route: Option<BrowserRelayRoute>,
+    control: BrowserRouteControl,
+}
+
+impl BrowserAuthenticatedRouteStream {
+    fn new(
+        stream: AuthenticatedStream,
+        route: BrowserRelayRoute,
+        control: BrowserRouteControl,
+    ) -> Self {
+        Self {
+            stream: Some(stream),
+            route: Some(route),
+            control,
+        }
+    }
+
+    /// Mutually authenticated remote peer bound to this stream.
+    pub fn remote_peer(&self) -> &crate::AuthenticatedPeer {
+        self.stream
+            .as_ref()
+            .expect("an authenticated browser route stream remains present until close")
+            .remote_peer()
+    }
+
+    /// Browser exact-route streams always own a relay circuit.
+    pub fn is_relayed(&self) -> bool {
+        true
+    }
+
+    /// Close the authenticated stream and release its exact relay circuit.
+    pub async fn close(mut self) -> Result<()> {
+        drop(self.stream.take());
+        if let Some(route) = self.route.as_ref() {
+            self.control.close(route).await?;
+            self.route.take();
+        }
+        Ok(())
+    }
+}
+
+impl AsyncRead for BrowserAuthenticatedRouteStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut [u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(
+            self.stream
+                .as_mut()
+                .expect("an authenticated browser route stream remains present until close"),
+        )
+        .poll_read(context, buffer)
+    }
+}
+
+impl AsyncWrite for BrowserAuthenticatedRouteStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(
+            self.stream
+                .as_mut()
+                .expect("an authenticated browser route stream remains present until close"),
+        )
+        .poll_write(context, buffer)
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(
+            self.stream
+                .as_mut()
+                .expect("an authenticated browser route stream remains present until close"),
+        )
+        .poll_flush(context)
+    }
+
+    fn poll_close(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(
+            self.stream
+                .as_mut()
+                .expect("an authenticated browser route stream remains present until close"),
+        )
+        .poll_close(context)
+    }
+}
+
+impl Drop for BrowserAuthenticatedRouteStream {
+    fn drop(&mut self) {
+        let Some(route) = self.route.take() else {
+            return;
+        };
+        let control = self.control.clone();
+        spawn_local(async move {
+            let _ = control.close(&route).await;
+        });
+    }
+}
+
+#[derive(Clone)]
+struct BrowserRouteControl {
+    node_instance_id: Uuid,
+    commands: Sender<Command>,
+    _local_only: Rc<()>,
+}
+
+impl BrowserRouteControl {
+    async fn close(&self, route: &BrowserRelayRoute) -> Result<()> {
+        if route.node_instance_id != self.node_instance_id {
+            return Err(Error::ForeignRelayRoute);
+        }
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(Command::CloseConnection {
+                connection_id: route.connection_id,
+                response,
+            })
+            .await
+            .map_err(|_| Error::SwarmStopped)?;
+        receiver.await.map_err(|_| Error::SwarmStopped)?
     }
 }
 
@@ -309,17 +449,31 @@ impl BrowserNode {
         .await
     }
 
-    pub async fn close_relay_route(&self, route: &BrowserRelayRoute) -> Result<()> {
-        if route.node_instance_id != self.node_instance_id {
-            return Err(Error::ForeignRelayRoute);
+    /// Connect through one exact WSS circuit, authenticate the selected
+    /// application stream, and retain the circuit until the returned stream is
+    /// explicitly closed or dropped.
+    pub async fn open_exact_route(
+        &self,
+        expected_peer_id: PeerId,
+        route: Multiaddr,
+        protocol: ApplicationProtocol,
+    ) -> Result<BrowserAuthenticatedRouteStream> {
+        let route = self.connect_relayed(expected_peer_id, route).await?;
+        match self.open_relayed(&route, protocol).await {
+            Ok(stream) => Ok(BrowserAuthenticatedRouteStream::new(
+                stream,
+                route,
+                self.route_control(),
+            )),
+            Err(open_error) => match self.close_relay_route(&route).await {
+                Ok(()) => Err(open_error),
+                Err(close_error) => Err(close_error),
+            },
         }
-        let (response, receiver) = oneshot::channel();
-        self.send(Command::CloseConnection {
-            connection_id: route.connection_id,
-            response,
-        })
-        .await?;
-        receiver.await.map_err(|_| Error::SwarmStopped)?
+    }
+
+    pub async fn close_relay_route(&self, route: &BrowserRelayRoute) -> Result<()> {
+        self.route_control().close(route).await
     }
 
     /// Drop the browser swarm and its WebSocket/relay resources before this
@@ -376,6 +530,14 @@ impl BrowserNode {
             .send(command)
             .await
             .map_err(|_| Error::SwarmStopped)
+    }
+
+    fn route_control(&self) -> BrowserRouteControl {
+        BrowserRouteControl {
+            node_instance_id: self.node_instance_id,
+            commands: self.commands.clone(),
+            _local_only: Rc::clone(&self._local_only),
+        }
     }
 }
 

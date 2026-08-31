@@ -489,7 +489,6 @@ name = "auki-mappers"
 version = "0.0.0"
 dependencies = [
  "auki-datatypes",
- "auki-domain",
  "auki-manifests",
  "auki-protocols",
  "auki-registry",

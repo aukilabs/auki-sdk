@@ -68,6 +68,7 @@ stream = [
     "dep:serde",
     "dep:thiserror",
 ]
+stream-endpoint = ["stream", "dep:auki-sdk", "dep:futures-timer"]
 
 [dependencies]
 auki-datatypes = { path = "../auki-datatypes", optional = true }

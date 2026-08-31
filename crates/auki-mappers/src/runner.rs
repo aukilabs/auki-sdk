@@ -81,7 +81,7 @@ impl<T: Send + 'static> MapperInput<T> {
     pub fn from_sdk_subscription(
         log_ref: LogRef,
         clock: RegistryRef,
-        subscription: auki_domain::StreamSubscription<T>,
+        subscription: auki_protocols::stream::StreamSubscription<T>,
     ) -> Result<Self, MapperInputBindingError> {
         let manifest = &subscription.manifest;
         if manifest.resource_id != log_ref.resource_id {
@@ -1279,7 +1279,7 @@ mod tests {
 
     #[tokio::test]
     async fn sdk_subscription_binding_validates_identity_and_detects_sequence_gaps() {
-        use auki_domain::{StreamEntry, StreamSubscription};
+        use auki_protocols::stream::{StreamEntry, StreamSubscription};
 
         let selected_clock = clock();
         let subscription = StreamSubscription {
@@ -1312,7 +1312,7 @@ mod tests {
 
     #[test]
     fn sdk_subscription_binding_rejects_wrong_accept_manifest() {
-        use auki_domain::StreamSubscription;
+        use auki_protocols::stream::StreamSubscription;
 
         let selected_clock = clock();
         let subscription = StreamSubscription::<PointCloudData> {

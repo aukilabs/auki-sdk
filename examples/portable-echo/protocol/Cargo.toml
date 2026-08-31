@@ -1,0 +1,15 @@
+[package]
+name = "auki-portable-echo-protocol"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "Portable reference application protocol for native Auki and Web/Wasm peers."
+readme = "README.md"
+
+[dependencies]
+futures = { workspace = true }
+thiserror = { workspace = true }

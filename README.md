@@ -146,6 +146,13 @@ only at the prior
 [`v0.0.60` tag](https://github.com/aukilabs/auki-sdk/tree/v0.0.60); they are not
 wire-compatible with Stage 1.
 
+## Examples
+
+- [`diagnostic-app`](examples/diagnostic-app) proves the authenticated native
+  Domain flow over direct TCP.
+- [`portable-echo`](examples/portable-echo) builds one bounded application
+  protocol once in platform-neutral Rust for reuse by native and Web runtimes.
+
 ## Contributing & license
 
 Work is tracked on the [SDK Kanban](https://github.com/orgs/Aukilabs/projects/5). See [CONTRIBUTING.md](CONTRIBUTING.md) for the folder convention, board flow, and git hygiene rules; [CLAUDE.md](CLAUDE.md) is the equivalent for AI agents.

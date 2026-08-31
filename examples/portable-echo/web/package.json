@@ -1,5 +1,5 @@
 {
-  "name": "@aukilabs/portable-echo-web-playground",
+  "name": "@aukilabs/portable-echo-web-example",
   "version": "0.1.0",
   "private": true,
   "type": "module",

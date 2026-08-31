@@ -194,7 +194,7 @@ cargo test --locked -p auki-portable-echo
 That command does not prove a network exchange. Follow the credentialed
 [two-terminal guide](p2p/getting-started.md) to authenticate two native peers
 in one Domain and exchange through their confirmed routes. Then use the
-[protected direction matrix](../examples/portable-echo/web/README.md#live-direction-proof)
+[protected direction matrix](../examples/portable-echo/web/README.md#run-the-protected-direction-proof)
 to prove browser-to-browser in both directions, native-to-browser, and
 browser-to-native.
 

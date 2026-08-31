@@ -67,7 +67,7 @@ The protected smoke test needs a separate environment contract, peer-card
 output, inbound event markers, flexible credential parsing, and keep-running
 controls. Those concerns remain in the `auki-portable-echo-interop` binary
 instead of obscuring the copyable app. The binary is test machinery; run it
-through the [Web/Wasm smoke command](../web/README.md#live-direction-proof),
+through the [Web/Wasm smoke command](../web/README.md#run-the-protected-direction-proof),
 which supplies its required `AUKI_STATE_DIR` and other controls:
 
 ```sh

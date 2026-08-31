@@ -3,223 +3,35 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta
-      name="description"
-      content="A small developer playground for authenticated Auki peers and the portable echo protocol."
-    />
     <link rel="icon" href="data:," />
-    <title>Auki Peer Playground</title>
+    <title>Auki echo peer</title>
   </head>
   <body>
-    <main class="app-shell" aria-labelledby="page-title">
-      <header class="app-header">
-        <div>
-          <p class="eyebrow">Auki SDK · portable echo</p>
-          <h1 id="page-title">Peer Playground</h1>
-          <p class="lede">
-            Start an ephemeral browser peer, exchange a public peer card, and
-            test one explicitly enabled protocol.
-          </p>
-        </div>
-        <p id="app-status" class="status-pill" role="status" aria-live="polite">
-          Ready to sign in
-        </p>
-      </header>
+    <main>
+      <h1>Auki echo peer</h1>
+      <form id="login">
+        <input id="email" type="email" placeholder="Email" required />
+        <input id="password" type="password" placeholder="Password" required />
+        <button id="login-button" type="submit" disabled>Log in</button>
+      </form>
 
-      <div class="workspace">
-        <div class="setup-flow">
-          <section class="step-card" aria-labelledby="login-title">
-            <header class="step-heading">
-              <span class="step-number" aria-hidden="true">1</span>
-              <div>
-                <h2 id="login-title">Log in</h2>
-                <p>Use a developer account that can access the test domain.</p>
-              </div>
-            </header>
+      <form id="start" hidden>
+        <select id="domain" aria-label="Accessible Domain" required></select>
+        <button id="start-button" type="submit">Start peer</button>
+      </form>
 
-            <form id="login-form" class="form-stack" autocomplete="on">
-              <div class="field-grid">
-                <label class="field" for="email">
-                  <span>Email</span>
-                  <input
-                    id="email"
-                    name="email"
-                    type="email"
-                    inputmode="email"
-                    autocomplete="username"
-                    placeholder="developer@example.com"
-                    required
-                  />
-                </label>
+      <pre id="local">Not connected</pre>
 
-                <label class="field" for="password">
-                  <span>Password</span>
-                  <input
-                    id="password"
-                    name="password"
-                    type="password"
-                    autocomplete="current-password"
-                    placeholder="Enter password"
-                    required
-                  />
-                </label>
-              </div>
+      <form id="send">
+        <input id="remote-peer" placeholder="Remote Peer ID" required />
+        <input id="remote-route" placeholder="Remote WSS route" required />
+        <input id="message" placeholder="Message" required />
+        <button id="send-button" type="submit" disabled>Send echo</button>
+      </form>
 
-              <div class="form-actions">
-                <p class="field-note">
-                  The playground does not persist credentials or include them
-                  in peer cards and logs.
-                </p>
-                <button id="login-button" class="button button-primary" type="submit" disabled>
-                  Log in
-                </button>
-              </div>
-            </form>
-          </section>
-
-          <section id="domain-panel" class="step-card" aria-labelledby="domain-title" hidden>
-            <header class="step-heading">
-              <span class="step-number" aria-hidden="true">2</span>
-              <div>
-                <h2 id="domain-title">Select a Domain</h2>
-                <p>Each start creates a new in-memory identity and Peer ID.</p>
-              </div>
-            </header>
-
-            <div class="form-row">
-              <label class="field field-grow" for="domain-select">
-                <span>Accessible Domain</span>
-                <select id="domain-select" name="domain" disabled required>
-                  <option value="">Log in to load Domains</option>
-                </select>
-              </label>
-              <button id="start-peer" class="button button-primary align-end" type="button" disabled>
-                Start peer
-              </button>
-            </div>
-          </section>
-
-          <section id="peer-panel" class="step-card" aria-labelledby="peer-title" hidden>
-            <header class="step-heading">
-              <span class="step-number" aria-hidden="true">3</span>
-              <div>
-                <h2 id="peer-title">Share this peer</h2>
-                <p>The card contains public routing data, never credentials.</p>
-              </div>
-            </header>
-
-            <dl class="identity-grid">
-              <div>
-                <dt>Peer ID</dt>
-                <dd id="local-peer-id">Not started</dd>
-              </div>
-              <div>
-                <dt>Domain ID</dt>
-                <dd id="local-domain-id">Not selected</dd>
-              </div>
-              <div>
-                <dt>Protocol</dt>
-                <dd><code>/example/echo/1.0.0</code></dd>
-              </div>
-            </dl>
-
-            <label class="field" for="peer-card">
-              <span>Public peer card</span>
-              <textarea
-                id="peer-card"
-                rows="5"
-                readonly
-                spellcheck="false"
-                placeholder="A public peer card will appear after startup."
-              ></textarea>
-            </label>
-
-            <div class="form-actions form-actions-end">
-              <button id="copy-peer-card" class="button button-secondary" type="button" disabled>
-                Copy peer card
-              </button>
-            </div>
-          </section>
-
-          <section id="connect-panel" class="step-card" aria-labelledby="connect-title" hidden>
-            <header class="step-heading">
-              <span class="step-number" aria-hidden="true">4</span>
-              <div>
-                <h2 id="connect-title">Send an echo</h2>
-                <p>Paste another peer’s public card with its exact WSS route.</p>
-              </div>
-            </header>
-
-            <div class="form-stack">
-              <label class="field" for="remote-peer">
-                <span>Remote peer</span>
-                <textarea
-                  id="remote-peer"
-                  rows="5"
-                  maxlength="16384"
-                  spellcheck="false"
-                  placeholder='Paste peer-card JSON'
-                  disabled
-                ></textarea>
-              </label>
-
-              <label class="field" for="echo-message">
-                <span>Message</span>
-                <input
-                  id="echo-message"
-                  name="message"
-                  type="text"
-                  maxlength="1024"
-                  placeholder="Hello from this peer"
-                  disabled
-                />
-              </label>
-
-              <div class="form-actions">
-                <p class="field-note">
-                  Every send opens one authenticated relay stream and closes it
-                  after the response.
-                </p>
-                <button id="send-echo" class="button button-primary" type="button" disabled>
-                  Send echo
-                </button>
-              </div>
-            </div>
-          </section>
-        </div>
-
-        <aside class="activity-card" aria-labelledby="activity-title">
-          <header class="activity-heading">
-            <div>
-              <p class="step-kicker">Step 5</p>
-              <h2 id="activity-title">Peer activity</h2>
-            </div>
-            <button id="stop-peer" class="button button-danger" type="button" disabled hidden>
-              Stop peer
-            </button>
-          </header>
-
-          <div class="log-key" aria-hidden="true">
-            <span><i class="direction-dot inbound"></i>Inbound</span>
-            <span><i class="direction-dot outbound"></i>Outbound</span>
-          </div>
-
-          <ol
-            id="event-log"
-            class="event-log"
-            role="log"
-            aria-live="polite"
-            aria-relevant="additions text"
-          >
-            <li class="empty-log">
-              <span>No peer activity yet.</span>
-              <small>Events will appear here after the peer starts.</small>
-            </li>
-          </ol>
-        </aside>
-      </div>
+      <button id="stop-button" type="button" disabled>Stop peer</button>
+      <pre id="log" aria-live="polite"></pre>
     </main>
-
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -93,7 +93,7 @@ therefore creates a new Peer ID. It does not accept App credentials or persist
 the User password or peer identity.
 
 See the
-[minimal browser echo](../../examples/portable-echo/web/README.md#copy-the-minimal-app)
+[browser echo app](../../examples/portable-echo/web/README.md#run-the-web-app)
 for the complete public flow.
 
 ## Boundary rules

@@ -16,8 +16,7 @@ const COMMAND_OUTPUT_LIMIT_BYTES = 32 * 1024 * 1024;
 const STATE_PREFIX = "auki-portable-echo-native-";
 const webRoot = fileURLToPath(new URL("../", import.meta.url));
 const workspaceRoot = fileURLToPath(new URL("../../../../", import.meta.url));
-const browserPage = join(webRoot, "scripts", "browser_echo.html");
-const packageRoot = join(webRoot, "pkg-web");
+const webDist = join(webRoot, "dist");
 const execFileAsync = promisify(execFile);
 
 const credentials = requiredCredentials();
@@ -38,7 +37,7 @@ let firstPeerStarted = false;
 let secondPeerStarted = false;
 
 try {
-  await buildWasmPackage(childEnvironment);
+  await buildWebApp(childEnvironment);
   const nativeBinary = await buildNativeBinary(childEnvironment);
   nativeStateDir = await mkdtemp(join(tmpdir(), STATE_PREFIX));
   staticServer = await startStaticServer();
@@ -58,8 +57,8 @@ try {
     secondPage.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: "load" }),
   ]);
   await Promise.all([
-    firstPage.waitForFunction(() => typeof globalThis.echoHarness?.start === "function"),
-    secondPage.waitForFunction(() => typeof globalThis.echoHarness?.start === "function"),
+    firstPage.waitForFunction(() => !document.querySelector("#login-button")?.disabled),
+    secondPage.waitForFunction(() => !document.querySelector("#login-button")?.disabled),
   ]);
 
   browserStartups = [
@@ -103,11 +102,6 @@ try {
     "the browser TCP route does not target its Peer ID",
   );
 
-  const serve = withTimeout(
-    firstPage.evaluate(() => globalThis.echoHarness.serveOnce()),
-    ECHO_TIMEOUT_MS,
-    "serving the browser echo request",
-  );
   native = runNativeClient({
     binary: nativeBinary,
     browserPeerId: firstPeer.peerId,
@@ -122,7 +116,7 @@ try {
     ECHO_TIMEOUT_MS,
     "waiting for the native peer to become bidirectional",
   );
-  const [receipt, nativeOutput] = await Promise.all([serve, nativeWaiting]);
+  const nativeOutput = await nativeWaiting;
   assertNativeEchoOutput(nativeOutput, firstPeer.peerId, nativeMessage.length);
 
   const nativePeerId = extractRequiredLine(nativeOutput, "PEER_ID");
@@ -142,27 +136,17 @@ try {
     nativeWssRoute.endsWith(`/p2p-circuit/p2p/${nativePeerId}`),
     "the native WSS route does not target its Peer ID",
   );
-  assert.equal(receipt.remotePeerId, nativePeerId);
-  assert.equal(Buffer.from(receipt.payload).toString("utf8"), nativeMessage);
-
-  const browserToNativePayload = Array.from(Buffer.from(browserToNativeMessage));
-  const browserReceipt = await withTimeout(
-    firstPage.evaluate(
-      ({ domainId, peerId, protocol, wssRoute, payload }) =>
-        globalThis.echoHarness.sendEcho({ domainId, peerId, protocol, wssRoute, payload }),
-      {
-        domainId: nativePeerCard.domainId,
-        peerId: nativePeerCard.peerId,
-        protocol: nativePeerCard.protocols[0],
-        wssRoute: nativePeerCard.routes.wss,
-        payload: browserToNativePayload,
-      },
-    ),
-    ECHO_TIMEOUT_MS,
-    "echoing browser A to the native peer",
+  await waitForLog(
+    firstPage,
+    `received from ${nativePeerId}: ${nativeMessage}`,
+    "observing the native-to-browser echo",
   );
-  assert.equal(browserReceipt.remotePeerId, nativePeerId);
-  assert.deepEqual(browserReceipt.payload, browserToNativePayload);
+
+  await sendBrowserEcho(
+    firstPage,
+    { peerId: nativePeerCard.peerId, wssRoute: nativePeerCard.routes.wss },
+    browserToNativeMessage,
+  );
   await waitForChildOutput(
     native,
     new RegExp(
@@ -188,8 +172,8 @@ try {
 
   await withTimeout(
     Promise.all([
-      firstPage.evaluate(() => globalThis.echoHarness.shutdown()),
-      secondPage.evaluate(() => globalThis.echoHarness.shutdown()),
+      stopBrowserPeer(firstPage),
+      stopBrowserPeer(secondPage),
     ]),
     START_TIMEOUT_MS,
     "shutting down the browser peers",
@@ -213,14 +197,14 @@ try {
   ).catch(() => {});
   if (firstPage && firstPeerStarted) {
     await withTimeout(
-      firstPage.evaluate(() => globalThis.echoHarness.shutdown()),
+      stopBrowserPeer(firstPage),
       CLEANUP_TIMEOUT_MS,
       "cleaning up browser peer A",
     ).catch(() => {});
   }
   if (secondPage && secondPeerStarted) {
     await withTimeout(
-      secondPage.evaluate(() => globalThis.echoHarness.shutdown()),
+      stopBrowserPeer(secondPage),
       CLEANUP_TIMEOUT_MS,
       "cleaning up browser peer B",
     ).catch(() => {});
@@ -251,11 +235,30 @@ function requiredCredentials() {
 }
 
 async function startBrowserPeer(page, input) {
-  return page.evaluate(
-    async ({ email, password, domainId }) =>
-      globalThis.echoHarness.start({ email, password, domainId }),
-    input,
+  await page.fill("#email", input.email);
+  await page.fill("#password", input.password);
+  await page.click("#login-button");
+  await page.waitForFunction(
+    (domainId) =>
+      Array.from(document.querySelector("#domain")?.options ?? [])
+        .some((option) => option.value === domainId),
+    input.domainId,
+    { timeout: START_TIMEOUT_MS },
   );
+  await page.selectOption("#domain", input.domainId);
+  await page.click("#start-button");
+  await page.waitForFunction(
+    () => Boolean(document.querySelector("#local")?.dataset.peerId),
+    undefined,
+    { timeout: START_TIMEOUT_MS },
+  );
+  return page.$eval("#local", (local) => ({
+    peerId: local.dataset.peerId,
+    domainId: local.dataset.domainId,
+    protocol: "/example/echo/1.0.0",
+    wssRoute: local.dataset.wssRoute,
+    tcpRoute: local.dataset.tcpRoute || undefined,
+  }));
 }
 
 function requireStartedPeers(results) {
@@ -277,23 +280,56 @@ function assertBrowserPeer(peer, expectedDomainId) {
 }
 
 async function proveBrowserEcho(senderPage, sender, receiverPage, receiver, message) {
-  const payload = Array.from(Buffer.from(message));
-  const result = await withTimeout(
-    Promise.all([
-      receiverPage.evaluate(() => globalThis.echoHarness.serveOnce()),
-      senderPage.evaluate(
-        ({ peer, bytes }) => globalThis.echoHarness.sendEcho({ ...peer, payload: bytes }),
-        { peer: receiver, bytes: payload },
-      ),
-    ]),
-    ECHO_TIMEOUT_MS,
-    `echoing ${sender.peerId} to ${receiver.peerId}`,
+  await Promise.all([
+    waitForLog(
+      receiverPage,
+      `received from ${sender.peerId}: ${message}`,
+      `observing ${sender.peerId} at ${receiver.peerId}`,
+    ),
+    sendBrowserEcho(senderPage, receiver, message),
+  ]);
+}
+
+async function sendBrowserEcho(page, target, message) {
+  await page.fill("#remote-peer", target.peerId);
+  await page.fill("#remote-route", target.wssRoute);
+  await page.fill("#message", message);
+  const sent = waitForLog(
+    page,
+    `sent to ${target.peerId}: ${message}`,
+    `sending an echo to ${target.peerId}`,
   );
-  const [served, echoed] = result;
-  assert.equal(served.remotePeerId, sender.peerId);
-  assert.deepEqual(served.payload, payload);
-  assert.equal(echoed.remotePeerId, receiver.peerId);
-  assert.deepEqual(echoed.payload, payload);
+  await page.click("#send-button");
+  await sent;
+}
+
+function waitForLog(page, line, description) {
+  return withTimeout(
+    page.waitForFunction(
+      (expected) => document.querySelector("#log")?.textContent?.includes(expected),
+      line,
+      { timeout: ECHO_TIMEOUT_MS },
+    ),
+    ECHO_TIMEOUT_MS,
+    description,
+  );
+}
+
+async function stopBrowserPeer(page) {
+  const running = await page.$eval("#local", (local) => Boolean(local.dataset.peerId));
+  if (!running) {
+    return;
+  }
+  await page.click("#stop-button");
+  await page.waitForFunction(
+    () => !document.querySelector("#local")?.dataset.peerId,
+    undefined,
+    { timeout: CLEANUP_TIMEOUT_MS },
+  );
+  const lastLogLine = await page.$eval("#log", (log) =>
+    log.textContent?.trim().split("\n").at(-1),
+  );
+  assert.equal(lastLogLine, "Peer stopped");
 }
 
 function sanitizedEnvironment(source) {
@@ -335,18 +371,14 @@ async function startStaticServer() {
 
 async function serveStatic(request, response) {
   const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
-  let file;
-  if (pathname === "/") {
-    file = browserPage;
-  } else if (/^\/pkg-web\/[A-Za-z0-9_.-]+$/.test(pathname)) {
-    file = join(packageRoot, pathname.slice("/pkg-web/".length));
-  } else {
+  const relative = pathname === "/" ? "index.html" : pathname.slice(1);
+  if (!/^(?:index\.html|assets\/[A-Za-z0-9_.-]+)$/.test(relative)) {
     response.writeHead(404);
     response.end();
     return;
   }
 
-  const body = await readFile(file);
+  const body = await readFile(join(webDist, relative));
   const contentType = pathname.endsWith(".wasm")
     ? "application/wasm"
     : pathname.endsWith(".js")
@@ -359,20 +391,10 @@ async function serveStatic(request, response) {
   response.end(body);
 }
 
-async function buildWasmPackage(environment) {
+async function buildWebApp(environment) {
   await execFileAsync(
-    "wasm-pack",
-    [
-      "build",
-      ".",
-      "--target",
-      "web",
-      "--out-dir",
-      "pkg-web",
-      "--dev",
-      "--",
-      "--locked",
-    ],
+    "npm",
+    ["run", "build"],
     {
       cwd: webRoot,
       env: environment,

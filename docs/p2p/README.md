@@ -67,7 +67,7 @@ relay route; there is no direct-only browser mode in `0.1`.
 Protocol implementations remain in Rust. A thin binding such as `AukiEcho`
 mounts the same Rust endpoint used by native hosts on the generic browser peer.
 See the
-[minimal browser echo](../../examples/portable-echo/web/README.md#copy-the-minimal-app).
+[browser echo app](../../examples/portable-echo/web/README.md#run-the-web-app).
 App access keys and secrets are never accepted by the browser facade.
 
 ## What remains explicit

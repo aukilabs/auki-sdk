@@ -7,7 +7,7 @@ in Rust and using it from native and Web Auki peers.
 src/wire.rs     author-owned ID, wire format, validation, and conversation
 src/endpoint.rs author-owned AukiPeer mount, deadlines, cleanup, and events
 native/         small Rust app plus a separate protected-interop binary
-web/            small browser app, richer playground, and protected smoke proof
+web/            small browser app plus a protected four-direction smoke proof
 ```
 
 The private `wire` module has no dependency on Tokio, libp2p, `auki-sdk`,
@@ -38,8 +38,8 @@ cargo check --locked \
 
 The [native README](native/README.md) runs the small two-terminal Rust app and
 keeps protected interop output in a separate executable. The
-[Web README](web/README.md) distinguishes the minimal browser app from the
-richer playground and four-direction protected smoke test.
+[Web README](web/README.md) runs the copyable root app in two tabs and keeps the
+four-direction protected smoke test as separate test machinery.
 
 Peer discovery and automatic route publication remain outside this example.
 The apps exchange an expected Peer ID and exact confirmed route explicitly;

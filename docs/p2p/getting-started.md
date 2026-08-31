@@ -135,10 +135,9 @@ only logs in a User, selects a Domain, starts an ephemeral `AukiPeer`, construct
 `AukiEcho`, and supplies the remote Peer ID plus WSS route. It closes
 `AukiEcho` before shutting down the peer.
 
-Run the [minimal browser app](../../examples/portable-echo/web/README.md#copy-the-minimal-app)
-to try that surface. The larger playground and protected four-direction smoke
-test remain separate so their UI and test machinery do not become the SDK
-example.
+Run the [browser echo app](../../examples/portable-echo/web/README.md#run-the-web-app)
+to try that surface in two tabs. The protected four-direction smoke test drives
+that same page while keeping its test machinery out of the application.
 
 ## App credentials
 
@@ -165,7 +164,7 @@ authenticates the expected remote Peer ID in the selected Domain.
 ## Continue
 
 - [Author one portable protocol crate](authoring-protocols.md).
-- Run the [protected interop proof](../../examples/portable-echo/web/README.md#live-direction-proof)
+- Run the [protected interop proof](../../examples/portable-echo/web/README.md#run-the-protected-direction-proof)
   for browser-to-browser in both directions plus native-to-browser and
   browser-to-native.
 - Use [`auki-p2p`](../../crates/auki-p2p/README.md) directly only when building a

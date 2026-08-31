@@ -202,9 +202,9 @@ their dedicated `AukiPeer` facades rather than reviving Manager semantics.
   - The [native reference app](examples/portable-echo/native) is a small,
     copyable User-authenticated peer with a stable identity, default DMS relay,
     exact-route send, inbound serving, and ordered shutdown.
-  - The [Web/Wasm source example](examples/portable-echo/web) provides a minimal
-    User-authenticated ephemeral peer and a two-tab playground. It is available
-    in this repository but is not a published package.
+  - The [Web/Wasm source example](examples/portable-echo/web) is a small,
+    copyable User-authenticated ephemeral peer that can be run in two tabs. It
+    is available in this repository but is not a published package.
   - Its protected smoke test proves browser-to-browser in both directions,
     native-to-browser, and browser-to-native using the remote peer's exact TCP
     or WSS route. It does not rely on discovery or automatic route publication.

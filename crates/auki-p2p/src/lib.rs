@@ -5,6 +5,7 @@
 //! before one of those streams becomes an [`AuthenticatedStream`]. It does not
 //! fetch credentials or understand tasks, datasets, or machine-auth flows.
 
+mod authentication;
 mod authority;
 mod error;
 mod identity;
@@ -20,6 +21,7 @@ mod targeted_stream;
 mod token;
 mod transport;
 
+pub use authentication::{AuthenticatedPeer, SessionRequirements};
 pub use authority::{DomainAuthority, P2pCredentialError, P2pCredentialResult};
 pub use error::{Error, Result};
 pub use identity::{Identity, PeerIdentityProof};
@@ -50,6 +52,6 @@ pub use token::{
     P2P_TOKEN_TYPE,
 };
 pub use transport::{
-    ApplicationProtocol, AuthenticatedPeer, AuthenticatedStream, IncomingAuthenticatedStreams,
-    Node, RelayRouteHandle, RelayTransportEvent, SessionRequirements,
+    ApplicationProtocol, AuthenticatedStream, IncomingAuthenticatedStreams, Node, RelayRouteHandle,
+    RelayTransportEvent,
 };

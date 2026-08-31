@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
-use crate::transport::AuthenticatedPeer;
+use crate::AuthenticatedPeer;
 
 /// Maximum number of peer-observation events retained for each subscriber.
 ///

@@ -121,7 +121,6 @@ This repo is in early development. The crates here implement a foundational subs
 | [`auki-sdk-web`](bindings/web/auki-sdk-web) | ✓ Source-only Web facade for User login, explicit Domain selection, one ephemeral `AukiPeer`, mandatory WSS relay reachability, and portable Rust endpoints. |
 | [`auki-protocols`](crates/auki-protocols) | ✓ Exact `/auki/auth/1/...` IDs, bounded codecs, validation, locked vectors, and transport-neutral wire types. Protocol families are compile-time opt-in; the crate owns no runtime. |
 | [`auki-domain`](crates/auki-domain) | Compatibility: low-level owner for existing native consumers of retained catalogs, registries, blobs, messages, and streams. It is not the canonical new peer facade. |
-| [`auki-domain-relay`](crates/auki-domain-relay) | WIP standalone native/WebSocket Circuit Relay v2 server. Domain authority and route distribution remain outside the relay. |
 | `auki-network-py` | Removed Manager-era networking binding. |
 | [`auki-domain-py`](bindings/python/auki-domain-py) | Compatibility: Python facade over the retained bounded `Domain` owner. A canonical Python `AukiPeer` facade is pending. |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ⚠ Generic ROS2 → SDK glue: `CameraInfo`/`Image` and `PointCloud2` translation, with RGB/RGBA normalization for point clouds. `frame_id` + `frame_hash` thread through both builders so sensor entries commit to an exact Frame Registry version. Currently broken at the transport layer: `r2r` 0.9.5's compile-time-generated `sensor_msgs` typesupport doesn't match the CDR layout some camera drivers publish. Fix in flight |
@@ -209,7 +208,6 @@ The on-device library, organized as a Cargo workspace. Each crate is independent
 | [`auki-sdk`](crates/auki-sdk) | Canonical `AukiPeer`, `AukiPeerConfig`, protocol mounting and exact-route dialing, confirmed reachability, observations, status, and shutdown. |
 | [`auki-protocols`](crates/auki-protocols) | Exact protocol IDs and versioned modules such as `catalog::v2`, `catalog::v3`, `catalog::v4`, and `stream::v2`; bounded framing and validation; no transport or hosting lifecycle. |
 | [`auki-domain`](crates/auki-domain) | Compatibility/low-level `DomainBuilder`, `DomainConfig`, `Domain`, retained protocol operations, and bounded ordered leave. |
-| [`auki-domain-relay`](crates/auki-domain-relay) | `DomainRelay`, `DomainRelayConfig`, `DomainRelayEvent`, `DomainRelayError`. |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ROS2 message structs (`StampMsg`, `CameraInfoMsg`, `ImageMsg`, `PointCloud2Msg`, `PointFieldMsg`); builders (`build_camera_registry_entry`, `build_sensor_log_entry`, `build_point_cloud_registry_entry`, `build_point_cloud_log_entry`); `CameraSubscriber` / `PointCloudSubscriber` traits + mocks; `r2r_subscriber` module |
 
 Each crate's own README documents the public types in detail and pins the on-disk format where applicable.

@@ -107,14 +107,6 @@ authenticated known peers, catalogs, registry/blob fetches, messages, typed
 streams, and ordered leave. There is no Manager, membership roster, election,
 or hidden discovery policy.
 
-### [`auki-domain-relay`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain-relay)
-
-Standalone native/WebSocket Circuit Relay v2 server. Hosts distribute relay
-routes and authority through their own control plane; the relay owns no Domain
-membership or topology policy.
-
----
-
 ## App surface
 
 One crate. The entry point for app code.

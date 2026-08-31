@@ -20,7 +20,6 @@ members = [
     "crates/auki-relay-booking",
     "crates/auki-sdk",
     "crates/auki-protocols",
-    "crates/auki-domain-relay",
     "bindings/swift/auki-identity-swift",
     "crates/auki-datatypes",
     "crates/auki-domain",

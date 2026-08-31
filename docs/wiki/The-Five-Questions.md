@@ -147,7 +147,6 @@ address is never authority.
 - [`auki-p2p`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-p2p) — stable identity, mutually authenticated transport, explicit routes, relay reservations, and observations.
 - [`auki-protocols`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-protocols) — exact IDs, versioned wire types, bounded codecs, validation, and locked vectors; no runtime.
 - [`auki-domain`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain) — public lifecycle, known peers, catalogs, registries, blobs, messages, and streams.
-- [`auki-domain-relay`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-domain-relay) — Domain Relay for browser-compatible reachability through Circuit Relay v2 (WIP)
 - [`auki-session`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-session) — `Peer` + `Session` (identity, registries, log registration; network-free) and the `materialize_remote_log` stub
 
 ### The wire protocols

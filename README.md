@@ -151,7 +151,6 @@ The first live pose-stream hardware target is Galbot G1 using RoboStreamer to pu
 | [`auki-protocols`](crates/auki-protocols) | Exact authenticated-protocol IDs, bounded codecs, validation, and transport-neutral wire types; no runtime | ✓ |
 | [`auki-session`](crates/auki-session) | Legacy-compatible, network-free recording model: `Peer`, `Session`, registries, and log registration | ✓ |
 | [`auki-domain`](crates/auki-domain) | Legacy/low-level authenticated Domain owner with retained catalogs, registries, blobs, messages, and streams; existing consumers remain supported | Compatibility |
-| [`auki-domain-relay`](crates/auki-domain-relay) | Earlier Domain relay capability retained in source; not the canonical `AukiPeer` relay path | WIP (v0.0.0) |
 | [`auki-ros-adapter`](crates/auki-ros-adapter) | ROS2 → SDK glue for `Image` / `CameraInfo` / `PointCloud2` | ⚠ broken at the `r2r 0.9.5` transport layer |
 
 ### `bindings/web/` — wasm-bindgen

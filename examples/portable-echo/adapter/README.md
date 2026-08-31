@@ -4,10 +4,11 @@ This crate mounts the transport-neutral
 [`auki-portable-echo-protocol`](../protocol/README.md) on the canonical
 cross-target `AukiPeer` protocol surface.
 
-It owns the protocol registration, five-second open/exchange/close deadlines,
-exact-route and configured-route clients, stream cleanup, and a bounded
-nonblocking queue of inbound results. A slow event consumer receives an
-explicit `Lagged` event; it never stalls a protocol handler.
+It owns the protocol registration, five-second stream-operation deadlines,
+the SDK registration shutdown barrier, exact-route and configured-route
+clients, stream cleanup, and a bounded nonblocking queue of inbound results. A
+slow event consumer receives an explicit `Lagged` event; it never stalls a
+protocol handler or prevents buffered events from making progress.
 
 The native and Web hosts only need to:
 

@@ -12,7 +12,7 @@ use std::{
     future::Future,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -135,8 +135,9 @@ impl EchoEndpoint {
 
     /// Stop accepting inbound echo streams and await admitted handlers.
     pub async fn close(self) -> Result<(), EchoAdapterError> {
-        deadline(EchoOperation::Close, self.registration.close())
-            .await?
+        self.registration
+            .close()
+            .await
             .map_err(EchoAdapterError::Sdk)
     }
 }
@@ -185,6 +186,7 @@ pub enum EchoServeEvent {
 pub struct EchoEventReceiver {
     events: Receiver<EchoServeEvent>,
     dropped: Arc<AtomicU64>,
+    event_since_lag: Arc<AtomicBool>,
 }
 
 impl EchoEventReceiver {
@@ -193,11 +195,16 @@ impl EchoEventReceiver {
     /// Returns `None` after the mounted endpoint and all admitted handlers are
     /// gone and buffered events have been drained.
     pub async fn recv(&self) -> Option<EchoServeEvent> {
-        if let Some(dropped) = self.take_dropped() {
+        if self.event_since_lag.swap(false, Ordering::AcqRel)
+            && let Some(dropped) = self.take_dropped()
+        {
             return Some(EchoServeEvent::Lagged { dropped });
         }
         match self.events.recv().await {
-            Ok(event) => Some(event),
+            Ok(event) => {
+                self.event_since_lag.store(true, Ordering::Release);
+                Some(event)
+            }
             Err(_) => self
                 .take_dropped()
                 .map(|dropped| EchoServeEvent::Lagged { dropped }),
@@ -237,6 +244,7 @@ impl EventDelivery {
 fn event_channel(capacity: usize) -> (EventDelivery, EchoEventReceiver) {
     let (event_sender, event_receiver) = async_channel::bounded(capacity);
     let dropped = Arc::new(AtomicU64::new(0));
+    let event_since_lag = Arc::new(AtomicBool::new(false));
     (
         EventDelivery {
             events: event_sender,
@@ -245,6 +253,7 @@ fn event_channel(capacity: usize) -> (EventDelivery, EchoEventReceiver) {
         EchoEventReceiver {
             events: event_receiver,
             dropped,
+            event_since_lag,
         },
     )
 }
@@ -311,7 +320,7 @@ pub enum EchoOperation {
     Open,
     /// Running the exact portable request/response conversation.
     Exchange,
-    /// Closing a stream or mounted registration.
+    /// Closing one authenticated stream.
     Close,
 }
 
@@ -356,7 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn full_event_queue_reports_lag_without_blocking_the_publisher() {
+    fn overloaded_event_queue_reports_lag_without_starving_buffered_events() {
         let peer_id = Identity::generate().peer_id();
         let (delivery, events) = event_channel(1);
         delivery.publish(EchoServeEvent::Served(EchoServeReceipt {
@@ -370,14 +379,41 @@ mod tests {
 
         assert_eq!(
             futures::executor::block_on(events.recv()),
-            Some(EchoServeEvent::Lagged { dropped: 1 })
-        );
-        assert_eq!(
-            futures::executor::block_on(events.recv()),
             Some(EchoServeEvent::Served(EchoServeReceipt {
                 remote_peer_id: peer_id,
                 payload: b"first".to_vec(),
             }))
+        );
+
+        delivery.publish(EchoServeEvent::Served(EchoServeReceipt {
+            remote_peer_id: peer_id,
+            payload: b"second".to_vec(),
+        }));
+        delivery.publish(EchoServeEvent::Served(EchoServeReceipt {
+            remote_peer_id: peer_id,
+            payload: b"also dropped".to_vec(),
+        }));
+
+        assert_eq!(
+            futures::executor::block_on(events.recv()),
+            Some(EchoServeEvent::Lagged { dropped: 2 })
+        );
+
+        delivery.publish(EchoServeEvent::Served(EchoServeReceipt {
+            remote_peer_id: peer_id,
+            payload: b"still dropped".to_vec(),
+        }));
+
+        assert_eq!(
+            futures::executor::block_on(events.recv()),
+            Some(EchoServeEvent::Served(EchoServeReceipt {
+                remote_peer_id: peer_id,
+                payload: b"second".to_vec(),
+            }))
+        );
+        assert_eq!(
+            futures::executor::block_on(events.recv()),
+            Some(EchoServeEvent::Lagged { dropped: 1 })
         );
     }
 

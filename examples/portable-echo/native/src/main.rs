@@ -30,9 +30,36 @@ async fn main() -> Result<()> {
 
     let remote_peer = remote_peer_from_env()?;
     let peer = AukiPeer::start(identity, prepared, AukiPeerConfig::dev()).await?;
-    let context = peer.protocol_context();
-    let echo = EchoEndpoint::mount(peer.protocols())?;
+    let echo = match EchoEndpoint::mount(peer.protocols()) {
+        Ok(echo) => echo,
+        Err(error) => {
+            let peer_shutdown: Result<()> = peer.shutdown().await.map_err(Into::into);
+            return complete_with_cleanup(Err(error.into()), vec![("Auki peer", peer_shutdown)]);
+        }
+    };
     let echo_events = echo.events();
+
+    let operation = run_started_peer(&peer, &echo, &echo_events, remote_peer.as_ref()).await;
+    let echo_shutdown: Result<()> = echo.close().await.map_err(Into::into);
+    let peer_shutdown: Result<()> = peer.shutdown().await.map_err(Into::into);
+    complete_with_cleanup(
+        operation,
+        vec![
+            ("portable echo endpoint", echo_shutdown),
+            ("Auki peer", peer_shutdown),
+        ],
+    )?;
+    println!("STOPPED");
+    Ok(())
+}
+
+async fn run_started_peer(
+    peer: &AukiPeer,
+    echo: &EchoEndpoint,
+    echo_events: &EchoEventReceiver,
+    remote_peer: Option<&RemotePeer>,
+) -> Result<()> {
+    let context = peer.protocol_context();
 
     println!("READY");
     println!("PEER_ID={}", peer.peer_id());
@@ -59,7 +86,7 @@ async fn main() -> Result<()> {
         println!("PEER_CARD={card}");
     }
 
-    if let Some(remote) = remote_peer.as_ref() {
+    if let Some(remote) = remote_peer {
         let message = env::var("AUKI_ECHO_MESSAGE")
             .unwrap_or_else(|_| "hello from the shared Rust protocol".to_owned());
         let receipt = echo
@@ -74,15 +101,30 @@ async fn main() -> Result<()> {
     }
     if remote_peer.is_none() || env::var_os("AUKI_KEEP_RUNNING").is_some() {
         println!("WAITING_FOR_PEER");
-        serve_until_shutdown(&echo_events).await?;
+        serve_until_shutdown(echo_events).await?;
     }
 
-    let echo_shutdown = echo.close().await;
-    let peer_shutdown = peer.shutdown().await;
-    echo_shutdown?;
-    peer_shutdown?;
-    println!("STOPPED");
     Ok(())
+}
+
+fn complete_with_cleanup(
+    operation: Result<()>,
+    cleanup: Vec<(&'static str, Result<()>)>,
+) -> Result<()> {
+    let failures = cleanup
+        .into_iter()
+        .filter_map(|(component, result)| {
+            result.err().map(|error| format!("{component}: {error:#}"))
+        })
+        .collect::<Vec<_>>();
+    match (operation, failures.is_empty()) {
+        (Ok(()), true) => Ok(()),
+        (Ok(()), false) => bail!("ordered shutdown failed: {}", failures.join("; ")),
+        (Err(error), true) => Err(error),
+        (Err(error), false) => {
+            Err(error.context(format!("cleanup also failed: {}", failures.join("; "))))
+        }
+    }
 }
 
 async fn serve_until_shutdown(events: &EchoEventReceiver) -> Result<()> {
@@ -158,6 +200,7 @@ fn required_env(name: &'static str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
     use auki_portable_echo_adapter::{MAX_CONCURRENCY, protocol_spec};
 
     #[test]
@@ -165,5 +208,24 @@ mod tests {
         let spec = protocol_spec().unwrap();
         assert_eq!(spec.protocol_id(), PROTOCOL_ID);
         assert_eq!(spec.max_concurrency(), MAX_CONCURRENCY);
+    }
+
+    #[test]
+    fn cleanup_is_reported_without_discarding_the_primary_failure() {
+        let error = complete_with_cleanup(
+            Err(anyhow!("outbound echo failed")),
+            vec![("Auki peer", Err(anyhow!("booking deletion failed")))],
+        )
+        .unwrap_err();
+        let rendered = format!("{error:#}");
+        assert!(rendered.contains("outbound echo failed"));
+        assert!(rendered.contains("Auki peer: booking deletion failed"));
+
+        let cleanup_only = complete_with_cleanup(
+            Ok(()),
+            vec![("Auki peer", Err(anyhow!("booking deletion failed")))],
+        )
+        .unwrap_err();
+        assert!(cleanup_only.to_string().contains("ordered shutdown failed"));
     }
 }

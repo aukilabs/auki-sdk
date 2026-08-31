@@ -167,12 +167,6 @@ migration.
 
 ---
 
-## Examples
-
-- [`examples/diagnostic-app`](https://github.com/aukilabs/auki-sdk/tree/develop/examples/diagnostic-app) — scriptable authenticated Domain peer and two-process direct-TCP demo.
-
----
-
 ## A consumer's likely subset
 
 If you're building a robot data-plane producer, you probably pull:

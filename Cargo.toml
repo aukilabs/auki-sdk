@@ -33,7 +33,6 @@ members = [
     "crates/auki-session",
     "bindings/python/auki-session-py",
     "crates/auki-time",
-    "examples/diagnostic-app",
     "examples/portable-echo",
     "examples/portable-echo/native",
     "examples/portable-echo/web",

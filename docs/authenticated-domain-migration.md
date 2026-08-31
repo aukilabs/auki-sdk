@@ -198,11 +198,6 @@ in one Domain and exchange through their confirmed routes. Then use the
 to prove browser-to-browser in both directions, native-to-browser, and
 browser-to-native.
 
-[`examples/diagnostic-app`](../examples/diagnostic-app) remains useful for the
-retained low-level Domain path. Its local proof uses manually supplied direct
-TCP routes; that is a compatibility diagnostic, not the canonical `AukiPeer`
-topology.
-
 ## Migration checklist
 
 1. Choose `AukiPeer` unless a retained low-level protocol forces a temporary

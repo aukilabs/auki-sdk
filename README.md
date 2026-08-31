@@ -194,8 +194,6 @@ their dedicated `AukiPeer` facades rather than reviving Manager semantics.
 
 ## Examples
 
-- [`diagnostic-app`](examples/diagnostic-app) retains a low-level authenticated
-  native Domain transport diagnostic over direct TCP.
 - [`portable-echo`](examples/portable-echo) keeps one bounded wire contract and
   its `AukiPeer` endpoint in one Rust crate consumed by both platform hosts.
   - The [native reference app](examples/portable-echo/native) is a small,

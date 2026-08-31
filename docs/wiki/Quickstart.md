@@ -26,7 +26,7 @@ From the repository root, prove the Rust surface with:
 
 ```sh
 cargo test --locked -p auki-session --test end_to_end
-cargo check --locked -p auki-diagnostic-app
+cargo test --locked -p auki-portable-echo
 ```
 
 Build the paired Python bindings from that same checkout with the commands in

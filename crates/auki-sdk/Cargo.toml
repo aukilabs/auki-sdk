@@ -12,10 +12,8 @@ readme = "README.md"
 [dependencies]
 async-trait = { workspace = true }
 auki-auth = { path = "../auki-auth" }
-auki-domain = { path = "../auki-domain" }
 auki-p2p = { path = "../auki-p2p" }
 auki-relay-booking = { path = "../auki-relay-booking" }
-auki-session = { path = "../auki-session" }
 chrono = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }
@@ -31,5 +29,4 @@ uuid = { workspace = true }
 [dev-dependencies]
 httpmock = "0.8.2"
 jsonwebtoken = "9.3.1"
-tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

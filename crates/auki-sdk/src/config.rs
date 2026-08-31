@@ -1,11 +1,5 @@
-use std::{
-    collections::HashSet,
-    net::IpAddr,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{collections::HashSet, net::IpAddr, time::Duration};
 
-use auki_domain::ServedProtocols;
 use auki_p2p::{
     Multiaddr, PeerId, Protocol, RouteCatalogLimits, canonicalize_circuit_route,
     validate_direct_route,
@@ -171,18 +165,12 @@ impl InitialPeerRoutes {
 
 /// Mechanical configuration for one authenticated peer runtime.
 ///
-/// The runtime creates and owns its `auki-session` Peer and Session from
-/// `app_id` and `storage_root`. It exposes those data APIs without exposing the
-/// underlying networking Domain or node.
 #[derive(Clone, Debug)]
 pub struct AukiPeerConfig {
     dms_base_url: Url,
-    app_id: String,
-    storage_root: PathBuf,
     listen_addresses: Vec<Multiaddr>,
     advertised_direct_routes: Vec<Multiaddr>,
     initial_peer_routes: Vec<InitialPeerRoutes>,
-    served_protocols: ServedProtocols,
     relay: Option<AukiRelayConfig>,
 }
 
@@ -192,28 +180,20 @@ impl AukiPeerConfig {
     /// Production endpoints must use HTTPS. Plain HTTP is accepted only when
     /// the URL host is a literal loopback IP address. Credentials, queries,
     /// and fragments are never accepted.
-    pub fn new(
-        dms_base_url: impl AsRef<str>,
-        app_id: impl Into<String>,
-        storage_root: impl Into<PathBuf>,
-    ) -> Result<Self, AukiPeerConfigError> {
+    pub fn new(dms_base_url: impl AsRef<str>) -> Result<Self, AukiPeerConfigError> {
         let dms_base_url = parse_dms_base_url(dms_base_url.as_ref())?;
         Ok(Self {
             dms_base_url,
-            app_id: app_id.into(),
-            storage_root: storage_root.into(),
             listen_addresses: Vec::new(),
             advertised_direct_routes: Vec::new(),
             initial_peer_routes: Vec::new(),
-            served_protocols: ServedProtocols::none(),
             relay: Some(AukiRelayConfig::default()),
         })
     }
 
     /// Configure one peer against the shared development DMS.
-    pub fn dev(app_id: impl Into<String>, storage_root: impl Into<PathBuf>) -> Self {
-        Self::new(DEV_DMS_BASE_URL, app_id, storage_root)
-            .expect("the built-in development DMS URL is valid")
+    pub fn dev() -> Self {
+        Self::new(DEV_DMS_BASE_URL).expect("the built-in development DMS URL is valid")
     }
 
     /// Replace the addresses on which the local P2P transport will listen.
@@ -295,15 +275,6 @@ impl AukiPeerConfig {
         Ok(self)
     }
 
-    /// Select the exact application protocol versions served inbound.
-    ///
-    /// The default is [`ServedProtocols::none`]. Client-side protocol opens do
-    /// not require enabling the corresponding inbound server.
-    pub fn with_served_protocols(mut self, protocols: ServedProtocols) -> Self {
-        self.served_protocols = protocols;
-        self
-    }
-
     /// Disable DMS relay allocation for this peer.
     ///
     /// Relay-backed reachability is required by default. This is the sole
@@ -330,16 +301,6 @@ impl AukiPeerConfig {
         self.dms_base_url.as_str()
     }
 
-    /// Application identifier used by the runtime-owned SDK Peer.
-    pub fn app_id(&self) -> &str {
-        &self.app_id
-    }
-
-    /// Storage root used by the runtime-owned SDK Peer and Session.
-    pub fn storage_root(&self) -> &Path {
-        &self.storage_root
-    }
-
     /// Requested local listener addresses.
     pub fn listen_addresses(&self) -> &[Multiaddr] {
         &self.listen_addresses
@@ -353,11 +314,6 @@ impl AukiPeerConfig {
     /// Initial remote route hints in stable Peer-ID order.
     pub fn initial_peer_routes(&self) -> &[InitialPeerRoutes] {
         &self.initial_peer_routes
-    }
-
-    /// Exact inbound application protocols selected by the caller.
-    pub fn served_protocols(&self) -> ServedProtocols {
-        self.served_protocols
     }
 
     /// Whether startup requires at least one confirmed relay route.
@@ -664,29 +620,26 @@ mod tests {
     }
 
     #[test]
-    fn defaults_are_relay_required_and_serve_no_protocols() {
-        let config = AukiPeerConfig::dev("robot-app", "/tmp/robot-app");
+    fn defaults_are_relay_required() {
+        let config = AukiPeerConfig::dev();
         assert!(config.relay_required());
         assert_eq!(config.relay(), Some(AukiRelayConfig::default()));
-        assert_eq!(config.served_protocols(), ServedProtocols::none());
         assert!(config.listen_addresses().is_empty());
         assert!(config.advertised_direct_routes().is_empty());
         assert!(config.initial_peer_routes().is_empty());
-        assert_eq!(config.app_id(), "robot-app");
-        assert_eq!(config.storage_root(), Path::new("/tmp/robot-app"));
         assert_eq!(config.dms_base_url(), DEV_DMS_BASE_URL);
     }
 
     #[test]
     fn direct_only_is_the_explicit_relay_opt_out() {
-        let config = AukiPeerConfig::dev("app", ".").direct_only();
+        let config = AukiPeerConfig::dev().direct_only();
         assert!(!config.relay_required());
         assert_eq!(config.relay(), None);
     }
 
     #[test]
     fn dms_base_preserves_path_prefix_and_accepts_literal_loopback_http() {
-        let prefixed = AukiPeerConfig::new("https://dms.example/v1", "app", ".").unwrap();
+        let prefixed = AukiPeerConfig::new("https://dms.example/v1").unwrap();
         assert_eq!(prefixed.dms_base_url(), "https://dms.example/v1");
 
         for base in [
@@ -694,7 +647,7 @@ mod tests {
             "http://127.42.0.7/v1/",
             "http://[::1]:8080/v1/",
         ] {
-            assert!(AukiPeerConfig::new(base, "app", ".").is_ok(), "{base}");
+            assert!(AukiPeerConfig::new(base).is_ok(), "{base}");
         }
     }
 
@@ -714,7 +667,7 @@ mod tests {
             "https://dms.example/v1/#fragment",
         ] {
             assert_eq!(
-                AukiPeerConfig::new(base, "app", ".").unwrap_err(),
+                AukiPeerConfig::new(base).unwrap_err(),
                 AukiPeerConfigError::InvalidDmsBaseUrl,
                 "{base}"
             );
@@ -725,7 +678,7 @@ mod tests {
     fn listener_addresses_are_deduplicated_and_stably_sorted() {
         let first = addr("/ip4/127.0.0.1/tcp/4002");
         let second = addr("/ip4/127.0.0.1/tcp/4001");
-        let config = AukiPeerConfig::dev("app", ".")
+        let config = AukiPeerConfig::dev()
             .with_listen_addresses([first.clone(), second.clone(), first])
             .unwrap();
         assert_eq!(
@@ -739,7 +692,7 @@ mod tests {
         let addresses =
             (0..=MAX_LISTEN_ADDRESSES).map(|port| addr(format!("/ip4/127.0.0.1/tcp/{port}")));
         assert!(matches!(
-            AukiPeerConfig::dev("app", ".").with_listen_addresses(addresses),
+            AukiPeerConfig::dev().with_listen_addresses(addresses),
             Err(AukiPeerConfigError::AddressLimit {
                 kind: "listener set",
                 maximum: MAX_LISTEN_ADDRESSES,
@@ -751,7 +704,7 @@ mod tests {
     fn advertised_routes_require_nonzero_direct_tcp_addresses() {
         let expected_peer = peer(7);
         let valid = addr(format!("/dns4/robot.example/tcp/4001/p2p/{expected_peer}"));
-        let config = AukiPeerConfig::dev("app", ".")
+        let config = AukiPeerConfig::dev()
             .with_advertised_direct_routes([valid.clone()])
             .unwrap();
         assert_eq!(config.advertised_direct_routes(), [valid]);
@@ -764,7 +717,7 @@ mod tests {
             addr("/tcp/4001"),
         ] {
             assert!(matches!(
-                AukiPeerConfig::dev("app", ".").with_advertised_direct_routes([invalid]),
+                AukiPeerConfig::dev().with_advertised_direct_routes([invalid]),
                 Err(AukiPeerConfigError::InvalidAdvertisedDirectRoute { .. })
             ));
         }
@@ -779,7 +732,7 @@ mod tests {
         let circuit = addr(format!(
             "/dns4/relay.dev.aukiverse.com/tcp/443/p2p/{relay}/p2p-circuit/p2p/{target}"
         ));
-        let config = AukiPeerConfig::dev("app", ".")
+        let config = AukiPeerConfig::dev()
             .with_peer_routes(target, [circuit.clone(), direct_with_peer, direct.clone()])
             .unwrap();
         assert_eq!(config.initial_peer_routes().len(), 1);
@@ -801,27 +754,18 @@ mod tests {
         let other = peer(22);
         let wrong = addr(format!("/ip4/127.0.0.1/tcp/4001/p2p/{other}"));
         assert!(matches!(
-            AukiPeerConfig::dev("app", ".").with_peer_routes(target, [wrong]),
+            AukiPeerConfig::dev().with_peer_routes(target, [wrong]),
             Err(AukiPeerConfigError::InvalidInitialPeerRoute { .. })
         ));
 
         let too_many = (1..=17).map(|port| addr(format!("/ip4/127.0.0.1/tcp/{port}")));
         assert!(matches!(
-            AukiPeerConfig::dev("app", ".").with_peer_routes(target, too_many),
+            AukiPeerConfig::dev().with_peer_routes(target, too_many),
             Err(AukiPeerConfigError::InitialPeerRouteLimit {
                 maximum: MAX_INITIAL_ROUTES_PER_PEER,
                 ..
             })
         ));
-    }
-
-    #[test]
-    fn served_protocols_are_an_explicit_opt_in() {
-        let selected = ServedProtocols::none()
-            .with_resources_v3()
-            .with_streams_v2();
-        let config = AukiPeerConfig::dev("app", ".").with_served_protocols(selected);
-        assert_eq!(config.served_protocols(), selected);
     }
 
     #[test]
@@ -833,7 +777,7 @@ mod tests {
             Duration::from_secs(60),
         )
         .unwrap();
-        let config = AukiPeerConfig::dev("app", ".")
+        let config = AukiPeerConfig::dev()
             .direct_only()
             .with_relay(relay)
             .unwrap();
@@ -880,7 +824,7 @@ mod tests {
             ..AukiRelayConfig::default()
         };
         assert!(matches!(
-            AukiPeerConfig::dev("app", ".").with_relay(invalid_literal),
+            AukiPeerConfig::dev().with_relay(invalid_literal),
             Err(AukiPeerConfigError::Relay(
                 AukiRelayConfigError::RelayCount { .. }
             ))
@@ -893,7 +837,7 @@ mod tests {
             .map(|port| addr(format!("/ip4/127.0.0.1/tcp/{port}")))
             .collect::<Vec<_>>();
         assert!(matches!(
-            AukiPeerConfig::dev("app", ".").with_advertised_direct_routes(sixteen_direct.clone()),
+            AukiPeerConfig::dev().with_advertised_direct_routes(sixteen_direct.clone()),
             Err(AukiPeerConfigError::LocalRouteLimit {
                 direct_routes: 16,
                 relay_routes: 1,
@@ -901,7 +845,7 @@ mod tests {
             })
         ));
 
-        let direct_only = AukiPeerConfig::dev("app", ".")
+        let direct_only = AukiPeerConfig::dev()
             .direct_only()
             .with_advertised_direct_routes(sixteen_direct)
             .unwrap();
@@ -924,7 +868,7 @@ mod tests {
         let thirteen_direct = (1..=13)
             .map(|port| addr(format!("/ip4/127.0.0.1/tcp/{port}")))
             .collect::<Vec<_>>();
-        let exact_capacity = AukiPeerConfig::dev("app", ".")
+        let exact_capacity = AukiPeerConfig::dev()
             .direct_only()
             .with_advertised_direct_routes(thirteen_direct)
             .unwrap()

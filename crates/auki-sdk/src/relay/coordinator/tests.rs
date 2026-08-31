@@ -270,12 +270,12 @@ impl RelayReservationBackend for PendingStartBackend {
         panic!("pending-start backend cannot reach wait")
     }
 
-    async fn cancel(&self, _handle: RelayReservationHandle) -> Result<(), DomainRelayError> {
+    async fn cancel(&self, _handle: RelayReservationHandle) -> Result<(), PeerRelayError> {
         self.cancellations.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
-    fn subscribe(&self) -> Result<broadcast::Receiver<RelayTransportEvent>, DomainRelayError> {
+    fn subscribe(&self) -> Result<broadcast::Receiver<RelayTransportEvent>, PeerRelayError> {
         Ok(self.relay_events.subscribe())
     }
 }
@@ -307,11 +307,11 @@ impl RelayReservationBackend for StoppedStartBackend {
         panic!("stopped-start backend cannot reach wait")
     }
 
-    async fn cancel(&self, _handle: RelayReservationHandle) -> Result<(), DomainRelayError> {
-        Err(DomainRelayError::Stopped)
+    async fn cancel(&self, _handle: RelayReservationHandle) -> Result<(), PeerRelayError> {
+        Err(PeerRelayError::Stopped)
     }
 
-    fn subscribe(&self) -> Result<broadcast::Receiver<RelayTransportEvent>, DomainRelayError> {
+    fn subscribe(&self) -> Result<broadcast::Receiver<RelayTransportEvent>, PeerRelayError> {
         Ok(self.relay_events.subscribe())
     }
 }
@@ -334,12 +334,12 @@ impl RelayReservationBackend for StoppedSubscriptionBackend {
         panic!("stopped subscription must prevent reservation wait")
     }
 
-    async fn cancel(&self, _handle: RelayReservationHandle) -> Result<(), DomainRelayError> {
+    async fn cancel(&self, _handle: RelayReservationHandle) -> Result<(), PeerRelayError> {
         panic!("stopped subscription must prevent reservation cancellation")
     }
 
-    fn subscribe(&self) -> Result<broadcast::Receiver<RelayTransportEvent>, DomainRelayError> {
-        Err(DomainRelayError::Stopped)
+    fn subscribe(&self) -> Result<broadcast::Receiver<RelayTransportEvent>, PeerRelayError> {
+        Err(PeerRelayError::Stopped)
     }
 }
 
@@ -1326,8 +1326,8 @@ async fn stopped_reservation_backend_is_terminal_without_reporting_provider_fail
 
     assert!(matches!(
         result,
-        Err(RelayCoordinatorError::DomainRelay(
-            DomainRelayError::Stopped
+        Err(RelayCoordinatorError::RelayTransport(
+            PeerRelayError::Stopped
         ))
     ));
     assert!(matches!(api.calls().as_slice(), [ApiCall::Active]));
@@ -1346,8 +1346,8 @@ async fn stopped_subscription_is_rejected_before_any_dms_booking_call() {
 
     assert!(matches!(
         result,
-        Err(RelayCoordinatorError::DomainRelay(
-            DomainRelayError::Stopped
+        Err(RelayCoordinatorError::RelayTransport(
+            PeerRelayError::Stopped
         ))
     ));
     assert!(api.calls().is_empty());
@@ -1355,7 +1355,7 @@ async fn stopped_subscription_is_rejected_before_any_dms_booking_call() {
 
 #[test]
 fn failure_mapping_distinguishes_configuration_dial_and_loss() {
-    let mismatch = DomainRelayError::P2p(auki_p2p::Error::RelayConfirmationRejected(
+    let mismatch = PeerRelayError::P2p(auki_p2p::Error::RelayConfirmationRejected(
         RelayConfirmationRejection::MissingLimits,
     ));
     assert_eq!(
@@ -1364,7 +1364,7 @@ fn failure_mapping_distinguishes_configuration_dial_and_loss() {
     );
     assert!(!reservation_failure_is_retryable(&mismatch));
 
-    let missing_transport = DomainRelayError::P2p(auki_p2p::Error::RelayReservation(
+    let missing_transport = PeerRelayError::P2p(auki_p2p::Error::RelayReservation(
         auki_p2p::RelayReservationError::MissingTransportBase(auki_p2p::RelayBaseTransport::Tcp),
     ));
     assert_eq!(
@@ -1373,14 +1373,14 @@ fn failure_mapping_distinguishes_configuration_dial_and_loss() {
     );
     assert!(!reservation_failure_is_retryable(&missing_transport));
 
-    let dns = DomainRelayError::P2p(auki_p2p::Error::Dns("NXDOMAIN".to_string()));
+    let dns = PeerRelayError::P2p(auki_p2p::Error::Dns("NXDOMAIN".to_string()));
     assert_eq!(
         reservation_failure_reason(&dns, false),
         ReservationFailureReason::DialFailed
     );
     assert!(reservation_failure_is_retryable(&dns));
 
-    let closed = DomainRelayError::P2p(auki_p2p::Error::RelayReservationClosed(
+    let closed = PeerRelayError::P2p(auki_p2p::Error::RelayReservationClosed(
         "closed".to_string(),
     ));
     assert_eq!(
@@ -1402,7 +1402,7 @@ fn failure_mapping_distinguishes_configuration_dial_and_loss() {
         ReservationFailureReason::LimitMismatch
     );
     assert!(matches!(
-        reservation_attempt_failure(DomainRelayError::Stopped, None),
+        reservation_attempt_failure(PeerRelayError::Stopped, None),
         ReservationAttemptFailure::BackendStopped { handle: None }
     ));
 }

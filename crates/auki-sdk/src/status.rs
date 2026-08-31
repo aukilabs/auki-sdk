@@ -4,8 +4,8 @@
 /// remains small, copyable, and safe to retain in watch channels and logs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AukiPeerFailure {
-    /// The authenticated Domain or its transport failed.
-    Domain,
+    /// The authenticated P2P transport failed.
+    Transport,
     /// Signed authority could not be renewed or installed.
     Authority,
     /// Relay booking or reservation reconciliation failed.
@@ -19,11 +19,11 @@ pub enum AukiPeerFailure {
 /// Local lifecycle and readiness snapshot for one facade-owned peer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AukiPeerStatus {
-    /// Startup is composing authority, Domain, and optional relay ownership.
+    /// Startup is composing authority, transport, and optional relay ownership.
     Starting,
-    /// Authority and Domain are ready and required reachability is confirmed.
+    /// Authority and transport are ready and required reachability is confirmed.
     Ready,
-    /// The Domain is alive but no current signed authority is usable.
+    /// The transport is alive but no current signed authority is usable.
     AuthorityUnavailable,
     /// Relay-backed reachability is required but currently unavailable.
     RelayUnavailable,

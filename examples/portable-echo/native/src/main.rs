@@ -6,13 +6,12 @@ use auki_portable_echo_protocol::{
     EchoRequest, ID as ECHO_PROTOCOL_ID, MAX_FRAME_BYTES, run_client, run_server,
 };
 use auki_sdk::{
-    AukiPeer, AukiPeerConfig, DomainProtocolError, DomainProtocolSpec, Identity, Multiaddr, PeerId,
+    AukiPeer, AukiPeerConfig, AukiProtocolError, AukiProtocolSpec, Identity, Multiaddr, PeerId,
 };
 use futures::AsyncWriteExt;
 use tokio::time::timeout;
 use uuid::Uuid;
 
-const APPLICATION_ID: &str = "auki-portable-echo-native";
 const MAX_CONCURRENCY: usize = 32;
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -38,28 +37,27 @@ async fn main() -> Result<()> {
         .authorize_peer(DomainSelection::new(selected.domain.id), &identity.proof())
         .await?;
 
-    let config = AukiPeerConfig::dev(APPLICATION_ID, state_dir.join("sdk"));
+    let config = AukiPeerConfig::dev();
     let (config, remote_peer) = remote_peer_from_env(config)?;
     let peer = AukiPeer::start(identity, prepared, config).await?;
     let context = peer.protocol_context();
+    let protocols = peer.protocols();
 
     let _echo_registration =
-        context
-            .protocols()
-            .register(echo_protocol_spec()?, |mut stream| async move {
-                let remote_peer = stream.remote_peer().peer_id;
-                match timeout(OPERATION_TIMEOUT, run_server(&mut stream)).await {
-                    Ok(Ok(request)) => println!(
-                        "ECHO_SERVED remote_peer={remote_peer} bytes={}",
-                        request.as_bytes().len()
-                    ),
-                    Ok(Err(error)) => {
-                        eprintln!("ECHO_SERVER_FAILED remote_peer={remote_peer} error={error}")
-                    }
-                    Err(_) => eprintln!("ECHO_SERVER_TIMEOUT remote_peer={remote_peer}"),
+        protocols.register(echo_protocol_spec()?, |mut stream| async move {
+            let remote_peer = stream.remote_peer().peer_id;
+            match timeout(OPERATION_TIMEOUT, run_server(&mut stream)).await {
+                Ok(Ok(request)) => println!(
+                    "ECHO_SERVED remote_peer={remote_peer} bytes={}",
+                    request.as_bytes().len()
+                ),
+                Ok(Err(error)) => {
+                    eprintln!("ECHO_SERVER_FAILED remote_peer={remote_peer} error={error}")
                 }
-                let _ = stream.close().await;
-            })?;
+                Err(_) => eprintln!("ECHO_SERVER_TIMEOUT remote_peer={remote_peer}"),
+            }
+            let _ = stream.close().await;
+        })?;
 
     println!("READY");
     println!("PEER_ID={}", peer.peer_id());
@@ -87,7 +85,7 @@ async fn main() -> Result<()> {
     }
 
     if let Some(remote_peer) = remote_peer {
-        run_echo_client(&context.protocols(), remote_peer).await?;
+        run_echo_client(&protocols, remote_peer).await?;
     }
     if remote_peer.is_none() || env::var_os("AUKI_KEEP_RUNNING").is_some() {
         println!("WAITING_FOR_PEER");
@@ -99,8 +97,8 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn echo_protocol_spec() -> Result<DomainProtocolSpec, DomainProtocolError> {
-    DomainProtocolSpec::new(
+fn echo_protocol_spec() -> Result<AukiProtocolSpec, AukiProtocolError> {
+    AukiProtocolSpec::new(
         ECHO_PROTOCOL_ID,
         MAX_CONCURRENCY,
         u32::try_from(MAX_FRAME_BYTES).expect("the portable frame bound fits in u32"),

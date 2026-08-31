@@ -1,4 +1,4 @@
-//! Reconciles one requester-scoped DMS booking with Domain-owned relay
+//! Reconciles one requester-scoped DMS booking with peer-owned relay
 //! reservations and a fenced local route catalog.
 //!
 //! This module deliberately owns no authentication renewal, discovery,
@@ -15,9 +15,8 @@ use std::{
 };
 
 use async_trait::async_trait;
-use auki_domain::{DomainRelayError, DomainRelayReservations};
 use auki_p2p::{
-    ExpectedRelayLimits, Multiaddr, PeerId, Protocol, RelayBaseTransport,
+    ExpectedRelayLimits, Multiaddr, Node, PeerId, Protocol, RelayBaseTransport,
     RelayConfirmationRejection, RelayProvider, RelayReservationHandle, RelayReservationSnapshot,
     RelayTransportEvent,
 };
@@ -79,60 +78,82 @@ pub(crate) trait RelayReservationBackend: Send + Sync {
         handle: RelayReservationHandle,
     ) -> Result<RelayReservationSnapshot, ReservationAttemptFailure>;
 
-    async fn cancel(&self, handle: RelayReservationHandle) -> Result<(), DomainRelayError>;
+    async fn cancel(&self, handle: RelayReservationHandle) -> Result<(), PeerRelayError>;
 
-    fn subscribe(&self) -> Result<broadcast::Receiver<RelayTransportEvent>, DomainRelayError>;
+    fn subscribe(&self) -> Result<broadcast::Receiver<RelayTransportEvent>, PeerRelayError>;
 }
 
 #[derive(Clone)]
-struct DomainRelayReservationBackend {
-    reservations: DomainRelayReservations,
+pub(crate) struct PeerRelayReservations {
+    node: Node,
+    lifecycle: CancellationToken,
 }
 
-impl DomainRelayReservationBackend {
-    fn new(reservations: DomainRelayReservations) -> Self {
-        Self { reservations }
+impl PeerRelayReservations {
+    pub(crate) fn new(node: Node, lifecycle: CancellationToken) -> Self {
+        Self { node, lifecycle }
     }
 }
 
 #[async_trait]
-impl RelayReservationBackend for DomainRelayReservationBackend {
+impl RelayReservationBackend for PeerRelayReservations {
     async fn start(
         &self,
         provider: RelayProvider,
     ) -> Result<RelayReservationHandle, ReservationAttemptFailure> {
-        self.reservations
-            .start(provider)
-            .await
-            .map_err(|error| reservation_attempt_failure(error, None))
+        tokio::select! {
+            biased;
+            _ = self.lifecycle.cancelled() => Err(ReservationAttemptFailure::BackendStopped { handle: None }),
+            result = self.node.start_relay_reservation(provider) => {
+                result.map_err(|error| reservation_attempt_failure(PeerRelayError::P2p(error), None))
+            }
+        }
     }
 
     async fn wait(
         &self,
         handle: RelayReservationHandle,
     ) -> Result<RelayReservationSnapshot, ReservationAttemptFailure> {
-        self.reservations
-            .wait(handle)
-            .await
-            .map_err(|error| reservation_attempt_failure(error, Some(handle)))
+        tokio::select! {
+            biased;
+            _ = self.lifecycle.cancelled() => Err(ReservationAttemptFailure::BackendStopped { handle: Some(handle) }),
+            result = self.node.wait_relay_reservation(handle) => {
+                result.map_err(|error| reservation_attempt_failure(PeerRelayError::P2p(error), Some(handle)))
+            }
+        }
     }
 
-    async fn cancel(&self, handle: RelayReservationHandle) -> Result<(), DomainRelayError> {
-        self.reservations.cancel(handle).await
+    async fn cancel(&self, handle: RelayReservationHandle) -> Result<(), PeerRelayError> {
+        tokio::select! {
+            biased;
+            _ = self.lifecycle.cancelled() => Err(PeerRelayError::Stopped),
+            result = self.node.cancel_relay_reservation(handle) => result.map_err(PeerRelayError::P2p),
+        }
     }
 
-    fn subscribe(&self) -> Result<broadcast::Receiver<RelayTransportEvent>, DomainRelayError> {
-        self.reservations.subscribe()
+    fn subscribe(&self) -> Result<broadcast::Receiver<RelayTransportEvent>, PeerRelayError> {
+        if self.lifecycle.is_cancelled() {
+            return Err(PeerRelayError::Stopped);
+        }
+        Ok(self.node.subscribe_relay_events())
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PeerRelayError {
+    #[error("the peer relay-reservation capability is stopped")]
+    Stopped,
+    #[error(transparent)]
+    P2p(#[from] auki_p2p::Error),
+}
+
 fn reservation_attempt_failure(
-    error: DomainRelayError,
+    error: PeerRelayError,
     handle: Option<RelayReservationHandle>,
 ) -> ReservationAttemptFailure {
     match error {
-        DomainRelayError::Stopped => ReservationAttemptFailure::BackendStopped { handle },
-        error @ DomainRelayError::P2p(_) => ReservationAttemptFailure::Provider {
+        PeerRelayError::Stopped => ReservationAttemptFailure::BackendStopped { handle },
+        error @ PeerRelayError::P2p(_) => ReservationAttemptFailure::Provider {
             handle,
             reason: reservation_failure_reason(&error, false),
             retryable: reservation_failure_is_retryable(&error),
@@ -141,12 +162,12 @@ fn reservation_attempt_failure(
 }
 
 fn reservation_failure_reason(
-    error: &DomainRelayError,
+    error: &PeerRelayError,
     was_publishable: bool,
 ) -> ReservationFailureReason {
     use auki_p2p::Error;
 
-    let DomainRelayError::P2p(error) = error else {
+    let PeerRelayError::P2p(error) = error else {
         return if was_publishable {
             ReservationFailureReason::ReservationLost
         } else {
@@ -181,8 +202,8 @@ fn reservation_failure_reason(
     }
 }
 
-fn reservation_failure_is_retryable(error: &DomainRelayError) -> bool {
-    let DomainRelayError::P2p(error) = error else {
+fn reservation_failure_is_retryable(error: &PeerRelayError) -> bool {
+    let PeerRelayError::P2p(error) = error else {
         return false;
     };
     matches!(
@@ -468,8 +489,8 @@ pub(crate) enum RelayCoordinatorError {
     LocalGenerationExhausted,
     #[error("relay reservation event stream lagged by {0} events")]
     RelayEventLagged(u64),
-    #[error("the Domain relay-reservation capability failed")]
-    DomainRelay(#[from] DomainRelayError),
+    #[error("the peer relay-reservation capability failed")]
+    RelayTransport(#[from] PeerRelayError),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -518,13 +539,13 @@ pub(crate) struct RelayBookingCoordinator {
 impl RelayBookingCoordinator {
     pub(crate) async fn start(
         api: Arc<dyn RelayBookingApi>,
-        reservations: DomainRelayReservations,
+        reservations: PeerRelayReservations,
         routes: auki_p2p::RouteCatalog,
         config: RelayCoordinatorConfig,
     ) -> Result<Self, RelayCoordinatorError> {
         Self::start_with_backends(
             api,
-            Arc::new(DomainRelayReservationBackend::new(reservations)),
+            Arc::new(reservations),
             Arc::new(FencedRouteCatalog::new(routes)),
             config,
         )
@@ -537,8 +558,8 @@ impl RelayBookingCoordinator {
         routes: SharedRouteRegistry,
         config: RelayCoordinatorConfig,
     ) -> Result<Self, RelayCoordinatorError> {
-        // Preflight the Domain-owned capability before creating control-plane
-        // authority. A stopped Domain must not leave a fresh DMS booking behind.
+        // Preflight the peer-owned capability before creating control-plane
+        // authority. A stopped peer must not leave a fresh DMS booking behind.
         let relay_events = backend.subscribe()?;
         let active =
             match bounded_control_call(config.http_timeout, RelayOperation::Active, api.active())
@@ -1316,8 +1337,8 @@ impl CoordinatorActor {
                 self.finish_retirement(fence).await?;
             }
             ChildEvent::BackendStopped => {
-                return Err(RelayCoordinatorError::DomainRelay(
-                    DomainRelayError::Stopped,
+                return Err(RelayCoordinatorError::RelayTransport(
+                    PeerRelayError::Stopped,
                 ));
             }
         }
@@ -1986,11 +2007,11 @@ async fn cancel_reservation_with_timeout(
     }
 }
 
-fn cancellation_already_complete(error: &DomainRelayError) -> bool {
-    matches!(error, DomainRelayError::Stopped)
+fn cancellation_already_complete(error: &PeerRelayError) -> bool {
+    matches!(error, PeerRelayError::Stopped)
         || matches!(
             error,
-            DomainRelayError::P2p(auki_p2p::Error::RelayReservation(
+            PeerRelayError::P2p(auki_p2p::Error::RelayReservation(
                 auki_p2p::RelayReservationError::StaleHandle
                     | auki_p2p::RelayReservationError::UnknownHandle
             ))

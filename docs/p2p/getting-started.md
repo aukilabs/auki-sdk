@@ -51,7 +51,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "tim
 uuid = "1"
 ```
 
-Do not mix Auki crate revisions. Identity, authority, Domain, and protocol
+Do not mix Auki crate revisions. Identity, authority, transport, and protocol
 contracts form one coordinated release line.
 
 ## 2. Start one peer
@@ -63,7 +63,7 @@ use std::{env, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use auki_auth::{AuthClient, AuthEnvironment, Credentials, DomainSelection};
-use auki_sdk::{AukiPeer, AukiPeerConfig, DomainProtocolSpec, Identity, Multiaddr, PeerId};
+use auki_sdk::{AukiPeer, AukiPeerConfig, AukiProtocolSpec, Identity, Multiaddr, PeerId};
 use futures::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
         .await?;
 
     // Relay-backed reachability is enabled by default in the dev config.
-    let mut config = AukiPeerConfig::dev("auki-peer-demo", state_dir);
+    let mut config = AukiPeerConfig::dev();
     let remote_peer = match (
         env::var("AUKI_REMOTE_PEER_ID"),
         env::var("AUKI_REMOTE_ROUTE"),
@@ -114,13 +114,14 @@ async fn main() -> Result<()> {
         _ => bail!("set both AUKI_REMOTE_PEER_ID and AUKI_REMOTE_ROUTE, or neither"),
     };
 
-    // This returns after authority, Domain, and one relay route are ready.
+    // This returns after authority, transport, and one relay route are ready.
     let peer = AukiPeer::start(identity, prepared, config).await?;
     let context = peer.protocol_context();
+    let protocols = peer.protocols();
 
     // Custom protocols are explicit. Keep the registration alive while serving.
-    let _echo = context.protocols().register(
-        DomainProtocolSpec::new(ECHO_PROTOCOL, 32, 4)?,
+    let _echo = protocols.register(
+        AukiProtocolSpec::new(ECHO_PROTOCOL, 32, 4)?,
         |mut stream| async move {
             let exchange = async {
                 let mut request = [0_u8; 4];
@@ -144,7 +145,7 @@ async fn main() -> Result<()> {
 
     if let Some(remote_peer) = remote_peer {
         let exchange = async {
-            let mut stream = context.protocols().open(remote_peer, ECHO_PROTOCOL).await?;
+            let mut stream = protocols.open(remote_peer, ECHO_PROTOCOL).await?;
             stream.write_all(b"ping").await?;
             stream.flush().await?;
             let mut response = [0_u8; 4];
@@ -183,7 +184,7 @@ cargo run
 ```
 
 Replace the Domain UUID with one returned for your account. Startup waits for
-the authenticated Domain, current authority, and a confirmed relay route. The
+the authenticated transport, current authority, and a confirmed relay route. The
 process then prints something like:
 
 ```text
@@ -242,16 +243,14 @@ a browser, mobile binary, public repository, container image, or log.
 
 ## What `AukiPeer` handled
 
-The example did not manually create a `Peer`, `Session`, or `Domain`; schedule
-credential refresh; or manage a relay booking. The facade owned:
+The example did not manually create an authenticated transport, schedule
+credential refresh, or manage a relay booking. The facade owned:
 
-1. SDK data and session creation.
-2. Domain startup and mutual authentication.
-3. Verification-key and credential renewal.
-4. Relay booking, reservation, and confirmed local route publication.
-5. Direct-first route dialing.
-6. Status monitoring and authority fencing.
-7. Ordered cleanup.
+1. Authenticated transport startup.
+2. Verification-key and credential renewal.
+3. Relay booking, reservation, and confirmed local route publication.
+4. Direct-first route dialing and explicit protocol hosting.
+5. Peer observations, status monitoring, and ordered cleanup.
 
 Call `peer.status()` or subscribe with `peer.subscribe_status()` when an
 application needs to reflect runtime health in its UI or supervisor.
@@ -276,7 +275,7 @@ Use `direct_only()` when the host deliberately does not want a DMS relay
 booking:
 
 ```rust
-let config = AukiPeerConfig::dev("auki-peer-demo", state_dir)
+let config = AukiPeerConfig::dev()
     .direct_only()
     .with_listen_addresses(["/ip4/0.0.0.0/tcp/41001".parse()?])?
     .with_advertised_direct_routes(["/ip4/203.0.113.10/tcp/41001".parse()?])?;
@@ -321,8 +320,7 @@ not ordinary User/App experiments.
 
 ## Where to go next
 
-- Register robot metadata and logs through `peer.peer()` and `peer.session()`.
-- Build product protocols through `peer.protocol_context().protocols()`.
+- Build product protocols through `peer.protocols()`.
 - Inspect the facade contract in the
   [`auki-sdk` crate README](../../crates/auki-sdk/README.md).
 - Use [`auki-p2p`](../../crates/auki-p2p/README.md) directly only for a custom

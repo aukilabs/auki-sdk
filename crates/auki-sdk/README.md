@@ -2,9 +2,9 @@
 
 `auki-sdk` is the mechanical runtime facade for authenticated Auki peers. An
 `AukiPeer` composes one stable identity and either pulled or externally managed
-authority with Domain participation, SDK `Peer` and `Session` data, configured
-routes, credential renewal, and optional relay allocation behind a small
-host-facing lifecycle.
+authority with an authenticated `auki-p2p` node, configured routes, credential
+renewal, application protocols, observations, and optional relay allocation
+behind a small host-facing lifecycle.
 
 Relay-backed reachability is required by default, and startup returns only
 after at least one relay reservation has produced a confirmed publication
@@ -15,8 +15,8 @@ booking calls.
 renewal loop. `AukiPeer::start_external` instead accepts one complete
 `ExternalAuthorityUpdate` and returns the sole `ExternalAuthorityControl` for
 subsequent replacements and coalesced DMS 401 refresh requests. Both paths pin
-the Domain and Peer, install verification keys before credentials, publish only
-a sensitive revisioned relay header, and fence authorization at literal
+the Domain and Peer ID, install verification keys before credentials, publish
+only a sensitive revisioned relay header, and fence authorization at literal
 credential expiry. Authentication, refresh scheduling, and product-specific
 heartbeat policy remain outside this crate.
 
@@ -30,10 +30,10 @@ constraint.
 Confirmed relay routes are fenced in a local route catalog and are removed on
 assignment changes, transport loss, authority expiry, or bounded shutdown.
 Explicit `AukiPeer::shutdown()` drains reservations and deletes the DMS booking
-while authority and Domain are still alive, then stops authority and leaves the
-Domain. Dropping a runtime or canceling startup only fences local resources; it
-does not own a DMS `DELETE`, so a booking created at that boundary expires via
-its requester-authority TTL.
+while authority and transport are still alive, then stops managed protocols,
+authority, and the transport. Dropping a runtime or canceling startup only
+fences local resources; it does not own a DMS `DELETE`, so a booking created at
+that boundary expires via its requester-authority TTL.
 
 One live runtime per Peer ID is the supported deployment invariant. Sequential
 restart with the same stable identity is supported; simultaneous processes or

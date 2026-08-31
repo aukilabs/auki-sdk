@@ -9,9 +9,9 @@ use std::{
 
 use async_trait::async_trait;
 use auki_auth::{AuthorityRenewal, PreparedPeer, RenewedAuthority};
-use auki_domain::{DomainAuthority, DomainAuthorityError};
 use auki_p2p::{
-    DdsTokenVerifier, DdsVerificationKeys, P2PAccessClaims, PeerId, SignedP2pCredential,
+    DdsTokenVerifier, DdsVerificationKeys, DomainAuthority as P2pDomainAuthority, P2PAccessClaims,
+    P2pCredentialError, PeerId, SignedP2pCredential,
 };
 use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
@@ -133,10 +133,10 @@ pub(crate) enum AuthoritySupervisorError {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum AuthorityInstallerError {
-    #[error("verification keys were rejected by the Domain")]
-    VerificationKeys(#[source] DomainAuthorityError),
-    #[error("credential was rejected by the Domain")]
-    Credential(#[source] DomainAuthorityError),
+    #[error("verification keys were rejected by the authenticated peer runtime")]
+    VerificationKeys(#[source] auki_p2p::Error),
+    #[error("credential was rejected by the authenticated peer runtime")]
+    Credential(#[source] P2pCredentialError),
     #[cfg(test)]
     #[error("test installer rejected {0}")]
     Injected(&'static str),
@@ -158,14 +158,24 @@ trait AuthorityInstaller: Send + Sync {
     ) -> Result<(), AuthorityInstallerError>;
 }
 
-struct DomainAuthorityInstaller {
-    authority: DomainAuthority,
+pub(crate) struct FixedDomainAuthority {
+    authority: P2pDomainAuthority,
+    domain_id: Uuid,
+}
+
+impl FixedDomainAuthority {
+    pub(crate) fn new(authority: P2pDomainAuthority, domain_id: Uuid) -> Self {
+        Self {
+            authority,
+            domain_id,
+        }
+    }
 }
 
 #[async_trait]
-impl AuthorityInstaller for DomainAuthorityInstaller {
+impl AuthorityInstaller for FixedDomainAuthority {
     fn domain_id(&self) -> Uuid {
-        self.authority.domain_id()
+        self.domain_id
     }
 
     fn peer_id(&self) -> PeerId {
@@ -187,8 +197,9 @@ impl AuthorityInstaller for DomainAuthorityInstaller {
         credential: SignedP2pCredential,
     ) -> Result<(), AuthorityInstallerError> {
         self.authority
-            .install_credential(credential)
+            .install_credential_for_domain(credential, self.domain_id)
             .await
+            .map(|_| ())
             .map_err(AuthorityInstallerError::Credential)
     }
 }
@@ -1123,18 +1134,12 @@ pub(crate) struct AuthoritySupervisor {
 
 impl AuthoritySupervisor {
     pub(crate) async fn start_pull(
-        authority: DomainAuthority,
+        authority: FixedDomainAuthority,
         prepared: PreparedPeer,
         config: AuthoritySupervisorConfig,
         shutdown: &CancellationToken,
     ) -> Result<Self, AuthoritySupervisorError> {
-        Self::start_pull_with_installer(
-            Arc::new(DomainAuthorityInstaller { authority }),
-            prepared,
-            config,
-            shutdown,
-        )
-        .await
+        Self::start_pull_with_installer(Arc::new(authority), prepared, config, shutdown).await
     }
 
     async fn start_pull_with_installer(
@@ -1186,19 +1191,13 @@ impl AuthoritySupervisor {
     }
 
     pub(crate) async fn start_external(
-        authority: DomainAuthority,
+        authority: FixedDomainAuthority,
         initial: ExternalAuthorityUpdate,
         config: AuthoritySupervisorConfig,
         shutdown: &CancellationToken,
     ) -> Result<(Self, ExternalAuthorityHandle, ExternalRefreshRequests), AuthoritySupervisorError>
     {
-        Self::start_external_with_installer(
-            Arc::new(DomainAuthorityInstaller { authority }),
-            initial,
-            config,
-            shutdown,
-        )
-        .await
+        Self::start_external_with_installer(Arc::new(authority), initial, config, shutdown).await
     }
 
     async fn start_external_with_installer(
@@ -1292,12 +1291,10 @@ mod tests {
     };
 
     use auki_auth::{AuthorityRenewalProvider, DomainDescriptor, PreparedPeer, RenewedAuthority};
-    use auki_domain::{DomainBuilder, DomainConfig, DomainStatus, Identity};
     use auki_p2p::{
-        P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_SCOPE, P2P_TOKEN_TTL, P2P_TOKEN_TYPE,
-        P2PAccessClaims,
+        Identity, Node, P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_SCOPE, P2P_TOKEN_TTL,
+        P2P_TOKEN_TYPE, P2PAccessClaims,
     };
-    use auki_session::Peer;
     use chrono::TimeZone;
     use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
     use parking_lot::Mutex as ParkingMutex;
@@ -2532,29 +2529,17 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn real_domain_installs_the_same_ordered_external_replacement() {
+    async fn real_node_installs_the_same_ordered_external_replacement() {
         let identity = identity();
         let peer_id = identity.peer_id();
         let domain_id = Uuid::new_v4();
         let issued_at = unix_time();
         let (initial_credential, initial_expiration) = credential(peer_id, domain_id, issued_at);
-        let root = tempfile::tempdir().unwrap();
-        let peer = Peer::new(peer_id.to_string(), "authority-supervisor-test")
-            .with_storage_root(root.path().to_path_buf());
-        let session = peer.start_session().unwrap();
-        let domain = DomainBuilder::new(
-            &peer,
-            &session,
-            DomainConfig::new(domain_id, identity.clone()),
-        )
-        .authority(keys(), initial_credential.clone())
-        .join()
-        .await
-        .unwrap();
-        assert_eq!(domain.status(), DomainStatus::Ready);
+        let verifier = DdsTokenVerifier::from_keys(keys()).unwrap();
+        let node = Node::start(identity, verifier, []).unwrap();
         let shutdown = CancellationToken::new();
         let (supervisor, handle, _) = AuthoritySupervisor::start_external(
-            domain.authority(),
+            FixedDomainAuthority::new(node.authority(), domain_id),
             external_update(
                 domain_id,
                 peer_id,
@@ -2593,9 +2578,9 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
                 .revision(),
             2
         );
-        assert_eq!(domain.status(), DomainStatus::Ready);
+        assert!(node.authority().require(domain_id).await.is_ok());
 
         supervisor.shutdown().await;
-        domain.leave().await.unwrap();
+        node.shutdown().await.unwrap();
     }
 }

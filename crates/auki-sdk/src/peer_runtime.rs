@@ -1,15 +1,14 @@
 use std::{error::Error, fmt, future::pending, sync::Arc, time::Duration};
 
 use auki_auth::PreparedPeer;
-use auki_domain::{Domain, DomainAuthority, DomainConfig, DomainError, DomainPeers, DomainStatus};
 use auki_p2p::{
-    DdsVerificationKeys, Multiaddr, PeerId, RouteCatalog, RouteCatalogError, RouteCatalogStatus,
-    SignedP2pCredential,
+    DdsTokenVerifier, DdsVerificationKeys, Multiaddr, Node, NodeObservationEvent,
+    NodeObservationStatus, NodeObservations, PeerId, RouteCatalog, RouteCatalogError,
+    RouteCatalogStatus,
 };
-use auki_session::{Peer, Session, SessionError};
 use parking_lot::Mutex;
 use tokio::{
-    sync::{Mutex as AsyncMutex, watch},
+    sync::{Mutex as AsyncMutex, broadcast, watch},
     task::{JoinError, JoinHandle},
 };
 use tokio_util::sync::CancellationToken;
@@ -20,15 +19,18 @@ use crate::{
     authority::{
         AuthorityInstallOutcome, AuthorityStatus, AuthoritySupervisor, AuthoritySupervisorConfig,
         AuthoritySupervisorError, ExternalAuthorityHandle, ExternalAuthorityRefreshRequest,
-        ExternalAuthorityUpdate, ExternalRefreshRequests,
+        ExternalAuthorityUpdate, ExternalRefreshRequests, FixedDomainAuthority,
     },
     config::{AukiPeerConfig, AukiRelayConfig, AukiRelayMode},
-    context::AukiPeerProtocolContext,
+    context::{AukiPeerProtocolContext, ContextLifecycle},
+    known_peers::AukiKnownPeers,
+    protocols::{AukiPeerProtocols, AukiProtocolError},
     relay::{
         RelayBookingClient, RelayBookingClientError, RelayBookingMode, RelayIdempotencyKey,
         coordinator::{
-            RelayBookingCoordinator, RelayCoordinatorConfig, RelayCoordinatorError,
-            RelayCoordinatorHealth, RelayCoordinatorShutdownError, RelayCoordinatorShutdownOutcome,
+            PeerRelayReservations, RelayBookingCoordinator, RelayCoordinatorConfig,
+            RelayCoordinatorError, RelayCoordinatorHealth, RelayCoordinatorShutdownError,
+            RelayCoordinatorShutdownOutcome,
         },
     },
     status::{AukiPeerFailure, AukiPeerStatus},
@@ -43,6 +45,8 @@ const RELAY_AUTHORITY_SAFETY_MARGIN: Duration = Duration::from_secs(15);
 // canceling distinct returned handles, followed by the coordinator's bounded
 // DELETE retry budget. Keep the outer deadline above that complete sequence.
 const RELAY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(150);
+const LISTENER_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+const NODE_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
@@ -198,18 +202,18 @@ pub enum AukiPeerStartError {
         /// Peer ID derived from the supplied stable identity.
         identity: PeerId,
     },
-    /// Runtime-owned Session initialization failed.
-    #[error("failed to initialize the Auki Session")]
-    Session(#[source] SessionError),
     /// Local advertised-route composition failed.
     #[error("failed to initialize the local route catalog")]
     Routes(#[source] RouteCatalogError),
-    /// The authenticated Domain could not join or became unavailable during startup.
-    #[error("failed to start the authenticated Domain")]
-    Domain(#[source] DomainError),
-    /// The joined authenticated Domain stopped before relay readiness.
-    #[error("the authenticated Domain stopped before AukiPeer startup became ready")]
-    DomainUnavailable,
+    /// The authenticated P2P transport could not start.
+    #[error("failed to start the authenticated P2P transport")]
+    Transport(#[source] auki_p2p::Error),
+    /// The configured listeners did not all bind within the startup deadline.
+    #[error("the authenticated P2P listeners did not bind within the startup deadline")]
+    ListenerStartupTimeout,
+    /// The authenticated transport stopped before startup became ready.
+    #[error("the authenticated P2P transport stopped before AukiPeer startup became ready")]
+    TransportUnavailable,
     /// Initial authority supervision failed or ended before readiness.
     #[error("failed to start local authority supervision")]
     Authority(#[source] AukiPeerAuthorityError),
@@ -228,7 +232,8 @@ pub enum AukiPeerStartError {
 struct ShutdownFailures {
     relay: Option<AukiPeerRelayError>,
     routes: Vec<RouteCatalogError>,
-    domain: Option<DomainError>,
+    protocols: Option<AukiProtocolError>,
+    transport: Option<AukiPeerTransportError>,
     supervisor: Option<JoinError>,
 }
 
@@ -236,10 +241,24 @@ impl ShutdownFailures {
     fn is_empty(&self) -> bool {
         self.relay.is_none()
             && self.routes.is_empty()
-            && self.domain.is_none()
+            && self.protocols.is_none()
+            && self.transport.is_none()
             && self.supervisor.is_none()
     }
 }
+
+#[derive(Debug, thiserror::Error)]
+enum PeerTransportShutdownError {
+    #[error("the P2P transport rejected graceful shutdown")]
+    P2p(#[source] auki_p2p::Error),
+    #[error("the P2P transport exceeded its graceful shutdown deadline")]
+    Timeout,
+}
+
+/// Detailed transport-shutdown failure retained behind the facade boundary.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct AukiPeerTransportError(PeerTransportShutdownError);
 
 /// Failures retained after every ordered cleanup stage has been attempted.
 #[derive(Debug)]
@@ -258,9 +277,14 @@ impl AukiPeerShutdownError {
         &self.failures.routes
     }
 
-    /// Authenticated Domain leave failure.
-    pub fn domain(&self) -> Option<&DomainError> {
-        self.failures.domain.as_ref()
+    /// Managed protocol-server shutdown failure.
+    pub fn protocols(&self) -> Option<&AukiProtocolError> {
+        self.failures.protocols.as_ref()
+    }
+
+    /// Authenticated transport shutdown failure.
+    pub fn transport(&self) -> Option<&AukiPeerTransportError> {
+        self.failures.transport.as_ref()
     }
 
     /// Facade status-monitor join failure.
@@ -273,7 +297,8 @@ impl fmt::Display for AukiPeerShutdownError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let count = usize::from(self.failures.relay.is_some())
             + self.failures.routes.len()
-            + usize::from(self.failures.domain.is_some())
+            + usize::from(self.failures.protocols.is_some())
+            + usize::from(self.failures.transport.is_some())
             + usize::from(self.failures.supervisor.is_some());
         write!(
             formatter,
@@ -291,7 +316,10 @@ impl Error for AukiPeerShutdownError {
         if let Some(error) = self.failures.routes.first() {
             return Some(error);
         }
-        if let Some(error) = self.failures.domain.as_ref() {
+        if let Some(error) = self.failures.protocols.as_ref() {
+            return Some(error);
+        }
+        if let Some(error) = self.failures.transport.as_ref() {
             return Some(error);
         }
         self.failures
@@ -384,22 +412,16 @@ impl StartupAuthority {
         }
     }
 
-    fn initial_domain_authority(&self) -> (DdsVerificationKeys, SignedP2pCredential) {
+    fn initial_verification_keys(&self) -> DdsVerificationKeys {
         match self {
-            Self::Pull(prepared) => (
-                prepared.verification_keys.clone(),
-                prepared.initial_credential.clone(),
-            ),
-            Self::External(update) => (
-                update.verification_keys().clone(),
-                update.credential().clone(),
-            ),
+            Self::Pull(prepared) => prepared.verification_keys.clone(),
+            Self::External(update) => update.verification_keys().clone(),
         }
     }
 
     async fn start_supervisor(
         self,
-        authority: DomainAuthority,
+        authority: FixedDomainAuthority,
     ) -> Result<(AuthoritySupervisor, StartupAuthorityControl), AuthoritySupervisorError> {
         let shutdown = CancellationToken::new();
         match self {
@@ -435,7 +457,7 @@ enum StartupAuthorityControl {
     External(ExternalAuthorityControl),
 }
 
-/// One owner of an authenticated Domain, authority renewal, and optional relay booking.
+/// One owner of an authenticated transport, authority renewal, and optional relay booking.
 ///
 /// At most one live `AukiPeer` in a process may own a given Peer ID. Reusing
 /// that identity after a completed shutdown is supported; simultaneous
@@ -444,11 +466,13 @@ enum StartupAuthorityControl {
 pub struct AukiPeer {
     peer_id: PeerId,
     domain_id: Uuid,
-    peer: Peer,
-    session: Session,
-    domain: Option<Domain>,
+    node: Option<Node>,
+    listen_addresses: Vec<Multiaddr>,
+    known_peers: AukiKnownPeers,
+    protocols: AukiPeerProtocols,
     authority: Option<AuthoritySupervisor>,
     relay: Option<RelayBookingCoordinator>,
+    relay_lifecycle: CancellationToken,
     route_catalog: RouteCatalog,
     protocol_context: AukiPeerProtocolContext,
     status: PeerStatusController,
@@ -514,46 +538,70 @@ impl AukiPeer {
             });
         }
         let domain_id = initial_authority.domain_id();
-        let (verification_keys, initial_credential) = initial_authority.initial_domain_authority();
-        let peer = Peer::new(identity_peer_id.to_string(), config.app_id())
-            .with_storage_root(config.storage_root().to_path_buf());
-        let session = peer.start_session().map_err(AukiPeerStartError::Session)?;
-        let route_catalog = RouteCatalog::new(
+        let verification_keys = initial_authority.initial_verification_keys();
+        let verifier = DdsTokenVerifier::from_keys(verification_keys)
+            .map_err(AukiPeerStartError::Transport)?;
+        let node = Node::start(
+            identity,
+            verifier,
+            config.listen_addresses().iter().cloned(),
+        )
+        .map_err(AukiPeerStartError::Transport)?;
+        let mut listen_addresses =
+            match tokio::time::timeout(LISTENER_STARTUP_TIMEOUT, node.wait_for_listeners()).await {
+                Ok(Ok(addresses)) => addresses,
+                Ok(Err(error)) => {
+                    node.shutdown_now().await;
+                    return Err(AukiPeerStartError::Transport(error));
+                }
+                Err(_) => {
+                    node.shutdown_now().await;
+                    return Err(AukiPeerStartError::ListenerStartupTimeout);
+                }
+            };
+        listen_addresses.sort_unstable_by_key(ToString::to_string);
+        let route_catalog = match RouteCatalog::new(
             identity_peer_id,
             config.advertised_direct_routes().to_vec(),
             config.route_catalog_limits(),
-        )
-        .map_err(AukiPeerStartError::Routes)?;
+        ) {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                node.shutdown_now().await;
+                return Err(AukiPeerStartError::Routes(error));
+            }
+        };
+        let lifecycle = ContextLifecycle::new();
+        let protocols = AukiPeerProtocols::new(
+            node.clone(),
+            domain_id,
+            config
+                .initial_peer_routes()
+                .iter()
+                .map(|initial| (initial.peer_id(), initial.routes().to_vec())),
+            lifecycle.clone(),
+        );
+        let known_peers = AukiKnownPeers::new(domain_id, node.observations(), lifecycle.clone());
+        let relay_lifecycle = CancellationToken::new();
 
-        let mut domain_config = DomainConfig::new(domain_id, identity)
-            .with_listen_addresses(config.listen_addresses().iter().cloned())
-            .map_err(AukiPeerStartError::Domain)?;
-        for initial in config.initial_peer_routes() {
-            domain_config = domain_config
-                .with_peer_routes(initial.peer_id(), initial.routes().iter().cloned())
-                .map_err(AukiPeerStartError::Domain)?;
-        }
-        let domain = Domain::builder(&peer, &session, domain_config)
-            .authority(verification_keys, initial_credential)
-            .served_protocols(config.served_protocols())
-            .join()
+        let (authority, authority_control) = match initial_authority
+            .start_supervisor(FixedDomainAuthority::new(node.authority(), domain_id))
             .await
-            .map_err(AukiPeerStartError::Domain)?;
-
-        let (authority, authority_control) =
-            match initial_authority.start_supervisor(domain.authority()).await {
-                Ok(started) => started,
-                Err(error) => {
-                    let _ = domain.leave().await;
-                    return Err(AukiPeerStartError::Authority(error.into()));
-                }
-            };
+        {
+            Ok(started) => started,
+            Err(error) => {
+                node.shutdown_now().await;
+                return Err(AukiPeerStartError::Authority(error.into()));
+            }
+        };
 
         // Create each receiver exactly once. The same receivers fence the
         // final startup decision and are then moved into the live monitor, so
         // a transition at that handoff remains observable through watch state.
+        let observations = node.observations();
         let mut signals = RuntimeSignals {
-            domain: domain.subscribe_status(),
+            node_events: observations.subscribe(),
+            observations,
             authority: authority.subscribe_status(),
             routes: route_catalog.subscribe(),
             relay: None,
@@ -569,7 +617,7 @@ impl AukiPeer {
                     Ok(client) => Arc::new(client),
                     Err(error) => {
                         authority.shutdown().await;
-                        let _ = domain.leave().await;
+                        node.shutdown_now().await;
                         return Err(AukiPeerStartError::Relay(AukiPeerRelayError::client(error)));
                     }
                 };
@@ -577,14 +625,14 @@ impl AukiPeer {
                     Ok(config) => config,
                     Err(error) => {
                         authority.shutdown().await;
-                        let _ = domain.leave().await;
+                        node.shutdown_now().await;
                         return Err(AukiPeerStartError::Relay(AukiPeerRelayError::client(error)));
                     }
                 };
                 let coordinator = loop {
                     match RelayBookingCoordinator::start(
                         client.clone(),
-                        domain.relay_reservations(),
+                        PeerRelayReservations::new(node.clone(), relay_lifecycle.clone()),
                         route_catalog.clone(),
                         coordinator_config.clone(),
                     )
@@ -596,7 +644,7 @@ impl AukiPeer {
                                 error.startup_retry_after(relay_config.status_poll_interval)
                             else {
                                 authority.shutdown().await;
-                                let _ = domain.leave().await;
+                                node.shutdown_now().await;
                                 return Err(AukiPeerStartError::Relay(
                                     AukiPeerRelayError::coordinator(error),
                                 ));
@@ -633,7 +681,8 @@ impl AukiPeer {
                     }
                 }
                 authority.shutdown().await;
-                let _ = domain.leave().await;
+                relay_lifecycle.cancel();
+                node.shutdown_now().await;
                 return Err(error.into_start_error());
             }
         };
@@ -642,8 +691,9 @@ impl AukiPeer {
             domain_id,
             identity_peer_id,
             authority.public_authorization(),
-            domain.protocols(),
+            protocols.clone(),
             route_catalog.clone(),
+            lifecycle,
         );
         let status = PeerStatusController::new(initial_status);
         let monitor_shutdown = CancellationToken::new();
@@ -657,11 +707,13 @@ impl AukiPeer {
             Self {
                 peer_id: identity_peer_id,
                 domain_id,
-                peer,
-                session,
-                domain: Some(domain),
+                node: Some(node),
+                listen_addresses,
+                known_peers,
+                protocols,
                 authority: Some(authority),
                 relay,
+                relay_lifecycle,
                 route_catalog,
                 protocol_context,
                 status,
@@ -685,20 +737,7 @@ impl AukiPeer {
 
     /// Addresses that successfully bound before startup returned.
     pub fn listen_addresses(&self) -> &[Multiaddr] {
-        self.domain
-            .as_ref()
-            .expect("a live AukiPeer retains its Domain")
-            .listen_addresses()
-    }
-
-    /// Runtime-owned long-lived SDK Peer data surface.
-    pub fn peer(&self) -> &Peer {
-        &self.peer
-    }
-
-    /// Runtime-owned Session data surface.
-    pub fn session(&self) -> &Session {
-        &self.session
+        &self.listen_addresses
     }
 
     /// Narrow authenticated custom-protocol and publication context.
@@ -706,12 +745,14 @@ impl AukiPeer {
         self.protocol_context.clone()
     }
 
+    /// Authenticated application protocol registration and opening surface.
+    pub fn protocols(&self) -> AukiPeerProtocols {
+        self.protocols.clone()
+    }
+
     /// Observational view of currently connected, mutually authenticated peers.
-    pub fn known_peers(&self) -> DomainPeers {
-        self.domain
-            .as_ref()
-            .expect("a live AukiPeer retains its Domain")
-            .known_peers()
+    pub fn known_peers(&self) -> AukiKnownPeers {
+        self.known_peers.clone()
     }
 
     /// Current facade lifecycle and readiness snapshot.
@@ -724,7 +765,7 @@ impl AukiPeer {
         self.status.subscribe()
     }
 
-    /// Drain relay reservations, delete the booking, stop authority, then leave the Domain.
+    /// Drain relay reservations, stop protocols and authority, then stop the transport.
     ///
     /// Every cleanup stage is attempted even if an earlier stage fails. Await
     /// this method to completion when DMS booking deletion is required.
@@ -748,19 +789,33 @@ impl AukiPeer {
                 Err(error) => failures.relay = Some(AukiPeerRelayError::shutdown(error)),
             }
         }
+        self.relay_lifecycle.cancel();
         if let Err(error) = self.route_catalog.tombstone_all() {
             failures.routes.push(error);
         }
         if let Err(error) = self.route_catalog.replace_direct_routes(Vec::new()) {
             failures.routes.push(error);
         }
+        if let Err(error) = self.protocols.shutdown_all().await {
+            failures.protocols = Some(error);
+        }
         if let Some(authority) = self.authority.take() {
             authority.shutdown().await;
         }
-        if let Some(domain) = self.domain.take()
-            && let Err(error) = domain.leave().await
-        {
-            failures.domain = Some(error);
+        if let Some(node) = self.node.take() {
+            match tokio::time::timeout(NODE_SHUTDOWN_TIMEOUT, node.shutdown()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    failures.transport = Some(AukiPeerTransportError(
+                        PeerTransportShutdownError::P2p(error),
+                    ));
+                }
+                Err(_) => {
+                    node.shutdown_now().await;
+                    failures.transport =
+                        Some(AukiPeerTransportError(PeerTransportShutdownError::Timeout));
+                }
+            }
         }
 
         let clean = failures.is_empty();
@@ -786,19 +841,25 @@ impl Drop for AukiPeer {
             monitor.abort();
         }
         drop(self.relay.take());
+        self.relay_lifecycle.cancel();
         let route_cleanup_failed = self.route_catalog.tombstone_all().is_err()
             | self
                 .route_catalog
                 .replace_direct_routes(Vec::new())
                 .is_err();
         drop(self.authority.take());
-        drop(self.domain.take());
+        self.protocols.abort_all();
+        if let Some(node) = self.node.take() {
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(async move { node.shutdown_now().await });
+            }
+        }
         if route_cleanup_failed {
             warn!("AukiPeer drop could not completely clear its local route catalog");
         }
         // Only the awaited shutdown path may publish Stopped: Drop performs
         // local fencing but deliberately cannot confirm DMS DELETE or await
-        // the Domain's asynchronous cleanup barrier.
+        // the transport's asynchronous cleanup barrier.
         self.closed = true;
     }
 }
@@ -825,7 +886,7 @@ fn relay_coordinator_config(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StartupReadinessError {
-    Domain,
+    Transport,
     Authority,
     Relay,
     Supervisor,
@@ -834,7 +895,7 @@ enum StartupReadinessError {
 impl StartupReadinessError {
     fn into_start_error(self) -> AukiPeerStartError {
         match self {
-            Self::Domain => AukiPeerStartError::DomainUnavailable,
+            Self::Transport => AukiPeerStartError::TransportUnavailable,
             Self::Authority => AukiPeerStartError::AuthorityUnavailable,
             Self::Relay => AukiPeerStartError::Relay(AukiPeerRelayError::unavailable()),
             Self::Supervisor => AukiPeerStartError::Supervisor,
@@ -849,7 +910,7 @@ enum StartupReadiness {
 }
 
 fn startup_readiness(
-    domain: DomainStatus,
+    transport: NodeObservationStatus,
     authority: &AuthorityStatus,
     confirmed_relay_count: usize,
     relay_failed: bool,
@@ -858,11 +919,10 @@ fn startup_readiness(
     if relay_required && relay_failed {
         return Err(StartupReadinessError::Relay);
     }
-    let domain_ready = match domain {
-        DomainStatus::Ready => true,
-        DomainStatus::CredentialUnavailable => false,
-        DomainStatus::Failed(_) | DomainStatus::Stopped => {
-            return Err(StartupReadinessError::Domain);
+    let transport_ready = match transport {
+        NodeObservationStatus::Running => true,
+        NodeObservationStatus::Failed(_) | NodeObservationStatus::Stopped => {
+            return Err(StartupReadinessError::Transport);
         }
     };
     let authority_ready = match authority {
@@ -871,15 +931,18 @@ fn startup_readiness(
         AuthorityStatus::Stopped => return Err(StartupReadinessError::Authority),
     };
     let reachability_ready = !relay_required || confirmed_relay_count > 0;
-    Ok(if domain_ready && authority_ready && reachability_ready {
-        StartupReadiness::Ready
-    } else {
-        StartupReadiness::Waiting
-    })
+    Ok(
+        if transport_ready && authority_ready && reachability_ready {
+            StartupReadiness::Ready
+        } else {
+            StartupReadiness::Waiting
+        },
+    )
 }
 
 struct RuntimeSignals {
-    domain: watch::Receiver<DomainStatus>,
+    observations: NodeObservations,
+    node_events: broadcast::Receiver<NodeObservationEvent>,
     authority: watch::Receiver<AuthorityStatus>,
     routes: watch::Receiver<RouteCatalogStatus>,
     relay: Option<RelayCoordinatorHealth>,
@@ -889,7 +952,7 @@ struct RuntimeSignals {
 impl RuntimeSignals {
     fn snapshot(&self) -> RuntimeSignalSnapshot {
         RuntimeSignalSnapshot {
-            domain: *self.domain.borrow(),
+            transport: self.observations.snapshot().status(),
             authority: self.authority.borrow().clone(),
             routes: self.routes.borrow().clone(),
             relay_failed: self
@@ -903,7 +966,7 @@ impl RuntimeSignals {
         loop {
             let snapshot = self.snapshot();
             match startup_readiness(
-                snapshot.domain,
+                snapshot.transport,
                 &snapshot.authority,
                 snapshot.routes.confirmed_relay_count,
                 snapshot.relay_failed,
@@ -928,8 +991,11 @@ impl RuntimeSignals {
                     None => pending::<()>().await,
                 }
             } => Ok(()),
-            changed = self.domain.changed() => {
-                changed.map_err(|_| StartupReadinessError::Supervisor)
+            event = self.node_events.recv() => {
+                match event {
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => Ok(()),
+                    Err(broadcast::error::RecvError::Closed) => Err(StartupReadinessError::Supervisor),
+                }
             }
             changed = self.authority.changed() => {
                 changed.map_err(|_| StartupReadinessError::Supervisor)
@@ -939,7 +1005,7 @@ impl RuntimeSignals {
 }
 
 struct RuntimeSignalSnapshot {
-    domain: DomainStatus,
+    transport: NodeObservationStatus,
     authority: AuthorityStatus,
     routes: RouteCatalogStatus,
     relay_failed: bool,
@@ -948,7 +1014,7 @@ struct RuntimeSignalSnapshot {
 impl RuntimeSignalSnapshot {
     fn facade_status(&self, relay_required: bool) -> AukiPeerStatus {
         observed_status(
-            self.domain,
+            self.transport,
             &self.authority,
             &self.routes,
             self.relay_failed,
@@ -981,14 +1047,17 @@ async fn monitor_runtime(
 }
 
 fn observed_status(
-    domain: DomainStatus,
+    transport: NodeObservationStatus,
     authority: &AuthorityStatus,
     routes: &RouteCatalogStatus,
     relay_failed: bool,
     relay_required: bool,
 ) -> AukiPeerStatus {
-    if matches!(domain, DomainStatus::Failed(_) | DomainStatus::Stopped) {
-        return AukiPeerStatus::Failed(AukiPeerFailure::Domain);
+    if matches!(
+        transport,
+        NodeObservationStatus::Failed(_) | NodeObservationStatus::Stopped
+    ) {
+        return AukiPeerStatus::Failed(AukiPeerFailure::Transport);
     }
     if matches!(authority, AuthorityStatus::Stopped) {
         return AukiPeerStatus::Failed(AukiPeerFailure::Authority);
@@ -996,12 +1065,10 @@ fn observed_status(
     if relay_failed {
         return AukiPeerStatus::Failed(AukiPeerFailure::Relay);
     }
-    if matches!(domain, DomainStatus::CredentialUnavailable)
-        || matches!(
-            authority,
-            AuthorityStatus::Starting | AuthorityStatus::Expired { .. }
-        )
-    {
+    if matches!(
+        authority,
+        AuthorityStatus::Starting | AuthorityStatus::Expired { .. }
+    ) {
         return AukiPeerStatus::AuthorityUnavailable;
     }
     if relay_required && routes.confirmed_relay_count == 0 {
@@ -1026,7 +1093,6 @@ mod tests {
     use httpmock::{Method::DELETE, Method::GET, Method::POST, MockServer};
     use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
     use serde_json::json;
-    use tempfile::TempDir;
 
     use super::*;
     use crate::{AukiPeerAuthorizationError, AukiPeerRoutesError};
@@ -1148,8 +1214,8 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         )
     }
 
-    fn direct_config(storage: &TempDir) -> AukiPeerConfig {
-        AukiPeerConfig::new("http://127.0.0.1:9", "runtime-test", storage.path())
+    fn direct_config() -> AukiPeerConfig {
+        AukiPeerConfig::new("http://127.0.0.1:9")
             .unwrap()
             .direct_only()
             .with_listen_addresses([Multiaddr::from_str("/ip4/127.0.0.1/tcp/0").unwrap()])
@@ -1158,13 +1224,12 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn direct_only_runtime_is_ready_and_ordered_shutdown_fences_every_context_view() {
-        let storage = tempfile::tempdir().unwrap();
         let identity = auki_p2p::Identity::generate();
         let peer_id = identity.peer_id();
         let domain_id = Uuid::new_v4();
         let advertised =
             Multiaddr::from_str(&format!("/ip4/127.0.0.1/tcp/4001/p2p/{peer_id}")).unwrap();
-        let config = direct_config(&storage)
+        let config = direct_config()
             .with_advertised_direct_routes([advertised])
             .unwrap();
         let prepared = fixture(&identity, domain_id);
@@ -1178,9 +1243,22 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             runtime.listen_addresses()[0].to_string(),
             "/ip4/127.0.0.1/tcp/0"
         );
-        assert!(runtime.peer().owns_session(runtime.session()));
-        assert_eq!(runtime.peer().peer_id(), peer_id.to_string());
         assert_eq!(runtime.known_peers().peer_count(), 0);
+        let protocols = runtime.protocols();
+        let registration = protocols
+            .register(
+                crate::AukiProtocolSpec::new("/example/runtime/1.0.0", 1, 32).unwrap(),
+                |_stream| async {},
+            )
+            .unwrap();
+        assert!(matches!(
+            protocols.register(
+                crate::AukiProtocolSpec::new("/example/runtime/1.0.0", 1, 32).unwrap(),
+                |_stream| async {},
+            ),
+            Err(AukiProtocolError::DuplicateProtocol(protocol))
+                if protocol == "/example/runtime/1.0.0"
+        ));
 
         let context = runtime.protocol_context();
         let current = context.authorization().current().unwrap();
@@ -1195,6 +1273,14 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         let mut statuses = runtime.subscribe_status();
 
         runtime.shutdown().await.unwrap();
+        registration.close().await.unwrap();
+        assert!(matches!(
+            protocols.register(
+                crate::AukiProtocolSpec::new("/example/after-stop/1.0.0", 1, 32).unwrap(),
+                |_stream| async {},
+            ),
+            Err(AukiProtocolError::Stopped)
+        ));
         assert_eq!(*statuses.borrow_and_update(), AukiPeerStatus::Stopped);
         assert_eq!(
             context.authorization().current().unwrap_err(),
@@ -1208,7 +1294,6 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn external_direct_only_runtime_replaces_authority_and_shutdown_ends_control() {
-        let storage = tempfile::tempdir().unwrap();
         let identity = auki_p2p::Identity::generate();
         let peer_id = identity.peer_id();
         let domain_id = Uuid::new_v4();
@@ -1225,7 +1310,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         assert!(!rendered.contains("BEGIN PUBLIC KEY"));
 
         let (runtime, control) =
-            AukiPeer::start_external(identity.clone(), initial, direct_config(&storage))
+            AukiPeer::start_external(identity.clone(), initial, direct_config())
                 .await
                 .unwrap();
         assert_eq!(runtime.status(), AukiPeerStatus::Ready);
@@ -1295,14 +1380,13 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn external_refresh_request_requires_an_advancing_credential_revision() {
-        let storage = tempfile::tempdir().unwrap();
         let identity = auki_p2p::Identity::generate();
         let domain_id = Uuid::new_v4();
         let issued_at = unix_time().saturating_sub(2);
         let (initial, initial_compact) = external_fixture(&identity, domain_id, issued_at);
         let initial_expiration = initial.credential_expires_at();
         let (runtime, control) =
-            AukiPeer::start_external(identity.clone(), initial, direct_config(&storage))
+            AukiPeer::start_external(identity.clone(), initial, direct_config())
                 .await
                 .unwrap();
         let relay_authorization = runtime.authority.as_ref().unwrap().relay_authorization();
@@ -1356,14 +1440,12 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn dropping_external_runtime_wakes_the_refresh_request_stream() {
-        let storage = tempfile::tempdir().unwrap();
         let identity = auki_p2p::Identity::generate();
         let (initial, _) =
             external_fixture(&identity, Uuid::new_v4(), unix_time().saturating_sub(1));
-        let (runtime, control) =
-            AukiPeer::start_external(identity, initial, direct_config(&storage))
-                .await
-                .unwrap();
+        let (runtime, control) = AukiPeer::start_external(identity, initial, direct_config())
+            .await
+            .unwrap();
 
         drop(runtime);
 
@@ -1377,13 +1459,11 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn identity_mismatch_is_rejected_before_local_runtime_creation() {
-        let storage = tempfile::tempdir().unwrap();
         let authorized_identity = auki_p2p::Identity::generate();
         let prepared = fixture(&authorized_identity, Uuid::new_v4());
         let actual_identity = auki_p2p::Identity::generate();
         let actual_peer = actual_identity.peer_id();
-        let error = match AukiPeer::start(actual_identity, prepared, direct_config(&storage)).await
-        {
+        let error = match AukiPeer::start(actual_identity, prepared, direct_config()).await {
             Ok(_) => panic!("a mismatched identity must not start"),
             Err(error) => error,
         };
@@ -1400,12 +1480,11 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         );
         let actual_identity = auki_p2p::Identity::generate();
         let actual_peer = actual_identity.peer_id();
-        let error =
-            match AukiPeer::start_external(actual_identity, initial, direct_config(&storage)).await
-            {
-                Ok(_) => panic!("a mismatched external authority must not start"),
-                Err(error) => error,
-            };
+        let error = match AukiPeer::start_external(actual_identity, initial, direct_config()).await
+        {
+            Ok(_) => panic!("a mismatched external authority must not start"),
+            Err(error) => error,
+        };
         assert!(matches!(
             error,
             AukiPeerStartError::IdentityMismatch { identity, .. } if identity == actual_peer
@@ -1414,10 +1493,9 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn dropping_runtime_fences_context_without_a_network_cleanup_api_call() {
-        let storage = tempfile::tempdir().unwrap();
         let identity = auki_p2p::Identity::generate();
         let prepared = fixture(&identity, Uuid::new_v4());
-        let runtime = AukiPeer::start(identity, prepared, direct_config(&storage))
+        let runtime = AukiPeer::start(identity, prepared, direct_config())
             .await
             .unwrap();
         let context = runtime.protocol_context();
@@ -1477,10 +1555,9 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             then.status(204).header("cache-control", "no-store");
         });
 
-        let storage = tempfile::tempdir().unwrap();
         let identity = auki_p2p::Identity::generate();
         let prepared = fixture(&identity, Uuid::new_v4());
-        let config = AukiPeerConfig::new(server.base_url(), "relay-cancel-test", storage.path())
+        let config = AukiPeerConfig::new(server.base_url())
             .unwrap()
             .with_relay(
                 AukiRelayConfig::new(
@@ -1530,23 +1607,21 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
                 }));
         });
 
-        let storage = tempfile::tempdir().unwrap();
         let identity = auki_p2p::Identity::generate();
         let (initial, _) =
             external_fixture(&identity, Uuid::new_v4(), unix_time().saturating_sub(1));
-        let config =
-            AukiPeerConfig::new(server.base_url(), "external-relay-401-test", storage.path())
-                .unwrap()
-                .with_relay(
-                    AukiRelayConfig::new(
-                        AukiRelayMode::Public,
-                        1,
-                        Duration::from_secs(86_400),
-                        Duration::from_secs(60),
-                    )
-                    .unwrap(),
+        let config = AukiPeerConfig::new(server.base_url())
+            .unwrap()
+            .with_relay(
+                AukiRelayConfig::new(
+                    AukiRelayMode::Public,
+                    1,
+                    Duration::from_secs(86_400),
+                    Duration::from_secs(60),
                 )
-                .unwrap();
+                .unwrap(),
+            )
+            .unwrap();
         let startup = tokio::spawn(AukiPeer::start_external(identity, initial, config));
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
@@ -1597,17 +1672,17 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         };
         assert_eq!(
             observed_status(
-                DomainStatus::Stopped,
+                NodeObservationStatus::Stopped,
                 &authority,
                 &route_status,
                 false,
                 true
             ),
-            AukiPeerStatus::Failed(AukiPeerFailure::Domain)
+            AukiPeerStatus::Failed(AukiPeerFailure::Transport)
         );
         assert_eq!(
             observed_status(
-                DomainStatus::CredentialUnavailable,
+                NodeObservationStatus::Running,
                 &AuthorityStatus::Stopped,
                 &route_status,
                 false,
@@ -1617,7 +1692,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         );
         assert_eq!(
             observed_status(
-                DomainStatus::CredentialUnavailable,
+                NodeObservationStatus::Running,
                 &authority,
                 &route_status,
                 true,
@@ -1635,17 +1710,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         };
         assert_eq!(
             startup_readiness(
-                DomainStatus::CredentialUnavailable,
-                &ready_authority,
-                1,
-                false,
-                true,
-            ),
-            Ok(StartupReadiness::Waiting)
-        );
-        assert_eq!(
-            startup_readiness(
-                DomainStatus::Ready,
+                NodeObservationStatus::Running,
                 &AuthorityStatus::Expired {
                     credential_revision: 1,
                     expired_at: Utc::now(),
@@ -1657,34 +1722,36 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             Ok(StartupReadiness::Waiting)
         );
         assert_eq!(
-            startup_readiness(DomainStatus::Ready, &ready_authority, 1, false, true),
+            startup_readiness(
+                NodeObservationStatus::Running,
+                &ready_authority,
+                1,
+                false,
+                true,
+            ),
             Ok(StartupReadiness::Ready)
         );
         assert_eq!(
-            startup_readiness(DomainStatus::Stopped, &ready_authority, 1, false, true),
-            Err(StartupReadinessError::Domain)
+            startup_readiness(
+                NodeObservationStatus::Stopped,
+                &ready_authority,
+                1,
+                false,
+                true,
+            ),
+            Err(StartupReadinessError::Transport)
         );
     }
 
     #[test]
-    fn direct_only_startup_waits_for_authority_and_domain_without_requiring_a_route() {
+    fn direct_only_startup_waits_for_authority_and_transport_without_requiring_a_route() {
         let ready_authority = AuthorityStatus::Ready {
             credential_revision: 1,
             expires_at: Utc::now() + chrono::Duration::minutes(5),
         };
         assert_eq!(
             startup_readiness(
-                DomainStatus::CredentialUnavailable,
-                &ready_authority,
-                0,
-                false,
-                false,
-            ),
-            Ok(StartupReadiness::Waiting)
-        );
-        assert_eq!(
-            startup_readiness(
-                DomainStatus::Ready,
+                NodeObservationStatus::Running,
                 &AuthorityStatus::Expired {
                     credential_revision: 1,
                     expired_at: Utc::now(),
@@ -1696,16 +1763,28 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             Ok(StartupReadiness::Waiting)
         );
         assert_eq!(
-            startup_readiness(DomainStatus::Ready, &ready_authority, 0, false, false,),
+            startup_readiness(
+                NodeObservationStatus::Running,
+                &ready_authority,
+                0,
+                false,
+                false,
+            ),
             Ok(StartupReadiness::Ready)
         );
         assert_eq!(
-            startup_readiness(DomainStatus::Stopped, &ready_authority, 0, false, false,),
-            Err(StartupReadinessError::Domain)
+            startup_readiness(
+                NodeObservationStatus::Stopped,
+                &ready_authority,
+                0,
+                false,
+                false,
+            ),
+            Err(StartupReadinessError::Transport)
         );
         assert_eq!(
             startup_readiness(
-                DomainStatus::Ready,
+                NodeObservationStatus::Running,
                 &AuthorityStatus::Stopped,
                 0,
                 false,

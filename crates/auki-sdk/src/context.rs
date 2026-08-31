@@ -1,28 +1,29 @@
-use std::{future::Future, sync::Arc};
+use std::sync::Arc;
 
-use auki_domain::{
-    DomainProtocolError, DomainProtocolRegistration, DomainProtocolSpec, DomainProtocolStream,
-    DomainProtocols,
-};
 use auki_p2p::{
-    AuthenticatedRouteStream, Multiaddr, PeerId, RouteCatalog, RouteCatalogError,
-    RouteCatalogStatus, RouteFence, RouteSnapshot,
+    PeerId, RouteCatalog, RouteCatalogError, RouteCatalogStatus, RouteFence, RouteSnapshot,
 };
 use parking_lot::{Mutex, MutexGuard};
 use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::authorization::{AukiPeerAuthorization, AuthorizationSnapshotSource};
+use crate::{
+    authorization::{AukiPeerAuthorization, AuthorizationSnapshotSource},
+    protocols::AukiPeerProtocols,
+};
 
 #[derive(Clone)]
 pub(crate) struct ContextLifecycle {
     running: Arc<Mutex<bool>>,
+    cancellation: CancellationToken,
 }
 
 impl ContextLifecycle {
     pub(crate) fn new() -> Self {
         Self {
             running: Arc::new(Mutex::new(true)),
+            cancellation: CancellationToken::new(),
         }
     }
 
@@ -33,6 +34,19 @@ impl ContextLifecycle {
 
     pub(crate) fn fence(&self) {
         *self.running.lock() = false;
+        self.cancellation.cancel();
+    }
+
+    pub(crate) fn is_running(&self) -> bool {
+        *self.running.lock()
+    }
+
+    pub(crate) fn token(&self) -> &CancellationToken {
+        &self.cancellation
+    }
+
+    pub(crate) async fn cancelled(&self) {
+        self.cancellation.cancelled().await;
     }
 }
 
@@ -104,97 +118,11 @@ pub enum AukiPeerRoutesError {
     Catalog(#[from] RouteCatalogError),
 }
 
-/// Lifecycle-fenced authenticated custom-protocol surface.
-///
-/// A call that passes the synchronous lifecycle check before shutdown is an
-/// admitted in-flight operation and is subsequently bounded by Domain
-/// teardown. Calls that begin after the facade fence are rejected without
-/// touching the Domain runtime.
-#[derive(Clone)]
-pub struct AukiPeerProtocols {
-    protocols: DomainProtocols,
-    lifecycle: ContextLifecycle,
-}
-
-impl AukiPeerProtocols {
-    fn new(protocols: DomainProtocols, lifecycle: ContextLifecycle) -> Self {
-        Self {
-            protocols,
-            lifecycle,
-        }
-    }
-
-    /// Register one exact inbound application protocol and bounded handler.
-    pub fn register<H, F>(
-        &self,
-        spec: DomainProtocolSpec,
-        handler: H,
-    ) -> Result<DomainProtocolRegistration, AukiPeerProtocolsError>
-    where
-        H: Fn(DomainProtocolStream) -> F + Send + Sync + 'static,
-        F: Future<Output = ()> + Send + 'static,
-    {
-        let _running = self
-            .lifecycle
-            .enter()
-            .ok_or(AukiPeerProtocolsError::Stopped)?;
-        self.protocols.register(spec, handler).map_err(Into::into)
-    }
-
-    /// Open the selected protocol using the configured routes for one peer.
-    pub async fn open(
-        &self,
-        expected_peer: PeerId,
-        protocol_id: impl Into<String>,
-    ) -> Result<AuthenticatedRouteStream, AukiPeerProtocolsError> {
-        {
-            let _running = self
-                .lifecycle
-                .enter()
-                .ok_or(AukiPeerProtocolsError::Stopped)?;
-        }
-        self.protocols
-            .open(expected_peer, protocol_id)
-            .await
-            .map_err(Into::into)
-    }
-
-    /// Open the selected protocol through one exact untrusted route hint.
-    pub async fn open_exact(
-        &self,
-        expected_peer: PeerId,
-        route: Multiaddr,
-        protocol_id: impl Into<String>,
-    ) -> Result<AuthenticatedRouteStream, AukiPeerProtocolsError> {
-        {
-            let _running = self
-                .lifecycle
-                .enter()
-                .ok_or(AukiPeerProtocolsError::Stopped)?;
-        }
-        self.protocols
-            .open_exact(expected_peer, route, protocol_id)
-            .await
-            .map_err(Into::into)
-    }
-}
-
-/// Rejected custom-protocol access through the facade.
-#[derive(Debug, thiserror::Error)]
-pub enum AukiPeerProtocolsError {
-    /// The facade has entered ordered shutdown.
-    #[error("the Auki peer protocol surface is stopped")]
-    Stopped,
-    /// The authenticated Domain rejected the protocol operation.
-    #[error("the authenticated Domain protocol operation failed")]
-    Domain(#[from] DomainProtocolError),
-}
-
 /// Narrow surface passed to an application protocol adapter.
 ///
 /// It exposes authenticated protocol registration/opening, local published
 /// routes, and non-secret local identity metadata. It deliberately omits the
-/// raw Domain, transport node, authority installer, and relay reservations.
+/// raw transport node, authority installer, and relay reservations.
 #[derive(Clone)]
 pub struct AukiPeerProtocolContext {
     domain_id: Uuid,
@@ -210,15 +138,15 @@ impl AukiPeerProtocolContext {
         domain_id: Uuid,
         peer_id: PeerId,
         authorization: Arc<dyn AuthorizationSnapshotSource>,
-        protocols: DomainProtocols,
+        protocols: AukiPeerProtocols,
         catalog: RouteCatalog,
+        lifecycle: ContextLifecycle,
     ) -> Self {
-        let lifecycle = ContextLifecycle::new();
         Self {
             domain_id,
             peer_id,
             authorization: AukiPeerAuthorization::new(authorization, lifecycle.clone()),
-            protocols: AukiPeerProtocols::new(protocols, lifecycle.clone()),
+            protocols,
             routes: AukiPeerRoutes::new(catalog, lifecycle.clone()),
             lifecycle,
         }

@@ -23,7 +23,7 @@ User password or App credentials
           auki-auth ─────► PreparedPeer
                                 │
 persistent Identity ─────────────┤
-app config + protocol opt-ins ───┤
+routes + protocol registrations ─┤
                                 ▼
                            AukiPeer
                                 │
@@ -50,19 +50,18 @@ Most applications perform five explicit steps:
 4. Pass the resulting `PreparedPeer`, identity, and `AukiPeerConfig` to
    `AukiPeer::start`.
 5. Register or open application protocols through
-   `peer.protocol_context()` and finish with `peer.shutdown().await`.
+   `peer.protocols()` and finish with `peer.shutdown().await`.
 
 `AukiPeer::start` owns the mechanical work between steps four and five:
 
-- the SDK `Peer` and `Session`;
-- the authenticated Domain runtime;
+- the authenticated P2P transport;
 - verification keys and credential renewal;
 - local route state;
 - DMS relay booking and reservation recovery; and
 - readiness monitoring and ordered shutdown.
 
 Relay-backed reachability is required by default. Startup returns only after
-the Domain and authority are ready and at least one confirmed relay route is
+the transport and authority are ready and at least one confirmed relay route is
 available. `AukiPeerConfig::direct_only()` is the explicit opt-out and makes no
 DMS relay-booking calls.
 
@@ -73,9 +72,8 @@ The facade deliberately leaves product decisions visible:
 | Application provides | SDK owns |
 | --- | --- |
 | Credentials and exact Domain selection | Authentication proof and renewable authority |
-| Stable identity storage location | Domain and transport lifecycle |
-| Application ID and data directory | SDK `Peer` and `Session` |
-| Exact inbound protocol opt-ins | Protocol hosting and authenticated streams |
+| Stable identity storage location | Authenticated transport lifecycle |
+| Exact inbound protocol registrations | Protocol hosting and authenticated streams |
 | Initial remote Peer IDs and route hints | Direct-first dialing and local relay recovery |
 | Capability or command policy | Mutual Peer-ID and Domain authentication |
 
@@ -85,9 +83,8 @@ or relay route through configuration or an application control plane.
 
 ## Protocols are explicit
 
-A new peer serves no built-in protocol by default. Select exact built-in
-versions with `AukiPeerConfig::with_served_protocols(...)`, or register a
-versioned product protocol through:
+A new peer serves no application protocol by default. Register each exact,
+versioned product protocol explicitly:
 
 Product owners choose bounded, explicitly versioned IDs shaped like
 `/<name>[/<name>...]/<version>`; for example, `/posemesh/store/v1`. The
@@ -96,8 +93,7 @@ top-level `/auki/` namespace is reserved; retained SDK protocols use
 `/auki-p2p/dataset/0` remains a valid product protocol, not a required prefix.
 
 ```rust
-let context = peer.protocol_context();
-let registration = context.protocols().register(spec, handler)?;
+let registration = peer.protocols().register(spec, handler)?;
 ```
 
 Keep the returned registration alive for as long as the handler should remain
@@ -122,7 +118,7 @@ relay reservations.
 - Relay-backed startup is the default; direct-only operation is explicit.
 - Credential renewal and authority expiry are supervised by the facade.
 - Explicit `shutdown().await` drains reservations and requests DMS booking
-  deletion before leaving the Domain.
+  deletion before stopping the transport.
 - App secrets belong only in trusted native or headless processes—not browsers
   or distributed mobile applications.
 
@@ -141,7 +137,7 @@ distinct identities.
 Robot and Compute hosts may already receive authority through a product
 control plane. Those integrations use `AukiPeer::start_external` and feed
 complete replacements through `ExternalAuthorityControl`. The host retains
-its task or heartbeat policy; the facade still owns the Domain, routes,
+its task or heartbeat policy; the facade still owns the transport, routes,
 protocol context, fencing, and shutdown.
 
 This is an integration boundary, not the recommended first experiment. User

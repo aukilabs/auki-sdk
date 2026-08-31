@@ -16,7 +16,9 @@ application protocol's wire format.
 The identity, DDS token verification, session requirements, and bounded mutual
 authentication conversation compile for native Rust and browser Wasm. TCP,
 DNS, relay booking, route management, and the current libp2p runtime remain
-native-only. Browser transport and JavaScript bindings are not implemented yet.
+native-only. An internal compile spike proves the SDK identity can build a WSS,
+Noise/Yamux, Circuit Relay v2, and stream-protocol browser swarm. It does not
+yet drive that swarm, authenticate it, or expose JavaScript bindings.
 
 ## Stable identity
 

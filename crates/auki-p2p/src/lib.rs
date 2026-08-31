@@ -10,6 +10,9 @@
 mod authentication;
 #[cfg(not(target_arch = "wasm32"))]
 mod authority;
+#[cfg(target_arch = "wasm32")]
+#[allow(dead_code)]
+mod browser_transport;
 mod error;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod identity;

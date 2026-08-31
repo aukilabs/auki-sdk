@@ -229,7 +229,7 @@ A consumer that wants "all lidar streams" filters on `sensor.kind = "rangefinder
 - *Kind vs type collapsed into one field.* The pre-#216 schema used a single `sensor.kind` field that conflated `point_cloud` (a sensor modality) with `camera` (a sensor family). #216 split them: `point_cloud` is now `kind=rangefinder, type=point_cloud`.
 - *"My type isn't in the documented list."* The type is open — producers may use unlisted values; consumers MUST handle unknown types gracefully (fall back to the kind-level handler or ignore the row).
 
-**See also:** [`dataproducts.md` § Closed sensor kinds](https://github.com/aukilabs/auki-sdk/blob/develop/dataproducts.md), [#216 design spec § 1](https://github.com/aukilabs/auki-sdk/blob/develop/docs/superpowers/specs/2026-05-27-216-schema-and-api-placement-design.md).
+**See also:** [`dataproducts.md` § Closed sensor kinds](https://github.com/aukilabs/auki-sdk/blob/develop/dataproducts.md) and the historical [issue #216](https://github.com/aukilabs/auki-sdk/issues/216).
 
 ---
 

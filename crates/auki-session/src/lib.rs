@@ -1,8 +1,8 @@
 //! Session — per-process declarative API for the Auki SDK.
 //!
 //! Apps construct a [`Session`], register their sensors / clocks / frames /
-//! detectors and the logs they own, then join a domain to advertise them.
-//! Spec: `docs/superpowers/specs/2026-05-27-216-schema-and-api-placement-design.md` §4.
+//! detectors, and own the resulting local logs. Networking composes this
+//! model separately; see the repository's `dataproducts.md` reference.
 
 #![deny(unused_must_use)]
 

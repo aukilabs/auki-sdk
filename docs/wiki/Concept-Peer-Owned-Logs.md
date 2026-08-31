@@ -6,7 +6,9 @@ The Auki SDK rests on one invariant. Internalize this and the rest of the API st
 > A data product has exactly one canonical `peer_id`.
 > Materialized copies preserve that `peer_id`.
 
-— from the [#216 design spec](https://github.com/aukilabs/auki-sdk/blob/develop/docs/superpowers/specs/2026-05-27-216-schema-and-api-placement-design.md)
+This invariant is implemented by the current manifest and catalog schemas; see
+the [`dataproducts.md`](https://github.com/aukilabs/auki-sdk/blob/develop/dataproducts.md)
+reference.
 
 ## Why ownership matters
 
@@ -142,7 +144,7 @@ When the SDK refers to "a log" abstractly — a `Session::materialize_remote_log
 ## See also
 
 - [Quickstart](Quickstart) — register your first peer-owned sensor log
-- [#216 design spec](https://github.com/aukilabs/auki-sdk/blob/develop/docs/superpowers/specs/2026-05-27-216-schema-and-api-placement-design.md) — the canonical record of this design
+- [Issue #216](https://github.com/aukilabs/auki-sdk/issues/216) — historical discussion for the schema migration
 - [`dataproducts.md`](https://github.com/aukilabs/auki-sdk/blob/develop/dataproducts.md) — catalog row reference with worked examples per variant
 - [The Five Questions](The-Five-Questions) — where ownership fits in the architectural frame
 

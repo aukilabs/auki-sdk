@@ -37,6 +37,7 @@ members = [
     "examples/diagnostic-app",
     "examples/portable-echo/native",
     "examples/portable-echo/protocol",
+    "examples/portable-echo/web",
 ]
 
 [workspace.package]
@@ -56,6 +57,7 @@ futures = "0.3.30"
 futures-timer = { version = "3.0.3", features = ["wasm-bindgen"] }
 hex = "0.4.3"
 http = "1.4.0"
+js-sys = "0.3.98"
 libp2p = { version = "0.56.0", default-features = false }
 libp2p-identity = { version = "0.2.13", default-features = false, features = ["ed25519", "peerid", "rand"] }
 # `libp2p-stream` is pre-release and must remain in the libp2p 0.56 /
@@ -74,5 +76,6 @@ tokio-util = "0.7.16"
 tracing = "0.1.40"
 uuid = { version = "1.10.1", features = ["v4", "serde"] }
 web-time = "1.1.0"
+wasm-bindgen = "0.2.121"
 wasm-bindgen-futures = "0.4.71"
 zeroize = "1.8.1"

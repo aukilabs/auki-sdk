@@ -678,6 +678,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-portable-echo-web"
+version = "0.1.0"
+dependencies = [
+ "auki-auth",
+ "auki-p2p",
+ "auki-portable-echo-protocol",
+ "auki-sdk-web",
+ "futures",
+ "futures-timer",
+ "js-sys",
+ "tokio-util",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "auki-protocols"
 version = "0.1.0"
 dependencies = [

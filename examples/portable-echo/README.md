@@ -6,13 +6,12 @@ Rust and reused by multiple Auki peer runtimes.
 ```text
 protocol/       exact ID, wire format, validation, and conversation
 native/         AukiPeer adapter and runnable two-peer example
-web/            Rust/Wasm adapter (after browser-peer feasibility)
+web/            Rust/Wasm adapter (browser/native relay proof follows)
 ```
 
 `protocol/` deliberately has no dependency on Tokio, libp2p, `auki-sdk`,
-`wasm-bindgen`, or browser APIs. The native example provides an authenticated
-`AukiPeer` stream and calls those unchanged protocol functions. The Web adapter
-will do the same after browser-peer feasibility is proven.
+`wasm-bindgen`, or browser APIs. The native and Web adapters each provide an
+authenticated stream and call those unchanged protocol functions.
 
 Run the portable gate with:
 
@@ -23,3 +22,4 @@ cargo check --locked -p auki-portable-echo-protocol --target wasm32-unknown-unkn
 ```
 
 See [`native/README.md`](native/README.md) for the relay-backed two-peer proof.
+See [`web/README.md`](web/README.md) for the ephemeral browser Peer adapter.

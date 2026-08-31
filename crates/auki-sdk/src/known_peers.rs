@@ -88,9 +88,9 @@ impl AukiKnownPeers {
 
     /// Read a fresh stable snapshot.
     pub fn snapshot(&self) -> AukiKnownPeerSnapshot {
-        if !self.lifecycle.is_running() {
+        let Some(_running) = self.lifecycle.enter() else {
             return AukiKnownPeerSnapshot { peers: Vec::new() };
-        }
+        };
         let mut peers = self
             .observations
             .snapshot()

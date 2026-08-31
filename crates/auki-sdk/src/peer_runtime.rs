@@ -802,7 +802,10 @@ impl AukiPeer {
         if let Some(authority) = self.authority.take() {
             authority.shutdown().await;
         }
-        if let Some(node) = self.node.take() {
+        // Keep the owner slot populated across the asynchronous barrier. If
+        // this shutdown future is canceled, `Drop` can still force the node
+        // down even when public protocol handles retain their own clones.
+        if let Some(node) = self.node.as_ref() {
             match tokio::time::timeout(NODE_SHUTDOWN_TIMEOUT, node.shutdown()).await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
@@ -817,6 +820,7 @@ impl AukiPeer {
                 }
             }
         }
+        drop(self.node.take());
 
         let clean = failures.is_empty();
         self.status.finish_shutdown(clean);
@@ -1290,6 +1294,71 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             context.routes().snapshot(),
             Err(AukiPeerRoutesError::Stopped)
         ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn known_peer_snapshot_is_cleared_by_the_runtime_fence() {
+        let server_identity = auki_p2p::Identity::generate();
+        let server_peer_id = server_identity.peer_id();
+        let client_identity = auki_p2p::Identity::generate();
+        let client_peer_id = client_identity.peer_id();
+        let domain_id = Uuid::new_v4();
+
+        let server = AukiPeer::start(
+            server_identity.clone(),
+            fixture(&server_identity, domain_id),
+            direct_config(),
+        )
+        .await
+        .unwrap();
+        let (accepted_sender, accepted_receiver) = tokio::sync::oneshot::channel();
+        let accepted = Arc::new(Mutex::new(Some(accepted_sender)));
+        let handler_accepted = Arc::clone(&accepted);
+        let registration = server
+            .protocols()
+            .register(
+                crate::AukiProtocolSpec::new("/example/known-peers/1.0.0", 1, 1).unwrap(),
+                move |_stream| {
+                    let accepted = handler_accepted.lock().take();
+                    async move {
+                        if let Some(accepted) = accepted {
+                            let _ = accepted.send(());
+                        }
+                        pending::<()>().await;
+                    }
+                },
+            )
+            .unwrap();
+
+        let client_config = direct_config()
+            .with_peer_routes(server_peer_id, server.listen_addresses().iter().cloned())
+            .unwrap();
+        let client = AukiPeer::start(
+            client_identity.clone(),
+            fixture(&client_identity, domain_id),
+            client_config,
+        )
+        .await
+        .unwrap();
+        let stream = client
+            .protocols()
+            .open(server_peer_id, "/example/known-peers/1.0.0")
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), accepted_receiver)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let known_peers = server.known_peers();
+        assert_eq!(known_peers.snapshot().peers()[0].peer_id(), client_peer_id);
+
+        server.shutdown().await.unwrap();
+        assert!(known_peers.snapshot().peers().is_empty());
+
+        drop(stream);
+        registration.close().await.unwrap();
+        client.shutdown().await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

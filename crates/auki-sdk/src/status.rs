@@ -17,10 +17,12 @@ pub enum AukiPeerFailure {
 }
 
 /// Local lifecycle and readiness snapshot for one facade-owned peer.
+///
+/// Startup is an atomic readiness gate: the first observable status is the
+/// state in which [`crate::AukiPeer::start`] returns. Startup failures are
+/// returned directly rather than exposed as an intermediate status.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AukiPeerStatus {
-    /// Startup is composing authority, transport, and optional relay ownership.
-    Starting,
     /// Authority and transport are ready and required reachability is confirmed.
     Ready,
     /// The transport is alive but no current signed authority is usable.

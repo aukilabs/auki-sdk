@@ -37,10 +37,6 @@ impl ContextLifecycle {
         self.cancellation.cancel();
     }
 
-    pub(crate) fn is_running(&self) -> bool {
-        *self.running.lock()
-    }
-
     pub(crate) fn token(&self) -> &CancellationToken {
         &self.cancellation
     }
@@ -189,7 +185,7 @@ impl AukiPeerProtocolContext {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use std::{str::FromStr, sync::mpsc, time::Duration};
 
     use auki_p2p::{Multiaddr, RouteCatalogLimits};
 
@@ -200,6 +196,34 @@ mod tests {
         encoded[1] = 32;
         encoded[2..10].copy_from_slice(&seed.to_be_bytes());
         PeerId::from_bytes(&encoded).expect("test Peer ID must parse")
+    }
+
+    #[test]
+    fn lifecycle_fence_waits_for_an_admitted_synchronous_read() {
+        let lifecycle = ContextLifecycle::new();
+        let operation_lifecycle = lifecycle.clone();
+        let (entered, entered_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let operation = std::thread::spawn(move || {
+            let _running = operation_lifecycle.enter().unwrap();
+            entered.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        entered_rx.recv().unwrap();
+
+        let fence_lifecycle = lifecycle.clone();
+        let (fenced, fenced_rx) = mpsc::channel();
+        let fence = std::thread::spawn(move || {
+            fence_lifecycle.fence();
+            fenced.send(()).unwrap();
+        });
+        assert!(fenced_rx.recv_timeout(Duration::from_millis(50)).is_err());
+
+        release.send(()).unwrap();
+        fenced_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        operation.join().unwrap();
+        fence.join().unwrap();
+        assert!(lifecycle.enter().is_none());
     }
 
     #[tokio::test]

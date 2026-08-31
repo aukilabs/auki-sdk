@@ -1,6 +1,6 @@
 use std::env;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use auki_auth::{AuthClient, AuthEnvironment, Credentials, DomainSelection};
 use auki_portable_echo_adapter::EchoEndpoint;
 use auki_sdk::{AukiPeer, AukiPeerConfig, Identity};
@@ -58,7 +58,14 @@ async fn run(peer: &AukiPeer) -> Result<()> {
             println!("echo: {}", String::from_utf8_lossy(&receipt.payload));
         } else {
             println!("serving; press Ctrl-C to stop");
-            tokio::signal::ctrl_c().await?;
+            let mut statuses = peer.subscribe_status();
+            tokio::select! {
+                result = tokio::signal::ctrl_c() => result?,
+                terminal = statuses.wait_for(|status| status.is_terminal()) => {
+                    let status = *terminal.context("wait for terminal Auki peer status")?;
+                    bail!("Auki peer stopped unexpectedly: {status:?}");
+                }
+            }
         }
         Ok::<_, anyhow::Error>(())
     }

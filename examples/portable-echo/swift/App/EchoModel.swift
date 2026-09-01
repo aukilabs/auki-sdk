@@ -112,7 +112,7 @@ final class EchoModel: ObservableObject {
                 json: remoteCard.trimmingCharacters(in: .whitespacesAndNewlines)
             )
             let receipt = try await mounted.sendExact(
-                target: nativeTarget(card: card),
+                target: nativePeerTarget(card: card, requiredProtocol: "/example/echo/1.0.0"),
                 payload: Data(message.utf8)
             )
             guard receipt.relayed else { throw DemoError("Echo did not use the relay") }

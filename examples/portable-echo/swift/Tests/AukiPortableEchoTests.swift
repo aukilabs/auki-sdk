@@ -25,8 +25,16 @@ final class AukiPortableEchoTests: XCTestCase {
         )
 
         let json = try peerCardToJson(card: card)
-        let decoded = try peerCardFromJson(json: "{\"runtime\":\"ios\"," + json.dropFirst())
-        let selected = try nativeTarget(card: decoded)
+        let decoded = try peerCardFromJson(
+            json: json.replacingOccurrences(
+                of: "\"runtime\":\"swift\"",
+                with: "\"runtime\":\"ios\""
+            )
+        )
+        let selected = try nativePeerTarget(
+            card: decoded,
+            requiredProtocol: "/example/echo/1.0.0"
+        )
 
         XCTAssertEqual(decoded.domainId, "de66fdf4-a830-4017-95dd-5741c30a6d0f")
         XCTAssertEqual(selected.peerId, target)
@@ -46,6 +54,8 @@ final class AukiPortableEchoTests: XCTestCase {
             )
         )
 
-        XCTAssertThrowsError(try nativeTarget(card: card))
+        XCTAssertThrowsError(
+            try nativePeerTarget(card: card, requiredProtocol: "/example/echo/1.0.0")
+        )
     }
 }

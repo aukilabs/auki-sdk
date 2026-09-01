@@ -9,13 +9,25 @@ use std::sync::Arc;
 use auki_sdk_rs::{
     AukiPeer as RustAukiPeer, AukiPeerBootstrap, AukiPeerExit, AukiPeerFailure, AukiPeerLifecycle,
     AukiPeerProtocols, AukiPeerRoutes as RustAukiPeerRoutes, AukiPeerStatus as RustAukiPeerStatus,
-    Credentials, DomainDescriptor, DomainSelection, Identity,
+    Credentials, DomainDescriptor, DomainSelection, Identity, Multiaddr, PeerId,
+    validate_relay_circuit_routes,
 };
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use tokio::{runtime::Handle, sync::watch};
 use uuid::Uuid;
 
 uniffi::setup_scaffolding!();
+
+#[cfg(any(
+    feature = "info",
+    feature = "catalog",
+    feature = "registry",
+    feature = "blob",
+    feature = "message",
+    feature = "stream",
+))]
+mod protocols;
 
 /// Cloneable cleanup result retained behind a platform adapter's one-shot
 /// shutdown barrier.
@@ -92,7 +104,10 @@ pub enum AukiSdkError {
     Operation { message: String },
 }
 
-fn operation_error(context: &'static str, error: impl std::fmt::Display) -> AukiSdkError {
+pub(crate) fn operation_error(
+    context: &'static str,
+    error: impl std::fmt::Display,
+) -> AukiSdkError {
     AukiSdkError::Operation {
         message: format!("{context}: {error}"),
     }
@@ -123,6 +138,172 @@ impl From<DomainDescriptor> for AukiDomain {
 pub struct AukiPeerRoutes {
     pub tcp: String,
     pub wss: String,
+}
+
+/// Exact authenticated peer target selected from an advertised peer card.
+#[derive(Clone, Debug, Eq, PartialEq, uniffi::Record)]
+pub struct AukiPeerTarget {
+    pub domain_id: String,
+    pub peer_id: String,
+    pub route: String,
+}
+
+/// Bounded copyable peer description used until discovery supplies the same
+/// data. Applications exchange this card, then dial its exact advertised route.
+#[derive(Clone, Debug, Eq, PartialEq, uniffi::Record)]
+pub struct AukiPeerCard {
+    pub version: u32,
+    pub domain_id: String,
+    pub peer_id: String,
+    pub protocols: Vec<String>,
+    pub routes: AukiPeerRoutes,
+}
+
+const MAX_PEER_CARD_JSON_BYTES: usize = 16 * 1024;
+const MAX_PEER_CARD_PROTOCOLS: usize = 32;
+const MAX_PROTOCOL_ID_BYTES: usize = 256;
+const MAX_ROUTE_BYTES: usize = 2 * 1024;
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PeerCardWire {
+    version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    runtime: Option<String>,
+    domain_id: String,
+    peer_id: String,
+    protocols: Vec<String>,
+    routes: PeerCardRoutesWire,
+}
+
+#[derive(Deserialize, Serialize)]
+struct PeerCardRoutesWire {
+    tcp: String,
+    wss: String,
+}
+
+/// Rust-side validation shared by protocol adapters compiled into an umbrella
+/// Apple artifact. Swift callers use `peer_card_from_json` or `AukiPeer.card`.
+pub fn canonicalize_peer_card(mut card: AukiPeerCard) -> Result<AukiPeerCard, AukiSdkError> {
+    if card.version != 1 {
+        return Err(AukiSdkError::Operation {
+            message: format!("unsupported peer card version {}", card.version),
+        });
+    }
+    let domain_id = Uuid::parse_str(&card.domain_id)
+        .map_err(|error| operation_error("parse peer card Domain ID", error))?;
+    let peer_id = card
+        .peer_id
+        .parse::<PeerId>()
+        .map_err(|error| operation_error("parse peer card Peer ID", error))?;
+    if card.protocols.len() > MAX_PEER_CARD_PROTOCOLS
+        || card
+            .protocols
+            .iter()
+            .any(|protocol| protocol.is_empty() || protocol.len() > MAX_PROTOCOL_ID_BYTES)
+    {
+        return Err(AukiSdkError::Operation {
+            message: "peer card protocol list exceeds its bounded envelope".into(),
+        });
+    }
+    if card.routes.tcp.len() > MAX_ROUTE_BYTES || card.routes.wss.len() > MAX_ROUTE_BYTES {
+        return Err(AukiSdkError::Operation {
+            message: "peer card route exceeds its bounded envelope".into(),
+        });
+    }
+    let tcp = card
+        .routes
+        .tcp
+        .parse::<Multiaddr>()
+        .map_err(|error| operation_error("parse peer card TCP route", error))?;
+    let wss = card
+        .routes
+        .wss
+        .parse::<Multiaddr>()
+        .map_err(|error| operation_error("parse peer card WSS route", error))?;
+    let routes = validate_relay_circuit_routes(&tcp, &wss, peer_id)
+        .map_err(|error| operation_error("validate peer card relay routes", error))?;
+
+    card.domain_id = domain_id.to_string();
+    card.peer_id = peer_id.to_string();
+    card.routes = AukiPeerRoutes {
+        tcp: routes.tcp().to_string(),
+        wss: routes.wss().to_string(),
+    };
+    Ok(card)
+}
+
+/// Parse the exact peer and route selected by a Swift caller.
+pub fn parse_target(target: AukiPeerTarget) -> Result<(PeerId, Multiaddr), AukiSdkError> {
+    let peer_id = target
+        .peer_id
+        .parse::<PeerId>()
+        .map_err(|error| operation_error("parse remote Peer ID", error))?;
+    let route = target
+        .route
+        .parse::<Multiaddr>()
+        .map_err(|error| operation_error("parse remote route", error))?;
+    Ok((peer_id, route))
+}
+
+#[uniffi::export]
+pub fn peer_card_to_json(card: AukiPeerCard) -> Result<String, AukiSdkError> {
+    let card = canonicalize_peer_card(card)?;
+    serde_json::to_string(&PeerCardWire {
+        version: card.version,
+        runtime: Some("swift".into()),
+        domain_id: card.domain_id,
+        peer_id: card.peer_id,
+        protocols: card.protocols,
+        routes: PeerCardRoutesWire {
+            tcp: card.routes.tcp,
+            wss: card.routes.wss,
+        },
+    })
+    .map_err(|error| operation_error("encode peer card", error))
+}
+
+#[uniffi::export]
+pub fn peer_card_from_json(json: String) -> Result<AukiPeerCard, AukiSdkError> {
+    if json.len() > MAX_PEER_CARD_JSON_BYTES {
+        return Err(AukiSdkError::Operation {
+            message: "peer card JSON exceeds its bounded envelope".into(),
+        });
+    }
+    let wire = serde_json::from_str::<PeerCardWire>(&json)
+        .map_err(|error| operation_error("decode peer card", error))?;
+    canonicalize_peer_card(AukiPeerCard {
+        version: wire.version,
+        domain_id: wire.domain_id,
+        peer_id: wire.peer_id,
+        protocols: wire.protocols,
+        routes: AukiPeerRoutes {
+            tcp: wire.routes.tcp,
+            wss: wire.routes.wss,
+        },
+    })
+}
+
+/// Select the native TCP member of a peer card's atomic route pair, optionally
+/// requiring one advertised protocol first.
+#[uniffi::export]
+pub fn native_peer_target(
+    card: AukiPeerCard,
+    required_protocol: Option<String>,
+) -> Result<AukiPeerTarget, AukiSdkError> {
+    let card = canonicalize_peer_card(card)?;
+    if let Some(required_protocol) = required_protocol
+        && !card.protocols.iter().any(|item| item == &required_protocol)
+    {
+        return Err(AukiSdkError::Operation {
+            message: format!("peer card does not advertise {required_protocol}"),
+        });
+    }
+    Ok(AukiPeerTarget {
+        domain_id: card.domain_id,
+        peer_id: card.peer_id,
+        route: card.routes.tcp,
+    })
 }
 
 /// Small cross-language peer lifecycle state.
@@ -356,6 +537,18 @@ impl AukiPeer {
         })
     }
 
+    /// Build one exact copyable card for the protocols the application has
+    /// explicitly mounted on this peer.
+    pub fn card(&self, protocols: Vec<String>) -> Result<AukiPeerCard, AukiSdkError> {
+        canonicalize_peer_card(AukiPeerCard {
+            version: 1,
+            domain_id: self.domain_id(),
+            peer_id: self.peer_id(),
+            protocols,
+            routes: self.routes()?,
+        })
+    }
+
     pub fn status(&self) -> AukiPeerStatus {
         (*self.status.borrow()).into()
     }
@@ -388,6 +581,25 @@ mod tests {
 
     fn assert_send_sync<T: Send + Sync>() {}
 
+    fn peer_card() -> AukiPeerCard {
+        let peer_id = Identity::generate().peer_id().to_string();
+        let relay_peer_id = Identity::generate().peer_id().to_string();
+        AukiPeerCard {
+            version: 1,
+            domain_id: "00000000-0000-0000-0000-000000000001".into(),
+            peer_id: peer_id.clone(),
+            protocols: vec!["/example/echo/1.0.0".into()],
+            routes: AukiPeerRoutes {
+                tcp: format!(
+                    "/dns4/relay.example.com/tcp/443/p2p/{relay_peer_id}/p2p-circuit/p2p/{peer_id}"
+                ),
+                wss: format!(
+                    "/dns4/relay.example.com/tcp/4443/wss/p2p/{relay_peer_id}/p2p-circuit/p2p/{peer_id}"
+                ),
+            },
+        }
+    }
+
     #[test]
     fn identity_round_trip_preserves_peer_id() {
         let identity = AukiPeerIdentity::generate();
@@ -399,6 +611,32 @@ mod tests {
     #[test]
     fn malformed_identity_fails_closed() {
         assert!(AukiPeerIdentity::from_encoded(b"not-a-private-key".to_vec()).is_err());
+    }
+
+    #[test]
+    fn generic_peer_card_round_trips_and_selects_the_exact_tcp_route() {
+        let card = peer_card();
+        let json = peer_card_to_json(card.clone()).unwrap();
+        let decoded = peer_card_from_json(json).unwrap();
+        let target =
+            native_peer_target(decoded.clone(), Some("/example/echo/1.0.0".into())).unwrap();
+
+        assert_eq!(decoded, card);
+        assert_eq!(target.peer_id, card.peer_id);
+        assert_eq!(target.route, card.routes.tcp);
+    }
+
+    #[test]
+    fn generic_peer_card_rejects_mismatched_pairs_and_missing_protocols() {
+        let card = peer_card();
+        assert!(native_peer_target(card.clone(), Some("/missing/1".into())).is_err());
+
+        let mut mismatched = card;
+        mismatched.routes.wss = mismatched.routes.wss.replace(
+            &mismatched.peer_id,
+            &Identity::generate().peer_id().to_string(),
+        );
+        assert!(canonicalize_peer_card(mismatched).is_err());
     }
 
     #[test]

@@ -21,7 +21,9 @@ mkdir -p "$BINDINGS" "$SWIFT_OUT"
 cd "$WORKSPACE_ROOT"
 
 for TARGET in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
-  cargo build --locked --release -p auki-sdk-swift --target "$TARGET"
+  cargo build --locked --release -p auki-sdk-swift \
+    --features standard-protocols \
+    --target "$TARGET"
 done
 
 DEVICE_LIB="target/aarch64-apple-ios/release/lib${LIB_NAME}.a"
@@ -31,7 +33,8 @@ lipo -create \
   "target/x86_64-apple-ios/release/lib${LIB_NAME}.a" \
   -output "$SIM_FAT"
 
-cargo run --locked --release --features cli -p auki-sdk-swift --bin uniffi-bindgen -- generate \
+cargo run --locked --release --features cli,standard-protocols \
+  -p auki-sdk-swift --bin uniffi-bindgen -- generate \
   --library "$DEVICE_LIB" \
   --language swift \
   --out-dir "$BINDINGS"

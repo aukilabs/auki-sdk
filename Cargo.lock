@@ -568,8 +568,6 @@ dependencies = [
  "auki-sdk",
  "auki-sdk-swift",
  "parking_lot",
- "serde",
- "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "uniffi",
@@ -739,8 +737,17 @@ dependencies = [
 name = "auki-sdk-swift"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
+ "auki-datatypes",
+ "auki-protocols",
+ "auki-registry",
  "auki-sdk",
+ "futures",
  "parking_lot",
+ "prost",
+ "serde",
+ "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "tokio",
  "uniffi",

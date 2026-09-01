@@ -720,6 +720,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-sdk-swift"
+version = "0.1.0"
+dependencies = [
+ "auki-sdk",
+ "parking_lot",
+ "thiserror 2.0.18",
+ "tokio",
+ "uniffi",
+ "uuid",
+]
+
+[[package]]
 name = "auki-sdk-web"
 version = "0.1.0"
 dependencies = [

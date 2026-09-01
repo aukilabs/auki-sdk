@@ -1,0 +1,32 @@
+[package]
+name = "auki-sdk-swift"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Mechanical UniFFI facade for authenticated Auki peers on Apple platforms"
+readme = "README.md"
+publish = false
+
+[lib]
+name = "auki_sdk_swift"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = []
+cli = ["uniffi/cli"]
+
+[dependencies]
+auki-sdk-rs = { package = "auki-sdk", path = "../../../crates/auki-sdk" }
+parking_lot.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+uniffi = { version = "0.31", features = ["tokio"] }
+uuid.workspace = true
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]

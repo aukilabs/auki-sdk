@@ -22,6 +22,7 @@ members = [
     "bindings/python/auki-sdk-py",
     "crates/auki-protocols",
     "bindings/swift/auki-identity-swift",
+    "bindings/swift/auki-sdk-swift",
     "crates/auki-datatypes",
     "crates/auki-qr-detector",
     "crates/auki-registry",

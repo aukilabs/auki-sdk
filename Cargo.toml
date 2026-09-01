@@ -36,6 +36,7 @@ members = [
     "examples/portable-echo/native",
     "examples/portable-echo/python",
     "examples/portable-echo/web",
+    "examples/standard-protocols/native",
 ]
 
 [workspace.package]

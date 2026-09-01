@@ -775,6 +775,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-standard-protocols-native"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auki-datatypes",
+ "auki-protocols",
+ "auki-registry",
+ "auki-sdk",
+ "futures",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "auki-time"
 version = "0.0.0"
 dependencies = [

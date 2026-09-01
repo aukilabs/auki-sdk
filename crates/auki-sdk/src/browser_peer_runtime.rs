@@ -3,8 +3,8 @@ use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use auki_auth::{AuthorityRenewal, PreparedPeer};
 use auki_p2p::{
-    BrowserAuthority, BrowserNode, BrowserNodeExit, Identity, Multiaddr, PeerAuthorityUpdate,
-    PeerId, RelayBaseTransport, RelayReservationError,
+    BrowserAuthority, BrowserNode, BrowserNodeExit, Identity, PeerAuthorityUpdate, PeerId,
+    RelayCircuitRoutes, RelayReservationError,
 };
 use auki_relay_booking::{
     CreateRelayBookingRequest, RelayAuthorizationError, RelayAuthorizationProvider,
@@ -54,12 +54,8 @@ pub struct AukiPeer {
     closed: bool,
 }
 
-/// Confirmed routes for reaching one browser Peer through its relay.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AukiPeerReachability {
-    wss: Multiaddr,
-    tcp: Option<Multiaddr>,
-}
+/// Confirmed TCP/WSS routes for reaching one browser Peer through one relay slot.
+pub type AukiPeerReachability = RelayCircuitRoutes;
 
 /// Clone-only observation of one browser Peer's terminal lifecycle result.
 ///
@@ -77,20 +73,8 @@ impl AukiPeerLifecycle {
     }
 }
 
-impl AukiPeerReachability {
-    /// Exact WSS circuit route suitable for another browser Peer.
-    pub fn wss(&self) -> &Multiaddr {
-        &self.wss
-    }
-
-    /// Exact TCP circuit route suitable for a native Peer, when advertised by DMS.
-    pub fn tcp(&self) -> Option<&Multiaddr> {
-        self.tcp.as_ref()
-    }
-}
-
 impl AukiPeer {
-    /// Start one browser Peer and return only after its WSS relay reservation is publishable.
+    /// Start one browser Peer after its WSS reservation and dual routes are publishable.
     pub async fn start(
         identity: Identity,
         prepared: PreparedPeer,
@@ -164,7 +148,7 @@ impl AukiPeer {
                 }
             }
         };
-        let (wss, tcp) = match relay_routes(&ready, identity_peer_id) {
+        let reachability = match relay_routes(&ready, identity_peer_id) {
             Ok(routes) => routes,
             Err(error) => {
                 cleanup_startup(&node, &relay_client, &authority, Some(ready.booking_id)).await;
@@ -188,7 +172,7 @@ impl AukiPeer {
                 }
             }
         };
-        if reservation.publishable_route() != Some(&wss) {
+        if reservation.publishable_route() != Some(reachability.wss()) {
             cleanup_startup(&node, &relay_client, &authority, Some(ready.booking_id)).await;
             return Err(AukiPeerError::RelayReservationMismatch);
         }
@@ -208,7 +192,6 @@ impl AukiPeer {
                 }
             }
         };
-        let reachability = AukiPeerReachability { wss, tcp };
         let protocols = AukiPeerProtocols::new(Rc::clone(&node), node.domain_id());
         let relay = RelaySupervisor::start(
             relay_client,
@@ -389,23 +372,8 @@ async fn acquire_ready_relay(
     }
 }
 
-fn relay_routes(
-    ready: &ReadyRelay,
-    peer_id: PeerId,
-) -> Result<(Multiaddr, Option<Multiaddr>), AukiPeerError> {
-    let wss = ready
-        .provider
-        .circuit_route_for_transport(RelayBaseTransport::Wss, peer_id)?;
-    let tcp = ready
-        .provider
-        .base_for_transport(RelayBaseTransport::Tcp)
-        .map(|_| {
-            ready
-                .provider
-                .circuit_route_for_transport(RelayBaseTransport::Tcp, peer_id)
-        })
-        .transpose()?;
-    Ok((wss, tcp))
+fn relay_routes(ready: &ReadyRelay, peer_id: PeerId) -> Result<RelayCircuitRoutes, AukiPeerError> {
+    ready.provider.circuit_routes(peer_id).map_err(Into::into)
 }
 
 async fn confirm_ready_relay(

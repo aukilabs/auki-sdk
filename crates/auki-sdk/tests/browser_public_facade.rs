@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use auki_sdk::RelayCircuitRoutes;
 use auki_sdk::{
     AukiPeer, AukiPeerBootstrap, AukiPeerBootstrapError, AukiPeerConfig, AukiPeerError,
     AukiPeerExit, AukiPeerFailure, AukiPeerLifecycle, AukiPeerProtocols, AukiPeerReachability,
@@ -27,6 +28,8 @@ fn browser_facade_exposes_only_browser_runtime_configuration_and_lifecycle() {
     let _wait_stopped = AukiPeer::wait_stopped;
     let _protocols: fn(&AukiPeer) -> AukiPeerProtocols = AukiPeer::protocols;
     let _reachability: fn(&AukiPeer) -> &AukiPeerReachability = AukiPeer::reachability;
+    let _tcp: fn(&RelayCircuitRoutes) -> &auki_sdk::Multiaddr = RelayCircuitRoutes::tcp;
+    let _wss: fn(&RelayCircuitRoutes) -> &auki_sdk::Multiaddr = RelayCircuitRoutes::wss;
     let _lifecycle: fn(&AukiPeer) -> AukiPeerLifecycle = AukiPeer::lifecycle;
     let _registration: Option<AukiProtocolRegistration> = None;
     let _exit: Option<AukiPeerExit> = None;

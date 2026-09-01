@@ -43,7 +43,7 @@ pub use auki_auth::{
 pub use auki_p2p::BrowserAuthenticatedRouteStream as AuthenticatedRouteStream;
 pub use auki_p2p::{
     AuthenticatedPeer, DdsVerificationKeys, Identity, Multiaddr, P2PAccessClaims, PeerId,
-    SignedP2pCredential,
+    RelayCircuitRoutes, SignedP2pCredential,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use auki_p2p::{

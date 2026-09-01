@@ -1,5 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use auki_sdk::RelayCircuitRoutes;
 use auki_sdk::{
     AukiKnownPeerEvent, AukiKnownPeerRecvError, AukiKnownPeerSnapshot, AukiKnownPeers, AukiPeer,
     AukiPeerAuthorityError, AukiPeerBootstrap, AukiPeerBootstrapError, AukiPeerExit,
@@ -78,6 +79,8 @@ fn facade_reexports_the_complete_safe_custom_protocol_surface() {
     let _shutdown_error: Option<AukiPeerShutdownError> = None;
     let _authority_error: Option<AukiPeerAuthorityError> = None;
     let _relay_error: Option<AukiPeerRelayError> = None;
+    let _tcp: fn(&RelayCircuitRoutes) -> &auki_sdk::Multiaddr = RelayCircuitRoutes::tcp;
+    let _wss: fn(&RelayCircuitRoutes) -> &auki_sdk::Multiaddr = RelayCircuitRoutes::wss;
 
     let _external_update_new: fn(
         Uuid,

@@ -30,6 +30,8 @@ import {
 } from "../pkg-test/auki_sdk_web.js";
 
 declare const peer: AukiPeer;
+const browserRoute: string = peer.wssRoute;
+const nativeRoute: string = peer.tcpRoute;
 
 const target: AukiExactTarget = {
   peerId: "12D3KooW...",
@@ -120,4 +122,6 @@ void [
   receiverClose,
   checkMessageSender,
   checkStreamConsumer,
+  browserRoute,
+  nativeRoute,
 ];

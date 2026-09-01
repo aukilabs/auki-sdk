@@ -96,7 +96,7 @@ try {
     "hello from browser B",
   );
 
-  assert(firstPeer.tcpRoute, "the selected relay did not advertise a TCP route");
+  assert(firstPeer.tcpRoute, "the required relay TCP route is missing");
   assert(
     firstPeer.tcpRoute.endsWith(`/p2p-circuit/p2p/${firstPeer.peerId}`),
     "the browser TCP route does not target its Peer ID",
@@ -257,7 +257,7 @@ async function startBrowserPeer(page, input) {
     domainId: local.dataset.domainId,
     protocol: "/example/echo/1.0.0",
     wssRoute: local.dataset.wssRoute,
-    tcpRoute: local.dataset.tcpRoute || undefined,
+    tcpRoute: local.dataset.tcpRoute,
   }));
 }
 

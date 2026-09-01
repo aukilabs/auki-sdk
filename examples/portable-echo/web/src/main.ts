@@ -75,9 +75,9 @@ async function startPeer(): Promise<void> {
     local.dataset.peerId = started.peerId;
     local.dataset.domainId = started.domainId;
     local.dataset.wssRoute = started.wssRoute;
-    local.dataset.tcpRoute = started.tcpRoute ?? "";
+    local.dataset.tcpRoute = started.tcpRoute;
     local.textContent = `Peer ID: ${started.peerId}\nWSS route: ${started.wssRoute}`
-      + (started.tcpRoute ? `\nTCP route: ${started.tcpRoute}` : "");
+      + `\nTCP route: ${started.tcpRoute}`;
     start.hidden = true;
     sendButton.disabled = stopButton.disabled = false;
     receiving = receiveEchoes(mounted);

@@ -72,7 +72,7 @@ pub(crate) fn ready_relay(
         Duration::from_secs(u64::from(limits.duration_seconds)),
         limits.data_bytes_per_direction,
     )?;
-    let provider = RelayProvider::new_for_transport(
+    let provider = RelayProvider::new_dual_transport(
         relay_peer_id,
         bases,
         RelayBaseTransport::Wss,
@@ -217,53 +217,32 @@ mod tests {
     }
 
     #[test]
-    fn selects_one_ready_wss_provider_with_native_counterpart() {
+    fn one_booking_exposes_both_required_route_getters() {
         let snapshot = snapshot(RelaySlotState::Ready);
         let ready = ready_relay(&snapshot, policy()).unwrap().unwrap();
         let target = Identity::generate().peer_id();
+        let routes = ready.provider.circuit_routes(target).unwrap();
 
+        assert_eq!(snapshot.relay_count, 1);
         assert_eq!(ready.booking_id, snapshot.booking_id);
         assert_eq!(
             ready.provider_lease_expires_at,
             snapshot.slots[0].provider_lease_expires_at.unwrap()
         );
-        assert!(
-            ready
-                .provider
-                .circuit_route_for_transport(RelayBaseTransport::Wss, target)
-                .unwrap()
-                .to_string()
-                .contains("/wss/")
-        );
-        assert!(
-            ready
-                .provider
-                .circuit_route_for_transport(RelayBaseTransport::Tcp, target)
-                .is_ok()
-        );
+        assert!(routes.wss().to_string().contains("/wss/"));
+        assert!(!routes.tcp().to_string().contains("/wss/"));
+        assert_eq!(ready.provider.selected_transport(), RelayBaseTransport::Wss);
     }
 
     #[test]
-    fn requires_wss_but_keeps_tcp_optional() {
+    fn requires_both_tcp_and_wss_from_one_provider_slot() {
         let mut wss_only = snapshot(RelaySlotState::Ready);
         wss_only.slots[0]
             .provider_base_addresses
             .as_mut()
             .unwrap()
             .remove(0);
-        let ready = ready_relay(&wss_only, policy()).unwrap().unwrap();
-        assert!(
-            ready
-                .provider
-                .base_for_transport(RelayBaseTransport::Wss)
-                .is_some()
-        );
-        assert!(
-            ready
-                .provider
-                .base_for_transport(RelayBaseTransport::Tcp)
-                .is_none()
-        );
+        assert!(ready_relay(&wss_only, policy()).is_err());
 
         let mut tcp_only = snapshot(RelaySlotState::Ready);
         tcp_only.slots[0]
@@ -308,9 +287,10 @@ mod tests {
         let mut provider = original.clone();
         let relay = Identity::generate().peer_id();
         provider.slots[0].provider_peer_id = Some(relay.to_string());
-        provider.slots[0].provider_base_addresses = Some(vec![format!(
-            "/dns4/other-relay.example.com/tcp/4443/wss/p2p/{relay}"
-        )]);
+        provider.slots[0].provider_base_addresses = Some(vec![
+            format!("/dns4/other-relay.example.com/tcp/443/p2p/{relay}"),
+            format!("/dns4/other-relay.example.com/tcp/4443/wss/p2p/{relay}"),
+        ]);
         replacements.push(provider);
 
         for replacement in replacements {

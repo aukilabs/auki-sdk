@@ -4,7 +4,10 @@ use chrono::{DateTime, Utc};
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use crate::{ExpectedRelayLimits, Multiaddr, PeerId, Protocol, RelayBaseTransport, RelayProvider};
+use crate::{
+    ExpectedRelayLimits, Multiaddr, PeerId, Protocol, RelayBaseTransport, RelayCircuitRoutes,
+    RelayProvider,
+};
 
 /// Opaque authority fence for one stable advertised route slot.
 ///
@@ -23,9 +26,8 @@ pub struct RouteFence {
 pub struct ConfirmedRoute {
     pub fence: RouteFence,
     pub relay_peer_id: PeerId,
-    pub route: Multiaddr,
-    /// Optional canonical WSS alternative derived from the same trusted provider metadata.
-    pub wss_route: Option<Multiaddr>,
+    /// Required native/browser routes derived atomically from one provider slot.
+    pub routes: RelayCircuitRoutes,
     pub limits: ExpectedRelayLimits,
     pub authorized_until: DateTime<Utc>,
 }
@@ -34,11 +36,11 @@ pub struct ConfirmedRoute {
 pub struct PublishedRoute {
     pub fence: RouteFence,
     pub relay_peer_id: PeerId,
-    pub route: Multiaddr,
-    /// DMS-derived browser route governed by this entry's reservation fence and deadline.
+    /// DMS-derived TCP/WSS pair governed by this entry's reservation fence and deadline.
     ///
-    /// The WSS endpoint is validated provider metadata; it is not independently dial-probed.
-    pub wss_route: Option<Multiaddr>,
+    /// Only the runtime's selected reservation transport is independently
+    /// confirmed. Infrastructure guarantees the other advertised endpoint.
+    pub routes: RelayCircuitRoutes,
     pub limits: ExpectedRelayLimits,
     pub authorized_until: DateTime<Utc>,
 }
@@ -126,9 +128,8 @@ struct RouteState {
 struct StoredRelayRoute {
     fence: RouteFence,
     relay_peer_id: PeerId,
-    endpoint: String,
-    route: Multiaddr,
-    wss_route: Option<Multiaddr>,
+    endpoints: [String; 2],
+    routes: RelayCircuitRoutes,
     limits: ExpectedRelayLimits,
     authorized_until: DateTime<Utc>,
     publishable: bool,
@@ -222,11 +223,17 @@ impl RouteCatalog {
                 "local generation must be positive".to_string(),
             ));
         }
-        let (relay_peer_id, endpoint) =
-            validate_circuit_route(&route.route, route.relay_peer_id, self.inner.local_peer_id)?;
-        if let Some(wss_route) = route.wss_route.as_ref() {
-            validate_wss_circuit_route(wss_route, route.relay_peer_id, self.inner.local_peer_id)?;
-        }
+        let (relay_peer_id, tcp_endpoint) = validate_circuit_route(
+            route.routes.tcp(),
+            route.relay_peer_id,
+            self.inner.local_peer_id,
+        )?;
+        let wss_endpoint = validate_wss_circuit_route(
+            route.routes.wss(),
+            route.relay_peer_id,
+            self.inner.local_peer_id,
+        )?;
+        let endpoints = [tcp_endpoint, wss_endpoint];
         let now = Utc::now();
         if route.authorized_until <= now {
             return Err(RouteCatalogError::RelayAuthorizationExpired);
@@ -238,9 +245,8 @@ impl RouteCatalog {
             if let Some(existing) = state.relay_routes.get(&route.fence.route_id) {
                 if existing.fence != route.fence
                     || existing.relay_peer_id != relay_peer_id
-                    || existing.endpoint != endpoint
-                    || existing.route != route.route
-                    || existing.wss_route != route.wss_route
+                    || existing.endpoints != endpoints
+                    || existing.routes != route.routes
                     || existing.limits != route.limits
                 {
                     return Err(RouteCatalogError::RelaySlotOccupied);
@@ -252,7 +258,11 @@ impl RouteCatalog {
                     });
                 }
                 if state.relay_routes.values().any(|existing| {
-                    existing.relay_peer_id == relay_peer_id || existing.endpoint == endpoint
+                    existing.relay_peer_id == relay_peer_id
+                        || existing
+                            .endpoints
+                            .iter()
+                            .any(|existing| endpoints.contains(existing))
                 }) {
                     return Err(RouteCatalogError::DuplicateRelayRoute);
                 }
@@ -282,9 +292,8 @@ impl RouteCatalog {
                 StoredRelayRoute {
                     fence: route.fence,
                     relay_peer_id,
-                    endpoint,
-                    route: route.route,
-                    wss_route: route.wss_route,
+                    endpoints,
+                    routes: route.routes,
                     limits: route.limits,
                     authorized_until: route.authorized_until,
                     publishable: true,
@@ -451,8 +460,7 @@ fn route_snapshot(state: &RouteState, now: DateTime<Utc>) -> RouteSnapshot {
             .map(|route| PublishedRoute {
                 fence: route.fence,
                 relay_peer_id: route.relay_peer_id,
-                route: route.route.clone(),
-                wss_route: route.wss_route.clone(),
+                routes: route.routes.clone(),
                 limits: route.limits,
                 authorized_until: route.authorized_until,
             })
@@ -556,7 +564,7 @@ fn validate_wss_circuit_route(
     route: &Multiaddr,
     expected_relay_peer_id: PeerId,
     expected_target_peer_id: PeerId,
-) -> RouteCatalogResult<()> {
+) -> RouteCatalogResult<String> {
     let mut provider_base = route.clone();
     let target_peer_id = match provider_base.pop() {
         Some(Protocol::P2p(peer_id)) => peer_id,
@@ -593,7 +601,13 @@ fn validate_wss_circuit_route(
             "WSS relay route is not canonical".to_string(),
         ));
     }
-    Ok(())
+    let mut endpoint = provider.selected_base().clone();
+    let Some(Protocol::P2p(_)) = endpoint.pop() else {
+        return Err(RouteCatalogError::InvalidRelayRoute(
+            "canonical WSS provider base omitted its Peer ID".to_string(),
+        ));
+    };
+    Ok(endpoint.to_string())
 }
 
 pub fn canonicalize_circuit_route(
@@ -736,21 +750,17 @@ mod tests {
         let local_peer_id = PeerId::random();
         let relay_peer_id = PeerId::random();
         let limits = relay_limits();
-        let provider = RelayProvider::new(
+        let provider = RelayProvider::new_dual_transport(
             relay_peer_id,
             [
                 format!("/dns4/relay.example.com/tcp/443/p2p/{relay_peer_id}"),
                 format!("/dns4/relay.example.com/tcp/4443/wss/p2p/{relay_peer_id}"),
             ],
+            RelayBaseTransport::Tcp,
             limits,
         )
         .unwrap();
-        let tcp_route = provider
-            .circuit_route_for_transport(RelayBaseTransport::Tcp, local_peer_id)
-            .unwrap();
-        let wss_route = provider
-            .circuit_route_for_transport(RelayBaseTransport::Wss, local_peer_id)
-            .unwrap();
+        let routes = provider.circuit_routes(local_peer_id).unwrap();
         let catalog =
             RouteCatalog::new(local_peer_id, Vec::new(), RouteCatalogLimits::new(3, 1)).unwrap();
 
@@ -758,18 +768,68 @@ mod tests {
             .publish_confirmed(ConfirmedRoute {
                 fence: route_fence(),
                 relay_peer_id,
-                route: tcp_route.clone(),
-                wss_route: Some(wss_route.clone()),
+                routes: routes.clone(),
                 limits,
                 authorized_until: Utc::now() + chrono::Duration::minutes(4),
             })
             .unwrap();
 
         let published = catalog.snapshot().unwrap().relay_routes.remove(0);
-        assert_eq!(published.route, tcp_route);
-        assert_eq!(published.wss_route, Some(wss_route));
+        assert_eq!(published.routes, routes);
         catalog.tombstone(published.fence).unwrap();
         assert!(catalog.snapshot().unwrap().relay_routes.is_empty());
+    }
+
+    #[test]
+    fn relay_pair_dedup_checks_both_transport_endpoints_atomically() {
+        let local_peer_id = PeerId::random();
+        let first_relay = PeerId::random();
+        let second_relay = PeerId::random();
+        let limits = relay_limits();
+        let first = RelayProvider::new_dual_transport(
+            first_relay,
+            [
+                format!("/dns4/tcp-a.example.com/tcp/443/p2p/{first_relay}"),
+                format!("/dns4/shared.example.com/tcp/4443/wss/p2p/{first_relay}"),
+            ],
+            RelayBaseTransport::Tcp,
+            limits,
+        )
+        .unwrap();
+        let second = RelayProvider::new_dual_transport(
+            second_relay,
+            [
+                format!("/dns4/tcp-b.example.com/tcp/443/p2p/{second_relay}"),
+                format!("/dns4/shared.example.com/tcp/4443/wss/p2p/{second_relay}"),
+            ],
+            RelayBaseTransport::Tcp,
+            limits,
+        )
+        .unwrap();
+        let catalog =
+            RouteCatalog::new(local_peer_id, Vec::new(), RouteCatalogLimits::new(3, 2)).unwrap();
+
+        catalog
+            .publish_confirmed(ConfirmedRoute {
+                fence: route_fence(),
+                relay_peer_id: first_relay,
+                routes: first.circuit_routes(local_peer_id).unwrap(),
+                limits,
+                authorized_until: Utc::now() + chrono::Duration::minutes(4),
+            })
+            .unwrap();
+        let error = catalog
+            .publish_confirmed(ConfirmedRoute {
+                fence: route_fence(),
+                relay_peer_id: second_relay,
+                routes: second.circuit_routes(local_peer_id).unwrap(),
+                limits,
+                authorized_until: Utc::now() + chrono::Duration::minutes(4),
+            })
+            .unwrap_err();
+
+        assert!(matches!(error, RouteCatalogError::DuplicateRelayRoute));
+        assert_eq!(catalog.snapshot().unwrap().relay_routes.len(), 1);
     }
 
     #[test]
@@ -794,10 +854,10 @@ mod tests {
             .publish_confirmed(ConfirmedRoute {
                 fence: route_fence(),
                 relay_peer_id,
-                route: provider
-                    .circuit_route_for_transport(RelayBaseTransport::Tcp, local_peer_id)
-                    .unwrap(),
-                wss_route: Some(
+                routes: RelayCircuitRoutes::from_provider(
+                    provider
+                        .circuit_route_for_transport(RelayBaseTransport::Tcp, local_peer_id)
+                        .unwrap(),
                     provider
                         .circuit_route_for_transport(RelayBaseTransport::Wss, other_peer_id)
                         .unwrap(),
@@ -849,8 +909,7 @@ mod tests {
                 .publish_confirmed(ConfirmedRoute {
                     fence: route_fence(),
                     relay_peer_id,
-                    route: tcp_route.clone(),
-                    wss_route: Some(wss_route),
+                    routes: RelayCircuitRoutes::from_provider(tcp_route.clone(), wss_route),
                     limits,
                     authorized_until: Utc::now() + chrono::Duration::minutes(4),
                 })

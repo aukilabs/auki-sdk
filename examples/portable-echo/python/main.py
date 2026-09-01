@@ -24,8 +24,7 @@ async def main() -> None:
             routes = peer.routes
             print(f"peer: {peer.peer_id}")
             print(f"route: {routes.tcp}")
-            if routes.wss:
-                print(f"wss route: {routes.wss}")
+            print(f"wss route: {routes.wss}")
 
             if remote:
                 receipt = await echo.send_exact(

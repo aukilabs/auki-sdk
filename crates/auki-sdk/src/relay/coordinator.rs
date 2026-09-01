@@ -16,7 +16,7 @@ use std::{
 
 use async_trait::async_trait;
 use auki_p2p::{
-    ExpectedRelayLimits, Multiaddr, Node, PeerId, Protocol, RelayBaseTransport,
+    ExpectedRelayLimits, Multiaddr, Node, PeerId, Protocol, RelayBaseTransport, RelayCircuitRoutes,
     RelayConfirmationRejection, RelayProvider, RelayReservationHandle, RelayReservationSnapshot,
     RelayTransportEvent,
 };
@@ -238,7 +238,7 @@ pub(crate) fn relay_provider(
         Duration::from_secs(u64::from(duration_seconds)),
         data_bytes_per_direction,
     )?;
-    RelayProvider::new(peer_id, bases, limits)
+    RelayProvider::new_dual_transport(peer_id, bases, RelayBaseTransport::Tcp, limits)
 }
 
 pub(crate) fn confirmed_route(snapshot: &RelayReservationSnapshot) -> Option<Multiaddr> {
@@ -250,8 +250,7 @@ pub(crate) type SharedReservationBackend = Arc<dyn RelayReservationBackend>;
 #[derive(Clone, Debug)]
 pub(crate) struct PublishedRelayRoute {
     pub(crate) fence: LocalRelayFence,
-    pub(crate) route: Multiaddr,
-    pub(crate) wss_route: Option<Multiaddr>,
+    pub(crate) routes: RelayCircuitRoutes,
     pub(crate) limits: ExpectedRelayLimits,
     pub(crate) authorized_until: chrono::DateTime<chrono::Utc>,
     pub(crate) relay_peer_id: PeerId,
@@ -331,8 +330,7 @@ impl RelayRouteRegistry for FencedRouteCatalog {
             .publish_confirmed(auki_p2p::ConfirmedRoute {
                 fence: route_fence(fence),
                 relay_peer_id: route.relay_peer_id,
-                route: route.route,
-                wss_route: route.wss_route,
+                routes: route.routes,
                 limits: route.limits,
                 authorized_until: route.authorized_until,
             })
@@ -420,8 +418,7 @@ impl RelayRouteRegistry for auki_p2p::RouteCatalog {
         self.publish_confirmed(auki_p2p::ConfirmedRoute {
             fence: route_fence(route.fence),
             relay_peer_id: route.relay_peer_id,
-            route: route.route,
-            wss_route: route.wss_route,
+            routes: route.routes,
             limits: route.limits,
             authorized_until: route.authorized_until,
         })
@@ -1378,23 +1375,17 @@ impl CoordinatorActor {
             local.limits.data_bytes_per_direction(),
         )
         .map_err(|error| RelayCoordinatorError::RouteRegistry(error.to_string()))?;
-        let expected_route = provider
-            .circuit_route_for_transport(RelayBaseTransport::Tcp, target_peer_id)
+        let routes = provider
+            .circuit_routes(target_peer_id)
             .map_err(|error| RelayCoordinatorError::RouteRegistry(error.to_string()))?;
-        if expected_route != route {
+        if routes.tcp() != &route {
             return Err(RelayCoordinatorError::RouteRegistry(
                 "confirmed TCP route differs from the current DMS provider metadata".to_string(),
             ));
         }
-        let wss_route = provider
-            .base_for_transport(RelayBaseTransport::Wss)
-            .map(|_| provider.circuit_route_for_transport(RelayBaseTransport::Wss, target_peer_id))
-            .transpose()
-            .map_err(|error| RelayCoordinatorError::RouteRegistry(error.to_string()))?;
         let published = PublishedRelayRoute {
             fence,
-            route,
-            wss_route,
+            routes,
             limits: local.limits,
             authorized_until: local.authorized_until,
             relay_peer_id,

@@ -155,7 +155,7 @@ mod facade {
         peer_id: String,
         domain_id: String,
         wss_route: String,
-        tcp_route: Option<String>,
+        tcp_route: String,
     }
 
     impl AukiPeer {
@@ -165,7 +165,7 @@ mod facade {
                 peer_id: peer.peer_id().to_string(),
                 domain_id: peer.domain_id().to_string(),
                 wss_route: peer.reachability().wss().to_string(),
-                tcp_route: peer.reachability().tcp().map(ToString::to_string),
+                tcp_route: peer.reachability().tcp().to_string(),
                 inner: RefCell::new(Some(peer)),
             }
         }
@@ -196,9 +196,9 @@ mod facade {
             self.wss_route.clone()
         }
 
-        /// Confirmed native-compatible circuit route, when advertised.
+        /// Confirmed native-compatible circuit route from the same relay slot.
         #[wasm_bindgen(getter, js_name = tcpRoute)]
-        pub fn tcp_route(&self) -> Option<String> {
+        pub fn tcp_route(&self) -> String {
             self.tcp_route.clone()
         }
 

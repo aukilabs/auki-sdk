@@ -74,9 +74,9 @@ pub use observation::{
     PEER_OBSERVATION_CHANNEL_CAPACITY,
 };
 pub use relay::{
-    ExpectedRelayLimits, RelayBaseTransport, RelayConfirmationRejection, RelayProvider,
-    RelayReservationError, RelayReservationHandle, RelayReservationSnapshot, RelayReservationState,
-    ReservationGeneration,
+    ExpectedRelayLimits, RelayBaseTransport, RelayCircuitRoutes, RelayConfirmationRejection,
+    RelayProvider, RelayReservationError, RelayReservationHandle, RelayReservationSnapshot,
+    RelayReservationState, ReservationGeneration,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use routing::{

@@ -37,7 +37,7 @@ async fn run(peer: &AukiPeer) -> Result<()> {
             .next()
             .context("peer started without its required relay route")?;
         println!("peer: {}", peer.peer_id());
-        println!("route: {}", relay.route);
+        println!("route: {}", relay.routes.tcp());
 
         let mut arguments = env::args().skip(1);
         if let Some(remote_peer) = arguments.next() {

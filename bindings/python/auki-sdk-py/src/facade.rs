@@ -115,7 +115,7 @@ impl PyAukiDomain {
 #[pyclass(name = "AukiPeerRoutes", frozen)]
 struct PyAukiPeerRoutes {
     tcp: String,
-    wss: Option<String>,
+    wss: String,
 }
 
 #[pymethods]
@@ -126,7 +126,7 @@ impl PyAukiPeerRoutes {
     }
 
     #[getter]
-    fn wss(&self) -> Option<String> {
+    fn wss(&self) -> String {
         self.wss.clone()
     }
 
@@ -266,7 +266,7 @@ impl PyAukiPeer {
         self.listen_addresses.clone()
     }
 
-    /// One atomic snapshot of the confirmed native relay and its WSS alternative.
+    /// One atomic snapshot of the required TCP/WSS routes from one relay slot.
     #[getter]
     fn routes(&self, py: Python<'_>) -> PyResult<Py<PyAukiPeerRoutes>> {
         let route = self
@@ -280,8 +280,8 @@ impl PyAukiPeer {
         Py::new(
             py,
             PyAukiPeerRoutes {
-                tcp: route.route.to_string(),
-                wss: route.wss_route.map(|route| route.to_string()),
+                tcp: route.routes.tcp().to_string(),
+                wss: route.routes.wss().to_string(),
             },
         )
     }

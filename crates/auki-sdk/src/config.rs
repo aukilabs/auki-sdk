@@ -54,7 +54,11 @@ pub enum AukiRelayMode {
 pub struct AukiRelayConfig {
     /// Shared or dedicated relay allocation.
     pub mode: AukiRelayMode,
-    /// Number of relay slots requested from DMS, in `1..=3`.
+    /// Number of redundant relay-provider slots requested from DMS, in `1..=3`.
+    ///
+    /// Each slot supplies one atomic TCP/WSS route pair. This value never
+    /// counts transports: the default of one still makes the peer reachable
+    /// from native, Python, and browser runtimes.
     pub relay_count: u8,
     /// Requested booking duration, in whole seconds from 300 through 86,400.
     pub requested_duration: Duration,
@@ -355,7 +359,7 @@ impl AukiPeerConfig {
         &self.initial_peer_routes
     }
 
-    /// Whether startup requires at least one confirmed relay route.
+    /// Whether startup requires at least one confirmed relay-provider route pair.
     pub fn relay_required(&self) -> bool {
         self.relay.is_some()
     }

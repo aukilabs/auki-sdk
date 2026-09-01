@@ -504,18 +504,24 @@ fn confirmed_local_route(
     relay_peer_id: PeerId,
 ) -> PublishedRelayRoute {
     let base = format!("/dns4/relay-{}.dev.aukiverse.com", fence.slot_id);
+    let limits =
+        ExpectedRelayLimits::new(Duration::from_secs(900), 1_048_576).expect("finite relay limits");
+    let provider = RelayProvider::new_dual_transport(
+        relay_peer_id,
+        [
+            format!("{base}/tcp/443/p2p/{relay_peer_id}"),
+            format!("{base}/tcp/4443/wss/p2p/{relay_peer_id}"),
+        ],
+        RelayBaseTransport::Tcp,
+        limits,
+    )
+    .expect("dual relay provider");
     PublishedRelayRoute {
         fence,
-        route: format!("{base}/tcp/443/p2p/{relay_peer_id}/p2p-circuit/p2p/{local_peer_id}")
-            .parse()
-            .expect("canonical circuit route"),
-        wss_route: Some(
-            format!("{base}/tcp/4443/wss/p2p/{relay_peer_id}/p2p-circuit/p2p/{local_peer_id}")
-                .parse()
-                .expect("canonical WSS circuit route"),
-        ),
-        limits: ExpectedRelayLimits::new(Duration::from_secs(900), 1_048_576)
-            .expect("finite relay limits"),
+        routes: provider
+            .circuit_routes(local_peer_id)
+            .expect("canonical circuit routes"),
+        limits,
         authorized_until: chrono::Utc::now() + chrono::Duration::minutes(4),
         relay_peer_id,
     }
@@ -709,6 +715,26 @@ fn provider_construction_uses_the_exact_dms_limits_and_canonical_base() {
     );
 }
 
+#[test]
+fn provider_construction_rejects_either_incomplete_transport_shape() {
+    let peer = auki_p2p::PeerId::random();
+    let tcp = format!("/dns4/relay.example.com/tcp/443/p2p/{peer}");
+    let wss = format!("/dns4/relay.example.com/tcp/4443/wss/p2p/{peer}");
+
+    assert!(matches!(
+        relay_provider(&peer.to_string(), &[tcp], 900, 1_048_576),
+        Err(auki_p2p::RelayReservationError::MissingTransportBase(
+            RelayBaseTransport::Wss
+        ))
+    ));
+    assert!(matches!(
+        relay_provider(&peer.to_string(), &[wss], 900, 1_048_576),
+        Err(auki_p2p::RelayReservationError::MissingTransportBase(
+            RelayBaseTransport::Tcp
+        ))
+    ));
+}
+
 #[tokio::test]
 async fn actor_publishes_exact_fenced_route_to_local_catalog() {
     let booking_id = Uuid::new_v4();
@@ -739,7 +765,10 @@ async fn actor_publishes_exact_fenced_route_to_local_catalog() {
     let fence = actor.slots[&slot_id].fence;
     let expected_limits = actor.slots[&slot_id].limits;
     let expected_deadline = actor.slots[&slot_id].authorized_until;
-    let route = confirmed_local_route(fence, local_peer_id, relay_peer_id).route;
+    let route = confirmed_local_route(fence, local_peer_id, relay_peer_id)
+        .routes
+        .tcp()
+        .clone();
 
     actor
         .publish_confirmed_route(fence, route.clone(), relay_peer_id)
@@ -752,12 +781,12 @@ async fn actor_publishes_exact_fenced_route_to_local_catalog() {
     let published = &snapshot.relay_routes[0];
     assert_eq!(published.fence, route_fence(fence));
     assert_eq!(published.relay_peer_id, relay_peer_id);
-    assert_eq!(published.route, route);
+    assert_eq!(published.routes.tcp(), &route);
     assert_eq!(
-        published.wss_route.as_ref().map(ToString::to_string),
-        Some(format!(
+        published.routes.wss().to_string(),
+        format!(
             "/dns4/relay-{slot_id}.dev.aukiverse.com/tcp/4443/wss/p2p/{relay_peer_id}/p2p-circuit/p2p/{local_peer_id}"
-        ))
+        )
     );
     assert_eq!(published.limits, expected_limits);
     assert_eq!(published.authorized_until, expected_deadline);
@@ -766,7 +795,7 @@ async fn actor_publishes_exact_fenced_route_to_local_catalog() {
 }
 
 #[tokio::test]
-async fn actor_publishes_tcp_only_provider_without_wss_reachability() {
+async fn actor_rejects_tcp_only_provider_before_reservation() {
     let booking_id = Uuid::new_v4();
     let local_peer_id = PeerId::random();
     let relay_peer_id = PeerId::random();
@@ -794,18 +823,24 @@ async fn actor_publishes_tcp_only_provider_without_wss_reachability() {
         snapshot,
     );
     actor.apply_current_snapshot().await.unwrap();
-    wait_for_count(&backend.starts, 1).await;
     let fence = actor.slots[&slot_id].fence;
-    let route = confirmed_local_route(fence, local_peer_id, relay_peer_id).route;
-
-    actor
-        .publish_confirmed_route(fence, route.clone(), relay_peer_id)
+    assert!(matches!(
+        actor.slots[&slot_id].state,
+        LocalSlotState::ReportingFailure(ReservationFailureReason::AddressMismatch)
+    ));
+    assert_eq!(backend.starts.load(Ordering::SeqCst), 0);
+    let event = tokio::time::timeout(Duration::from_secs(1), actor.event_rx.recv())
         .await
-        .expect("TCP-only provider publishes");
-
-    let published = catalog.snapshot().unwrap().relay_routes.remove(0);
-    assert_eq!(published.route, route);
-    assert_eq!(published.wss_route, None);
+        .expect("address mismatch event arrived")
+        .expect("event channel remains open");
+    assert!(matches!(
+        event,
+        ChildEvent::RetryFailure {
+            fence: event_fence,
+            reason: ReservationFailureReason::AddressMismatch,
+        } if event_fence == fence
+    ));
+    assert!(catalog.snapshot().unwrap().relay_routes.is_empty());
     actor.remove_all_slots().await.unwrap();
 }
 
@@ -834,8 +869,14 @@ async fn actor_retirement_preserves_a_confirmed_sibling_route() {
     wait_for_count(&backend.starts, 2).await;
     let first_fence = actor.slots[&first.0].fence;
     let second_fence = actor.slots[&second.0].fence;
-    let first_route = confirmed_local_route(first_fence, local_peer_id, first_relay).route;
-    let second_route = confirmed_local_route(second_fence, local_peer_id, second_relay).route;
+    let first_route = confirmed_local_route(first_fence, local_peer_id, first_relay)
+        .routes
+        .tcp()
+        .clone();
+    let second_route = confirmed_local_route(second_fence, local_peer_id, second_relay)
+        .routes
+        .tcp()
+        .clone();
     actor
         .publish_confirmed_route(first_fence, first_route, first_relay)
         .await
@@ -844,6 +885,13 @@ async fn actor_retirement_preserves_a_confirmed_sibling_route() {
         .publish_confirmed_route(second_fence, second_route.clone(), second_relay)
         .await
         .unwrap();
+
+    let redundant = catalog.snapshot().unwrap();
+    assert_eq!(redundant.relay_routes.len(), 2);
+    assert!(redundant.relay_routes.iter().all(|route| {
+        route.routes.tcp().to_string().contains("/tcp/443/")
+            && route.routes.wss().to_string().contains("/tcp/4443/wss/")
+    }));
 
     actor
         .begin_retirement(first_fence, RetirementAction::Remove)
@@ -855,7 +903,7 @@ async fn actor_retirement_preserves_a_confirmed_sibling_route() {
     assert_eq!(catalog.status().unwrap().confirmed_relay_count, 1);
     assert_eq!(snapshot.relay_routes.len(), 1);
     assert_eq!(snapshot.relay_routes[0].fence, route_fence(second_fence));
-    assert_eq!(snapshot.relay_routes[0].route, second_route);
+    assert_eq!(snapshot.relay_routes[0].routes.tcp(), &second_route);
     assert!(!actor.slots.contains_key(&first.0));
     assert!(actor.slots.contains_key(&second.0));
 
@@ -888,7 +936,10 @@ async fn command_channel_closure_fences_routes_and_reservations_without_deleting
     actor.apply_current_snapshot().await.unwrap();
     wait_for_count(&backend.starts, 1).await;
     let fence = actor.slots[&slot_id].fence;
-    let route = confirmed_local_route(fence, local_peer_id, relay_peer_id).route;
+    let route = confirmed_local_route(fence, local_peer_id, relay_peer_id)
+        .routes
+        .tcp()
+        .clone();
     actor
         .publish_confirmed_route(fence, route, relay_peer_id)
         .await
@@ -1271,7 +1322,10 @@ async fn route_catalog_rejection_cleans_local_reservation_without_reporting_prov
     actor.apply_current_snapshot().await.unwrap();
     wait_for_count(&backend.starts, 1).await;
     let fence = actor.slots[&slot_id].fence;
-    let route = confirmed_local_route(fence, requester_peer_id, relay_peer_id).route;
+    let route = confirmed_local_route(fence, requester_peer_id, relay_peer_id)
+        .routes
+        .tcp()
+        .clone();
 
     let result = actor
         .publish_confirmed_route(fence, route, relay_peer_id)
@@ -1501,9 +1555,10 @@ async fn cancel_during_blocked_start_is_bounded_and_emits_no_handle() {
     let relay_peer_id = auki_p2p::PeerId::random();
     let provider = relay_provider(
         &relay_peer_id.to_string(),
-        &[format!(
-            "/dns4/relay-a.dev.aukiverse.com/tcp/443/p2p/{relay_peer_id}"
-        )],
+        &[
+            format!("/dns4/relay-a.dev.aukiverse.com/tcp/443/p2p/{relay_peer_id}"),
+            format!("/dns4/relay-a.dev.aukiverse.com/tcp/4443/wss/p2p/{relay_peer_id}"),
+        ],
         900,
         1_048_576,
     )

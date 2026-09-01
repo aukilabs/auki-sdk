@@ -143,6 +143,30 @@ pub struct RelayProvider {
     expected_limits: ExpectedRelayLimits,
 }
 
+/// Exact TCP and WSS circuit routes derived from one canonical relay provider.
+///
+/// The pair can only be constructed from one validated [`RelayProvider`], so
+/// both routes always target the same relay Peer ID and destination Peer ID.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RelayCircuitRoutes {
+    tcp: Multiaddr,
+    wss: Multiaddr,
+}
+
+impl RelayCircuitRoutes {
+    pub fn tcp(&self) -> &Multiaddr {
+        &self.tcp
+    }
+
+    pub fn wss(&self) -> &Multiaddr {
+        &self.wss
+    }
+
+    pub(crate) fn from_provider(tcp: Multiaddr, wss: Multiaddr) -> Self {
+        Self { tcp, wss }
+    }
+}
+
 /// Transport carried by one canonical relay provider base.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RelayBaseTransport {
@@ -231,6 +255,36 @@ impl RelayProvider {
         })
     }
 
+    /// Validate a provider that must advertise both native TCP and browser WSS.
+    ///
+    /// `selected_transport` chooses the single connection used to establish
+    /// the relay reservation. It does not create a second booking or
+    /// reservation; both public routes remain governed by that one provider
+    /// snapshot and reservation.
+    pub fn new_dual_transport<I, S>(
+        relay_peer_id: PeerId,
+        raw_bases: I,
+        selected_transport: RelayBaseTransport,
+        expected_limits: ExpectedRelayLimits,
+    ) -> RelayReservationResult<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let provider = Self::new_for_transport(
+            relay_peer_id,
+            raw_bases,
+            selected_transport,
+            expected_limits,
+        )?;
+        for required in [RelayBaseTransport::Tcp, RelayBaseTransport::Wss] {
+            if provider.base_for_transport(required).is_none() {
+                return Err(RelayReservationError::MissingTransportBase(required));
+            }
+        }
+        Ok(provider)
+    }
+
     pub fn relay_peer_id(&self) -> PeerId {
         self.relay_peer_id
     }
@@ -278,6 +332,17 @@ impl RelayProvider {
             .clone()
             .with(Protocol::P2pCircuit)
             .with(Protocol::P2p(target_peer_id)))
+    }
+
+    /// Construct the canonical TCP/WSS route pair for one destination.
+    pub fn circuit_routes(
+        &self,
+        target_peer_id: PeerId,
+    ) -> RelayReservationResult<RelayCircuitRoutes> {
+        Ok(RelayCircuitRoutes::from_provider(
+            self.circuit_route_for_transport(RelayBaseTransport::Tcp, target_peer_id)?,
+            self.circuit_route_for_transport(RelayBaseTransport::Wss, target_peer_id)?,
+        ))
     }
 
     /// Address passed to `Swarm::listen_on` for a reservation.
@@ -1212,6 +1277,42 @@ mod tests {
             provider.circuit_route_for_transport(RelayBaseTransport::Wss, target),
             Err(RelayReservationError::MissingTransportBase(
                 RelayBaseTransport::Wss
+            ))
+        ));
+    }
+
+    #[test]
+    fn dual_provider_requires_and_constructs_one_atomic_tcp_wss_pair() {
+        let relay = peer_id();
+        let target = peer_id();
+        let tcp = format!("/dns4/relay.dev.aukiverse.com/tcp/443/p2p/{relay}");
+        let wss = format!("/dns4/relay.dev.aukiverse.com/tcp/4443/wss/p2p/{relay}");
+
+        for selected in [RelayBaseTransport::Tcp, RelayBaseTransport::Wss] {
+            let provider =
+                RelayProvider::new_dual_transport(relay, [&wss, &tcp], selected, limits()).unwrap();
+            assert_eq!(provider.selected_transport(), selected);
+            let routes = provider.circuit_routes(target).unwrap();
+            assert_eq!(
+                routes.tcp().to_string(),
+                format!("{tcp}/p2p-circuit/p2p/{target}")
+            );
+            assert_eq!(
+                routes.wss().to_string(),
+                format!("{wss}/p2p-circuit/p2p/{target}")
+            );
+        }
+
+        assert!(matches!(
+            RelayProvider::new_dual_transport(relay, [&tcp], RelayBaseTransport::Tcp, limits(),),
+            Err(RelayReservationError::MissingTransportBase(
+                RelayBaseTransport::Wss
+            ))
+        ));
+        assert!(matches!(
+            RelayProvider::new_dual_transport(relay, [&wss], RelayBaseTransport::Wss, limits(),),
+            Err(RelayReservationError::MissingTransportBase(
+                RelayBaseTransport::Tcp
             ))
         ));
     }

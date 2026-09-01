@@ -55,22 +55,20 @@ async fn run_started_peer(
     println!("PEER_ID={}", peer.peer_id());
     let mut public_peer_card = None;
     for published in context.routes().snapshot()?.relay_routes {
-        println!("RELAY_ROUTE={}", published.route);
-        if let Some(wss_route) = published.wss_route {
-            println!("RELAY_WSS_ROUTE={wss_route}");
-            public_peer_card.get_or_insert_with(|| {
-                serde_json::json!({
-                    "version": 1,
-                    "domainId": peer.domain_id().to_string(),
-                    "peerId": peer.peer_id().to_string(),
-                    "protocols": [PROTOCOL_ID],
-                    "routes": {
-                        "wss": wss_route.to_string(),
-                        "tcp": published.route.to_string(),
-                    },
-                })
-            });
-        }
+        println!("RELAY_ROUTE={}", published.routes.tcp());
+        println!("RELAY_WSS_ROUTE={}", published.routes.wss());
+        public_peer_card.get_or_insert_with(|| {
+            serde_json::json!({
+                "version": 1,
+                "domainId": peer.domain_id().to_string(),
+                "peerId": peer.peer_id().to_string(),
+                "protocols": [PROTOCOL_ID],
+                "routes": {
+                    "wss": published.routes.wss().to_string(),
+                    "tcp": published.routes.tcp().to_string(),
+                },
+            })
+        });
     }
     if let Some(card) = public_peer_card {
         println!("PEER_CARD={card}");

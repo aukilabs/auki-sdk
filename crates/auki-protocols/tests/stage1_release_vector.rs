@@ -4,6 +4,10 @@
 //! signed DDS claims, authentication frame, and resource payload. This test
 //! additionally round-trips the retained v0.2 wire contract.
 
+// The release vector also verifies ES256 through jsonwebtoken/ring, which is a
+// native test dependency. Portable codecs remain covered by the Wasm all-target check.
+#![cfg(not(target_arch = "wasm32"))]
+
 use auki_p2p::{
     Identity, P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_TTL, P2P_TOKEN_TYPE, P2PAccessClaims,
 };

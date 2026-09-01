@@ -106,13 +106,18 @@ tokio = { workspace = true, features = ["sync"], optional = true }
 auki-session = { path = "../auki-session", optional = true }
 
 [dev-dependencies]
-auki-p2p = { path = "../auki-p2p" }
 futures = "0.3"
+serde_json = "1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+auki-p2p = { path = "../auki-p2p" }
 hex = { workspace = true }
 jsonwebtoken = "9.3.0"
-serde_json = "1"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "time"] }
 
 [[bin]]
 name = "regen_protocol_fixtures"

@@ -22,25 +22,26 @@ expose selected roles to JavaScript without duplicating the wire contract:
 
 | Feature | JavaScript surface |
 | --- | --- |
-| `info` | outbound `AukiInfoClient` |
-| `catalog` | outbound `AukiCatalogClient` |
-| `registry` | outbound `AukiRegistryClient` |
-| `blob` | outbound `AukiBlobClient` |
-| `finite-protocols` | convenience feature enabling the four clients above |
+| `info` | `AukiInfoClient` and provider-backed `AukiInfoEndpoint` |
+| `catalog` | `AukiCatalogClient` and provider-backed `AukiCatalogEndpoint` |
+| `registry` | `AukiRegistryClient` and provider-backed `AukiRegistryEndpoint` |
+| `blob` | `AukiBlobClient` and provider-backed `AukiBlobEndpoint` |
+| `finite-protocols` | convenience feature enabling the four families above |
 | `message` | `AukiMessageClient`, `AukiMessageEndpoint`, sender, and receiver |
-| `stream` | outbound `AukiStreamClient` and consumer subscription |
+| `stream` | `AukiStreamClient`, producer-backed `AukiStreamEndpoint`, and subscription |
 
-Every outbound operation uses an exact `{ peerId, route }` target. Message
-senders, receivers, and endpoints expose awaited `close()` barriers. Stream
-subscriptions expose awaited `cancel()`; entries contain Rust-validated
-protobuf bytes as `Uint8Array`.
+Every client supports peer-configured routing and exact `{ peerId, route }`
+dialing. Endpoints and Message handles expose awaited `close()` barriers;
+Stream subscriptions expose awaited `cancel()`. Stream producers return an
+async iterable, and entries contain Rust-validated protobuf bytes as
+`Uint8Array`.
 
-This JavaScript surface is intentionally narrower than the portable Rust
-surface. Info, Catalog, Registry, and Blob do not expose JavaScript providers,
-and Stream does not expose a JavaScript producer or endpoint. A browser that
-must serve one of those roles can compile a thin application-specific
-`wasm-bindgen` adapter into the same Wasm module, as the portable echo example
-does. Live Rust handles cannot cross independently instantiated Wasm modules.
+Callbacks receive verified requester metadata, never credentials or proofs.
+Info, Catalog, Registry, and Stream admission callbacks are synchronous and
+should return promptly. Blob providers may return a value or `Promise`, and
+Stream sources are async iterables. A custom product protocol still compiles a
+thin `wasm-bindgen` adapter into this same Wasm module, as portable echo does.
+Live Rust handles cannot cross independently instantiated Wasm modules.
 
 Browser identities are intentionally in-memory. This crate does not persist
 Peer IDs, expose raw transport streams, reconnect automatically, or accept app

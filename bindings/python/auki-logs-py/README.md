@@ -17,8 +17,9 @@ log.flush()
 log.set_retention(retention_ns)
 log.manifest()                       # dict
 
-# Producer sources preserve the metadata needed by a future Python adapter to
-# the canonical AukiPeer Stream endpoint. This package starts no networking.
+# Producer sources preserve metadata for a convenience bridge to the
+# auki-sdk-py Stream endpoint. That bridge remains future work; this component
+# package itself starts no networking.
 sensor_source = log.stream_source(...)  # payload_kind also accepts "scalar"
 map_source = log.map_stream_source(
     resource_id="voxel/world",

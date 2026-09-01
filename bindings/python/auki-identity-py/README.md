@@ -21,8 +21,8 @@ mac_id  = auki_identity.app_instance.derive()         # MAC-derived per-machine 
 Native Rust constructs the canonical network identity with
 `auki_sdk::Identity::from_ed25519_seed(peer_seed)` before authorizing and
 starting an `AukiPeer`. Its Peer ID must equal `peer.peer_id()` above. A
-canonical Python `AukiPeer` facade is pending, so this binding currently
-provides identity material to trusted native host adapters rather than starting
+canonical Python `AukiPeer` facade is available separately in `auki-sdk-py`;
+this component binding still only provides identity material and does not start
 networking itself. Treat both wallet and peer seeds as private keys.
 
 ## Depends on

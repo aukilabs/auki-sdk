@@ -4,7 +4,7 @@ PyO3 bindings for [`auki-session`](../../../crates/auki-session) — Python surf
 
 **Status:** Shipped and tested in `python_tests/`. This package is deliberately
 network-free. The canonical authenticated networking owner is
-`auki_sdk::AukiPeer`; its Python facade is still pending.
+`auki_sdk::AukiPeer`; its separate Python facade is `auki-sdk-py`.
 
 ## Public surface
 
@@ -62,7 +62,8 @@ Each returns a typed handle with `resource_id`, `log_ref`, and canonical session
 the #282 split; they do not exist on the Rust `Session` either. In native Rust,
 `auki_protocols::session_adapter::SessionProtocolProvider` can project a
 `Peer`/`Session` pair into the opt-in Catalog and Stream endpoints mounted on an
-`AukiPeer`. Python does not yet expose that authenticated peer facade.
+`AukiPeer`. Python applications use `auki-sdk-py` for authenticated networking;
+this local component package does not own that lifecycle.
 
 Catalog v3 is the live general resource service. It carries compatible v2 log
 rows plus message-channel rows; Catalog v2 remains a wire schema rather than a

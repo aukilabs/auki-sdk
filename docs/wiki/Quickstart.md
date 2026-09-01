@@ -121,8 +121,9 @@ log = session.register_sensor_log(
 print(log.log_ref.source_peer_id, log.log_ref.resource_id)
 ```
 
-The Python session binding is local-only. A canonical Python `AukiPeer` facade
-is pending.
+The Python session binding remains local-only. Use the separate `auki-sdk-py`
+module for authenticated networking and its built-in protocol clients and
+endpoints.
 
 ## Put a Rust session on the network
 

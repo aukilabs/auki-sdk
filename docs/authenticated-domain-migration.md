@@ -16,7 +16,7 @@ Upgrade communicating peers together.
 | Trusted native/headless App | App credentials → `PreparedPeer` → `AukiPeer::start` |
 | Robot or Compute product | product-managed authority → `AukiPeer::start_external` |
 | Web browser | `AukiUserSession` → selected Domain → ephemeral relay-backed peer |
-| Python | canonical peer facade pending |
+| Python | `AukiSession` → selected Domain → persistent relay-backed peer |
 | Swift/iOS | canonical peer facade pending |
 
 `auki-session::Peer` and `Session` remain the network-free recording model.

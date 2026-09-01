@@ -89,14 +89,19 @@ to serve that exact protocol.
 
 ## SDK-owned protocol families
 
-| Feature | Hosted versions | Rust API |
-| --- | --- | --- |
-| `info-endpoint` | Info v1 | `InfoClient`, `InfoEndpoint`, `InfoProvider` |
-| `catalog-endpoint` | Catalog v3 and v4 | `CatalogClient`, `CatalogEndpoint`, `CatalogProvider` |
-| `registry-endpoint` | Registry v3 | `RegistryClient`, `RegistryEndpoint`, `RegistryProvider` |
-| `blob-endpoint` | Blob v1 | `BlobClient`, `BlobEndpoint`, `BlobProvider` |
-| `message-endpoint` | Message v1 | `MessageClient`, `MessageEndpoint` |
-| `stream-endpoint` | Stream v2 | `StreamClient`, `StreamEndpoint`, `StreamProvider` |
+| Family | Hosted versions | Rust | Web/Wasm | Python |
+| --- | --- | --- | --- | --- |
+| Info | v1 | call + serve | call + serve | call + serve |
+| Catalog | v3 resources, v4 maps | call + serve | call + serve | call + serve |
+| Registry | v3 | list/fetch + serve | list/fetch + serve | list/fetch + serve |
+| Blob | v1 | fetch + serve | fetch + serve | fetch + serve |
+| Message | v1 | send + receive | send + receive | send + receive |
+| Stream | v2 | consume + produce | consume + produce | consume + produce |
+
+The portable echo reference also supports call + serve on all three hosts.
+These rows describe API parity over the same Rust protocol implementations;
+they do not claim that every cross-language combination has its own live
+credentialed E2E suite. Echo is the maintained interop proof.
 
 Catalog v2 is wire-only because v3 embeds its locked log-row shape. Registry
 support begins at v3. Portable endpoints do not host or negotiate an older
@@ -132,16 +137,12 @@ ephemeral relay-backed peer. Browser peers reserve over an exact WSS circuit
 route and expose the same slot's required TCP route for native/Python callers.
 They do not accept App secrets.
 
-The opt-in JavaScript facade reuses the portable Rust implementations. It
-exposes outbound Info, Catalog, Registry, and Blob clients; Message sending and
-serving; and Stream consumption. Stream payloads remain validated protobuf
-bytes.
-
-Portable Rust endpoint support is broader than the JavaScript facade:
-JavaScript provider bridges are not currently exported for Info, Catalog,
-Registry, Blob, or Stream. A product protocol or browser-serving role can
-expose a thin `wasm-bindgen` adapter from the same Wasm module. Live Rust
-handles cannot cross independently instantiated Wasm modules.
+The opt-in JavaScript facade reuses the portable Rust implementations and
+exposes both client and serving roles for Info, Catalog, Registry, Blob,
+Message, and Stream. Stream payloads remain Rust-validated protobuf bytes.
+Product protocols use a thin `wasm-bindgen` adapter compiled into the same
+Wasm module; live Rust handles cannot cross independently instantiated Wasm
+modules.
 
 ## Python
 
@@ -153,6 +154,9 @@ same extension module and receives the live Rust protocol handle internally.
 The [portable echo Python host](../../examples/portable-echo/python/README.md)
 is the reference: Python owns a few lines of application flow while Rust owns
 the executor, wire protocol, transport, relay booking, and ordered cleanup.
+The built-in binding exposes both client and serving roles for all six standard
+protocol families. Provider callbacks receive verified requester metadata, not
+credentials or authentication proofs.
 Swift/iOS does not yet expose the canonical peer facade.
 
 ## Discovery is still application-owned

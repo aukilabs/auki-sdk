@@ -84,8 +84,8 @@ its dataset protocol.
 | Platform | Authenticated peer facade |
 | --- | --- |
 | Native Rust | User/App authentication, persistent identity, default TCP reservation with TCP/WSS routes, exact protocols, ordered shutdown |
-| Web/Wasm | User authentication, ephemeral identity, mandatory WSS reservation with TCP/WSS routes, outbound Info/Catalog/Registry/Blob, Message send/serve, Stream consumption, and custom Rust adapters |
-| Python | User/App authentication, persistent identity, default TCP reservation with TCP/WSS routes, exact protocols, ordered shutdown, and same-module Rust protocol adapters |
+| Web/Wasm | User authentication, ephemeral identity, mandatory WSS reservation with TCP/WSS routes, client and serving roles for all six standard protocols, ordered shutdown, and custom same-module Rust adapters |
+| Python | User/App authentication, persistent identity, default TCP reservation with TCP/WSS routes, client and serving roles for all six standard protocols, ordered shutdown, and custom same-module Rust adapters |
 | Swift/iOS | Wallet binding exists; `AukiPeer` facade pending |
 
 Robot and Compute products that already manage machine authority use
@@ -129,6 +129,11 @@ facade. Swift currently exposes data and identity pieces only.
 Rust protocol shared by native, Web, and Python applications. Its hosts prove
 that exact relay routes interoperate across those runtimes; they do not provide
 discovery.
+
+The six standard protocol families also expose matching client and serving
+roles in Rust, Web/Wasm, and Python. This is API parity over the same Rust wire
+implementations; portable echo remains the maintained cross-language interop
+proof.
 
 ## Release status
 

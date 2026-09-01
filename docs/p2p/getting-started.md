@@ -140,8 +140,9 @@ only logs in a User, selects a Domain, starts an ephemeral `AukiPeer`, construct
 `AukiEcho` before shutting down the peer.
 
 Echo needs its small `AukiEcho` adapter because it is an application protocol.
-SDK-owned protocols already have opt-in JavaScript clients; Message also
-exposes an inbound endpoint, while Stream currently exposes the consumer role.
+SDK-owned Info, Catalog, Registry, Blob, Message, and Stream bindings expose
+both client and serving roles. Each is a thin host adapter over the same Rust
+protocol implementation.
 
 Run the [browser echo app](../../examples/portable-echo/web/README.md#run-the-web-app)
 to try that surface in two tabs. The protected four-direction smoke test drives

@@ -133,15 +133,15 @@ Catalog responses are current snapshots, not promises. A row should be present
 only while the matching operation is actually serviceable. Content-addressed
 references let consumers verify the exact metadata used to interpret payloads.
 
-## Cross-platform direction
+## Cross-platform shape
 
-The target shape is one Rust core with thin platform hosts:
+One Rust core now feeds thin platform hosts:
 
 | Platform | Direction |
 | --- | --- |
 | Native Rust | Complete `AukiPeer` and protocol surface |
 | Web/Wasm | Complete User-authenticated relay peer; Rust protocols bound into the same Wasm module |
-| Python | Bind the canonical peer and selected protocol clients/endpoints; pending |
+| Python | Complete User/App-authenticated relay peer; standard Rust protocols bound into the same extension module |
 | Swift/iOS | Bind the canonical peer and selected protocol clients/endpoints; pending |
 
 Browser and mobile peers will normally be relay-backed. Persisting a browser
@@ -151,13 +151,11 @@ backend processes.
 
 ## What comes next
 
-The near-term order is intentionally conservative:
+The remaining order is intentionally conservative:
 
-1. make the Rust clients, endpoints, providers, and examples small and stable;
-2. prove native/Web interop for shared Rust protocols;
-3. add Python bindings over the same peer/runtime concepts;
-4. add Swift/iOS bindings over the same peer/runtime concepts; and
-5. design discovery and route publication from real application needs.
+1. keep the Rust, Web/Wasm, and Python surfaces small and aligned;
+2. add Swift/iOS bindings over the same peer/runtime concepts; and
+3. design discovery and route publication from real application needs.
 
 Discovery should not be smuggled into authentication, and platform bindings
 should not fork protocol logic. Those two constraints keep the foundation

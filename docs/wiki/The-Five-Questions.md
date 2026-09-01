@@ -87,9 +87,9 @@ application supplies the expected remote Peer ID and a complete TCP or WSS
 route, and the SDK authenticates both identity and Domain before application
 bytes flow.
 
-Native Rust and Web/Wasm have an `AukiPeer` facade today. Canonical Python and
-Swift/iOS peer facades are pending; their current bindings cover local
-components only.
+Native Rust, Web/Wasm, and Python have an `AukiPeer` facade today. All six
+standard protocol families expose client and serving roles on those hosts over
+the same Rust implementations. Swift/iOS remains pending.
 
 ## Tokenomics — How is value settled?
 

@@ -22,8 +22,9 @@ application / product protocol
 
 The canonical `AukiPeer` facade. It owns authority renewal, authenticated
 transport, relay-backed reachability by default, routes, protocol registration,
-fencing, and ordered shutdown. Native Rust and Web expose the same core peer and
-protocol concepts with platform-appropriate route and lifecycle details.
+fencing, and ordered shutdown. Native Rust, Web/Wasm, and Python expose the same
+core peer and protocol concepts with platform-appropriate route and lifecycle
+details.
 
 ### [`auki-auth`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-auth)
 
@@ -90,10 +91,12 @@ state into Catalog and Stream providers.
 
 - **Web/Wasm:** [`auki-sdk-web`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/web/auki-sdk-web)
   provides User authentication, Domain selection, ephemeral browser peers,
-  required TCP/WSS relay reachability, and thin Rust protocol adapters.
+  required TCP/WSS relay reachability, and client/serving adapters for all six
+  standard Rust protocols.
 - **Python:** `auki-sdk-py` provides User/App authentication, Domain selection,
   persistent native peers, required TCP/WSS relay reachability, and same-module
-  Rust protocol adapters. Component bindings remain available separately.
+  client/serving adapters for all six standard Rust protocols. Component
+  bindings remain available separately.
 - **Swift/iOS:** the current binding covers `Wallet` only. A canonical Swift
   `AukiPeer` facade is pending.
 
@@ -104,7 +107,7 @@ state into Catalog and Stream providers.
 - Local recording: `auki-session`, plus specific data or registry types needed
   by the product.
 - A product-specific protocol: one small Rust crate containing its private wire
-  and endpoint modules; native and Web applications consume the same public API.
+  and endpoint modules; native, Web, and Python hosts bind the same public API.
 
 See [Auki P2P](https://github.com/aukilabs/auki-sdk/blob/develop/docs/p2p/README.md)
 for the runtime mental model and [Quickstart](Quickstart) for the local recording

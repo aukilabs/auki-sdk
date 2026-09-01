@@ -83,7 +83,7 @@ dataset protocol.
 | Platform | Authenticated peer facade |
 | --- | --- |
 | Native Rust | User/App authentication, persistent identity, default relay, exact protocols, ordered shutdown |
-| Web/Wasm | User authentication, ephemeral identity, mandatory WSS relay, Rust protocol adapters |
+| Web/Wasm | User authentication, ephemeral identity, mandatory WSS relay, outbound Info/Catalog/Registry/Blob, Message send/serve, Stream consumption, and custom Rust adapters |
 | Python | Recording/data bindings exist; `AukiPeer` facade pending |
 | Swift/iOS | Wallet binding exists; `AukiPeer` facade pending |
 
@@ -119,7 +119,8 @@ The main layers are:
 
 Supporting crates provide canonical JSON, hashing, identity, filesystem layout,
 detectors, and ROS adapters. Python and Swift directories expose data-model
-bindings; the Web directory exposes the current browser peer facade.
+bindings; the Web directory exposes the browser peer and built-in protocol
+facade.
 
 ## Example
 

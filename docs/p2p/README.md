@@ -47,7 +47,7 @@ Native identity is persistent and single-owner. Do not run two processes or
 pods with the same Peer ID. Browser identity is intentionally ephemeral in the
 first iteration.
 
-## Serve and call protocols explicitly
+## Serve and call protocols from Rust
 
 `auki-protocols` has no default features. A wire feature exposes types and
 codecs; an `*-endpoint` feature additionally exposes the portable runtime API.
@@ -84,7 +84,7 @@ to serve that exact protocol.
 
 ## SDK-owned protocol families
 
-| Feature | Hosted versions | API |
+| Feature | Hosted versions | Rust API |
 | --- | --- | --- |
 | `info-endpoint` | Info v1 | `InfoClient`, `InfoEndpoint`, `InfoProvider` |
 | `catalog-endpoint` | Catalog v3 and v4 | `CatalogClient`, `CatalogEndpoint`, `CatalogProvider` |
@@ -126,9 +126,16 @@ or replace them when product policy requires filtering.
 ephemeral relay-backed peer. Browser peers always use an exact WSS circuit
 route and do not accept App secrets.
 
-Protocol logic remains Rust. Compile the protocol crate and its thin
-wasm-bindgen adapter into the same Wasm module as the peer; live Rust handles
-cannot cross independently instantiated Wasm modules.
+The opt-in JavaScript facade reuses the portable Rust implementations. It
+exposes outbound Info, Catalog, Registry, and Blob clients; Message sending and
+serving; and Stream consumption. Stream payloads remain validated protobuf
+bytes.
+
+Portable Rust endpoint support is broader than the JavaScript facade:
+JavaScript provider bridges are not currently exported for Info, Catalog,
+Registry, Blob, or Stream. A product protocol or browser-serving role can
+expose a thin `wasm-bindgen` adapter from the same Wasm module. Live Rust
+handles cannot cross independently instantiated Wasm modules.
 
 Python and Swift/iOS do not yet expose the canonical peer facade. Their current
 bindings cover data and identity pieces only.
@@ -158,7 +165,8 @@ expected Peer ID and Domain before exposing protocol bytes.
 - Bound every frame, queue, concurrent handler count, and deadline.
 - Keep product authorization separate from Domain authentication.
 - Use exact routes for portable native/Web dialing.
-- Close mounted endpoints before shutting down the peer.
+- Close endpoints, senders, and receivers and cancel subscriptions before
+  shutting down the peer.
 - Attempt cleanup even when the application operation fails.
 - On native Rust, treat `known_peers()` as observation only.
 

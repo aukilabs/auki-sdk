@@ -67,6 +67,11 @@ Wire codecs operate on portable `futures` async I/O. Endpoint implementations
 compile for native and Wasm, using `Arc`/`Send + Sync` providers natively and
 executor-local `Rc` providers in a browser.
 
+This describes the portable Rust API. Compiling an Endpoint for Wasm does not
+automatically export its Provider to JavaScript; see the
+[Web binding README](../../bindings/web/auki-sdk-web/README.md) for the
+currently exposed JavaScript roles.
+
 The protocol ID is immutable wire identity. Locked tests pin representative
 JSON/protobuf bytes. Incompatible changes require a new protocol ID rather than
 a hidden fallback.

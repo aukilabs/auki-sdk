@@ -34,6 +34,7 @@ members = [
     "crates/auki-time",
     "examples/portable-echo",
     "examples/portable-echo/native",
+    "examples/portable-echo/python",
     "examples/portable-echo/web",
 ]
 

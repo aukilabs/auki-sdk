@@ -548,6 +548,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-portable-echo-py"
+version = "0.1.0"
+dependencies = [
+ "auki-portable-echo",
+ "auki-sdk",
+ "auki-sdk-py",
+ "parking_lot",
+ "pyo3",
+ "pyo3-async-runtimes",
+ "tokio",
+]
+
+[[package]]
 name = "auki-portable-echo-web"
 version = "0.1.0"
 dependencies = [

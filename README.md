@@ -40,7 +40,8 @@ The split is deliberate:
 - `auki-auth` turns User or trusted native App credentials into a validated
   `PreparedPeer` for one Domain.
 - `auki-sdk` owns authority renewal, authenticated transport, default DMS relay
-  allocation, routes, protocol registration, status, and ordered shutdown.
+  allocation, atomic TCP/WSS route pairs, protocol registration, status, and
+  ordered shutdown.
 - `auki-protocols` provides opt-in wire contracts and portable `Client` /
   `Endpoint` APIs. A peer serves nothing until an application mounts an
   endpoint.
@@ -82,9 +83,9 @@ its dataset protocol.
 
 | Platform | Authenticated peer facade |
 | --- | --- |
-| Native Rust | User/App authentication, persistent identity, default relay, exact protocols, ordered shutdown |
-| Web/Wasm | User authentication, ephemeral identity, mandatory WSS relay, outbound Info/Catalog/Registry/Blob, Message send/serve, Stream consumption, and custom Rust adapters |
-| Python | User/App authentication, persistent identity, default relay, exact routes, ordered shutdown, and same-module Rust protocol adapters |
+| Native Rust | User/App authentication, persistent identity, default TCP reservation with TCP/WSS routes, exact protocols, ordered shutdown |
+| Web/Wasm | User authentication, ephemeral identity, mandatory WSS reservation with TCP/WSS routes, outbound Info/Catalog/Registry/Blob, Message send/serve, Stream consumption, and custom Rust adapters |
+| Python | User/App authentication, persistent identity, default TCP reservation with TCP/WSS routes, exact protocols, ordered shutdown, and same-module Rust protocol adapters |
 | Swift/iOS | Wallet binding exists; `AukiPeer` facade pending |
 
 Robot and Compute products that already manage machine authority use

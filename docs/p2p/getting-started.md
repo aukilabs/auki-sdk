@@ -5,8 +5,9 @@ application does not implement framing, libp2p, authentication, relay booking,
 or protocol cleanup.
 
 By the end, two native peers will have distinct persistent Peer IDs, authority
-for the same Domain, confirmed relay routes, and one authenticated echo
-exchange. The same protocol crate also powers the tiny Web and Python hosts.
+for the same Domain, confirmed TCP/WSS relay-route pairs, and one authenticated
+echo exchange. The same protocol crate also powers the tiny Web and Python
+hosts.
 
 ## Prerequisites
 
@@ -38,8 +39,9 @@ the identity file's parent directory and reuses the same Peer ID on later
 launches.
 
 Startup returns only after authority, transport, and one relay reservation are
-ready. The host mounts `/example/echo/1.0.0`, then prints its public Peer ID and
-confirmed native TCP circuit route:
+ready. That one provider slot supplies both TCP and WSS circuit routes; the
+native host uses and prints its TCP route. The host then mounts
+`/example/echo/1.0.0`:
 
 ```text
 peer: 12D3KooW...

@@ -41,9 +41,8 @@ export AUKI_IDENTITY_FILE='/tmp/auki-python-echo-a/peer.identity'
 python main.py
 ```
 
-The application reads one atomic route snapshot, then prints its Peer ID,
-confirmed TCP relay route, and the WSS alternative when the relay advertises
-one:
+The application reads one atomic route snapshot, then prints its Peer ID and
+the required TCP/WSS route pair from one relay-provider slot and reservation:
 
 ```text
 peer: 12D3KooW...

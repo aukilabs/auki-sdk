@@ -71,8 +71,9 @@ makes a peer dialable from more network environments. It does not discover
 remote peers or authorize application operations.
 
 Native `AukiPeer` uses relay-backed reachability by default and may explicitly
-choose direct-only operation. Browser peers always use one confirmed WSS relay
-in `0.1`.
+choose direct-only operation. Each relay-provider slot yields one required
+TCP/WSS route pair under one reservation; native/Python reserve over TCP and
+browsers reserve over WSS. Additional slots are provider redundancy.
 
 ## Discovery
 

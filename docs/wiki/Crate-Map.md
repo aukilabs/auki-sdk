@@ -90,10 +90,10 @@ state into Catalog and Stream providers.
 
 - **Web/Wasm:** [`auki-sdk-web`](https://github.com/aukilabs/auki-sdk/tree/develop/bindings/web/auki-sdk-web)
   provides User authentication, Domain selection, ephemeral browser peers,
-  mandatory WSS relay reachability, and thin Rust protocol adapters.
-- **Python:** component bindings exist for identity, geometry, layout, logs,
-  manifests, mappers, registries, and sessions. A canonical Python `AukiPeer`
-  facade is pending.
+  required TCP/WSS relay reachability, and thin Rust protocol adapters.
+- **Python:** `auki-sdk-py` provides User/App authentication, Domain selection,
+  persistent native peers, required TCP/WSS relay reachability, and same-module
+  Rust protocol adapters. Component bindings remain available separately.
 - **Swift/iOS:** the current binding covers `Wallet` only. A canonical Swift
   `AukiPeer` facade is pending.
 

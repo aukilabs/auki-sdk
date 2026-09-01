@@ -122,7 +122,8 @@ Do not duplicate relay allocation or route validation in the product runtime.
 ## Web migration
 
 The Web facade authenticates a User, lists accessible Domains, and starts an
-ephemeral Peer ID. Browser startup requires one confirmed WSS relay route.
+ephemeral Peer ID. Browser startup reserves one relay over WSS and requires the
+same provider slot's atomic TCP/WSS route pair.
 Protocol adapters remain Rust code compiled into the same Wasm module.
 
 The browser does not accept App secrets or persist identity in the first

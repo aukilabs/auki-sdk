@@ -63,6 +63,13 @@ Wasm builds expose the browser WSS/Noise/Yamux/Relay v2 runtime used by the Web
 The shared identity, token, authentication, and application-protocol contracts
 compile on both targets.
 
+The high-level SDK accepts a relay provider only when the same DMS slot
+advertises both a native TCP base and a browser WSS base. It establishes one
+reservation (TCP on native/Python, WSS in a browser) and exposes the validated
+`RelayCircuitRoutes` pair. The lower-level `RelayProvider::new` and
+`new_for_transport` constructors remain available to custom transport hosts
+that intentionally consume only one advertised transport.
+
 ## Application protocols
 
 The low-level extension boundary is `ApplicationProtocol` /

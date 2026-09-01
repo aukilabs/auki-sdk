@@ -37,9 +37,12 @@ Native User and trusted App flows use `auki-auth`:
 5. start `AukiPeer`.
 
 Relay-backed reachability is the default. Startup completes only when the peer
-has valid authority, transport, and a confirmed relay route. Native
-`direct_only()` is an explicit alternative; an inbound direct peer must also
-publish a reachable listener route.
+has valid authority, transport, and a confirmed relay-provider route pair.
+One booking requests `relay_count` provider slots; each slot owns one
+reservation and one atomic TCP/WSS pair. Native and Python reserve over TCP;
+Web reserves over WSS. The count adds redundant providers, not transports.
+Native `direct_only()` is an explicit alternative that makes no relay booking;
+an inbound direct peer must also publish a reachable listener route.
 
 Robot and Compute hosts use `AukiPeer::start_external` when product
 infrastructure already manages authority. They do not need a second transport
@@ -125,8 +128,9 @@ or replace them when product policy requires filtering.
 ## Web
 
 `auki-sdk-web::AukiUserSession` logs in a User, lists Domains, and starts one
-ephemeral relay-backed peer. Browser peers always use an exact WSS circuit
-route and do not accept App secrets.
+ephemeral relay-backed peer. Browser peers reserve over an exact WSS circuit
+route and expose the same slot's required TCP route for native/Python callers.
+They do not accept App secrets.
 
 The opt-in JavaScript facade reuses the portable Rust implementations. It
 exposes outbound Info, Catalog, Registry, and Blob clients; Message sending and

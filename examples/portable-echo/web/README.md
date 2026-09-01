@@ -12,7 +12,8 @@ authority, relay booking, libp2p, authenticated streams, protocol framing,
 deadlines, and cleanup. JavaScript only owns the form and lifecycle wiring.
 
 Browser identity is intentionally ephemeral in `0.1`: every start creates a new
-Peer ID and relay route. The page does not persist credentials or peer state.
+Peer ID and one atomic TCP/WSS relay-route pair. The page does not persist
+credentials or peer state.
 Trusted discovery and automatic route publication remain separate work.
 
 Start with
@@ -54,8 +55,8 @@ Open the printed root URL in two tabs. In each tab:
 3. Copy the other tab's Peer ID and complete WSS route into the remote fields.
 4. Enter a message and send it.
 
-Both peers must select the same Domain. The page also prints a TCP route when
-the relay advertises one so the native example can reach the browser. Use
+Both peers must select the same Domain. The page always prints the same relay
+slot's TCP route so the native or Python example can reach the browser. Use
 **Stop peer** to close the echo endpoint before shutting down the peer and
 releasing its relay booking.
 

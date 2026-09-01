@@ -31,8 +31,8 @@ export AUKI_IDENTITY_FILE='/tmp/auki-echo-a/peer.identity'
 cargo run --locked -p auki-portable-echo-native
 ```
 
-The application prints its Peer ID and confirmed TCP relay route, then serves
-echo requests until Ctrl-C:
+The application receives one atomic TCP/WSS route pair from its relay slot,
+prints the native TCP route, then serves echo requests until Ctrl-C:
 
 ```text
 peer: 12D3KooW...

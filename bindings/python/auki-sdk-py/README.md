@@ -17,6 +17,8 @@ finally:
 flow. Domain choice remains explicit, identities are persisted by Rust, and a
 public relay is required by default. The binding does not expose credentials,
 raw transport streams, relay booking, or a Python-owned Tokio runtime.
+`peer.routes` is one atomic snapshot: `tcp` and `wss` are both required routes
+from the same relay-provider slot and reservation.
 
 Protocol adapters must compile into the same extension module as this facade so
 live Rust handles never cross native module boundaries. The

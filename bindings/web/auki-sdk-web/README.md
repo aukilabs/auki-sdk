@@ -4,8 +4,10 @@ Generic Rust/Wasm composition for authenticated Auki browser peers.
 
 JavaScript uses `AukiUserSession` to authenticate a User, list accessible
 Domains, and start an ephemeral `AukiPeer`. A browser peer always acquires a
-relay before startup completes and exposes its confirmed WSS and optional TCP
-circuit routes as public peer-card data. `AukiPeer.shutdown()` is the awaited
+relay before startup completes and exposes a required TCP/WSS circuit-route
+pair from that one provider slot as public peer-card data. The browser reserves
+over WSS; its TCP route lets native and Python peers dial the same reservation.
+`AukiPeer.shutdown()` is the awaited
 cleanup barrier, while `AukiPeer.waitStopped()` reports unexpected terminal
 transport or relay failure to the application.
 

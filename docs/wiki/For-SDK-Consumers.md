@@ -43,9 +43,9 @@ requesters may see or subscribe to its data.
 
 | Platform | Authenticated peer facade |
 | --- | --- |
-| Native Rust | Available: User/App auth, persistent identity, relay, endpoints, shutdown |
-| Web/Wasm | Available: User auth, ephemeral identity, mandatory WSS relay, endpoints, shutdown |
-| Python | Pending; component-level identity/session/log/registry bindings remain available |
+| Native Rust | Available: User/App auth, persistent identity, TCP/WSS relay routes, endpoints, shutdown |
+| Web/Wasm | Available: User auth, ephemeral identity, TCP/WSS relay routes, endpoints, shutdown |
+| Python | Available: User/App auth, persistent identity, TCP/WSS relay routes, same-module protocol adapters, shutdown |
 | Swift/iOS | Pending; the current Swift binding covers `Wallet` only |
 
 Do not start a new integration on the removed Manager or `Domain` runtime.

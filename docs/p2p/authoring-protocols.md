@@ -1,8 +1,8 @@
 # Author a portable Auki protocol
 
 Keep one immutable wire contract and its small `AukiPeer` integration in one
-Rust crate. Native and Web hosts should consume that same crate; platform code
-should not reimplement the conversation.
+Rust crate. Native, Web, and Python hosts should consume that same crate;
+platform code should not reimplement the conversation.
 
 [`examples/portable-echo`](../../examples/portable-echo/README.md) is the
 smallest complete reference.
@@ -108,7 +108,7 @@ protocol and cannot collide.
 The Client stores `AukiPeerProtocols` and exposes:
 
 - configured-route methods on native Rust when useful; and
-- exact-route methods for the portable native/Web surface.
+- exact-route methods for the portable native/Web/Python surface.
 
 ```rust,ignore
 #[derive(Clone)]
@@ -250,6 +250,7 @@ cargo clippy --locked -p my-protocol --all-targets -- -D warnings
 cargo check --locked -p my-protocol --target wasm32-unknown-unknown
 ```
 
-Also prove native/native traffic and, when Web is supported, browser/browser
-plus both native/Web directions. Review the wire and endpoint modules as one
+Also prove native/native traffic and, when supported, browser/browser plus both
+native/Web directions and Python/native in both directions. Review the wire and
+endpoint modules as one
 release.

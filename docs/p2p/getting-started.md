@@ -6,7 +6,7 @@ or protocol cleanup.
 
 By the end, two native peers will have distinct persistent Peer IDs, authority
 for the same Domain, confirmed relay routes, and one authenticated echo
-exchange. The same protocol crate also powers the tiny Web host.
+exchange. The same protocol crate also powers the tiny Web and Python hosts.
 
 ## Prerequisites
 
@@ -145,6 +145,30 @@ Run the [browser echo app](../../examples/portable-echo/web/README.md#run-the-we
 to try that surface in two tabs. The protected four-direction smoke test drives
 that same page while keeping its test machinery out of the application.
 
+## Use the same protocol from Python
+
+The Python extension statically links the generic native peer facade with the
+same `auki-portable-echo` crate. Live Rust handles never cross separately
+loaded extension modules, and Python does not manage Tokio or raw streams.
+
+The application flow stays small:
+
+```python
+session = await AukiSession.login_dev(email, password)
+peer = await session.start_peer(domain_id, identity_file)
+try:
+    echo = await AukiEcho.mount(peer)
+    try:
+        receipt = await echo.send_exact(remote_peer_id, remote_route, payload)
+    finally:
+        await echo.close()
+finally:
+    await peer.shutdown()
+```
+
+Run the [Python echo app](../../examples/portable-echo/python/README.md) to try
+Python-to-Python or either Python/native direction through exact relay routes.
+
 ## App credentials
 
 A trusted native or headless process can replace User credentials with:
@@ -170,6 +194,7 @@ authenticates the expected remote Peer ID in the selected Domain.
 ## Continue
 
 - [Author one portable protocol crate](authoring-protocols.md).
+- Run the [Python echo host](../../examples/portable-echo/python/README.md).
 - Run the [protected interop proof](../../examples/portable-echo/web/README.md#run-the-protected-direction-proof)
   for browser-to-browser in both directions plus native-to-browser and
   browser-to-native.

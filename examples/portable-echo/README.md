@@ -1,20 +1,21 @@
 # Portable echo protocol
 
 This is the copyable reference for implementing one application protocol once
-in Rust and using it from native and Web Auki peers.
+in Rust and using it from native, Web, and Python Auki peers.
 
 ```text
 src/wire.rs     author-owned ID, wire format, validation, and conversation
 src/endpoint.rs author-owned AukiPeer mount, deadlines, cleanup, and events
 native/         small Rust app plus a separate protected-interop binary
 web/            small browser app plus a protected four-direction smoke proof
+python/         small Python app plus its same-module PyO3 adapter
 ```
 
 The private `wire` module has no dependency on Tokio, libp2p, `auki-sdk`,
 wasm-bindgen, or browser APIs. The private `endpoint` module implements the
 protocol-specific runtime glue once on the canonical cross-target `AukiPeer`
-surface. Both platform hosts consume the same crate; neither reimplements the
-echo wire contract.
+surface. All three platform hosts consume the same crate; none reimplements
+the echo wire contract.
 
 Start with [Build with an existing protocol](../../docs/p2p/getting-started.md)
 when writing an application. Use
@@ -39,7 +40,9 @@ cargo check --locked \
 The [native README](native/README.md) runs the small two-terminal Rust app and
 keeps protected interop output in a separate executable. The
 [Web README](web/README.md) runs the copyable root app in two tabs and keeps the
-four-direction protected smoke test as separate test machinery.
+four-direction protected smoke test as separate test machinery. The
+[Python README](python/README.md) runs the same endpoint Python-to-Python or in
+either Python/native direction.
 
 Peer discovery and automatic route publication remain outside this example.
 The apps exchange an expected Peer ID and exact confirmed route explicitly;

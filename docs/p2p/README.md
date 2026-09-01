@@ -1,12 +1,14 @@
 # Build on Auki P2P
 
-`AukiPeer` is the normal way to build an authenticated native Rust or Web peer.
+`AukiPeer` is the normal way to build an authenticated native Rust, Web, or
+Python peer.
 It hides authority renewal, libp2p setup, relay booking, route fencing, and
 shutdown while leaving product policy explicit.
 
 - [Run an existing protocol](getting-started.md)
 - [Author a portable protocol](authoring-protocols.md)
 - [Try the Web echo app](../../examples/portable-echo/web/README.md)
+- [Try the Python echo app](../../examples/portable-echo/python/README.md)
 
 ## Mental model
 
@@ -137,8 +139,17 @@ Registry, Blob, or Stream. A product protocol or browser-serving role can
 expose a thin `wasm-bindgen` adapter from the same Wasm module. Live Rust
 handles cannot cross independently instantiated Wasm modules.
 
-Python and Swift/iOS do not yet expose the canonical peer facade. Their current
-bindings cover data and identity pieces only.
+## Python
+
+`auki-sdk-py` binds the canonical native runtime instead of rebuilding it in
+Python. `AukiSession` authenticates a User or trusted App, lists Domains, and
+starts one persistent relay-backed peer. A protocol adapter compiles into the
+same extension module and receives the live Rust protocol handle internally.
+
+The [portable echo Python host](../../examples/portable-echo/python/README.md)
+is the reference: Python owns a few lines of application flow while Rust owns
+the executor, wire protocol, transport, relay booking, and ordered cleanup.
+Swift/iOS does not yet expose the canonical peer facade.
 
 ## Discovery is still application-owned
 
@@ -164,7 +175,7 @@ expected Peer ID and Domain before exposing protocol bytes.
 
 - Bound every frame, queue, concurrent handler count, and deadline.
 - Keep product authorization separate from Domain authentication.
-- Use exact routes for portable native/Web dialing.
+- Use exact routes for portable native/Web/Python dialing.
 - Close endpoints, senders, and receivers and cancel subscriptions before
   shutting down the peer.
 - Attempt cleanup even when the application operation fails.

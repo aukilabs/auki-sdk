@@ -75,8 +75,8 @@ the listed current versions; compatibility is not silently negotiated.
 
 Product protocols can live outside this repository. Keep one immutable wire
 contract and its small `AukiPeer` client/endpoint in one Rust crate, then reuse
-that crate from native and Web hosts. Posemesh follows this model for its
-dataset protocol.
+that crate from native, Web, and Python hosts. Posemesh follows this model for
+its dataset protocol.
 
 ## Platform status
 
@@ -84,7 +84,7 @@ dataset protocol.
 | --- | --- |
 | Native Rust | User/App authentication, persistent identity, default relay, exact protocols, ordered shutdown |
 | Web/Wasm | User authentication, ephemeral identity, mandatory WSS relay, outbound Info/Catalog/Registry/Blob, Message send/serve, Stream consumption, and custom Rust adapters |
-| Python | Recording/data bindings exist; `AukiPeer` facade pending |
+| Python | User/App authentication, persistent identity, default relay, exact routes, ordered shutdown, and same-module Rust protocol adapters |
 | Swift/iOS | Wallet binding exists; `AukiPeer` facade pending |
 
 Robot and Compute products that already manage machine authority use
@@ -118,17 +118,16 @@ The main layers are:
 | [`auki-geometry`](crates/auki-geometry) | Coordinate-convention conversion |
 
 Supporting crates provide canonical JSON, hashing, identity, filesystem layout,
-detectors, and ROS adapters. Python and Swift directories expose data-model
-bindings; the Web directory exposes the browser peer and built-in protocol
-facade.
+detectors, and ROS adapters. The Python directory also exposes the native peer
+facade; the Web directory exposes the browser peer and built-in protocol
+facade. Swift currently exposes data and identity pieces only.
 
 ## Example
 
 [`examples/portable-echo`](examples/portable-echo) demonstrates one bounded
-Rust protocol shared by native and Web applications. The protected interop
-proof covers browser-to-browser, browser-to-native, and native-to-browser
-traffic through exact relay routes. It proves transport and protocol reuse; it
-does not provide discovery.
+Rust protocol shared by native, Web, and Python applications. Its hosts prove
+that exact relay routes interoperate across those runtimes; they do not provide
+discovery.
 
 ## Release status
 

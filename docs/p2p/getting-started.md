@@ -83,20 +83,22 @@ An application imports the endpoint from the existing protocol crate:
 
 ```rust
 use auki_portable_echo::EchoEndpoint;
+use auki_sdk::{AukiPeerBootstrap, Credentials, DomainSelection};
 ```
 
 It then chooses credentials, Domain, native identity path, whether to mount the
-protocol, and the remote peer information. The failure-safe lifecycle is:
+protocol, and the remote peer information. Rust's bootstrap facade owns the
+mechanical authentication, identity proof, authority preparation, and peer
+startup sequence. The failure-safe lifecycle is:
 
 ```rust
-let identity = Identity::load_or_create(identity_file)?;
-let session = AuthClient::new(AuthEnvironment::dev())?
-    .authenticate(Credentials::user_password(email, password))
+let bootstrap = AukiPeerBootstrap::dev(
+    Credentials::user_password(email, password),
+)
+.await?;
+let peer = bootstrap
+    .start_persistent_peer(DomainSelection::new(domain_id), identity_file)
     .await?;
-let prepared = session
-    .authorize_peer(DomainSelection::new(domain_id), &identity.proof())
-    .await?;
-let peer = AukiPeer::start(identity, prepared, AukiPeerConfig::dev()).await?;
 
 let operation = async {
     let echo = EchoEndpoint::mount(peer.protocols())?;
@@ -124,9 +126,9 @@ same pattern around both client and serving modes.
 
 The `auki-portable-echo` crate owns its immutable protocol ID, bounded wire
 conversation, registration, deadlines, exact-route send, inbound events, and
-stream cleanup. `auki-auth` and `AukiPeer` own the API/DDS exchange, renewable
-authority, authenticated transport, relay booking, route validation, fencing,
-and peer shutdown.
+stream cleanup. `AukiPeerBootstrap` and `AukiPeer` own the API/DDS exchange,
+renewable authority, authenticated transport, relay booking, route validation,
+fencing, and peer shutdown.
 
 ## Use the same protocol from Web
 
@@ -147,9 +149,9 @@ A trusted native or headless process can replace User credentials with:
 Credentials::app(app_access_key, app_secret)
 ```
 
-Everything after authentication uses the same `PreparedPeer` and `AukiPeer`
-lifecycle. Never embed an App secret in a browser, mobile binary, public
-repository, container image, or log.
+Everything else uses the same `AukiPeerBootstrap` and `AukiPeer` lifecycle.
+Never embed an App secret in a browser, mobile binary, public repository,
+container image, or log.
 
 ## Relay is not discovery
 

@@ -9,6 +9,10 @@ circuit routes as public peer-card data. `AukiPeer.shutdown()` is the awaited
 cleanup barrier, while `AukiPeer.waitStopped()` reports unexpected terminal
 transport or relay failure to the application.
 
+The binding delegates authentication, explicit Domain authorization, ephemeral
+identity creation, and peer startup to Rust's `AukiPeerBootstrap`. This crate
+only maps browser values, object ownership, and Promise errors.
+
 Protocol implementations stay in Rust. An application-specific adapter
 compiled into the same Wasm module obtains `AukiPeerProtocols` through the
 Rust-only `AukiPeer::protocols()` method. Live Rust handles cannot be shared

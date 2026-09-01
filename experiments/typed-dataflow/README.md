@@ -146,5 +146,12 @@ lifecycle results are in
 failure and scheduler results are in
 [`RESULTS-DATAFLOW-STRESS.md`](RESULTS-DATAFLOW-STRESS.md).
 
+The next agent-friendliness phase is specified by
+[`CLEAN-ROOM-VOLUME-MONITOR-TASK.md`](CLEAN-ROOM-VOLUME-MONITOR-TASK.md) and
+[`CLEAN-ROOM-EVALUATION-RUBRIC.md`](CLEAN-ROOM-EVALUATION-RUBRIC.md). Its
+initial public-API feasibility gate failed before a generic live Component
+could be constructed; the result and proposed smallest next step are recorded
+in [`CLEAN-ROOM-FIRST-ATTEMPT.md`](CLEAN-ROOM-FIRST-ATTEMPT.md).
+
 This code is intentionally disposable. The design should be rejected or
 changed if the evidence does not support it.

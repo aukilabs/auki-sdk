@@ -718,6 +718,13 @@ Run the reproducible performance matrix, stored-Log comparison, and clean-room
 agent-friendliness exercise. Produce the final recommendation about the public
 semantic model and optimized implementation paths.
 
+The first public-API feasibility gate for the clean-room volume-monitor task
+failed before a generic live Component could be constructed. The Catalog can
+accept Component and Output Manifests independently, while `Observable<T>` has
+no public generic construction path. The full blind exercise is paused until a
+reviewed second pass couples live typed interface construction to Catalog
+exposure. See `CLEAN-ROOM-FIRST-ATTEMPT.md`.
+
 ### Performance comparisons
 
 Measure these paths independently:

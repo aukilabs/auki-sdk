@@ -48,6 +48,7 @@ pub use auki_p2p::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use auki_p2p::{
     AuthenticatedRouteStream, RouteCatalogError, RouteCatalogStatus, RouteFence, RouteSnapshot,
+    validate_relay_circuit_routes,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use authority::{ExternalAuthorityRefreshRequest, ExternalAuthorityUpdate};

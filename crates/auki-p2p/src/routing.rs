@@ -610,6 +610,27 @@ fn validate_wss_circuit_route(
     Ok(endpoint.to_string())
 }
 
+/// Validate one canonical TCP/WSS circuit pair for an exact destination.
+///
+/// This proves that both routes use the required transport grammar, name the
+/// same relay, and terminate at `expected_target_peer_id`. It does not prove
+/// that the caller currently owns a relay reservation; runtime publication is
+/// still gated by [`RouteCatalog::publish_confirmed`].
+pub fn validate_relay_circuit_routes(
+    tcp: &Multiaddr,
+    wss: &Multiaddr,
+    expected_target_peer_id: PeerId,
+) -> RouteCatalogResult<RelayCircuitRoutes> {
+    let canonical_tcp = canonicalize_circuit_route(tcp, expected_target_peer_id)?;
+    if canonical_tcp.route != *tcp {
+        return Err(RouteCatalogError::InvalidRelayRoute(
+            "TCP relay route is not canonical".to_string(),
+        ));
+    }
+    validate_wss_circuit_route(wss, canonical_tcp.relay_peer_id, expected_target_peer_id)?;
+    Ok(RelayCircuitRoutes::from_provider(tcp.clone(), wss.clone()))
+}
+
 pub fn canonicalize_circuit_route(
     route: &Multiaddr,
     expected_target_peer_id: PeerId,
@@ -778,6 +799,35 @@ mod tests {
         assert_eq!(published.routes, routes);
         catalog.tombstone(published.fence).unwrap();
         assert!(catalog.snapshot().unwrap().relay_routes.is_empty());
+    }
+
+    #[test]
+    fn public_relay_pair_validation_requires_one_relay_and_target() {
+        let target_peer_id = PeerId::random();
+        let other_target_peer_id = PeerId::random();
+        let relay_peer_id = PeerId::random();
+        let provider = RelayProvider::new_dual_transport(
+            relay_peer_id,
+            [
+                format!("/dns4/relay.example.com/tcp/443/p2p/{relay_peer_id}"),
+                format!("/dns4/relay.example.com/tcp/4443/wss/p2p/{relay_peer_id}"),
+            ],
+            RelayBaseTransport::Tcp,
+            relay_limits(),
+        )
+        .unwrap();
+        let routes = provider.circuit_routes(target_peer_id).unwrap();
+
+        assert_eq!(
+            validate_relay_circuit_routes(routes.tcp(), routes.wss(), target_peer_id).unwrap(),
+            routes
+        );
+
+        let wrong_target = provider.circuit_routes(other_target_peer_id).unwrap();
+        assert!(
+            validate_relay_circuit_routes(routes.tcp(), wrong_target.wss(), target_peer_id,)
+                .is_err()
+        );
     }
 
     #[test]

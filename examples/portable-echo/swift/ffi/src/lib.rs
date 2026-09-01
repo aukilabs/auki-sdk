@@ -10,13 +10,18 @@ use auki_echo_protocol::{
     EchoClient, EchoEndpoint, EchoEventReceiver, EchoServeEvent, PROTOCOL_ID,
 };
 use auki_sdk_binding::{AukiPeer, AukiPeerRoutes, CleanupResult, DetachedCleanup, wait_cleanup};
-use auki_sdk_rs::{Multiaddr, PeerId};
+use auki_sdk_rs::{Multiaddr, PeerId, validate_relay_circuit_routes};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use uuid::Uuid;
 
 uniffi::setup_scaffolding!();
+
+const MAX_PEER_CARD_JSON_BYTES: usize = 16 * 1024;
+const MAX_PEER_CARD_PROTOCOLS: usize = 32;
+const MAX_PROTOCOL_ID_BYTES: usize = 256;
+const MAX_ROUTE_BYTES: usize = 2 * 1024;
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum AukiEchoError {
@@ -60,7 +65,7 @@ pub struct AukiPeerCard {
 }
 
 #[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 struct PeerCardWire {
     version: u32,
     domain_id: String,
@@ -70,31 +75,50 @@ struct PeerCardWire {
 }
 
 #[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 struct PeerCardRoutesWire {
     tcp: String,
     wss: String,
 }
 
-fn validate_card(card: &AukiPeerCard) -> Result<(), AukiEchoError> {
+fn canonicalize_card(mut card: AukiPeerCard) -> Result<AukiPeerCard, AukiEchoError> {
     if card.version != 1 {
         return Err(AukiEchoError::Operation {
             message: format!("unsupported peer card version {}", card.version),
         });
     }
-    Uuid::parse_str(&card.domain_id)
+    let domain_id = Uuid::parse_str(&card.domain_id)
         .map_err(|error| operation_error("parse peer card Domain ID", error))?;
-    card.peer_id
+    let peer_id = card
+        .peer_id
         .parse::<PeerId>()
         .map_err(|error| operation_error("parse peer card Peer ID", error))?;
-    card.routes
+    if card.protocols.len() > MAX_PEER_CARD_PROTOCOLS
+        || card
+            .protocols
+            .iter()
+            .any(|protocol| protocol.is_empty() || protocol.len() > MAX_PROTOCOL_ID_BYTES)
+    {
+        return Err(AukiEchoError::Operation {
+            message: "peer card protocol list exceeds its bounded envelope".into(),
+        });
+    }
+    if card.routes.tcp.len() > MAX_ROUTE_BYTES || card.routes.wss.len() > MAX_ROUTE_BYTES {
+        return Err(AukiEchoError::Operation {
+            message: "peer card route exceeds its bounded envelope".into(),
+        });
+    }
+    let tcp = card
+        .routes
         .tcp
         .parse::<Multiaddr>()
         .map_err(|error| operation_error("parse peer card TCP route", error))?;
-    card.routes
+    let wss = card
+        .routes
         .wss
         .parse::<Multiaddr>()
         .map_err(|error| operation_error("parse peer card WSS route", error))?;
+    let routes = validate_relay_circuit_routes(&tcp, &wss, peer_id)
+        .map_err(|error| operation_error("validate peer card relay routes", error))?;
     if !card
         .protocols
         .iter()
@@ -104,12 +128,18 @@ fn validate_card(card: &AukiPeerCard) -> Result<(), AukiEchoError> {
             message: format!("peer card does not advertise {PROTOCOL_ID}"),
         });
     }
-    Ok(())
+    card.domain_id = domain_id.to_string();
+    card.peer_id = peer_id.to_string();
+    card.routes = AukiPeerRoutes {
+        tcp: routes.tcp().to_string(),
+        wss: routes.wss().to_string(),
+    };
+    Ok(card)
 }
 
 #[uniffi::export]
 pub fn peer_card_to_json(card: AukiPeerCard) -> Result<String, AukiEchoError> {
-    validate_card(&card)?;
+    let card = canonicalize_card(card)?;
     serde_json::to_string(&PeerCardWire {
         version: card.version,
         domain_id: card.domain_id,
@@ -125,6 +155,11 @@ pub fn peer_card_to_json(card: AukiPeerCard) -> Result<String, AukiEchoError> {
 
 #[uniffi::export]
 pub fn peer_card_from_json(json: String) -> Result<AukiPeerCard, AukiEchoError> {
+    if json.len() > MAX_PEER_CARD_JSON_BYTES {
+        return Err(AukiEchoError::Operation {
+            message: "peer card JSON exceeds its bounded envelope".into(),
+        });
+    }
     let wire = serde_json::from_str::<PeerCardWire>(&json)
         .map_err(|error| operation_error("decode peer card", error))?;
     let card = AukiPeerCard {
@@ -137,14 +172,13 @@ pub fn peer_card_from_json(json: String) -> Result<AukiPeerCard, AukiEchoError> 
             wss: wire.routes.wss,
         },
     };
-    validate_card(&card)?;
-    Ok(card)
+    canonicalize_card(card)
 }
 
 /// Select the native TCP member of one peer card's atomic relay-route pair.
 #[uniffi::export]
 pub fn native_target(card: AukiPeerCard) -> Result<AukiPeerTarget, AukiEchoError> {
-    validate_card(&card)?;
+    let card = canonicalize_card(card)?;
     Ok(AukiPeerTarget {
         domain_id: card.domain_id,
         peer_id: card.peer_id,
@@ -254,8 +288,7 @@ impl AukiEcho {
                 .routes()
                 .map_err(|error| operation_error("read local peer routes", error))?,
         };
-        validate_card(&card)?;
-        Ok(card)
+        canonicalize_card(card)
     }
 
     /// Send one bounded echo through an exact authenticated route.
@@ -265,7 +298,11 @@ impl AukiEcho {
         payload: Vec<u8>,
     ) -> Result<AukiEchoSendReceipt, AukiEchoError> {
         self.owner.ensure_open()?;
-        if target.domain_id != self.peer.domain_id() {
+        let target_domain_id = Uuid::parse_str(&target.domain_id)
+            .map_err(|error| operation_error("parse remote Domain ID", error))?;
+        let local_domain_id = Uuid::parse_str(&self.peer.domain_id())
+            .map_err(|error| operation_error("parse local Domain ID", error))?;
+        if target_domain_id != local_domain_id {
             return Err(AukiEchoError::Operation {
                 message: format!(
                     "remote peer Domain {} does not match local Domain {}",
@@ -310,7 +347,8 @@ impl AukiEcho {
         }
     }
 
-    /// Stop inbound serving behind one detached, replayable cleanup barrier.
+    /// Fence new endpoint operations and stop serving behind one detached,
+    /// replayable cleanup barrier. Already-admitted operations may finish.
     pub async fn close(&self) -> Result<(), AukiEchoError> {
         wait_cleanup(self.owner.begin_close())
             .await
@@ -324,14 +362,19 @@ mod tests {
 
     fn peer_card() -> AukiPeerCard {
         let peer_id = auki_sdk_rs::Identity::generate().peer_id().to_string();
+        let relay_peer_id = auki_sdk_rs::Identity::generate().peer_id().to_string();
         AukiPeerCard {
             version: 1,
             domain_id: "00000000-0000-0000-0000-000000000001".into(),
             peer_id: peer_id.clone(),
             protocols: vec![PROTOCOL_ID.into()],
             routes: AukiPeerRoutes {
-                tcp: format!("/dns4/relay.example.com/tcp/443/p2p/{peer_id}"),
-                wss: format!("/dns4/relay.example.com/tcp/4443/wss/p2p/{peer_id}"),
+                tcp: format!(
+                    "/dns4/relay.example.com/tcp/443/p2p/{relay_peer_id}/p2p-circuit/p2p/{peer_id}"
+                ),
+                wss: format!(
+                    "/dns4/relay.example.com/tcp/4443/wss/p2p/{relay_peer_id}/p2p-circuit/p2p/{peer_id}"
+                ),
             },
         }
     }
@@ -354,17 +397,40 @@ mod tests {
     }
 
     #[test]
-    fn peer_card_json_round_trip_is_strict_and_stable() {
+    fn peer_card_json_round_trip_accepts_compatible_extensions() {
         let card = peer_card();
         let json = peer_card_to_json(card.clone()).expect("encode peer card");
 
         assert_eq!(peer_card_from_json(json).expect("decode peer card"), card);
 
-        let json_with_unknown_field = format!(
-            r#"{{"version":1,"domainId":"{}","peerId":"{}","protocols":["{}"],"routes":{{"tcp":"{}","wss":"{}"}},"surprise":true}}"#,
+        let extended_json = format!(
+            r#"{{"version":1,"runtime":"browser","domainId":"{}","peerId":"{}","protocols":["{}"],"routes":{{"tcp":"{}","wss":"{}","future":"ignored"}},"future":true}}"#,
             card.domain_id, card.peer_id, PROTOCOL_ID, card.routes.tcp, card.routes.wss,
         );
-        assert!(peer_card_from_json(json_with_unknown_field).is_err());
+        assert_eq!(
+            peer_card_from_json(extended_json).expect("decode extended peer card"),
+            card
+        );
+    }
+
+    #[test]
+    fn peer_card_rejects_mismatched_relay_routes() {
+        let mut card = peer_card();
+        let other_peer_id = auki_sdk_rs::Identity::generate().peer_id().to_string();
+        card.routes.wss = card.routes.wss.replace(&card.peer_id, &other_peer_id);
+
+        assert!(native_target(card).is_err());
+    }
+
+    #[test]
+    fn peer_card_canonicalizes_domain_ids_and_bounds_json() {
+        let mut card = peer_card();
+        card.domain_id = "DE66FDF4-A830-4017-95DD-5741C30A6D0F".into();
+        let json = peer_card_to_json(card).expect("encode peer card");
+        let decoded = peer_card_from_json(json).expect("decode peer card");
+
+        assert_eq!(decoded.domain_id, "de66fdf4-a830-4017-95dd-5741c30a6d0f");
+        assert!(peer_card_from_json("x".repeat(MAX_PEER_CARD_JSON_BYTES + 1)).is_err());
     }
 
     #[test]

@@ -80,9 +80,9 @@ pub use relay::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use routing::{
-    canonicalize_circuit_route, validate_direct_route, CanonicalCircuitRoute, ConfirmedRoute,
-    PublishedRoute, RouteCatalog, RouteCatalogError, RouteCatalogLimits, RouteCatalogResult,
-    RouteCatalogStatus, RouteFence, RouteSnapshot,
+    canonicalize_circuit_route, validate_direct_route, validate_relay_circuit_routes,
+    CanonicalCircuitRoute, ConfirmedRoute, PublishedRoute, RouteCatalog, RouteCatalogError,
+    RouteCatalogLimits, RouteCatalogResult, RouteCatalogStatus, RouteFence, RouteSnapshot,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use runtime::{ApplicationProtocolServer, AuthenticatedRouteStream, ExactRoute};

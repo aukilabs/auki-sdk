@@ -1,13 +1,21 @@
+use std::cell::RefCell;
+
 use auki_protocols::registry::{
-    RegistryClient,
-    v3::{ID, RegistryKind, RegistryListEntry},
+    RegistryClient, RegistryEndpoint, RegistryProvider,
+    v3::{ID, RegistryKind, RegistryListEntry, RegistryRequest, RegistryResponse},
 };
+use auki_sdk::AuthenticatedPeer;
+use js_sys::{Function, Promise};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::future_to_promise;
 
 use crate::{
     AukiPeer,
-    protocol_support::{js_context, js_error, parse_exact_target, peer_protocols, to_js_value},
+    protocol_support::{
+        CloseBarrier, authenticated_peer_to_js, javascript_error_reason, js_context, js_error,
+        parse_exact_target, peer_protocols, to_js_value,
+    },
 };
 
 /// Outbound Registry v3 client backed by the portable Rust protocol.
@@ -118,6 +126,97 @@ impl AukiRegistryClient {
     }
 }
 
+/// Mounted inbound Registry v3 service backed by one synchronous JavaScript provider.
+#[wasm_bindgen]
+pub struct AukiRegistryEndpoint {
+    inner: RefCell<Option<RegistryEndpoint>>,
+    closing: CloseBarrier,
+}
+
+#[wasm_bindgen]
+impl AukiRegistryEndpoint {
+    /// Mount Registry v3 on one running browser peer.
+    ///
+    /// The provider receives already-authenticated requester metadata and one
+    /// validated canonical Registry request. It must return synchronously;
+    /// asynchronous storage belongs behind Blob or another application layer.
+    #[wasm_bindgen(js_name = mount)]
+    pub fn mount(
+        peer: &AukiPeer,
+        #[wasm_bindgen(unchecked_param_type = "AukiRegistryProvider")] provider: Function,
+    ) -> Result<AukiRegistryEndpoint, JsValue> {
+        let endpoint = RegistryEndpoint::mount(
+            peer_protocols(peer, "Registry endpoint")?,
+            JavaScriptRegistryProvider { provider },
+        )
+        .map_err(|error| js_context("mount Registry endpoint", error))?;
+        Ok(Self {
+            inner: RefCell::new(Some(endpoint)),
+            closing: CloseBarrier::default(),
+        })
+    }
+
+    /// Immutable authenticated protocol identifier implemented by this endpoint.
+    #[wasm_bindgen(getter)]
+    pub fn protocol(&self) -> String {
+        ID.to_owned()
+    }
+
+    /// Idempotently stop accepting requests and await every admitted handler.
+    #[wasm_bindgen(unchecked_return_type = "Promise<void>")]
+    pub fn close(&self) -> Promise {
+        self.closing.get_or_start(|| {
+            let endpoint = self.inner.borrow_mut().take();
+            future_to_promise(async move {
+                if let Some(endpoint) = endpoint {
+                    endpoint
+                        .close()
+                        .await
+                        .map_err(|error| js_context("close Registry endpoint", error))?;
+                }
+                Ok(JsValue::UNDEFINED)
+            })
+        })
+    }
+}
+
+struct JavaScriptRegistryProvider {
+    provider: Function,
+}
+
+impl RegistryProvider for JavaScriptRegistryProvider {
+    fn respond(
+        &self,
+        requester: &AuthenticatedPeer,
+        request: &RegistryRequest,
+    ) -> RegistryResponse {
+        invoke_registry_provider(&self.provider, requester, request).unwrap_or_else(|reason| {
+            RegistryResponse::Error {
+                reason: format!("Registry provider failed: {reason}"),
+            }
+        })
+    }
+}
+
+fn invoke_registry_provider(
+    provider: &Function,
+    requester: &AuthenticatedPeer,
+    request: &RegistryRequest,
+) -> Result<RegistryResponse, String> {
+    let requester = authenticated_peer_to_js("convert authenticated Registry requester", requester)
+        .map_err(|error| javascript_error_reason(&error))?;
+    let request = to_js_value("convert Registry provider request", request)
+        .map_err(|error| javascript_error_reason(&error))?;
+    let response = provider
+        .call2(&JsValue::UNDEFINED, &requester, &request)
+        .map_err(|error| javascript_error_reason(&error))?;
+    registry_response_from_js(response)
+}
+
+fn registry_response_from_js(value: JsValue) -> Result<RegistryResponse, String> {
+    serde_wasm_bindgen::from_value(value).map_err(|error| format!("invalid response: {error}"))
+}
+
 fn parse_registry_kind(kind: &str) -> Result<RegistryKind, JsValue> {
     match kind {
         "sensor" => Ok(RegistryKind::Sensor),
@@ -196,6 +295,47 @@ export type AukiRegistryEntry =
     | AukiDetectorRegistryEntry
     | AukiMapRegistryEntry
     | AukiDeviceModelRegistryEntry;
+
+/** Validated canonical request delivered to an inbound Registry provider. */
+export type AukiRegistryProviderRequest =
+    | {
+          readonly op: "get";
+          readonly kind: AukiRegistryKind;
+          readonly id: string;
+          readonly hash: string;
+      }
+    | {
+          readonly op: "list";
+          readonly kind: AukiRegistryKind;
+      };
+
+/** Exact content-addressed envelope returned by an inbound Registry provider. */
+export interface AukiRegistryEntryEnvelope {
+    readonly kind: AukiRegistryKind;
+    readonly id: string;
+    readonly hash: string;
+    readonly canonical_json: string;
+}
+
+/** Canonical Registry response returned synchronously by a provider. */
+export type AukiRegistryProviderResponse =
+    | {
+          readonly op: "get";
+          readonly entry: AukiRegistryEntryEnvelope | null;
+      }
+    | {
+          readonly op: "list";
+          readonly entries: readonly AukiRegistryListEntry[];
+      }
+    | {
+          readonly op: "error";
+          readonly reason: string;
+      };
+
+export type AukiRegistryProvider = (
+    requester: AukiAuthenticatedPeer,
+    request: AukiRegistryProviderRequest,
+) => AukiRegistryProviderResponse;
 "#;
 
 #[cfg(test)]
@@ -292,5 +432,46 @@ mod tests {
                 .unwrap()
                 .is_bigint()
         );
+    }
+
+    #[wasm_bindgen_test]
+    fn registry_provider_values_preserve_the_canonical_wire_shape() {
+        let request = RegistryRequest::get(
+            RegistryKind::Sensor,
+            "camera",
+            "0123456789abcdef0123456789abcdef",
+        );
+        let value = to_js_value("convert Registry request fixture", &request).unwrap();
+        assert_eq!(
+            Reflect::get(&value, &JsValue::from_str("op"))
+                .unwrap()
+                .as_string()
+                .as_deref(),
+            Some("get")
+        );
+        assert_eq!(
+            Reflect::get(&value, &JsValue::from_str("kind"))
+                .unwrap()
+                .as_string()
+                .as_deref(),
+            Some("sensor")
+        );
+
+        let expected = RegistryResponse::List {
+            entries: vec![RegistryListEntry {
+                id: "camera".into(),
+                hash: "0123456789abcdef0123456789abcdef".into(),
+            }],
+        };
+        let value = to_js_value("convert Registry response fixture", &expected).unwrap();
+        let actual = registry_response_from_js(value).unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[wasm_bindgen_test]
+    fn invalid_registry_provider_values_are_remote_safe_errors() {
+        let invalid = js_sys::Object::new();
+        let error = registry_response_from_js(invalid.into()).unwrap_err();
+        assert!(error.contains("invalid response"));
     }
 }

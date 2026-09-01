@@ -12,14 +12,14 @@ mod registry;
 mod stream;
 
 #[cfg(feature = "blob")]
-pub use blob::AukiBlobClient;
+pub use blob::{AukiBlobClient, AukiBlobEndpoint};
 #[cfg(feature = "catalog")]
-pub use catalog::AukiCatalogClient;
+pub use catalog::{AukiCatalogClient, AukiCatalogEndpoint};
 #[cfg(feature = "info")]
-pub use info::AukiInfoClient;
+pub use info::{AukiInfoClient, AukiInfoEndpoint};
 #[cfg(feature = "message")]
 pub use message::{AukiMessageClient, AukiMessageEndpoint, AukiMessageReceiver, AukiMessageSender};
 #[cfg(feature = "registry")]
-pub use registry::AukiRegistryClient;
+pub use registry::{AukiRegistryClient, AukiRegistryEndpoint};
 #[cfg(feature = "stream")]
-pub use stream::{AukiStreamClient, AukiStreamSubscription};
+pub use stream::{AukiStreamClient, AukiStreamEndpoint, AukiStreamSubscription};

@@ -7,21 +7,26 @@ use auki_datatypes::{
     audio, camera::CameraFrame, detection::DetectionFrame, joint_encoders, map::MapUpdate,
     point_cloud, pose, scalar,
 };
+#[cfg(test)]
+use auki_protocols::stream::v2::decline_reason;
 use auki_protocols::stream::{
-    StreamClient, StreamEntry, StreamError, StreamSubscription, SubscriptionEntries,
-    v2::{EndReason, ID, ReadFrom, StreamManifest, StreamRequest, end_reason},
+    SourceStream, StreamClient, StreamDispatch, StreamEndpoint, StreamEntry, StreamError,
+    StreamItem, StreamProvider, StreamSubscription, SubscriptionEntries,
+    v2::{DeclineReason, EndReason, ID, ReadFrom, StreamManifest, StreamRequest, end_reason},
 };
+use auki_sdk::AuthenticatedPeer;
 use futures::{FutureExt, StreamExt, pin_mut};
-use js_sys::{Promise, Reflect, Uint8Array};
+use js_sys::{AsyncIterator, Function, Promise, Reflect, Symbol, Uint8Array};
 use prost::Message;
 use serde::{Deserialize, Serialize};
-use wasm_bindgen::prelude::*;
-use wasm_bindgen_futures::future_to_promise;
+use wasm_bindgen::{JsCast, prelude::*};
+use wasm_bindgen_futures::{JsFuture, future_to_promise};
 
 use crate::{
     AukiPeer,
     protocol_support::{
-        CloseBarrier, js_context, js_error, parse_exact_target, peer_protocols, to_js_value,
+        CloseBarrier, authenticated_peer_to_js, javascript_error_reason, js_context, js_error,
+        parse_exact_target, peer_protocols, to_js_value,
     },
 };
 
@@ -120,6 +125,257 @@ impl AukiStreamClient {
             subscription.entries,
         ))
     }
+}
+
+/// Mounted inbound Stream v2 service backed by a JavaScript admission callback.
+#[wasm_bindgen]
+pub struct AukiStreamEndpoint {
+    inner: RefCell<Option<StreamEndpoint>>,
+    closing: CloseBarrier,
+}
+
+#[wasm_bindgen]
+impl AukiStreamEndpoint {
+    /// Mount Stream v2 on one running browser peer.
+    ///
+    /// `provider` is invoked synchronously for each authenticated request. It
+    /// returns either a decline reason or an accepted manifest plus an async
+    /// iterable of typed protobuf payloads.
+    #[wasm_bindgen(js_name = mount)]
+    pub fn mount(
+        peer: &AukiPeer,
+        #[wasm_bindgen(unchecked_param_type = "AukiStreamProvider")] provider: Function,
+    ) -> Result<AukiStreamEndpoint, JsValue> {
+        let endpoint = StreamEndpoint::mount(
+            peer_protocols(peer, "Stream endpoint")?,
+            BrowserStreamProvider { provider },
+        )
+        .map_err(|error| js_context("mount Stream endpoint", error))?;
+        Ok(Self {
+            inner: RefCell::new(Some(endpoint)),
+            closing: CloseBarrier::default(),
+        })
+    }
+
+    /// Idempotently stop accepting subscriptions and await admitted handlers.
+    #[wasm_bindgen(unchecked_return_type = "Promise<void>")]
+    pub fn close(&self) -> Promise {
+        self.closing.get_or_start(|| {
+            let endpoint = self.inner.borrow_mut().take();
+            future_to_promise(async move {
+                if let Some(endpoint) = endpoint {
+                    endpoint
+                        .close()
+                        .await
+                        .map_err(|error| js_context("close Stream endpoint", error))?;
+                }
+                Ok(JsValue::UNDEFINED)
+            })
+        })
+    }
+}
+
+struct BrowserStreamProvider {
+    provider: Function,
+}
+
+impl StreamProvider for BrowserStreamProvider {
+    fn dispatch(&self, remote_peer: &AuthenticatedPeer, request: StreamRequest) -> StreamDispatch {
+        browser_stream_dispatch(&self.provider, remote_peer, &request).unwrap_or_else(|error| {
+            StreamDispatch::Decline {
+                reason: DeclineReason::other(js_error_message(error)),
+            }
+        })
+    }
+}
+
+fn browser_stream_dispatch(
+    provider: &Function,
+    remote_peer: &AuthenticatedPeer,
+    request: &StreamRequest,
+) -> Result<StreamDispatch, JsValue> {
+    let remote_peer =
+        authenticated_peer_to_js("convert authenticated Stream requester", remote_peer)?;
+    let request = stream_request_to_js(request)?;
+    let dispatch = provider
+        .call2(&JsValue::UNDEFINED, &remote_peer, &request)
+        .map_err(|error| js_context("call Stream provider", js_error_message(error)))?;
+    let kind = string_property(&dispatch, "kind", "read Stream provider result")?;
+    match kind.as_str() {
+        "decline" => {
+            let reason =
+                Reflect::get(&dispatch, &JsValue::from_str("reason")).map_err(|error| {
+                    js_context("read Stream decline reason", js_error_message(error))
+                })?;
+            Ok(StreamDispatch::Decline {
+                reason: decline_reason_from_js(reason)?,
+            })
+        }
+        "accept" => accepted_stream_dispatch(dispatch),
+        _ => Err(js_error(format!(
+            "Stream provider result kind must be \"accept\" or \"decline\", got {kind:?}"
+        ))),
+    }
+}
+
+fn accepted_stream_dispatch(dispatch: JsValue) -> Result<StreamDispatch, JsValue> {
+    let payload_kind = StreamPayloadKind::parse(&string_property(
+        &dispatch,
+        "payloadKind",
+        "read Stream provider payload kind",
+    )?)?;
+    let manifest_value = Reflect::get(&dispatch, &JsValue::from_str("manifest"))
+        .map_err(|error| js_context("read Stream provider manifest", js_error_message(error)))?;
+    let manifest = stream_manifest_from_js(manifest_value)?;
+    payload_kind.validate_manifest(&manifest)?;
+    let source = Reflect::get(&dispatch, &JsValue::from_str("source"))
+        .map_err(|error| js_context("read Stream provider source", js_error_message(error)))?;
+    let source = async_iterator_from_js(source)?;
+
+    Ok(match payload_kind {
+        StreamPayloadKind::Camera => StreamDispatch::AcceptCamera {
+            manifest,
+            source: typed_source_stream(source),
+        },
+        StreamPayloadKind::PointCloud => StreamDispatch::AcceptPointCloud {
+            manifest,
+            source: typed_source_stream(source),
+        },
+        StreamPayloadKind::JointEncoders => StreamDispatch::AcceptJointEncoders {
+            manifest,
+            source: typed_source_stream(source),
+        },
+        StreamPayloadKind::Audio => StreamDispatch::AcceptAudio {
+            manifest,
+            source: typed_source_stream(source),
+        },
+        StreamPayloadKind::Scalar => StreamDispatch::AcceptScalar {
+            manifest,
+            source: typed_source_stream(source),
+        },
+        StreamPayloadKind::Pose => StreamDispatch::AcceptPose {
+            manifest,
+            source: typed_source_stream(source),
+        },
+        StreamPayloadKind::Detection => StreamDispatch::AcceptDetection {
+            manifest,
+            source: typed_source_stream(source),
+        },
+        StreamPayloadKind::Map => StreamDispatch::AcceptMap {
+            manifest,
+            source: typed_source_stream(source),
+        },
+    })
+}
+
+fn async_iterator_from_js(source: JsValue) -> Result<AsyncIterator<JsValue>, JsValue> {
+    if source.is_instance_of::<AsyncIterator<JsValue>>() {
+        return Ok(source.unchecked_into());
+    }
+    let method = Reflect::get(&source, &Symbol::async_iterator().into())
+        .map_err(|error| js_context("read Stream async iterator", js_error_message(error)))?;
+    let method = method
+        .dyn_into::<Function>()
+        .map_err(|_| js_error("Stream provider source must be an AsyncIterable"))?;
+    let iterator = method
+        .call0(&source)
+        .map_err(|error| js_context("create Stream async iterator", js_error_message(error)))?;
+    iterator
+        .dyn_into::<AsyncIterator<JsValue>>()
+        .map_err(|_| js_error("Stream provider source returned an invalid AsyncIterator"))
+}
+
+fn typed_source_stream<T>(iterator: AsyncIterator<JsValue>) -> SourceStream<T>
+where
+    T: Message + Default + 'static,
+{
+    Box::pin(futures::stream::unfold(iterator, |iterator| async move {
+        let next = match iterator.next() {
+            Ok(next) => next,
+            Err(error) => {
+                return Some((
+                    Err(format!(
+                        "Stream provider source next() failed: {}",
+                        js_error_message(error)
+                    )),
+                    iterator,
+                ));
+            }
+        };
+        let next = match JsFuture::from(next).await {
+            Ok(next) => next,
+            Err(error) => {
+                return Some((
+                    Err(format!(
+                        "Stream provider source rejected: {}",
+                        js_error_message(error)
+                    )),
+                    iterator,
+                ));
+            }
+        };
+        let done = match Reflect::get(&next, &JsValue::from_str("done")) {
+            Ok(done) => done.as_bool().unwrap_or(false),
+            Err(error) => {
+                return Some((
+                    Err(format!(
+                        "Stream provider source result is invalid: {}",
+                        js_error_message(error)
+                    )),
+                    iterator,
+                ));
+            }
+        };
+        if done {
+            return None;
+        }
+        let item = Reflect::get(&next, &JsValue::from_str("value"))
+            .map_err(|error| {
+                format!(
+                    "Stream provider source result has no value: {}",
+                    js_error_message(error)
+                )
+            })
+            .and_then(source_item_from_js::<T>);
+        Some((item, iterator))
+    }))
+}
+
+fn source_item_from_js<T>(value: JsValue) -> Result<StreamItem<T>, String>
+where
+    T: Message + Default,
+{
+    let metadata: StreamSourceItemMetadata = serde_wasm_bindgen::from_value(value.clone())
+        .map_err(|error| format!("read Stream source item: {error}"))?;
+    let payload = Reflect::get(&value, &JsValue::from_str("payload"))
+        .map_err(|error| format!("read Stream source payload: {}", js_error_message(error)))?;
+    if !payload.is_instance_of::<Uint8Array>() {
+        return Err("Stream source payload must be a Uint8Array".into());
+    }
+    let payload = Uint8Array::new(&payload).to_vec();
+    let payload = T::decode(payload.as_slice())
+        .map_err(|error| format!("decode Stream source payload: {error}"))?;
+    Ok(StreamItem {
+        timestamp_ns: metadata.timestamp_ns,
+        payload,
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StreamSourceItemMetadata {
+    timestamp_ns: i64,
+}
+
+fn string_property(value: &JsValue, name: &str, context: &'static str) -> Result<String, JsValue> {
+    Reflect::get(value, &JsValue::from_str(name))
+        .map_err(|error| js_context(context, js_error_message(error)))?
+        .as_string()
+        .ok_or_else(|| js_context(context, format!("{name} must be a string")))
+}
+
+fn js_error_message(error: JsValue) -> String {
+    javascript_error_reason(&error)
 }
 
 /// One accepted, typed Stream v2 subscription.
@@ -272,7 +528,7 @@ impl StreamPayloadKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum StreamReadFromRecord {
     #[default]
@@ -282,6 +538,16 @@ enum StreamReadFromRecord {
         #[serde(rename = "timestampNs")]
         timestamp_ns: i64,
     },
+}
+
+impl From<ReadFrom> for StreamReadFromRecord {
+    fn from(value: ReadFrom) -> Self {
+        match value {
+            ReadFrom::Latest => Self::Latest,
+            ReadFrom::FromStart => Self::FromStart,
+            ReadFrom::FromTimestamp(timestamp_ns) => Self::FromTimestamp { timestamp_ns },
+        }
+    }
 }
 
 impl From<StreamReadFromRecord> for ReadFrom {
@@ -296,13 +562,23 @@ impl From<StreamReadFromRecord> for ReadFrom {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StreamRequestRecord {
     source_peer_id: String,
     resource_id: String,
     #[serde(default)]
     from: StreamReadFromRecord,
+}
+
+impl From<&StreamRequest> for StreamRequestRecord {
+    fn from(request: &StreamRequest) -> Self {
+        Self {
+            source_peer_id: request.source_peer_id.clone(),
+            resource_id: request.resource_id.clone(),
+            from: request.from.into(),
+        }
+    }
 }
 
 fn stream_request_from_js(value: JsValue) -> Result<StreamRequest, JsValue> {
@@ -315,7 +591,14 @@ fn stream_request_from_js(value: JsValue) -> Result<StreamRequest, JsValue> {
     })
 }
 
-#[derive(Clone, Debug, Serialize)]
+fn stream_request_to_js(request: &StreamRequest) -> Result<JsValue, JsValue> {
+    to_js_value(
+        "convert Stream provider request",
+        &StreamRequestRecord::from(request),
+    )
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StreamManifestRecord {
     sensor_id: String,
@@ -336,6 +619,31 @@ struct StreamManifestRecord {
     map_peer_id: String,
     map_id: String,
     map_hash: String,
+}
+
+impl From<StreamManifestRecord> for StreamManifest {
+    fn from(manifest: StreamManifestRecord) -> Self {
+        Self {
+            sensor_id: manifest.sensor_id,
+            sensor_hash: manifest.sensor_hash,
+            clock_peer_id: manifest.clock_peer_id,
+            clock_id: manifest.clock_id,
+            clock_hash: manifest.clock_hash,
+            frame_id: manifest.frame_id,
+            frame_hash: manifest.frame_hash,
+            resource_id: manifest.resource_id,
+            payload: manifest.payload,
+            from_frame_id: manifest.from_frame_id,
+            from_frame_hash: manifest.from_frame_hash,
+            to_frame_id: manifest.to_frame_id,
+            to_frame_hash: manifest.to_frame_hash,
+            writer_mode: manifest.writer_mode,
+            expected_rate_hz: manifest.expected_rate_hz,
+            map_peer_id: manifest.map_peer_id,
+            map_id: manifest.map_id,
+            map_hash: manifest.map_hash,
+        }
+    }
 }
 
 impl From<StreamManifest> for StreamManifestRecord {
@@ -361,6 +669,32 @@ impl From<StreamManifest> for StreamManifestRecord {
             map_hash: manifest.map_hash,
         }
     }
+}
+
+fn stream_manifest_from_js(value: JsValue) -> Result<StreamManifest, JsValue> {
+    serde_wasm_bindgen::from_value::<StreamManifestRecord>(value)
+        .map(StreamManifest::from)
+        .map_err(|error| js_context("read Stream provider manifest", error))
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum StreamDeclineReasonRecord {
+    SensorNotFound,
+    SensorUnavailable,
+    ProducerShuttingDown,
+    Other { detail: String },
+}
+
+fn decline_reason_from_js(value: JsValue) -> Result<DeclineReason, JsValue> {
+    let reason: StreamDeclineReasonRecord = serde_wasm_bindgen::from_value(value)
+        .map_err(|error| js_context("read Stream decline reason", error))?;
+    Ok(match reason {
+        StreamDeclineReasonRecord::SensorNotFound => DeclineReason::sensor_not_found(),
+        StreamDeclineReasonRecord::SensorUnavailable => DeclineReason::sensor_unavailable(),
+        StreamDeclineReasonRecord::ProducerShuttingDown => DeclineReason::producer_shutting_down(),
+        StreamDeclineReasonRecord::Other { detail } => DeclineReason::other(detail),
+    })
 }
 
 struct AnySubscription {
@@ -663,6 +997,33 @@ export interface AukiStreamManifest {
     readonly mapHash: string;
 }
 
+/** One producer item. `payload` is the protobuf encoding for `payloadKind`. */
+export interface AukiStreamSourceItem {
+    readonly timestampNs: bigint;
+    readonly payload: Uint8Array;
+}
+
+export type AukiStreamDeclineReason =
+    | { readonly kind: "sensor_not_found" }
+    | { readonly kind: "sensor_unavailable" }
+    | { readonly kind: "producer_shutting_down" }
+    | { readonly kind: "other"; readonly detail: string };
+
+/** Synchronous admission decision with a demand-driven asynchronous source. */
+export type AukiStreamDispatch =
+    | { readonly kind: "decline"; readonly reason: AukiStreamDeclineReason }
+    | {
+          readonly kind: "accept";
+          readonly payloadKind: AukiStreamPayloadKind;
+          readonly manifest: AukiStreamManifest;
+          readonly source: AsyncIterable<AukiStreamSourceItem>;
+      };
+
+export type AukiStreamProvider = (
+    requester: AukiAuthenticatedPeer,
+    request: AukiStreamRequest,
+) => AukiStreamDispatch;
+
 /** One sequence-checked, Rust-decoded-and-re-encoded protobuf entry. */
 export interface AukiStreamEntry {
     readonly timestampNs: bigint;
@@ -807,6 +1168,68 @@ mod tests {
         Reflect::set(&request, &JsValue::from_str("from"), &from).unwrap();
         let parsed = stream_request_from_js(request.into()).unwrap();
         assert_eq!(parsed.from, ReadFrom::FromTimestamp(i64::MIN));
+    }
+
+    #[wasm_bindgen_test]
+    fn provider_request_and_manifest_round_trip_without_new_wire_models() {
+        let request = StreamRequest {
+            source_peer_id: "source".into(),
+            resource_id: "camera/front".into(),
+            from: ReadFrom::FromTimestamp(i64::MIN),
+        };
+        let request_value = stream_request_to_js(&request).unwrap();
+        assert_eq!(stream_request_from_js(request_value).unwrap(), request);
+
+        let manifest = StreamManifest {
+            resource_id: "camera/front".into(),
+            payload: "camera_frame".into(),
+            expected_rate_hz: 30,
+            ..Default::default()
+        };
+        let manifest_value = to_js_value(
+            "convert provider test manifest",
+            &StreamManifestRecord::from(manifest.clone()),
+        )
+        .unwrap();
+        assert_eq!(stream_manifest_from_js(manifest_value).unwrap(), manifest);
+    }
+
+    #[wasm_bindgen_test]
+    fn provider_declines_are_a_closed_validated_set() {
+        let reason = Object::new();
+        Reflect::set(
+            &reason,
+            &JsValue::from_str("kind"),
+            &JsValue::from_str("sensor_unavailable"),
+        )
+        .unwrap();
+        assert!(matches!(
+            decline_reason_from_js(reason.into()).unwrap().kind,
+            Some(decline_reason::Kind::SensorUnavailable(_))
+        ));
+
+        let invalid = Object::new();
+        Reflect::set(
+            &invalid,
+            &JsValue::from_str("kind"),
+            &JsValue::from_str("retry_later"),
+        )
+        .unwrap();
+        assert!(decline_reason_from_js(invalid.into()).is_err());
+    }
+
+    #[wasm_bindgen_test(async)]
+    async fn provider_async_iterable_is_demand_driven_and_typed() {
+        let factory = Function::new_no_args(
+            "return (async function* () { yield { timestampNs: 7n, payload: new Uint8Array([]) }; })();",
+        );
+        let source = factory.call0(&JsValue::UNDEFINED).unwrap();
+        let iterator = async_iterator_from_js(source).unwrap();
+        let mut source = typed_source_stream::<CameraFrame>(iterator);
+        let item = source.next().await.unwrap().unwrap();
+        assert_eq!(item.timestamp_ns, 7);
+        assert_eq!(item.payload, CameraFrame::default());
+        assert!(source.next().await.is_none());
     }
 
     #[wasm_bindgen_test]

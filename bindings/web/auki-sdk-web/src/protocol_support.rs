@@ -1,11 +1,25 @@
-#[cfg(any(feature = "message", feature = "stream"))]
+#[cfg(any(
+    feature = "blob",
+    feature = "catalog",
+    feature = "info",
+    feature = "message",
+    feature = "registry",
+    feature = "stream"
+))]
 use std::cell::RefCell;
 use std::fmt::Display;
 
-use auki_sdk::{AukiPeerProtocols, Multiaddr, PeerId};
+use auki_sdk::{AukiPeerProtocols, AuthenticatedPeer, Multiaddr, PeerId};
 use js_sys::Error as JsError;
-#[cfg(any(feature = "message", feature = "stream"))]
-use js_sys::Promise;
+#[cfg(any(
+    feature = "blob",
+    feature = "catalog",
+    feature = "info",
+    feature = "message",
+    feature = "registry",
+    feature = "stream"
+))]
+use js_sys::{Promise, Reflect};
 #[cfg(any(
     feature = "blob",
     feature = "catalog",
@@ -110,6 +124,128 @@ pub(crate) fn to_js_value(
     feature = "registry",
     feature = "stream"
 ))]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AuthenticatedPeerRecord {
+    pub(crate) peer_id: String,
+    pub(crate) subject: String,
+    pub(crate) peer_type: Option<String>,
+    pub(crate) domain_ids: Vec<String>,
+    pub(crate) scopes: Vec<String>,
+    pub(crate) application: Option<ApplicationMetadataRecord>,
+    pub(crate) verified_until: String,
+}
+
+#[cfg(any(
+    feature = "blob",
+    feature = "catalog",
+    feature = "info",
+    feature = "message",
+    feature = "registry",
+    feature = "stream"
+))]
+impl From<&AuthenticatedPeer> for AuthenticatedPeerRecord {
+    fn from(peer: &AuthenticatedPeer) -> Self {
+        Self {
+            peer_id: peer.peer_id.to_string(),
+            subject: peer.subject.to_string(),
+            peer_type: peer.peer_type.clone(),
+            domain_ids: peer.domain_ids.iter().map(ToString::to_string).collect(),
+            scopes: peer.scopes.clone(),
+            application: peer
+                .application
+                .as_ref()
+                .map(|application| ApplicationMetadataRecord {
+                    name: application.name.clone(),
+                    version: application.version.clone(),
+                }),
+            verified_until: peer.verified_until.to_rfc3339(),
+        }
+    }
+}
+
+#[cfg(any(
+    feature = "blob",
+    feature = "catalog",
+    feature = "info",
+    feature = "message",
+    feature = "registry",
+    feature = "stream"
+))]
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct ApplicationMetadataRecord {
+    pub(crate) name: String,
+    pub(crate) version: String,
+}
+
+#[cfg(any(
+    feature = "blob",
+    feature = "catalog",
+    feature = "info",
+    feature = "message",
+    feature = "registry",
+    feature = "stream"
+))]
+pub(crate) fn authenticated_peer_to_js(
+    context: &'static str,
+    peer: &AuthenticatedPeer,
+) -> Result<JsValue, JsValue> {
+    to_js_value(context, &AuthenticatedPeerRecord::from(peer))
+}
+
+#[cfg(any(
+    feature = "blob",
+    feature = "catalog",
+    feature = "info",
+    feature = "message",
+    feature = "registry",
+    feature = "stream"
+))]
+pub(crate) fn javascript_error_reason(error: &JsValue) -> String {
+    if let Some(message) = error.as_string() {
+        return message;
+    }
+    if let Ok(message) = Reflect::get(error, &JsValue::from_str("message"))
+        && let Some(message) = message.as_string()
+    {
+        return message;
+    }
+    "JavaScript callback failed".to_owned()
+}
+
+#[cfg(any(
+    feature = "blob",
+    feature = "catalog",
+    feature = "info",
+    feature = "message",
+    feature = "registry",
+    feature = "stream"
+))]
+#[wasm_bindgen(typescript_custom_section)]
+const AUTHENTICATED_PEER_TYPESCRIPT: &str = r#"
+/** Safe metadata authenticated from the remote peer's DDS credential. */
+export interface AukiAuthenticatedPeer {
+    readonly peerId: string;
+    readonly subject: string;
+    readonly peerType?: string;
+    readonly domainIds: readonly string[];
+    readonly scopes: readonly string[];
+    readonly application?: {
+        readonly name: string;
+        readonly version: string;
+    };
+    readonly verifiedUntil: string;
+}
+"#;
+
+#[cfg(any(
+    feature = "blob",
+    feature = "catalog",
+    feature = "info",
+    feature = "message",
+    feature = "registry",
+    feature = "stream"
+))]
 #[wasm_bindgen(typescript_custom_section)]
 const EXACT_TARGET_TYPESCRIPT: &str = r#"
 /** Exact advertised route for one mutually authenticated Auki peer. */
@@ -121,13 +257,27 @@ export interface AukiExactTarget {
 
 /// Shared idempotent close promise for Wasm handles that own asynchronous
 /// protocol cleanup.
-#[cfg(any(feature = "message", feature = "stream"))]
+#[cfg(any(
+    feature = "blob",
+    feature = "catalog",
+    feature = "info",
+    feature = "message",
+    feature = "registry",
+    feature = "stream"
+))]
 #[derive(Default)]
 pub(crate) struct CloseBarrier {
     promise: RefCell<Option<Promise>>,
 }
 
-#[cfg(any(feature = "message", feature = "stream"))]
+#[cfg(any(
+    feature = "blob",
+    feature = "catalog",
+    feature = "info",
+    feature = "message",
+    feature = "registry",
+    feature = "stream"
+))]
 impl CloseBarrier {
     pub(crate) fn get_or_start(&self, start: impl FnOnce() -> Promise) -> Promise {
         if let Some(closing) = self.promise.borrow().clone() {

@@ -8,7 +8,6 @@ use auki_protocols::message::{
     MessageEndpoint, MessageEvent, v1::ID,
 };
 use auki_registry::RegistryRef;
-use auki_sdk::AuthenticatedPeer;
 use futures::{FutureExt, pin_mut};
 use js_sys::{Promise, Reflect, Uint8Array};
 use serde::{Deserialize, Serialize};
@@ -18,7 +17,8 @@ use wasm_bindgen_futures::future_to_promise;
 use crate::{
     AukiPeer,
     protocol_support::{
-        CloseBarrier, js_context, js_error, parse_exact_target, peer_protocols, to_js_value,
+        AuthenticatedPeerRecord, CloseBarrier, js_context, js_error, parse_exact_target,
+        peer_protocols, to_js_value,
     },
 };
 
@@ -421,44 +421,6 @@ fn message_channel_catalog_to_js(channels: &[MessageChannelResource]) -> Result<
     to_js_value("convert Message channel catalog", &records)
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AuthenticatedPeerRecord {
-    peer_id: String,
-    subject: String,
-    peer_type: Option<String>,
-    domain_ids: Vec<String>,
-    scopes: Vec<String>,
-    application: Option<ApplicationMetadataRecord>,
-    verified_until: String,
-}
-
-impl From<&AuthenticatedPeer> for AuthenticatedPeerRecord {
-    fn from(peer: &AuthenticatedPeer) -> Self {
-        Self {
-            peer_id: peer.peer_id.to_string(),
-            subject: peer.subject.to_string(),
-            peer_type: peer.peer_type.clone(),
-            domain_ids: peer.domain_ids.iter().map(ToString::to_string).collect(),
-            scopes: peer.scopes.clone(),
-            application: peer
-                .application
-                .as_ref()
-                .map(|application| ApplicationMetadataRecord {
-                    name: application.name.clone(),
-                    version: application.version.clone(),
-                }),
-            verified_until: peer.verified_until.to_rfc3339(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct ApplicationMetadataRecord {
-    name: String,
-    version: String,
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MessageEventRecord {
@@ -512,20 +474,6 @@ export interface AukiMessageChannelResource {
     readonly owner_peer_id: string;
     readonly resource_id: string;
     readonly clock: AukiRegistryRef;
-}
-
-/** Safe metadata authenticated from the remote peer's DDS credential. */
-export interface AukiAuthenticatedPeer {
-    readonly peerId: string;
-    readonly subject: string;
-    readonly peerType?: string;
-    readonly domainIds: readonly string[];
-    readonly scopes: readonly string[];
-    readonly application?: {
-        readonly name: string;
-        readonly version: string;
-    };
-    readonly verifiedUntil: string;
 }
 
 /** One accepted live message with its authenticated sender and channel. */

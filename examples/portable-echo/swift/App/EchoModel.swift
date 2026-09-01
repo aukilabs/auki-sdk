@@ -29,6 +29,7 @@ final class EchoModel: ObservableObject {
     private var echo: AukiEcho?
     private var receiveTask: Task<Void, Never>?
     private var automationStarted = false
+    private var stopAfterReceive = false
 
     var canLogin: Bool {
         phase == .signedOut && !email.isEmpty && !password.isEmpty
@@ -162,6 +163,7 @@ final class EchoModel: ObservableObject {
         selectedDomainID = automationDomain
         remoteCard = environment["AUKI_IOS_REMOTE_CARD"] ?? ""
         message = environment["AUKI_IOS_MESSAGE"] ?? message
+        stopAfterReceive = environment["AUKI_IOS_STOP_AFTER_RECEIVE"] == "1"
         Task {
             guard await login() else { return }
             selectedDomainID = automationDomain
@@ -183,6 +185,10 @@ final class EchoModel: ObservableObject {
                     let payload = String(decoding: receipt.payload, as: UTF8.self)
                     self.write("Received from \(receipt.remotePeerId): \(payload)")
                     print("AUKI_IOS_ECHO_SERVED peer=\(receipt.remotePeerId) payload=\(payload)")
+                    if self.stopAfterReceive {
+                        Task { await self.stop(reason: "Automation completed") }
+                        return
+                    }
                 } catch {
                     if self.echo === mounted { self.write(error) }
                     return

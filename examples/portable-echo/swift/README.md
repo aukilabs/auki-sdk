@@ -52,4 +52,5 @@ xcodebuild \
 For repeatable live interop, the debug app also accepts `AUKI_IOS_EMAIL`,
 `AUKI_IOS_PASSWORD`, `AUKI_IOS_DOMAIN_ID`, optional `AUKI_IOS_REMOTE_CARD`, and
 optional `AUKI_IOS_MESSAGE` in its process environment. Credentials are never
-printed.
+printed. Set `AUKI_IOS_STOP_AFTER_RECEIVE=1` when a smoke run should perform
+ordered echo and peer shutdown after its first inbound message.

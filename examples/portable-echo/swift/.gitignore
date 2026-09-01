@@ -4,3 +4,4 @@ Package/.build/
 .build-bindings/
 *.xcodeproj/
 DerivedData/
+.mint/

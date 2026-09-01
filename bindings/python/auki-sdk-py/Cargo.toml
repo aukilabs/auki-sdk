@@ -15,16 +15,71 @@ name = "auki_sdk"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = []
+default = ["standard-protocols"]
 extension-module = ["pyo3/extension-module"]
+info = [
+  "dep:auki-protocols",
+  "dep:serde",
+  "dep:serde_json",
+  "auki-protocols/info-endpoint",
+]
+catalog = [
+  "dep:auki-protocols",
+  "dep:serde",
+  "dep:serde_json",
+  "auki-protocols/catalog-endpoint",
+]
+registry = [
+  "dep:auki-protocols",
+  "dep:serde",
+  "dep:serde_json",
+  "auki-protocols/registry-endpoint",
+]
+blob = [
+  "dep:auki-protocols",
+  "dep:serde",
+  "dep:serde_json",
+  "auki-protocols/blob-endpoint",
+  "tokio/time",
+]
+message = [
+  "dep:auki-protocols",
+  "dep:auki-registry",
+  "dep:serde",
+  "dep:serde_json",
+  "auki-protocols/message-endpoint",
+  "tokio/macros",
+]
+stream = [
+  "dep:auki-datatypes",
+  "dep:auki-protocols",
+  "dep:futures",
+  "dep:prost",
+  "dep:serde",
+  "dep:serde_json",
+  "auki-protocols/stream-endpoint",
+  "tokio/macros",
+  "tokio/time",
+]
+finite-protocols = ["info", "catalog", "registry", "blob"]
+standard-protocols = ["finite-protocols", "message", "stream"]
 
 [dependencies]
+auki-datatypes = { path = "../../../crates/auki-datatypes", optional = true }
+auki-protocols = { path = "../../../crates/auki-protocols", optional = true }
+auki-registry = { path = "../../../crates/auki-registry", optional = true }
 auki-sdk-rs = { package = "auki-sdk", path = "../../../crates/auki-sdk" }
+futures = { workspace = true, optional = true }
 parking_lot.workspace = true
+prost = { version = "0.13", optional = true }
 pyo3 = { version = "0.22", features = ["abi3-py38"] }
 pyo3-async-runtimes = { version = "0.22", features = ["tokio-runtime"] }
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_json = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["sync"] }
 uuid.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
+jsonwebtoken = "9.3.1"
 pyo3 = { version = "0.22", features = ["abi3-py38", "auto-initialize"] }

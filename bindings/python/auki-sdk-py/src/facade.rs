@@ -247,6 +247,17 @@ impl PyAukiPeer {
     pub fn protocols(&self) -> AukiPeerProtocols {
         self.protocols.clone()
     }
+
+    #[cfg(all(
+        test,
+        feature = "info",
+        feature = "blob",
+        feature = "message",
+        feature = "stream"
+    ))]
+    pub(crate) fn from_test_peer(peer: AukiPeer) -> Self {
+        Self::new(peer)
+    }
 }
 
 #[pymethods]

@@ -20,7 +20,7 @@ extension-module = ["pyo3/extension-module"]
 
 [dependencies]
 auki-echo-protocol = { package = "auki-portable-echo", path = ".." }
-auki-sdk-binding = { package = "auki-sdk-py", path = "../../../bindings/python/auki-sdk-py" }
+auki-sdk-binding = { package = "auki-sdk-py", path = "../../../bindings/python/auki-sdk-py", default-features = false }
 auki-sdk-rs = { package = "auki-sdk", path = "../../../crates/auki-sdk" }
 parking_lot.workspace = true
 pyo3 = { version = "0.22", features = ["abi3-py38"] }

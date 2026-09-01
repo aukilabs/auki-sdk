@@ -702,10 +702,19 @@ dependencies = [
 name = "auki-sdk-py"
 version = "0.1.0"
 dependencies = [
+ "auki-datatypes",
+ "auki-protocols",
+ "auki-registry",
  "auki-sdk",
+ "chrono",
+ "futures",
+ "jsonwebtoken 9.3.1",
  "parking_lot",
+ "prost",
  "pyo3",
  "pyo3-async-runtimes",
+ "serde",
+ "serde_json",
  "tokio",
  "uuid",
 ]

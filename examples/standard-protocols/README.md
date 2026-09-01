@@ -1,8 +1,8 @@
 # Standard protocol playground
 
 This playground starts the same SDK-owned protocols on native Rust, Python,
-and Web. Use it when building an application on Auki's standard protocols or
-when checking cross-platform compatibility.
+Web, and Swift/iOS. Use it when building an application on Auki's standard
+protocols or when checking cross-platform compatibility.
 
 For a small example of **authoring a custom portable protocol**, use
 [`portable-echo`](../portable-echo/README.md) instead.
@@ -19,14 +19,14 @@ families:
 | Registry | v3 | one Frame registry entry |
 | Blob | v1 | one content-addressed byte string |
 | Message | v1 | one typed, timestamped message |
-| Stream | v2 | one finite scalar stream |
+| Stream | v2 | one scalar sample |
 
 Catalog owns two wire protocols, so each peer card advertises seven exact
 protocol IDs while the test reports six protocol-family results.
 
 The hosts are deliberately thin. Protocol contracts, bounds, authenticated
-streams, and relay-backed peer lifecycle stay in Rust; TypeScript and Python
-only provide fixture data and application flow.
+streams, and relay-backed peer lifecycle stay in Rust; TypeScript, Python, and
+Swift only provide fixture data and application flow.
 
 ## Protected four-peer matrix
 
@@ -77,6 +77,13 @@ AUKI_PROTOCOL_MATRIX_OK peers=4 edges=8 protocols=6 cases=48
 
 The success marker is emitted only after all four peers, their relay bookings,
 Chromium, and temporary state have shut down cleanly.
+
+## Swift/iOS interoperability gate
+
+The [Swift playground](swift/README.md) uses the same seven wire IDs and six
+family checks. Its simulator gate runs all six protocols in both Swift/native
+directions and both Swift/browser directions. This remains separate from the
+four-peer protected matrix so the ordinary browser job does not require Xcode.
 
 ## Try the browser node manually
 

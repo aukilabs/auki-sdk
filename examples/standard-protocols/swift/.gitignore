@@ -1,0 +1,4 @@
+Package/.build/
+*.xcodeproj/
+DerivedData/
+.mint/

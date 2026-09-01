@@ -10,18 +10,25 @@
 #![forbid(unsafe_code)]
 
 #[cfg(target_arch = "wasm32")]
+mod protocol_support;
+#[cfg(target_arch = "wasm32")]
+mod protocols;
+
+#[cfg(target_arch = "wasm32")]
 mod facade {
-    use std::{cell::RefCell, fmt::Display};
+    use std::cell::RefCell;
 
     use auki_sdk::{
         AukiPeer as SdkPeer, AukiPeerBootstrap, AukiPeerConfig, AukiPeerExit, AukiPeerLifecycle,
         AukiPeerProtocols, AuthClient, AuthEnvironment, Credentials, DomainDescriptor,
         DomainSelection,
     };
-    use js_sys::{Array, Error as JsError, Promise};
+    use js_sys::{Array, Promise};
     use uuid::Uuid;
     use wasm_bindgen::prelude::*;
     use wasm_bindgen_futures::future_to_promise;
+
+    use crate::protocol_support::{js_context, js_error};
 
     /// Authenticated User session used to inspect Domains and start peers.
     #[wasm_bindgen]
@@ -87,7 +94,7 @@ mod facade {
         #[wasm_bindgen(js_name = startPeer)]
         pub async fn start_peer(&self, domain_id: String) -> Result<AukiPeer, JsValue> {
             let domain_id =
-                Uuid::parse_str(&domain_id).map_err(|_| js_failure("Domain ID must be a UUID"))?;
+                Uuid::parse_str(&domain_id).map_err(|_| js_error("Domain ID must be a UUID"))?;
             let peer = self
                 .bootstrap
                 .start_ephemeral_peer(DomainSelection::new(domain_id))
@@ -217,7 +224,7 @@ mod facade {
                 .inner
                 .borrow_mut()
                 .take()
-                .ok_or_else(|| js_failure("Auki peer is stopped"))?;
+                .ok_or_else(|| js_error("Auki peer is stopped"))?;
             let shutdown = peer.shutdown();
             Ok(future_to_promise(async move {
                 shutdown
@@ -227,15 +234,9 @@ mod facade {
             }))
         }
     }
-
-    fn js_context(context: &'static str, error: impl Display) -> JsValue {
-        JsError::new(&format!("{context}: {error}")).into()
-    }
-
-    fn js_failure(message: &'static str) -> JsValue {
-        JsError::new(message).into()
-    }
 }
 
 #[cfg(target_arch = "wasm32")]
 pub use facade::{AukiDomain, AukiPeer, AukiUserSession};
+#[cfg(target_arch = "wasm32")]
+pub use protocols::*;

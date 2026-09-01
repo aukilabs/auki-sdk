@@ -184,9 +184,10 @@ owns UI and platform lifecycle. Do not link independent Rust XCFrameworks for
 the peer and protocol into one application.
 
 The [portable echo iOS app](../../examples/portable-echo/swift/README.md) is the
-reference. Its simulator proof exchanges authenticated relay traffic in both
-directions with the native Rust host. Swift bindings for the six standard
-protocol families are not part of this first facade.
+small custom-protocol reference. The
+[standard protocol iOS app](../../examples/standard-protocols/swift/README.md)
+mounts Info, Catalog, Registry, Blob, Message, and Stream through the same Rust
+implementations and probes native or browser peers through exact relay routes.
 
 ## Discovery is still application-owned
 

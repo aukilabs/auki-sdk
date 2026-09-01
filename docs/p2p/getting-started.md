@@ -205,6 +205,11 @@ ID may store `AukiPeerIdentity.encoded()` and restore it with `fromEncoded`.
 Run the [Swift/iOS echo app](../../examples/portable-echo/swift/README.md) for
 the generated-project commands and simulator test.
 
+To consume the built-in protocols instead, run the
+[Swift/iOS standard playground](../../examples/standard-protocols/swift/README.md).
+It mounts all six families through `AukiStandardProtocols` and keeps endpoint
+shutdown ahead of peer shutdown.
+
 ## App credentials
 
 A trusted native or headless process can replace User credentials with:

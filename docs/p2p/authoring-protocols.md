@@ -257,6 +257,6 @@ cargo check --locked -p my-protocol --target wasm32-unknown-unknown
 ```
 
 Also prove native/native traffic and, when supported, browser/browser plus both
-native/Web directions, Python/native in both directions, and Swift/native in
-both directions on a simulator. Review the wire and endpoint modules as one
-release.
+native/Web directions, Python/native in both directions, Swift/native in both
+directions on a simulator, and both Swift/browser directions. Review the wire
+and endpoint modules as one release.

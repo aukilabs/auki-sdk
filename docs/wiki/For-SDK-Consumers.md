@@ -46,12 +46,12 @@ requesters may see or subscribe to its data.
 | Native Rust | Available: User/App auth, persistent identity, TCP/WSS relay routes, endpoints, shutdown |
 | Web/Wasm | Available: User auth, ephemeral identity, TCP/WSS relay routes, endpoints, shutdown |
 | Python | Available: User/App auth, persistent identity, TCP/WSS relay routes, same-module protocol adapters, shutdown |
-| Swift/iOS | Available: User auth, ephemeral or app-persisted identity, TCP/WSS relay routes, same-artifact custom protocol adapters, shutdown |
+| Swift/iOS | Available: User auth, ephemeral or app-persisted identity, TCP/WSS relay routes, all six standard protocol adapters, same-artifact custom adapters, shutdown |
 
 Info, Catalog, Registry, Blob, Message, and Stream expose client and serving
-roles in Rust, Web/Wasm, and Python over the same Rust implementations.
-Portable echo remains the maintained cross-language interop proof.
-Swift bindings for the six standard protocol families remain future work.
+roles in Rust, Web/Wasm, Python, and Swift/iOS over the same Rust
+implementations. The standard playground is the cross-runtime interoperability
+proof; portable echo remains the small custom-protocol reference.
 
 Do not start a new integration on the removed Manager or `Domain` runtime.
 Historical behavior remains documented in [Release history](Release-History)

@@ -86,7 +86,7 @@ model for its dataset protocol.
 | Native Rust | User/App authentication, persistent identity, default TCP reservation with TCP/WSS routes, exact protocols, ordered shutdown |
 | Web/Wasm | User authentication, ephemeral identity, mandatory WSS reservation with TCP/WSS routes, client and serving roles for all six standard protocols, ordered shutdown, and custom same-module Rust adapters |
 | Python | User/App authentication, persistent identity, default TCP reservation with TCP/WSS routes, client and serving roles for all six standard protocols, ordered shutdown, and custom same-module Rust adapters |
-| Swift/iOS | User authentication, ephemeral or application-persisted identity, default TCP reservation with TCP/WSS routes, custom same-artifact Rust adapters, and ordered shutdown |
+| Swift/iOS | User authentication, ephemeral or application-persisted identity, default TCP reservation with TCP/WSS routes, client and serving roles for all six standard protocols, custom same-artifact Rust adapters, and ordered shutdown |
 
 Robot and Compute products that already manage machine authority use
 `AukiPeer::start_external`. They keep task, capability, heartbeat, and safety
@@ -133,10 +133,11 @@ Rust protocol shared by native, Web, Python, and Swift applications. Its hosts
 prove that exact relay routes interoperate across those runtimes; they do not
 provide discovery.
 
-The six standard protocol families also expose matching client and serving
-roles in Rust, Web/Wasm, and Python. This is API parity over the same Rust wire
-implementations; portable echo remains the maintained cross-language interop
-proof.
+The [standard protocol playground](examples/standard-protocols) exposes matching
+client and serving roles for all six families in Rust, Web/Wasm, Python, and
+Swift/iOS. It proves the same Rust wire implementations across native, browser,
+Python, and iOS simulator peers; portable echo remains the small custom-protocol
+authoring example.
 
 ## Release status
 

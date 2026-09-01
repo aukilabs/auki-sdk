@@ -22,9 +22,9 @@ application / product protocol
 
 The canonical `AukiPeer` facade. It owns authority renewal, authenticated
 transport, relay-backed reachability by default, routes, protocol registration,
-fencing, and ordered shutdown. Native Rust, Web/Wasm, and Python expose the same
-core peer and protocol concepts with platform-appropriate route and lifecycle
-details.
+fencing, and ordered shutdown. Native Rust, Web/Wasm, Python, and Swift/iOS
+expose the same core peer and protocol concepts with platform-appropriate route
+and lifecycle details.
 
 ### [`auki-auth`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-auth)
 
@@ -99,8 +99,9 @@ state into Catalog and Stream providers.
   bindings remain available separately.
 - **Swift/iOS:** `auki-sdk-swift` provides User authentication, Domain
   selection, identity bytes, native relay-backed peers, routes, and ordered
-  shutdown. Product protocols compile a UniFFI adapter into the same umbrella
-  XCFramework. The six standard-protocol Swift adapters remain future work.
+  shutdown, plus client and serving adapters for all six standard protocols.
+  Product protocols compile a UniFFI adapter into the same umbrella
+  XCFramework.
 
 ## What an application normally imports
 

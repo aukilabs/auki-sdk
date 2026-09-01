@@ -88,9 +88,9 @@ route, and the SDK authenticates both identity and Domain before application
 bytes flow.
 
 Native Rust, Web/Wasm, Python, and Swift/iOS have an `AukiPeer` facade today.
-All six standard protocol families expose client and serving roles on Rust,
-Web/Wasm, and Python. Swift currently proves the same custom Rust protocol
-architecture through portable echo.
+All six standard protocol families expose client and serving roles on every
+one of those runtimes over the same Rust implementations. Portable echo remains
+the small custom-protocol architecture example.
 
 ## Tokenomics — How is value settled?
 

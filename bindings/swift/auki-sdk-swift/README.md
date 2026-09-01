@@ -10,9 +10,12 @@ transitions. It does not implement authentication, relay booking, libp2p, or
 protocol framing.
 
 The [portable echo iOS app](../../../examples/portable-echo/swift/README.md)
-shows the product-protocol shape and uses an ephemeral identity. Persistence is
-optional: store `AukiPeerIdentity.encoded()` only when the application requires
-a stable Peer ID.
+shows the product-protocol shape. The
+[standard protocol iOS app](../../../examples/standard-protocols/swift/README.md)
+mounts and probes Info, Catalog, Registry, Blob, Message, and Stream. Both use
+ephemeral identities. Persistence is optional: store
+`AukiPeerIdentity.encoded()` only when the application requires a stable Peer
+ID.
 
 ## Build
 
@@ -32,7 +35,8 @@ before running the script to override it.
 The package links `SystemConfiguration.framework`, `CoreFoundation.framework`,
 and `libiconv` for the final Apple target.
 
-This generic artifact is useful for applications that only need the peer
-lifecycle. A custom Rust protocol must instead produce one umbrella artifact
-that contains both this facade and its protocol adapter; linking two separate
-Rust XCFrameworks would create incompatible UniFFI object runtimes.
+The build script enables the complete standard-protocol bundle. Individual
+Rust features remain available for smaller custom artifacts. A custom Rust
+protocol must produce one umbrella artifact that contains both this facade and
+its protocol adapter; linking two separate Rust XCFrameworks would create
+incompatible UniFFI object runtimes.

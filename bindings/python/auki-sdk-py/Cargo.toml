@@ -1,0 +1,30 @@
+[package]
+name = "auki-sdk-py"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Mechanical Python facade for authenticated Auki peers"
+readme = "README.md"
+publish = false
+
+[lib]
+name = "auki_sdk"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+auki-sdk-rs = { package = "auki-sdk", path = "../../../crates/auki-sdk" }
+parking_lot.workspace = true
+pyo3 = { version = "0.22", features = ["abi3-py38"] }
+pyo3-async-runtimes = { version = "0.22", features = ["tokio-runtime"] }
+tokio = { workspace = true, features = ["sync"] }
+uuid.workspace = true
+
+[dev-dependencies]
+pyo3 = { version = "0.22", features = ["abi3-py38", "auto-initialize"] }

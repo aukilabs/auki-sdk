@@ -19,6 +19,7 @@ members = [
     "crates/auki-auth",
     "crates/auki-relay-booking",
     "crates/auki-sdk",
+    "bindings/python/auki-sdk-py",
     "crates/auki-protocols",
     "bindings/swift/auki-identity-swift",
     "crates/auki-datatypes",

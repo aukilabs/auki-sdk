@@ -7,6 +7,7 @@ shutdown while leaving product policy explicit.
 
 - [Run an existing protocol](getting-started.md)
 - [Author a portable protocol](authoring-protocols.md)
+- [Exercise all six standard protocols](../../examples/standard-protocols/README.md)
 - [Try the Web echo app](../../examples/portable-echo/web/README.md)
 - [Try the Python echo app](../../examples/portable-echo/python/README.md)
 
@@ -98,10 +99,12 @@ to serve that exact protocol.
 | Message | v1 | send + receive | send + receive | send + receive |
 | Stream | v2 | consume + produce | consume + produce | consume + produce |
 
-The portable echo reference also supports call + serve on all three hosts.
-These rows describe API parity over the same Rust protocol implementations;
-they do not claim that every cross-language combination has its own live
-credentialed E2E suite. Echo is the maintained interop proof.
+The [standard protocol playground](../../examples/standard-protocols/README.md)
+is the credentialed interoperability proof for this table. It starts Native,
+Python, Browser A, and Browser B peers and exercises all six families across
+eight directed edges: 48 checks in total, including both browser-to-browser
+directions. The portable echo remains the small custom-protocol authoring
+reference and also supports call + serve on all three hosts.
 
 Catalog v2 is wire-only because v3 embeds its locked log-row shape. Registry
 support begins at v3. Portable endpoints do not host or negotiate an older
@@ -144,6 +147,11 @@ Product protocols use a thin `wasm-bindgen` adapter compiled into the same
 Wasm module; live Rust handles cannot cross independently instantiated Wasm
 modules.
 
+The [standard protocol browser node](../../examples/standard-protocols/web/README.md)
+mounts all six families in one page and can probe another browser tab, native
+node, or Python node. The matrix proves Browser A → Browser B and Browser B →
+Browser A as separate WSS-route cases.
+
 ## Python
 
 `auki-sdk-py` binds the canonical native runtime instead of rebuilding it in
@@ -157,6 +165,10 @@ the executor, wire protocol, transport, relay booking, and ordered cleanup.
 The built-in binding exposes both client and serving roles for all six standard
 protocol families. Provider callbacks receive verified requester metadata, not
 credentials or authentication proofs.
+
+The [standard protocol playground](../../examples/standard-protocols/README.md)
+drives the Python node against Native and Browser peers using the same six
+Rust implementations.
 Swift/iOS does not yet expose the canonical peer facade.
 
 ## Discovery is still application-owned

@@ -18,4 +18,4 @@ python -u main.py
 ```
 
 See the parent [playground guide](../README.md) for the JSONL contract and the
-complete native/Python/browser matrix.
+eight-edge, 48-case Native/Python/two-Browser matrix.

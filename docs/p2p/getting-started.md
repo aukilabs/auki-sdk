@@ -9,6 +9,10 @@ for the same Domain, confirmed TCP/WSS relay-route pairs, and one authenticated
 echo exchange. The same protocol crate also powers the tiny Web and Python
 hosts.
 
+To exercise the SDK-owned Info, Catalog, Registry, Blob, Message, and Stream
+families instead, use the
+[standard protocol playground](../../examples/standard-protocols/README.md).
+
 ## Prerequisites
 
 - Rust `1.89.0` or newer
@@ -198,8 +202,8 @@ authenticates the expected remote Peer ID in the selected Domain.
 
 - [Author one portable protocol crate](authoring-protocols.md).
 - Run the [Python echo host](../../examples/portable-echo/python/README.md).
-- Run the [protected interop proof](../../examples/portable-echo/web/README.md#run-the-protected-direction-proof)
-  for browser-to-browser in both directions plus native-to-browser and
-  browser-to-native.
+- Run the [standard protocol matrix](../../examples/standard-protocols/README.md#protected-four-peer-matrix)
+  for all six SDK protocol families across Native, Python, and two distinct
+  Browser peers, including browser-to-browser in both directions.
 - Use [`auki-p2p`](../../crates/auki-p2p/README.md) directly only when building a
   custom runtime or transport integration.

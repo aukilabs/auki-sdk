@@ -1,0 +1,21 @@
+{
+  "name": "@aukilabs/standard-protocols-web-example",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "scripts": {
+    "build:wasm": "cd ../../../bindings/web/auki-sdk-web && wasm-pack build . --target web --out-dir ../../../examples/standard-protocols/web/pkg-web --dev --features finite-protocols,message,stream --locked",
+    "check": "npm run build:wasm && tsc --noEmit",
+    "build": "npm run build:wasm && tsc --noEmit && vite build",
+    "dev": "npm run build:wasm && vite --host 127.0.0.1",
+    "smoke:dev": "node scripts/smoke_standard_matrix.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1",
+    "typescript": "5.9.3",
+    "vite": "7.3.6"
+  }
+}

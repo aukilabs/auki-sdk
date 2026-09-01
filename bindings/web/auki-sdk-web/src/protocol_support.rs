@@ -1,17 +1,18 @@
-#[cfg(feature = "message")]
+#[cfg(any(feature = "message", feature = "stream"))]
 use std::cell::RefCell;
 use std::fmt::Display;
 
 use auki_sdk::{AukiPeerProtocols, Multiaddr, PeerId};
 use js_sys::Error as JsError;
-#[cfg(feature = "message")]
+#[cfg(any(feature = "message", feature = "stream"))]
 use js_sys::Promise;
 #[cfg(any(
     feature = "blob",
     feature = "catalog",
     feature = "info",
     feature = "message",
-    feature = "registry"
+    feature = "registry",
+    feature = "stream"
 ))]
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -31,7 +32,8 @@ pub(crate) fn js_error(message: impl AsRef<str>) -> JsValue {
     feature = "catalog",
     feature = "info",
     feature = "message",
-    feature = "registry"
+    feature = "registry",
+    feature = "stream"
 ))]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,7 +47,8 @@ struct ExactTarget {
     feature = "catalog",
     feature = "info",
     feature = "message",
-    feature = "registry"
+    feature = "registry",
+    feature = "stream"
 ))]
 pub(crate) fn peer_protocols(
     peer: &AukiPeer,
@@ -63,7 +66,8 @@ pub(crate) fn peer_protocols(
     feature = "catalog",
     feature = "info",
     feature = "message",
-    feature = "registry"
+    feature = "registry",
+    feature = "stream"
 ))]
 pub(crate) fn parse_exact_target(target: JsValue) -> Result<(PeerId, Multiaddr), JsValue> {
     let target: ExactTarget = serde_wasm_bindgen::from_value(target)
@@ -84,7 +88,8 @@ pub(crate) fn parse_exact_target(target: JsValue) -> Result<(PeerId, Multiaddr),
     feature = "catalog",
     feature = "info",
     feature = "message",
-    feature = "registry"
+    feature = "registry",
+    feature = "stream"
 ))]
 pub(crate) fn to_js_value(
     context: &'static str,
@@ -102,7 +107,8 @@ pub(crate) fn to_js_value(
     feature = "catalog",
     feature = "info",
     feature = "message",
-    feature = "registry"
+    feature = "registry",
+    feature = "stream"
 ))]
 #[wasm_bindgen(typescript_custom_section)]
 const EXACT_TARGET_TYPESCRIPT: &str = r#"
@@ -115,13 +121,13 @@ export interface AukiExactTarget {
 
 /// Shared idempotent close promise for Wasm handles that own asynchronous
 /// protocol cleanup.
-#[cfg(feature = "message")]
+#[cfg(any(feature = "message", feature = "stream"))]
 #[derive(Default)]
 pub(crate) struct CloseBarrier {
     promise: RefCell<Option<Promise>>,
 }
 
-#[cfg(feature = "message")]
+#[cfg(any(feature = "message", feature = "stream"))]
 impl CloseBarrier {
     pub(crate) fn get_or_start(&self, start: impl FnOnce() -> Promise) -> Promise {
         if let Some(closing) = self.promise.borrow().clone() {
@@ -140,7 +146,8 @@ impl CloseBarrier {
         feature = "catalog",
         feature = "info",
         feature = "message",
-        feature = "registry"
+        feature = "registry",
+        feature = "stream"
     )
 ))]
 mod tests {

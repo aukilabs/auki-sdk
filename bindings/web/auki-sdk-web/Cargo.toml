@@ -45,6 +45,16 @@ message = [
   "dep:serde-wasm-bindgen",
   "auki-protocols/message-endpoint",
 ]
+stream = [
+  "dep:async-channel",
+  "dep:auki-datatypes",
+  "dep:auki-protocols",
+  "dep:futures",
+  "dep:prost",
+  "dep:serde",
+  "dep:serde-wasm-bindgen",
+  "auki-protocols/stream-endpoint",
+]
 finite-protocols = ["info", "catalog", "registry", "blob"]
 
 [lib]
@@ -55,10 +65,12 @@ auki-sdk = { path = "../../../crates/auki-sdk" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 async-channel = { workspace = true, optional = true }
+auki-datatypes = { path = "../../../crates/auki-datatypes", optional = true }
 auki-protocols = { path = "../../../crates/auki-protocols", optional = true }
 auki-registry = { path = "../../../crates/auki-registry", optional = true }
 futures = { workspace = true, optional = true }
 js-sys = { workspace = true }
+prost = { version = "0.13", optional = true }
 serde = { workspace = true, features = ["derive"], optional = true }
 serde-wasm-bindgen = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["js"] }

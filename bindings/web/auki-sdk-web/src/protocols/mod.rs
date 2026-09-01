@@ -8,6 +8,8 @@ mod info;
 mod message;
 #[cfg(feature = "registry")]
 mod registry;
+#[cfg(feature = "stream")]
+mod stream;
 
 #[cfg(feature = "blob")]
 pub use blob::AukiBlobClient;
@@ -19,3 +21,5 @@ pub use info::AukiInfoClient;
 pub use message::{AukiMessageClient, AukiMessageEndpoint, AukiMessageReceiver, AukiMessageSender};
 #[cfg(feature = "registry")]
 pub use registry::AukiRegistryClient;
+#[cfg(feature = "stream")]
+pub use stream::{AukiStreamClient, AukiStreamSubscription};

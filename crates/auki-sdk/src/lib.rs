@@ -4,9 +4,10 @@
 //! [`AukiPeer`] retains one authenticated transport, its renewable authority, and
 //! optional DMS-backed relay reachability for their complete shared lifetime.
 
+mod bootstrap;
 mod config;
 mod protocol_contract;
-#[cfg(not(target_arch = "wasm32"))]
+mod runtime_policy;
 mod status;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -32,7 +33,12 @@ mod authority;
 #[cfg(not(target_arch = "wasm32"))]
 mod relay;
 
-pub use auki_auth::PreparedPeer;
+#[cfg(not(target_arch = "wasm32"))]
+pub use auki_auth::AppCredentials;
+pub use auki_auth::{
+    AuthClient, AuthEnvironment, AuthLimits, Credentials, DomainChoice, DomainDescriptor,
+    DomainSelection, PreparedPeer, PrincipalKind,
+};
 #[cfg(target_arch = "wasm32")]
 pub use auki_p2p::BrowserAuthenticatedRouteStream as AuthenticatedRouteStream;
 pub use auki_p2p::{
@@ -49,10 +55,11 @@ pub use authority::{ExternalAuthorityRefreshRequest, ExternalAuthorityUpdate};
 pub use authorization::{
     AukiPeerAuthorization, AukiPeerAuthorizationError, AukiPeerAuthorizationSnapshot,
 };
+pub use bootstrap::{AukiPeerBootstrap, AukiPeerBootstrapError};
 #[cfg(target_arch = "wasm32")]
 pub use browser_peer_runtime::{
-    AukiPeer, AukiPeerError, AukiPeerExit, AukiPeerLifecycle, AukiPeerReachability,
-    AukiPeerShutdownError, AukiPeerStartError,
+    AukiPeer, AukiPeerError, AukiPeerLifecycle, AukiPeerReachability, AukiPeerShutdownError,
+    AukiPeerStartError,
 };
 #[cfg(target_arch = "wasm32")]
 pub use browser_protocols::{AukiPeerProtocols, AukiProtocolRegistration};
@@ -71,7 +78,7 @@ pub use known_peers::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use peer_runtime::{
-    AukiPeer, AukiPeerAuthorityError, AukiPeerRelayError, AukiPeerShutdownError,
+    AukiPeer, AukiPeerAuthorityError, AukiPeerLifecycle, AukiPeerRelayError, AukiPeerShutdownError,
     AukiPeerStartError, AukiPeerTransportError, ExternalAuthorityControl,
     ExternalAuthorityReplaceOutcome,
 };
@@ -81,4 +88,5 @@ pub use protocol_contract::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use protocols::{AukiPeerProtocols, AukiProtocolRegistration};
 #[cfg(not(target_arch = "wasm32"))]
-pub use status::{AukiPeerFailure, AukiPeerStatus};
+pub use status::AukiPeerStatus;
+pub use status::{AukiPeerExit, AukiPeerFailure};

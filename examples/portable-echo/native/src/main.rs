@@ -1,28 +1,22 @@
 use std::env;
 
 use anyhow::{Context, Result, bail};
-use auki_auth::{AuthClient, AuthEnvironment, Credentials, DomainSelection};
 use auki_portable_echo::EchoEndpoint;
-use auki_sdk::{AukiPeer, AukiPeerConfig, Identity};
+use auki_sdk::{AukiPeer, AukiPeerBootstrap, Credentials, DomainSelection};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let identity = Identity::load_or_create(
-        env::var("AUKI_IDENTITY_FILE").unwrap_or_else(|_| "./state/peer.identity".to_owned()),
-    )?;
-    let session = AuthClient::new(AuthEnvironment::dev())?
-        .authenticate(Credentials::user_password(
-            env::var("AUKI_EMAIL")?,
-            env::var("AUKI_PASSWORD")?,
-        ))
-        .await?;
-    let prepared = session
-        .authorize_peer(
+    let bootstrap = AukiPeerBootstrap::dev(Credentials::user_password(
+        env::var("AUKI_EMAIL")?,
+        env::var("AUKI_PASSWORD")?,
+    ))
+    .await?;
+    let peer = bootstrap
+        .start_persistent_peer(
             DomainSelection::new(env::var("AUKI_DOMAIN_ID")?.parse()?),
-            &identity.proof(),
+            env::var("AUKI_IDENTITY_FILE").unwrap_or_else(|_| "./state/peer.identity".to_owned()),
         )
         .await?;
-    let peer = AukiPeer::start(identity, prepared, AukiPeerConfig::dev()).await?;
 
     let operation = run(&peer).await;
     let cleanup = peer.shutdown().await;

@@ -3,22 +3,16 @@ use std::{str::FromStr, time::Duration};
 use auki_p2p::{
     ExpectedRelayLimits, PeerId, RelayBaseTransport, RelayProvider, RelayReservationError,
 };
-use auki_relay_booking::{
-    RELAY_HTTP_REQUEST_TIMEOUT, RelayBookingMode, RelayBookingSnapshot, RelayBookingState,
-    RelaySlotState,
-};
+use auki_relay_booking::{RELAY_HTTP_REQUEST_TIMEOUT, RelayBookingSnapshot, RelaySlotState};
 use uuid::Uuid;
 
-use crate::{AukiRelayConfig, AukiRelayMode};
-
-pub(crate) const RELAY_AUTHORITY_SAFETY: Duration = Duration::from_secs(20);
-
-pub(crate) fn booking_mode(policy: AukiRelayConfig) -> RelayBookingMode {
-    match policy.mode {
-        AukiRelayMode::Public => RelayBookingMode::Public,
-        AukiRelayMode::Dedicated => RelayBookingMode::Dedicated,
-    }
-}
+use crate::{
+    AukiRelayConfig,
+    runtime_policy::{
+        ActiveBookingValidation, RELAY_AUTHORITY_SAFETY_MARGIN, cap_relay_renewal_delay,
+        relay_authorized_until, validate_active_booking,
+    },
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RelayFence {
@@ -112,17 +106,16 @@ pub(crate) fn matches_ready_relay(
 }
 
 pub(crate) fn relay_usable_until(ready: &ReadyRelay) -> chrono::DateTime<chrono::Utc> {
-    ready
-        .requested_until
-        .min(ready.authority_expires_at)
-        .min(ready.provider_lease_expires_at)
-        - chrono::Duration::from_std(RELAY_AUTHORITY_SAFETY)
-            .expect("the fixed browser relay safety margin fits chrono")
+    relay_authorized_until(
+        ready.requested_until,
+        ready.authority_expires_at,
+        ready.provider_lease_expires_at,
+    )
 }
 
 pub(crate) fn relay_renewal_start_deadline(ready: &ReadyRelay) -> chrono::DateTime<chrono::Utc> {
     ready.authority_expires_at
-        - chrono::Duration::from_std(RELAY_AUTHORITY_SAFETY + RELAY_HTTP_REQUEST_TIMEOUT)
+        - chrono::Duration::from_std(RELAY_AUTHORITY_SAFETY_MARGIN + RELAY_HTTP_REQUEST_TIMEOUT)
             .expect("the fixed browser relay renewal margin fits chrono")
 }
 
@@ -136,10 +129,7 @@ pub(crate) fn booking_renewal_delay_at(
         .to_std()
         .unwrap_or_default();
     let preferred = remaining / 4;
-    let latest = remaining
-        .saturating_sub(RELAY_AUTHORITY_SAFETY)
-        .saturating_sub(RELAY_HTTP_REQUEST_TIMEOUT);
-    preferred.min(latest)
+    cap_relay_renewal_delay(remaining, preferred, RELAY_HTTP_REQUEST_TIMEOUT)
 }
 
 pub(crate) fn pull_booking_renewal_forward(
@@ -157,17 +147,12 @@ fn validate_policy(
     snapshot: &RelayBookingSnapshot,
     policy: AukiRelayConfig,
 ) -> Result<(), ReadyRelayError> {
-    if snapshot.mode != booking_mode(policy)
-        || snapshot.requested_duration_seconds != policy.requested_duration.as_secs()
-        || snapshot.relay_count != policy.relay_count
-        || snapshot.state != RelayBookingState::Active
-        || snapshot.slots.len() != usize::from(policy.relay_count)
-    {
-        return Err(ReadyRelayError::Invalid(
-            "active relay booking does not match the browser policy",
-        ));
+    match validate_active_booking(snapshot, policy.into()) {
+        ActiveBookingValidation::Match => Ok(()),
+        ActiveBookingValidation::PolicyMismatch | ActiveBookingValidation::Ended => Err(
+            ReadyRelayError::Invalid("active relay booking does not match the browser policy"),
+        ),
     }
-    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -181,10 +166,11 @@ pub(crate) enum ReadyRelayError {
 #[cfg(test)]
 mod tests {
     use auki_p2p::Identity;
-    use auki_relay_booking::{RelayLimits, RelaySlotSnapshot};
+    use auki_relay_booking::{RelayBookingState, RelayLimits, RelaySlotSnapshot};
     use chrono::Duration as ChronoDuration;
 
     use super::*;
+    use crate::runtime_policy::booking_mode;
 
     fn policy() -> AukiRelayConfig {
         AukiRelayConfig::default()

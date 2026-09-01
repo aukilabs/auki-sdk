@@ -29,15 +29,21 @@ use wasm_bindgen_futures::spawn_local;
 use crate::{
     AukiPeerConfig, AukiRelayConfig,
     browser_booking::{
-        ReadyRelay, ReadyRelayError, booking_mode, booking_renewal_delay_at, matches_ready_relay,
+        ReadyRelay, ReadyRelayError, booking_renewal_delay_at, matches_ready_relay,
         pull_booking_renewal_forward, ready_relay, relay_renewal_start_deadline,
         relay_usable_until,
     },
     browser_protocols::AukiPeerProtocols,
     protocol_contract::AukiProtocolError,
+    runtime_policy::{
+        RejectedAuthorityRevision, booking_mode, next_authority_revision,
+        rejected_authority_revision,
+    },
+    status::{AukiPeerExit, AukiPeerFailure},
 };
 
 const RELAY_RETRY: Duration = Duration::from_secs(2);
+const CLEANUP_STAGE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One browser Peer with renewable DDS authority and mandatory relay reachability.
 pub struct AukiPeer {
@@ -265,10 +271,8 @@ impl AukiPeer {
         async move {
             let protocol_failure = self.protocols.shutdown_all().await.err();
             let relay_failure = match self.relay.stop().await {
-                SupervisorExit::Failed { reason } => Some(reason),
-                SupervisorExit::Shutdown
-                | SupervisorExit::OwnersDropped
-                | SupervisorExit::Node(_) => None,
+                SupervisorExit::Failed { reason, .. } => Some(reason),
+                SupervisorExit::Shutdown | SupervisorExit::OwnersDropped => None,
             };
             self.closed = true;
             match (protocol_failure, relay_failure) {
@@ -287,13 +291,6 @@ impl Drop for AukiPeer {
             self.protocols.abort_all();
         }
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AukiPeerExit {
-    Node(BrowserNodeExit),
-    SupervisorFailed { reason: String },
-    SupervisorStopped,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -436,11 +433,25 @@ async fn cleanup_startup(
     authority: &AuthoritySupervisor,
     known_booking_id: Option<Uuid>,
 ) {
-    let _ = node.shutdown().await;
-    if let Some(booking_id) = known_booking_id {
-        let _ = client.delete(booking_id).await;
+    match cleanup_before_deadline(node.shutdown(), CLEANUP_STAGE_TIMEOUT).await {
+        Some(Ok(())) => {}
+        Some(Err(error)) => warn!(error = %error, "browser node startup cleanup failed"),
+        None => warn!("browser node startup cleanup timed out"),
     }
-    authority.stop().await;
+    if let Some(booking_id) = known_booking_id {
+        match cleanup_before_deadline(client.delete(booking_id), CLEANUP_STAGE_TIMEOUT).await {
+            Some(Ok(())) => {}
+            Some(Err(error)) if error.http_code() == Some(RelayErrorCode::NotFound) => {}
+            Some(Err(error)) => warn!(error = %error, "browser booking startup cleanup failed"),
+            None => warn!("browser booking startup cleanup timed out"),
+        }
+    }
+    if cleanup_before_deadline(authority.stop(), CLEANUP_STAGE_TIMEOUT)
+        .await
+        .is_none()
+    {
+        warn!("browser authority startup cleanup timed out");
+    }
 }
 
 struct AuthoritySupervisor {
@@ -515,11 +526,12 @@ impl AuthoritySupervisor {
         if state.stopped {
             return Err(AuthoritySupervisorError::Stopped);
         }
-        if state.current.revision > rejected_revision {
-            return Ok(());
-        }
-        if state.current.revision != rejected_revision {
-            return Err(AuthoritySupervisorError::StaleRevision);
+        match rejected_authority_revision(state.current.revision, rejected_revision) {
+            RejectedAuthorityRevision::AlreadyReplaced => return Ok(()),
+            RejectedAuthorityRevision::Current => {}
+            RejectedAuthorityRevision::Stale => {
+                return Err(AuthoritySupervisorError::StaleRevision);
+            }
         }
         self.renew_locked(&mut state).await
     }
@@ -551,10 +563,7 @@ impl AuthoritySupervisor {
             .pending
             .as_ref()
             .expect("pending authority was just installed");
-        let next_revision = state
-            .current
-            .revision
-            .checked_add(1)
+        let next_revision = next_authority_revision(Some(state.current.revision))
             .ok_or(AuthoritySupervisorError::RevisionExhausted)?;
         self.authority.replace(&pending.update).await?;
         let pending = state
@@ -703,20 +712,22 @@ impl Drop for RelaySupervisor {
 enum SupervisorExit {
     Shutdown,
     OwnersDropped,
-    Node(BrowserNodeExit),
-    Failed { reason: String },
+    Failed {
+        failure: AukiPeerFailure,
+        reason: String,
+    },
 }
 
 fn peer_exit(exit: SupervisorExit) -> AukiPeerExit {
     match exit {
-        SupervisorExit::Node(status) => AukiPeerExit::Node(status),
-        SupervisorExit::Failed { reason } => AukiPeerExit::SupervisorFailed { reason },
-        SupervisorExit::Shutdown | SupervisorExit::OwnersDropped => AukiPeerExit::SupervisorStopped,
+        SupervisorExit::Failed { failure, .. } => AukiPeerExit::Failed(failure),
+        SupervisorExit::Shutdown | SupervisorExit::OwnersDropped => AukiPeerExit::Stopped,
     }
 }
 
 async fn wait_for_supervisor(stopped: Shared<oneshot::Receiver<SupervisorExit>>) -> SupervisorExit {
     stopped.await.unwrap_or_else(|_| SupervisorExit::Failed {
+        failure: AukiPeerFailure::Supervisor,
         reason: "browser relay supervisor status channel dropped".into(),
     })
 }
@@ -868,56 +879,75 @@ async fn finish_supervision(
     booking_id: Uuid,
 ) -> SupervisorExit {
     let (success, root_failure, context) = match end {
-        SupervisionEnd::Shutdown => (SupervisorExit::Shutdown, None, "shutdown".to_owned()),
+        SupervisionEnd::Shutdown => (Some(SupervisorExit::Shutdown), None, "shutdown".to_owned()),
         SupervisionEnd::OwnersDropped => (
-            SupervisorExit::OwnersDropped,
+            Some(SupervisorExit::OwnersDropped),
             None,
             "all Peer owners dropped".to_owned(),
         ),
-        SupervisionEnd::Node(status) => (
-            SupervisorExit::Node(status.clone()),
-            None,
-            format!("browser node stopped: {status:?}"),
-        ),
-        SupervisionEnd::Failed(error) => {
-            let reason = error.to_string();
+        SupervisionEnd::Node(status) => {
+            let reason = format!("browser node stopped: {status:?}");
             (
-                SupervisorExit::Failed {
-                    reason: reason.clone(),
-                },
-                Some(reason.clone()),
+                None,
+                Some((AukiPeerFailure::Transport, reason.clone())),
                 reason,
             )
+        }
+        SupervisionEnd::Failed(error) => {
+            let failure = error.failure();
+            let reason = error.to_string();
+            (None, Some((failure, reason.clone())), reason)
         }
     };
 
     let mut cleanup_failures = Vec::new();
-    if let Err(error) = node.shutdown().await
-        && !matches!(error, auki_p2p::Error::SwarmStopped)
-    {
-        cleanup_failures.push(format!("node cleanup failed: {error}"));
+    match cleanup_before_deadline(node.shutdown(), CLEANUP_STAGE_TIMEOUT).await {
+        Some(Ok(())) | Some(Err(auki_p2p::Error::SwarmStopped)) => {}
+        Some(Err(error)) => cleanup_failures.push(format!("node cleanup failed: {error}")),
+        None => cleanup_failures.push("node cleanup timed out".into()),
     }
-    if let Err(error) = client.delete(booking_id).await
-        && error.http_code() != Some(RelayErrorCode::NotFound)
-    {
-        cleanup_failures.push(format!("booking cleanup failed: {error}"));
+    match cleanup_before_deadline(client.delete(booking_id), CLEANUP_STAGE_TIMEOUT).await {
+        Some(Ok(())) => {}
+        Some(Err(error)) if error.http_code() == Some(RelayErrorCode::NotFound) => {}
+        Some(Err(error)) => cleanup_failures.push(format!("booking cleanup failed: {error}")),
+        None => cleanup_failures.push("booking cleanup timed out".into()),
     }
-    authority.stop().await;
+    if cleanup_before_deadline(authority.stop(), CLEANUP_STAGE_TIMEOUT)
+        .await
+        .is_none()
+    {
+        cleanup_failures.push("authority cleanup timed out".into());
+    }
 
-    if let Some(reason) = root_failure {
+    if let Some((failure, reason)) = root_failure {
         if cleanup_failures.is_empty() {
-            SupervisorExit::Failed { reason }
+            SupervisorExit::Failed { failure, reason }
         } else {
             SupervisorExit::Failed {
+                failure,
                 reason: format!("{reason}; {}", cleanup_failures.join("; ")),
             }
         }
     } else if cleanup_failures.is_empty() {
-        success
+        success.expect("non-failure supervision has a successful terminal result")
     } else {
         SupervisorExit::Failed {
+            failure: AukiPeerFailure::Cleanup,
             reason: format!("{context}; {}", cleanup_failures.join("; ")),
         }
+    }
+}
+
+async fn cleanup_before_deadline<T>(
+    cleanup: impl std::future::Future<Output = T>,
+    timeout: Duration,
+) -> Option<T> {
+    let cleanup = cleanup.fuse();
+    let deadline = Delay::new(timeout).fuse();
+    pin_mut!(cleanup, deadline);
+    futures::select_biased! {
+        result = cleanup => Some(result),
+        () = deadline => None,
     }
 }
 
@@ -941,10 +971,31 @@ enum SupervisorError {
     RelayChanged,
 }
 
+impl SupervisorError {
+    fn failure(&self) -> AukiPeerFailure {
+        match self {
+            Self::Authority(_) => AukiPeerFailure::Authority,
+            Self::Relay(_)
+            | Self::Selection(_)
+            | Self::BookingDisappeared
+            | Self::RelayAuthorityEnded
+            | Self::RelayChanged => AukiPeerFailure::Relay,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use wasm_bindgen_test::wasm_bindgen_test;
+
+    struct DropProbe(Rc<Cell<bool>>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.set(true);
+        }
+    }
 
     #[wasm_bindgen_test(async)]
     async fn lifecycle_clones_share_one_terminal_result() {
@@ -955,14 +1006,32 @@ mod tests {
         let clone = lifecycle.clone();
         stopped_sender
             .send(SupervisorExit::Failed {
+                failure: AukiPeerFailure::Relay,
                 reason: "relay ended".to_owned(),
             })
             .expect("terminal status receiver remains alive");
 
-        let expected = AukiPeerExit::SupervisorFailed {
-            reason: "relay ended".to_owned(),
-        };
+        let expected = AukiPeerExit::Failed(AukiPeerFailure::Relay);
         assert_eq!(lifecycle.wait_stopped().await, expected);
         assert_eq!(clone.wait_stopped().await, expected);
+    }
+
+    #[wasm_bindgen_test(async)]
+    async fn cleanup_deadline_drops_a_stuck_stage() {
+        let dropped = Rc::new(Cell::new(false));
+        let cleanup = {
+            let dropped = Rc::clone(&dropped);
+            async move {
+                let _probe = DropProbe(dropped);
+                futures::future::pending::<()>().await;
+            }
+        };
+
+        assert!(
+            cleanup_before_deadline(cleanup, Duration::ZERO)
+                .await
+                .is_none()
+        );
+        assert!(dropped.get());
     }
 }

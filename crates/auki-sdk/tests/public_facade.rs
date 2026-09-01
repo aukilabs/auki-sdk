@@ -2,14 +2,17 @@
 
 use auki_sdk::{
     AukiKnownPeerEvent, AukiKnownPeerRecvError, AukiKnownPeerSnapshot, AukiKnownPeers, AukiPeer,
-    AukiPeerAuthorityError, AukiPeerProtocolContext, AukiPeerProtocols, AukiPeerRelayError,
+    AukiPeerAuthorityError, AukiPeerBootstrap, AukiPeerBootstrapError, AukiPeerExit,
+    AukiPeerLifecycle, AukiPeerProtocolContext, AukiPeerProtocols, AukiPeerRelayError,
     AukiPeerShutdownError, AukiPeerStartError, AukiPeerStatus, AukiProtocolError,
     AukiProtocolRegistration, AukiProtocolRouteAttempt, AukiProtocolSpec, AukiProtocolStream,
-    AuthenticatedPeer, AuthenticatedRouteStream, DdsVerificationKeys, ExternalAuthorityControl,
+    AuthClient, AuthEnvironment, AuthenticatedPeer, AuthenticatedRouteStream, Credentials,
+    DdsVerificationKeys, DomainChoice, DomainSelection, ExternalAuthorityControl,
     ExternalAuthorityRefreshRequest, ExternalAuthorityReplaceOutcome, ExternalAuthorityUpdate,
     Identity, PreparedPeer, SignedP2pCredential,
 };
 use chrono::{DateTime, Utc};
+use std::path::Path;
 use uuid::Uuid;
 
 fn assert_send_sync<T: Send + Sync>() {}
@@ -21,6 +24,14 @@ fn register_custom_protocol(protocols: &AukiPeerProtocols) {
     let _registration = protocols.register(spec, |stream: AukiProtocolStream| async move {
         let _remote: &AuthenticatedPeer = stream.remote_peer();
     });
+}
+
+fn start_persistent_peer_is_public(
+    bootstrap: &AukiPeerBootstrap,
+    selection: DomainSelection,
+    identity_file: &Path,
+) {
+    drop(bootstrap.start_persistent_peer(selection, identity_file));
 }
 
 #[test]
@@ -37,8 +48,23 @@ fn facade_reexports_the_complete_safe_custom_protocol_surface() {
     let _stream: Option<AuthenticatedRouteStream> = None;
 
     let _start = AukiPeer::start;
+    let _bootstrap_authenticate = AukiPeerBootstrap::authenticate;
+    let _bootstrap_dev = AukiPeerBootstrap::dev;
+    let _bootstrap_domains = AukiPeerBootstrap::accessible_domains;
+    let _bootstrap_start = AukiPeerBootstrap::start_peer;
+    let _bootstrap_ephemeral = AukiPeerBootstrap::start_ephemeral_peer;
+    let _bootstrap_persistent = start_persistent_peer_is_public;
+    let _auth_client: Option<AuthClient> = None;
+    let _auth_environment = AuthEnvironment::dev();
+    let _credentials: Option<Credentials> = None;
+    let _domain_choice: Option<DomainChoice> = None;
+    let _domain_selection: Option<DomainSelection> = None;
+    let _bootstrap_error: Option<AukiPeerBootstrapError> = None;
     let _start_external = AukiPeer::start_external;
     let _shutdown = AukiPeer::shutdown;
+    let _lifecycle: fn(&AukiPeer) -> AukiPeerLifecycle = AukiPeer::lifecycle;
+    let _wait_stopped = AukiPeer::wait_stopped;
+    let _exit: Option<AukiPeerExit> = None;
     let _status: fn(&AukiPeer) -> AukiPeerStatus = AukiPeer::status;
     let _context: fn(&AukiPeer) -> AukiPeerProtocolContext = AukiPeer::protocol_context;
     let _protocols: fn(&AukiPeer) -> AukiPeerProtocols = AukiPeer::protocols;

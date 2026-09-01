@@ -392,7 +392,6 @@ fn coordinator_config(idempotency_key: &str) -> RelayCoordinatorConfig {
         retry_min: Duration::from_millis(5),
         retry_max: Duration::from_millis(5),
         http_timeout: Duration::from_millis(100),
-        authority_safety_margin: Duration::from_secs(15),
     }
 }
 

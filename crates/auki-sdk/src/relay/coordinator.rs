@@ -33,6 +33,11 @@ use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::runtime_policy::{
+    ActiveBookingValidation, RelayBookingExpectation, cap_relay_renewal_delay,
+    relay_authorized_until, validate_active_booking,
+};
+
 use super::{
     CreateRelayBookingRequest, RelayBookingApi, RelayBookingClientError, RelayBookingMode,
     RelayBookingSnapshot, RelayBookingState, RelayErrorCode, RelayIdempotencyKey, RelayOperation,
@@ -468,7 +473,6 @@ pub(crate) struct RelayCoordinatorConfig {
     pub(crate) retry_min: Duration,
     pub(crate) retry_max: Duration,
     pub(crate) http_timeout: Duration,
-    pub(crate) authority_safety_margin: Duration,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -940,13 +944,8 @@ impl CoordinatorActor {
             .signed_duration_since(now)
             .to_std()
             .unwrap_or_default();
-        let safety = self.config.authority_safety_margin;
-        let latest_safe_start = remaining
-            .saturating_sub(safety)
-            .saturating_sub(self.config.http_timeout);
-        let renew_after = remaining
-            .mul_f64(rand::random::<f64>() * 0.10 + 0.25)
-            .min(latest_safe_start)
+        let preferred = remaining.mul_f64(rand::random::<f64>() * 0.10 + 0.25);
+        let renew_after = cap_relay_renewal_delay(remaining, preferred, self.config.http_timeout)
             .max(Duration::from_millis(1));
         self.next_renew = Instant::now() + renew_after;
     }
@@ -1011,9 +1010,8 @@ impl CoordinatorActor {
                     .signed_duration_since(now)
                     .to_std()
                     .unwrap_or_default();
-                let retry_window = remaining
-                    .saturating_sub(self.config.authority_safety_margin)
-                    .saturating_sub(self.config.http_timeout);
+                let retry_window =
+                    cap_relay_renewal_delay(remaining, remaining, self.config.http_timeout);
                 if retry_window.is_zero() {
                     self.fence_control_plane().await?;
                     return Err(RelayCoordinatorError::AuthorityEnded);
@@ -1098,14 +1096,11 @@ impl CoordinatorActor {
         for (slot_id, (assignment_id, reservation_epoch, peer, bases, limits, lease_deadline)) in
             desired
         {
-            let literal_deadline = self
-                .snapshot
-                .requested_until
-                .min(self.snapshot.authority_expires_at)
-                .min(lease_deadline);
-            let authorized_until = literal_deadline
-                - chrono::Duration::from_std(self.config.authority_safety_margin)
-                    .map_err(|_| RelayCoordinatorError::ActiveBookingMismatch)?;
+            let authorized_until = relay_authorized_until(
+                self.snapshot.requested_until,
+                self.snapshot.authority_expires_at,
+                lease_deadline,
+            );
             if self.retiring.contains_key(&slot_id) {
                 continue;
             }
@@ -2316,16 +2311,18 @@ fn validate_booking_matches(
     snapshot: &RelayBookingSnapshot,
     config: &RelayCoordinatorConfig,
 ) -> Result<(), RelayCoordinatorError> {
-    if snapshot.mode != config.mode
-        || snapshot.requested_duration_seconds != config.requested_duration_seconds
-        || snapshot.relay_count != config.relay_count
-    {
-        return Err(RelayCoordinatorError::ActiveBookingMismatch);
+    let expected = RelayBookingExpectation {
+        mode: config.mode,
+        requested_duration_seconds: config.requested_duration_seconds,
+        relay_count: config.relay_count,
+    };
+    match validate_active_booking(snapshot, expected) {
+        ActiveBookingValidation::Match => Ok(()),
+        ActiveBookingValidation::PolicyMismatch => {
+            Err(RelayCoordinatorError::ActiveBookingMismatch)
+        }
+        ActiveBookingValidation::Ended => Err(RelayCoordinatorError::AuthorityEnded),
     }
-    if snapshot.state != RelayBookingState::Active {
-        return Err(RelayCoordinatorError::AuthorityEnded);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

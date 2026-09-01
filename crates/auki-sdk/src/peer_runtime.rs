@@ -21,27 +21,27 @@ use crate::{
         AuthoritySupervisorError, ExternalAuthorityHandle, ExternalAuthorityRefreshRequest,
         ExternalAuthorityUpdate, ExternalRefreshRequests, FixedDomainAuthority,
     },
-    config::{AukiPeerConfig, AukiRelayConfig, AukiRelayMode},
+    config::{AukiPeerConfig, AukiRelayConfig},
     context::{AukiPeerProtocolContext, ContextLifecycle},
     known_peers::AukiKnownPeers,
     protocol_contract::AukiProtocolError,
     protocols::AukiPeerProtocols,
     relay::{
-        RelayBookingClient, RelayBookingClientError, RelayBookingMode, RelayIdempotencyKey,
+        RelayBookingClient, RelayBookingClientError, RelayIdempotencyKey,
         coordinator::{
             PeerRelayReservations, RelayBookingCoordinator, RelayCoordinatorConfig,
             RelayCoordinatorError, RelayCoordinatorHealth, RelayCoordinatorShutdownError,
             RelayCoordinatorShutdownOutcome,
         },
     },
-    status::{AukiPeerFailure, AukiPeerStatus},
+    runtime_policy::booking_mode,
+    status::{AukiPeerExit, AukiPeerFailure, AukiPeerStatus},
 };
 
 const RELAY_RESERVATION_RETRY_BUDGET: Duration = Duration::from_secs(30);
 const RELAY_RETRY_MIN: Duration = Duration::from_millis(250);
 const RELAY_RETRY_MAX: Duration = Duration::from_secs(5);
 const RELAY_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
-const RELAY_AUTHORITY_SAFETY_MARGIN: Duration = Duration::from_secs(15);
 // A retirement can spend one budget joining its worker and up to two budgets
 // canceling distinct returned handles, followed by the coordinator's bounded
 // DELETE retry budget. Keep the outer deadline above that complete sequence.
@@ -339,6 +339,23 @@ struct PeerStatusController {
 struct PeerStatusState {
     status: AukiPeerStatus,
     shutting_down: bool,
+}
+
+/// Clone-only observation of one native Peer's terminal lifecycle result.
+///
+/// The observer does not retain the Peer, relay booking, authority, or
+/// transport. Every clone receives the same terminal result, including after
+/// [`AukiPeer::shutdown`] consumes the owner.
+#[derive(Clone)]
+pub struct AukiPeerLifecycle {
+    status: watch::Receiver<AukiPeerStatus>,
+}
+
+impl AukiPeerLifecycle {
+    /// Wait until the native Peer has stopped or failed.
+    pub async fn wait_stopped(&self) -> AukiPeerExit {
+        wait_for_stopped_status(self.status.clone()).await
+    }
 }
 
 impl PeerStatusController {
@@ -701,6 +718,7 @@ impl AukiPeer {
         let monitor = tokio::spawn(monitor_runtime(
             status.clone(),
             monitor_shutdown.clone(),
+            protocols.clone(),
             signals,
         ));
 
@@ -764,6 +782,21 @@ impl AukiPeer {
     /// Subscribe to facade lifecycle and readiness changes.
     pub fn subscribe_status(&self) -> watch::Receiver<AukiPeerStatus> {
         self.status.subscribe()
+    }
+
+    /// Retain a clone-only observer that outlives the consumed peer owner.
+    pub fn lifecycle(&self) -> AukiPeerLifecycle {
+        AukiPeerLifecycle {
+            status: self.status.subscribe(),
+        }
+    }
+
+    /// Wait for one stable terminal status without consuming the peer owner.
+    ///
+    /// Every waiter observes the retained final status. `Stopping` is skipped
+    /// because ordered cleanup may still finish successfully or fail.
+    pub async fn wait_stopped(&self) -> AukiPeerExit {
+        self.lifecycle().wait_stopped().await
     }
 
     /// Drain relay reservations, stop protocols and authority, then stop the transport.
@@ -881,10 +914,7 @@ fn relay_coordinator_config(
 ) -> Result<RelayCoordinatorConfig, RelayBookingClientError> {
     Ok(RelayCoordinatorConfig {
         idempotency_key: RelayIdempotencyKey::new(format!("auki-sdk-relay-{}", Uuid::new_v4()))?,
-        mode: match relay.mode {
-            AukiRelayMode::Public => RelayBookingMode::Public,
-            AukiRelayMode::Dedicated => RelayBookingMode::Dedicated,
-        },
+        mode: booking_mode(relay),
         requested_duration_seconds: relay.requested_duration.as_secs(),
         relay_count: relay.relay_count,
         status_poll_interval: relay.status_poll_interval,
@@ -892,7 +922,6 @@ fn relay_coordinator_config(
         retry_min: RELAY_RETRY_MIN,
         retry_max: RELAY_RETRY_MAX,
         http_timeout: RELAY_HTTP_TIMEOUT,
-        authority_safety_margin: RELAY_AUTHORITY_SAFETY_MARGIN,
     })
 }
 
@@ -1038,22 +1067,46 @@ impl RuntimeSignalSnapshot {
 async fn monitor_runtime(
     status: PeerStatusController,
     shutdown: CancellationToken,
+    protocols: AukiPeerProtocols,
     mut signals: RuntimeSignals,
 ) {
     loop {
         let observed = signals.snapshot().facade_status(signals.relay_required);
-        status.update(observed);
         if observed.is_terminal() {
+            // Fence before publishing the terminal result so a waiter can never
+            // observe failure while a retained protocol handle still accepts
+            // new work.
+            protocols.abort_all();
+            status.update(observed);
             return;
         }
+        status.update(observed);
         let changed = tokio::select! {
             biased;
             _ = shutdown.cancelled() => return,
             changed = signals.changed() => changed,
         };
         if changed.is_err() {
+            protocols.abort_all();
             status.update(AukiPeerStatus::Failed(AukiPeerFailure::Supervisor));
             return;
+        }
+    }
+}
+
+async fn wait_for_stopped_status(mut status: watch::Receiver<AukiPeerStatus>) -> AukiPeerExit {
+    loop {
+        let observed = *status.borrow_and_update();
+        match observed {
+            AukiPeerStatus::Stopped => return AukiPeerExit::Stopped,
+            AukiPeerStatus::Failed(failure) => return AukiPeerExit::Failed(failure),
+            AukiPeerStatus::Ready
+            | AukiPeerStatus::AuthorityUnavailable
+            | AukiPeerStatus::RelayUnavailable
+            | AukiPeerStatus::Stopping => {}
+        }
+        if status.changed().await.is_err() {
+            return AukiPeerExit::Failed(AukiPeerFailure::Supervisor);
         }
     }
 }
@@ -1107,7 +1160,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::{AukiPeerAuthorizationError, AukiPeerRoutesError};
+    use crate::{AukiPeerAuthorizationError, AukiPeerRoutesError, AukiRelayMode};
 
     const TEST_DDS_PRIVATE_KEY: &[u8] = br#"-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQggm4twpf4y/yNNw/k
@@ -1304,6 +1357,52 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             context.routes().snapshot(),
             Err(AukiPeerRoutesError::Stopped)
         ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn lifecycle_clone_observes_clean_stop_after_shutdown_consumes_peer() {
+        let identity = auki_p2p::Identity::generate();
+        let prepared = fixture(&identity, Uuid::new_v4());
+        let runtime = AukiPeer::start(identity, prepared, direct_config())
+            .await
+            .unwrap();
+        let lifecycle = runtime.lifecycle();
+        let waiter = tokio::spawn({
+            let lifecycle = lifecycle.clone();
+            async move { lifecycle.wait_stopped().await }
+        });
+
+        runtime.shutdown().await.unwrap();
+
+        assert_eq!(waiter.await.unwrap(), AukiPeerExit::Stopped);
+        assert_eq!(lifecycle.wait_stopped().await, AukiPeerExit::Stopped);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unexpected_transport_stop_fences_protocols_before_waiters_observe_failure() {
+        let identity = auki_p2p::Identity::generate();
+        let prepared = fixture(&identity, Uuid::new_v4());
+        let runtime = AukiPeer::start(identity, prepared, direct_config())
+            .await
+            .unwrap();
+        let protocols = runtime.protocols();
+        let node = runtime.node.as_ref().unwrap().clone();
+
+        node.shutdown_now().await;
+        let terminal = tokio::time::timeout(Duration::from_secs(2), runtime.wait_stopped())
+            .await
+            .expect("transport failure must become observable");
+        assert_eq!(terminal, AukiPeerExit::Failed(AukiPeerFailure::Transport));
+        assert_eq!(runtime.wait_stopped().await, terminal);
+        assert!(matches!(
+            protocols.register(
+                crate::AukiProtocolSpec::new("/example/fenced/1.0.0", 1, 32).unwrap(),
+                |_stream| async {},
+            ),
+            Err(AukiProtocolError::Stopped)
+        ));
+
+        let _ = runtime.shutdown().await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

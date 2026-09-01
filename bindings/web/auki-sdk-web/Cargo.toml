@@ -17,7 +17,6 @@ crate-type = ["cdylib", "rlib"]
 auki-sdk = { path = "../../../crates/auki-sdk" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-auki-auth = { path = "../../../crates/auki-auth" }
 js-sys = { workspace = true }
 uuid = { workspace = true, features = ["js"] }
 wasm-bindgen = { workspace = true }

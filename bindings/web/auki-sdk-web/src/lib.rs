@@ -1,9 +1,11 @@
 //! Generic Rust/Wasm composition for one authenticated Auki browser peer.
 //!
-//! JavaScript owns authentication, explicit Domain selection, peer startup,
-//! public routing data, and ordered shutdown. Rust protocol adapters compiled
-//! into the same Wasm module obtain the canonical [`auki_sdk::AukiPeerProtocols`]
-//! handle without exposing transport streams to JavaScript.
+//! JavaScript supplies User credentials and an explicit Domain selection, then
+//! owns the returned peer object, public routing data, and ordered shutdown.
+//! Rust owns authentication and peer startup through
+//! [`auki_sdk::AukiPeerBootstrap`]. Rust protocol adapters compiled into the
+//! same Wasm module obtain the canonical [`auki_sdk::AukiPeerProtocols`] handle
+//! without exposing transport streams to JavaScript.
 
 #![forbid(unsafe_code)]
 
@@ -11,12 +13,10 @@
 mod facade {
     use std::{cell::RefCell, fmt::Display};
 
-    use auki_auth::{
-        AuthClient, AuthEnvironment, AuthSession, Credentials, DomainDescriptor, DomainSelection,
-    };
     use auki_sdk::{
-        AukiPeer as SdkPeer, AukiPeerConfig, AukiPeerExit, AukiPeerLifecycle, AukiPeerProtocols,
-        Identity,
+        AukiPeer as SdkPeer, AukiPeerBootstrap, AukiPeerConfig, AukiPeerExit, AukiPeerLifecycle,
+        AukiPeerProtocols, AuthClient, AuthEnvironment, Credentials, DomainDescriptor,
+        DomainSelection,
     };
     use js_sys::{Array, Error as JsError, Promise};
     use uuid::Uuid;
@@ -26,8 +26,7 @@ mod facade {
     /// Authenticated User session used to inspect Domains and start peers.
     #[wasm_bindgen]
     pub struct AukiUserSession {
-        auth: AuthSession,
-        peer_config: AukiPeerConfig,
+        bootstrap: AukiPeerBootstrap,
     }
 
     #[wasm_bindgen]
@@ -38,13 +37,10 @@ mod facade {
             email: String,
             password: String,
         ) -> Result<AukiUserSession, JsValue> {
-            Self::login(
-                AuthEnvironment::dev(),
-                AukiPeerConfig::dev(),
-                email,
-                password,
-            )
-            .await
+            let bootstrap = AukiPeerBootstrap::dev(Credentials::user_password(email, password))
+                .await
+                .map_err(|error| js_context("authenticate User", error))?;
+            Ok(Self { bootstrap })
         }
 
         /// Authenticate against exact API, DDS, and DMS HTTP bases.
@@ -60,14 +56,23 @@ mod facade {
                 .map_err(|error| js_context("configure authentication", error))?;
             let peer_config = AukiPeerConfig::new(dms_base_url)
                 .map_err(|error| js_context("configure DMS", error))?;
-            Self::login(environment, peer_config, email, password).await
+            let client = AuthClient::new(environment)
+                .map_err(|error| js_context("configure authentication", error))?;
+            let bootstrap = AukiPeerBootstrap::authenticate(
+                client,
+                Credentials::user_password(email, password),
+                peer_config,
+            )
+            .await
+            .map_err(|error| js_context("authenticate User", error))?;
+            Ok(Self { bootstrap })
         }
 
         /// Public descriptors for every Domain this User can select.
         #[wasm_bindgen(js_name = accessibleDomains, unchecked_return_type = "AukiDomain[]")]
         pub async fn accessible_domains(&self) -> Result<Array, JsValue> {
             let choices = self
-                .auth
+                .bootstrap
                 .accessible_domains()
                 .await
                 .map_err(|error| js_context("list accessible Domains", error))?;
@@ -83,33 +88,12 @@ mod facade {
         pub async fn start_peer(&self, domain_id: String) -> Result<AukiPeer, JsValue> {
             let domain_id =
                 Uuid::parse_str(&domain_id).map_err(|_| js_failure("Domain ID must be a UUID"))?;
-            let identity = Identity::generate();
-            let prepared = self
-                .auth
-                .authorize_peer(DomainSelection::new(domain_id), &identity.proof())
-                .await
-                .map_err(|error| js_context("authorize browser Peer", error))?;
-            let peer = SdkPeer::start(identity, prepared, self.peer_config.clone())
+            let peer = self
+                .bootstrap
+                .start_ephemeral_peer(DomainSelection::new(domain_id))
                 .await
                 .map_err(|error| js_context("start relay-backed browser Peer", error))?;
             Ok(AukiPeer::new(peer))
-        }
-    }
-
-    impl AukiUserSession {
-        async fn login(
-            environment: AuthEnvironment,
-            peer_config: AukiPeerConfig,
-            email: String,
-            password: String,
-        ) -> Result<Self, JsValue> {
-            let client = AuthClient::new(environment)
-                .map_err(|error| js_context("configure authentication", error))?;
-            let auth = client
-                .authenticate(Credentials::user_password(email, password))
-                .await
-                .map_err(|error| js_context("authenticate User", error))?;
-            Ok(Self { auth, peer_config })
         }
     }
 
@@ -217,14 +201,11 @@ mod facade {
             let lifecycle = self.lifecycle.clone();
             future_to_promise(async move {
                 match lifecycle.wait_stopped().await {
-                    AukiPeerExit::SupervisorStopped => Ok(JsValue::UNDEFINED),
-                    AukiPeerExit::Node(status) => Err(js_context(
-                        "browser Peer transport stopped unexpectedly",
-                        format!("{status:?}"),
+                    AukiPeerExit::Stopped => Ok(JsValue::UNDEFINED),
+                    AukiPeerExit::Failed(failure) => Err(js_context(
+                        "browser Peer stopped unexpectedly",
+                        format!("{failure:?}"),
                     )),
-                    AukiPeerExit::SupervisorFailed { reason } => {
-                        Err(js_context("browser Peer stopped unexpectedly", reason))
-                    }
                 }
             })
         }

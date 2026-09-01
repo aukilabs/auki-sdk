@@ -1,9 +1,8 @@
-use std::{env, fs, path::PathBuf};
+use std::{env, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
-use auki_auth::{AuthClient, AuthEnvironment, Credentials, DomainSelection};
 use auki_portable_echo::{EchoEndpoint, EchoEventReceiver, EchoServeEvent, PROTOCOL_ID};
-use auki_sdk::{AukiPeer, AukiPeerConfig, Identity, Multiaddr, PeerId};
+use auki_sdk::{AukiPeer, AukiPeerBootstrap, Credentials, DomainSelection, Multiaddr, PeerId};
 use uuid::Uuid;
 
 #[tokio::main]
@@ -12,24 +11,15 @@ async fn main() -> Result<()> {
         .parse::<Uuid>()
         .context("AUKI_DOMAIN_ID must be a UUID")?;
     let state_dir = PathBuf::from(required_env("AUKI_STATE_DIR")?);
-    fs::create_dir_all(&state_dir)
-        .with_context(|| format!("create state directory {}", state_dir.display()))?;
-
-    let identity = Identity::load_or_create(state_dir.join("peer.identity"))?;
-    let auth = AuthClient::new(AuthEnvironment::dev())?;
-    let session = auth.authenticate(credentials_from_env()?).await?;
-    let selected = session
-        .accessible_domains()
-        .await?
-        .into_iter()
-        .find(|choice| choice.domain.id == domain_id)
-        .context("the authenticated principal cannot access AUKI_DOMAIN_ID")?;
-    let prepared = session
-        .authorize_peer(DomainSelection::new(selected.domain.id), &identity.proof())
-        .await?;
+    let bootstrap = AukiPeerBootstrap::dev(credentials_from_env()?).await?;
 
     let remote_peer = remote_peer_from_env()?;
-    let peer = AukiPeer::start(identity, prepared, AukiPeerConfig::dev()).await?;
+    let peer = bootstrap
+        .start_persistent_peer(
+            DomainSelection::new(domain_id),
+            state_dir.join("peer.identity"),
+        )
+        .await?;
     let echo = match EchoEndpoint::mount(peer.protocols()) {
         Ok(echo) => echo,
         Err(error) => {

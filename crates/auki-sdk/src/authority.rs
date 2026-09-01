@@ -30,6 +30,9 @@ use crate::{
         AukiPeerAuthorizationError, AukiPeerAuthorizationSnapshot, AuthorizationSnapshotSource,
     },
     relay::{RelayAuthorizationError, RelayAuthorizationProvider, RelayAuthorizationSnapshot},
+    runtime_policy::{
+        RejectedAuthorityRevision, next_authority_revision, rejected_authority_revision,
+    },
 };
 
 #[derive(Clone, Debug)]
@@ -417,12 +420,13 @@ impl AuthorityInner {
             if state.stopped || self.shutdown.is_cancelled() {
                 return Err(AuthoritySupervisorError::Stopped);
             }
-            let credential_revision = state.current.as_ref().map_or(Ok(1), |current| {
-                current
-                    .credential_revision
-                    .checked_add(1)
-                    .ok_or(AuthoritySupervisorError::RevisionExhausted)
-            })?;
+            let credential_revision = next_authority_revision(
+                state
+                    .current
+                    .as_ref()
+                    .map(|current| current.credential_revision),
+            )
+            .ok_or(AuthoritySupervisorError::RevisionExhausted)?;
             let expires_at = validated.credential_expires_at;
             state.current = Some(CurrentAuthority {
                 credential_revision,
@@ -650,11 +654,12 @@ impl AuthorityInner {
             .as_ref()
             .filter(|current| current.available)
             .ok_or(AuthoritySupervisorError::RefreshUnavailable)?;
-        if current.credential_revision > rejected_revision {
-            return Ok(None);
-        }
-        if current.credential_revision != rejected_revision {
-            return Err(AuthoritySupervisorError::RejectedRevisionMismatch);
+        match rejected_authority_revision(current.credential_revision, rejected_revision) {
+            RejectedAuthorityRevision::AlreadyReplaced => return Ok(None),
+            RejectedAuthorityRevision::Current => {}
+            RejectedAuthorityRevision::Stale => {
+                return Err(AuthoritySupervisorError::RejectedRevisionMismatch);
+            }
         }
         let remaining = wall_remaining(current.credential_expires_at)
             .ok_or(AuthoritySupervisorError::RefreshTimedOut)?;

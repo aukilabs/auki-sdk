@@ -149,16 +149,41 @@ const streamRequest: AukiStreamRequest = {
   from: streamFrom,
 };
 
-async function* emptyStreamSource(): AsyncIterable<AukiStreamSourceItem> {
-  return;
+const streamManifest: AukiStreamManifest = {
+  sensorId: "camera/front",
+  sensorHash: "0123456789abcdef0123456789abcdef",
+  clockPeerId: peer.peerId,
+  clockId: "session/monotonic",
+  clockHash: "0123456789abcdef0123456789abcdef",
+  frameId: "camera/front",
+  frameHash: "0123456789abcdef0123456789abcdef",
+  resourceId: "camera/front",
+  payload: "camera_frame",
+  fromFrameId: "",
+  fromFrameHash: "",
+  toFrameId: "",
+  toFrameHash: "",
+  writerMode: "live",
+  expectedRateHz: 30,
+  mapPeerId: "",
+  mapId: "",
+  mapHash: "",
+};
+
+async function* cameraStreamSource(): AsyncIterable<AukiStreamSourceItem> {
+  yield { timestampNs: 1n, payload: new Uint8Array() };
 }
 
 const streamProvider: AukiStreamProvider = (_requester, request): AukiStreamDispatch => {
   if (request.resourceId !== "camera/front") {
     return { kind: "decline", reason: { kind: "sensor_not_found" } };
   }
-  void emptyStreamSource;
-  return { kind: "decline", reason: { kind: "sensor_unavailable" } };
+  return {
+    kind: "accept",
+    payloadKind: "camera",
+    manifest: streamManifest,
+    source: cameraStreamSource(),
+  };
 };
 const streamEndpoint: AukiStreamEndpoint = AukiStreamEndpoint.mount(peer, streamProvider);
 const streamClose: Promise<void> = streamEndpoint.close();

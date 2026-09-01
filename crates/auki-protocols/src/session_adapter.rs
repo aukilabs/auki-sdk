@@ -10,7 +10,7 @@
 
 use auki_datatypes::{detection::DetectionFrame, map::MapUpdate};
 use auki_registry::SensorBody;
-use auki_sdk::AuthenticatedPeer;
+use auki_sdk::{AukiPeerProtocols, AuthenticatedPeer};
 use auki_session::{
     DetectionLogHandle, HeadSpec, MapLogHandle, Peer, PeerRegistries, Session, SessionLogs,
 };
@@ -31,6 +31,18 @@ use crate::{
         v2::{DeclineReason, ReadFrom, StreamManifest, StreamRequest},
     },
 };
+
+/// Construct the local recording owner from the authenticated network
+/// identity that will publish its resources.
+///
+/// Keeping this conversion in Rust prevents hosts and language bindings from
+/// inventing a second, unrelated textual Peer ID.
+pub fn session_peer_for_auki_peer(
+    protocols: &AukiPeerProtocols,
+    app_id: impl Into<String>,
+) -> Peer {
+    Peer::new(protocols.peer_id().to_string(), app_id)
+}
 
 /// Native provider that projects one [`Session`] onto Catalog v3/v4 and
 /// Stream v2.
@@ -54,6 +66,22 @@ impl SessionProtocolProvider {
             logs: session.logs(),
             registries: peer.registries(),
         })
+    }
+
+    /// Bind the provider to a session and the authenticated peer that will
+    /// serve it.
+    ///
+    /// This is the preferred constructor before mounting the provider on
+    /// `protocols`: it additionally prevents a local recording [`Peer`] from
+    /// advertising resources under a different libp2p identity.
+    pub fn new_for_auki_peer(
+        protocols: &AukiPeerProtocols,
+        peer: &Peer,
+        session: &Session,
+    ) -> Result<Self, SessionProtocolProviderError> {
+        let provider = Self::new(peer, session)?;
+        validate_auki_peer_id(peer, &protocols.peer_id().to_string())?;
+        Ok(provider)
     }
 
     fn resource_rows(&self) -> Vec<v3::ResourceEntry> {
@@ -142,6 +170,29 @@ pub enum SessionProtocolProviderError {
     /// that peer happens to use the same textual peer ID.
     #[error("the Session was not created by the supplied Peer")]
     SessionPeerMismatch,
+    /// The local recording identity differs from the authenticated peer that
+    /// would serve its resources.
+    #[error(
+        "the Session Peer ID {session_peer_id} does not match the authenticated Auki peer ID {auki_peer_id}"
+    )]
+    AukiPeerMismatch {
+        session_peer_id: String,
+        auki_peer_id: String,
+    },
+}
+
+fn validate_auki_peer_id(
+    peer: &Peer,
+    auki_peer_id: &str,
+) -> Result<(), SessionProtocolProviderError> {
+    let session_peer_id = peer.peer_id();
+    if session_peer_id != auki_peer_id {
+        return Err(SessionProtocolProviderError::AukiPeerMismatch {
+            session_peer_id,
+            auki_peer_id: auki_peer_id.to_owned(),
+        });
+    }
+    Ok(())
 }
 
 impl CatalogProvider for SessionProtocolProvider {
@@ -458,6 +509,21 @@ mod tests {
             Err(SessionProtocolProviderError::SessionPeerMismatch)
         ));
         assert!(SessionProtocolProvider::new(&peer, &session).is_ok());
+    }
+
+    #[test]
+    fn auki_peer_identity_must_match_the_recording_peer() {
+        let tmp = tempdir().unwrap();
+        let (peer, _session) = peer_and_session(tmp.path());
+
+        assert_eq!(validate_auki_peer_id(&peer, "galbot"), Ok(()));
+        assert_eq!(
+            validate_auki_peer_id(&peer, "another-peer"),
+            Err(SessionProtocolProviderError::AukiPeerMismatch {
+                session_peer_id: "galbot".into(),
+                auki_peer_id: "another-peer".into(),
+            })
+        );
     }
 
     #[test]

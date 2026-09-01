@@ -65,6 +65,7 @@ impl MapLogHandle {
     ) -> crate::Result<()> {
         let mut writer = self.writer.lock();
         writer.append(timestamp_ns, update)?;
+        writer.flush()?;
         // Durability precedes visibility. A missing receiver is expected when
         // nobody currently subscribes and is not an append failure.
         let _ = self.updates.send((timestamp_ns, update.clone()));
@@ -276,4 +277,56 @@ impl DetectionLogHandle {
 
 pub struct MaterializedLogHandle {
     pub log_ref: LogRef,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use auki_datatypes::map::MapUpdate;
+    use auki_registry::{FiniteF64, MapBody, VoxelMap, VoxelValueModel};
+    use tempfile::tempdir;
+
+    use crate::{FrameDef, HeadSpec, MapLogSpec, Peer};
+
+    #[test]
+    fn map_append_is_durable_when_it_becomes_visible() {
+        let tmp = tempdir().unwrap();
+        let peer = Peer::new("galbot", "test-app").with_storage_root(tmp.path().to_path_buf());
+        let session = peer.start_session().unwrap();
+        let frame = peer.register_frame("world", FrameDef::ros_body()).unwrap();
+        let map = peer
+            .register_map(
+                "occupancy",
+                MapBody::Voxel(VoxelMap {
+                    frame,
+                    voxel_size_m: FiniteF64(0.05),
+                    chunk_dimension: 64,
+                    value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                    color_model: None,
+                    semantic_classes: Vec::new(),
+                }),
+            )
+            .unwrap();
+        let handle = session
+            .register_map_log(MapLogSpec {
+                map,
+                clock: session.monotonic_clock(),
+                head: HeadSpec::Fixed,
+                segment_duration: Duration::from_secs(1),
+                retention: Duration::ZERO,
+            })
+            .unwrap();
+        let mut updates = handle.subscribe();
+
+        handle.append(42, &MapUpdate::default()).unwrap();
+
+        assert_eq!(updates.try_recv().unwrap().0, 42);
+        let persisted = auki_logs::Log::<MapUpdate>::read(&handle.root)
+            .unwrap()
+            .entries()
+            .unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].timestamp_ns, 42);
+    }
 }

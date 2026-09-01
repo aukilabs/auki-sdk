@@ -10,21 +10,26 @@ use std::sync::Arc;
 use futures::{FutureExt, pin_mut};
 use futures_timer::Delay;
 
+#[allow(dead_code)]
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) type Shared<T> = Arc<T>;
+#[allow(dead_code)]
 #[cfg(target_arch = "wasm32")]
 pub(crate) type Shared<T> = Rc<T>;
 
+#[allow(dead_code)]
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn share<T>(value: T) -> Shared<T> {
     Arc::new(value)
 }
 
+#[allow(dead_code)]
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn share<T>(value: T) -> Shared<T> {
     Rc::new(value)
 }
 
+#[allow(dead_code)]
 pub(crate) fn clone_shared<T: ?Sized>(shared: &Shared<T>) -> Shared<T> {
     shared.clone()
 }

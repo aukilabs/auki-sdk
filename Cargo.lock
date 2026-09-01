@@ -689,8 +689,11 @@ dependencies = [
 name = "auki-sdk-web"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "auki-protocols",
+ "auki-registry",
  "auki-sdk",
+ "futures",
  "js-sys",
  "serde",
  "serde-wasm-bindgen",

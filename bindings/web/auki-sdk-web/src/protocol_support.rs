@@ -1,11 +1,16 @@
+#[cfg(feature = "message")]
+use std::cell::RefCell;
 use std::fmt::Display;
 
 use auki_sdk::{AukiPeerProtocols, Multiaddr, PeerId};
 use js_sys::Error as JsError;
+#[cfg(feature = "message")]
+use js_sys::Promise;
 #[cfg(any(
     feature = "blob",
     feature = "catalog",
     feature = "info",
+    feature = "message",
     feature = "registry"
 ))]
 use serde::{Deserialize, Serialize};
@@ -25,6 +30,7 @@ pub(crate) fn js_error(message: impl AsRef<str>) -> JsValue {
     feature = "blob",
     feature = "catalog",
     feature = "info",
+    feature = "message",
     feature = "registry"
 ))]
 #[derive(Deserialize)]
@@ -38,6 +44,7 @@ struct ExactTarget {
     feature = "blob",
     feature = "catalog",
     feature = "info",
+    feature = "message",
     feature = "registry"
 ))]
 pub(crate) fn peer_protocols(
@@ -55,6 +62,7 @@ pub(crate) fn peer_protocols(
     feature = "blob",
     feature = "catalog",
     feature = "info",
+    feature = "message",
     feature = "registry"
 ))]
 pub(crate) fn parse_exact_target(target: JsValue) -> Result<(PeerId, Multiaddr), JsValue> {
@@ -75,6 +83,7 @@ pub(crate) fn parse_exact_target(target: JsValue) -> Result<(PeerId, Multiaddr),
     feature = "blob",
     feature = "catalog",
     feature = "info",
+    feature = "message",
     feature = "registry"
 ))]
 pub(crate) fn to_js_value(
@@ -92,6 +101,7 @@ pub(crate) fn to_js_value(
     feature = "blob",
     feature = "catalog",
     feature = "info",
+    feature = "message",
     feature = "registry"
 ))]
 #[wasm_bindgen(typescript_custom_section)]
@@ -103,12 +113,33 @@ export interface AukiExactTarget {
 }
 "#;
 
+/// Shared idempotent close promise for Wasm handles that own asynchronous
+/// protocol cleanup.
+#[cfg(feature = "message")]
+#[derive(Default)]
+pub(crate) struct CloseBarrier {
+    promise: RefCell<Option<Promise>>,
+}
+
+#[cfg(feature = "message")]
+impl CloseBarrier {
+    pub(crate) fn get_or_start(&self, start: impl FnOnce() -> Promise) -> Promise {
+        if let Some(closing) = self.promise.borrow().clone() {
+            return closing;
+        }
+        let closing = start();
+        self.promise.borrow_mut().replace(closing.clone());
+        closing
+    }
+}
+
 #[cfg(all(
     test,
     any(
         feature = "blob",
         feature = "catalog",
         feature = "info",
+        feature = "message",
         feature = "registry"
     )
 ))]

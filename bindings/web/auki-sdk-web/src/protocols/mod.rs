@@ -4,6 +4,8 @@ mod blob;
 mod catalog;
 #[cfg(feature = "info")]
 mod info;
+#[cfg(feature = "message")]
+mod message;
 #[cfg(feature = "registry")]
 mod registry;
 
@@ -13,5 +15,7 @@ pub use blob::AukiBlobClient;
 pub use catalog::AukiCatalogClient;
 #[cfg(feature = "info")]
 pub use info::AukiInfoClient;
+#[cfg(feature = "message")]
+pub use message::{AukiMessageClient, AukiMessageEndpoint, AukiMessageReceiver, AukiMessageSender};
 #[cfg(feature = "registry")]
 pub use registry::AukiRegistryClient;

@@ -1,8 +1,8 @@
 # Author a portable Auki protocol
 
 Keep one immutable wire contract and its small `AukiPeer` integration in one
-Rust crate. Native, Web, and Python hosts should consume that same crate;
-platform code should not reimplement the conversation.
+Rust crate. Native, Web, Python, and Swift hosts should consume that same
+crate; platform code should not reimplement the conversation.
 
 [`examples/portable-echo`](../../examples/portable-echo/README.md) is the
 smallest complete reference.
@@ -108,7 +108,7 @@ protocol and cannot collide.
 The Client stores `AukiPeerProtocols` and exposes:
 
 - configured-route methods on native Rust when useful; and
-- exact-route methods for the portable native/Web/Python surface.
+- exact-route methods for the portable native/Web/Python/Swift surface.
 
 ```rust,ignore
 #[derive(Clone)]
@@ -240,6 +240,12 @@ When adding an SDK-owned version:
   requires it, and never mount fallback implicitly; and
 - add native and `wasm32-unknown-unknown` checks.
 
+For Swift, compile the protocol crate, its UniFFI adapter, and the generic
+Swift peer facade into one umbrella static library/XCFramework. A live UniFFI
+object must never cross independently linked Rust runtimes. Keep the adapter
+mechanical: translate records and errors, retain the Rust endpoint owner, and
+expose explicit close before peer shutdown.
+
 ## Release gate
 
 Before another application depends on the protocol:
@@ -251,6 +257,6 @@ cargo check --locked -p my-protocol --target wasm32-unknown-unknown
 ```
 
 Also prove native/native traffic and, when supported, browser/browser plus both
-native/Web directions and Python/native in both directions. Review the wire and
-endpoint modules as one
+native/Web directions, Python/native in both directions, and Swift/native in
+both directions on a simulator. Review the wire and endpoint modules as one
 release.

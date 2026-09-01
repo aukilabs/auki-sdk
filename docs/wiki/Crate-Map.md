@@ -97,8 +97,10 @@ state into Catalog and Stream providers.
   persistent native peers, required TCP/WSS relay reachability, and same-module
   client/serving adapters for all six standard Rust protocols. Component
   bindings remain available separately.
-- **Swift/iOS:** the current binding covers `Wallet` only. A canonical Swift
-  `AukiPeer` facade is pending.
+- **Swift/iOS:** `auki-sdk-swift` provides User authentication, Domain
+  selection, identity bytes, native relay-backed peers, routes, and ordered
+  shutdown. Product protocols compile a UniFFI adapter into the same umbrella
+  XCFramework. The six standard-protocol Swift adapters remain future work.
 
 ## What an application normally imports
 
@@ -107,7 +109,8 @@ state into Catalog and Stream providers.
 - Local recording: `auki-session`, plus specific data or registry types needed
   by the product.
 - A product-specific protocol: one small Rust crate containing its private wire
-  and endpoint modules; native, Web, and Python hosts bind the same public API.
+  and endpoint modules; native, Web, Python, and Swift hosts bind the same
+  public API.
 
 See [Auki P2P](https://github.com/aukilabs/auki-sdk/blob/develop/docs/p2p/README.md)
 for the runtime mental model and [Quickstart](Quickstart) for the local recording

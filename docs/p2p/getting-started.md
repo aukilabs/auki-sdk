@@ -6,8 +6,8 @@ or protocol cleanup.
 
 By the end, two native peers will have distinct persistent Peer IDs, authority
 for the same Domain, confirmed TCP/WSS relay-route pairs, and one authenticated
-echo exchange. The same protocol crate also powers the tiny Web and Python
-hosts.
+echo exchange. The same protocol crate also powers the tiny Web, Python, and
+Swift/iOS hosts.
 
 To exercise the SDK-owned Info, Catalog, Registry, Blob, Message, and Stream
 families instead, use the
@@ -176,6 +176,35 @@ finally:
 Run the [Python echo app](../../examples/portable-echo/python/README.md) to try
 Python-to-Python or either Python/native direction through exact relay routes.
 
+## Use the same protocol from Swift/iOS
+
+The Apple artifact statically links the generic peer facade and the same Rust
+echo endpoint. Swift does not implement authentication, relay booking,
+libp2p, or protocol framing:
+
+```swift
+let session = try await AukiSession.loginDev(email: email, password: password)
+let peer = try await session.startPeer(
+    domainId: domainId,
+    identity: AukiPeerIdentity.generate()
+)
+let echo = try await AukiEcho.mount(peer: peer)
+
+let card = try peerCardFromJson(json: remoteCard)
+let receipt = try await echo.sendExact(
+    target: nativeTarget(card: card),
+    payload: Data("hello from Swift".utf8)
+)
+
+try await echo.close()
+try await peer.shutdown()
+```
+
+The example identity is ephemeral. An application that requires a stable Peer
+ID may store `AukiPeerIdentity.encoded()` and restore it with `fromEncoded`.
+Run the [Swift/iOS echo app](../../examples/portable-echo/swift/README.md) for
+the generated-project commands and simulator test.
+
 ## App credentials
 
 A trusted native or headless process can replace User credentials with:
@@ -202,6 +231,7 @@ authenticates the expected remote Peer ID in the selected Domain.
 
 - [Author one portable protocol crate](authoring-protocols.md).
 - Run the [Python echo host](../../examples/portable-echo/python/README.md).
+- Run the [Swift/iOS echo host](../../examples/portable-echo/swift/README.md).
 - Run the [standard protocol matrix](../../examples/standard-protocols/README.md#protected-four-peer-matrix)
   for all six SDK protocol families across Native, Python, and two distinct
   Browser peers, including browser-to-browser in both directions.

@@ -5,14 +5,14 @@ Choose the path you actually need:
 - **Authenticated networking:** follow the maintained
   [P2P getting started guide](https://github.com/aukilabs/auki-sdk/blob/develop/docs/p2p/getting-started.md).
   It runs two relay-reachable Rust peers using the same portable echo protocol
-  used by the Web demo.
+  used by the Web, Python, and Swift/iOS demos.
 - **Local recording:** continue below to create registries, a session, and a
   peer-owned log without starting any network runtime.
 - **Protocol authoring:** use the
   [portable protocol guide](https://github.com/aukilabs/auki-sdk/blob/develop/docs/p2p/authoring-protocols.md).
 
-Python and Swift do not yet expose the canonical authenticated `AukiPeer`
-facade. Python component bindings still support the local recording flow.
+Python and Swift/iOS expose the canonical authenticated `AukiPeer` facade.
+Python component bindings also support the local recording flow below.
 
 ## Local recording in Rust
 

@@ -17,7 +17,7 @@ Upgrade communicating peers together.
 | Robot or Compute product | product-managed authority → `AukiPeer::start_external` |
 | Web browser | `AukiUserSession` → selected Domain → ephemeral relay-backed peer |
 | Python | `AukiSession` → selected Domain → persistent relay-backed peer |
-| Swift/iOS | canonical peer facade pending |
+| Swift/iOS | `AukiSession` → selected Domain → ephemeral or app-persisted relay-backed peer |
 
 `auki-session::Peer` and `Session` remain the network-free recording model.
 They do not authenticate or join a Domain.

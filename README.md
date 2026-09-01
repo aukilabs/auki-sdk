@@ -76,8 +76,8 @@ the listed current versions; compatibility is not silently negotiated.
 
 Product protocols can live outside this repository. Keep one immutable wire
 contract and its small `AukiPeer` client/endpoint in one Rust crate, then reuse
-that crate from native, Web, and Python hosts. Posemesh follows this model for
-its dataset protocol.
+that crate from native, Web, Python, and Swift hosts. Posemesh follows this
+model for its dataset protocol.
 
 ## Platform status
 
@@ -86,7 +86,7 @@ its dataset protocol.
 | Native Rust | User/App authentication, persistent identity, default TCP reservation with TCP/WSS routes, exact protocols, ordered shutdown |
 | Web/Wasm | User authentication, ephemeral identity, mandatory WSS reservation with TCP/WSS routes, client and serving roles for all six standard protocols, ordered shutdown, and custom same-module Rust adapters |
 | Python | User/App authentication, persistent identity, default TCP reservation with TCP/WSS routes, client and serving roles for all six standard protocols, ordered shutdown, and custom same-module Rust adapters |
-| Swift/iOS | Wallet binding exists; `AukiPeer` facade pending |
+| Swift/iOS | User authentication, ephemeral or application-persisted identity, default TCP reservation with TCP/WSS routes, custom same-artifact Rust adapters, and ordered shutdown |
 
 Robot and Compute products that already manage machine authority use
 `AukiPeer::start_external`. They keep task, capability, heartbeat, and safety
@@ -94,9 +94,10 @@ policy; the SDK still owns transport, relay/routes, protocol hosting, and
 shutdown.
 
 Native applications should persist `auki_p2p::Identity` and run only one live
-process or pod for that Peer ID. The Web facade intentionally generates a new
-in-memory identity on each start. Never ship App secrets in a browser or mobile
-binary.
+process or pod for that Peer ID. Web generates a new in-memory identity on each
+start. Swift exposes canonical identity bytes but leaves persistence policy to
+the application; the portable echo app intentionally stays ephemeral. Never
+ship App secrets in a browser or mobile binary.
 
 ## Workspace map
 
@@ -121,14 +122,16 @@ The main layers are:
 Supporting crates provide canonical JSON, hashing, identity, filesystem layout,
 detectors, and ROS adapters. The Python directory also exposes the native peer
 facade; the Web directory exposes the browser peer and built-in protocol
-facade. Swift currently exposes data and identity pieces only.
+facade. Swift exposes the native peer lifecycle through one generated Apple
+artifact; application protocols compile their Rust adapter into that same
+artifact.
 
 ## Example
 
 [`examples/portable-echo`](examples/portable-echo) demonstrates one bounded
-Rust protocol shared by native, Web, and Python applications. Its hosts prove
-that exact relay routes interoperate across those runtimes; they do not provide
-discovery.
+Rust protocol shared by native, Web, Python, and Swift applications. Its hosts
+prove that exact relay routes interoperate across those runtimes; they do not
+provide discovery.
 
 The six standard protocol families also expose matching client and serving
 roles in Rust, Web/Wasm, and Python. This is API parity over the same Rust wire

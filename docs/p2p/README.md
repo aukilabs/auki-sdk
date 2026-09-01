@@ -1,7 +1,7 @@
 # Build on Auki P2P
 
-`AukiPeer` is the normal way to build an authenticated native Rust, Web, or
-Python peer.
+`AukiPeer` is the normal way to build an authenticated native Rust, Web,
+Python, or Swift peer.
 It hides authority renewal, libp2p setup, relay booking, route fencing, and
 shutdown while leaving product policy explicit.
 
@@ -10,6 +10,7 @@ shutdown while leaving product policy explicit.
 - [Exercise all six standard protocols](../../examples/standard-protocols/README.md)
 - [Try the Web echo app](../../examples/portable-echo/web/README.md)
 - [Try the Python echo app](../../examples/portable-echo/python/README.md)
+- [Try the Swift/iOS echo app](../../examples/portable-echo/swift/README.md)
 
 ## Mental model
 
@@ -49,9 +50,10 @@ Robot and Compute hosts use `AukiPeer::start_external` when product
 infrastructure already manages authority. They do not need a second transport
 or relay implementation.
 
-Native identity is persistent and single-owner. Do not run two processes or
-pods with the same Peer ID. Browser identity is intentionally ephemeral in the
-first iteration.
+Native and Python identities are persistent and single-owner. Do not run two
+processes or pods with the same Peer ID. Browser identity is intentionally
+ephemeral. Swift exposes identity generation and canonical bytes; each iOS
+application decides whether to persist them. The echo example does not.
 
 ## Serve and call protocols from Rust
 
@@ -169,7 +171,22 @@ credentials or authentication proofs.
 The [standard protocol playground](../../examples/standard-protocols/README.md)
 drives the Python node against Native and Browser peers using the same six
 Rust implementations.
-Swift/iOS does not yet expose the canonical peer facade.
+
+## Swift/iOS
+
+`auki-sdk-swift` exposes the native Rust peer lifecycle through UniFFI: User
+login, Domain listing, identity, relay-backed startup, routes, status, and
+ordered shutdown. Mobile applications do not accept App secrets.
+
+A product protocol adds a thin UniFFI adapter and links it with the peer facade
+into one umbrella XCFramework. Rust owns the protocol and live handles; Swift
+owns UI and platform lifecycle. Do not link independent Rust XCFrameworks for
+the peer and protocol into one application.
+
+The [portable echo iOS app](../../examples/portable-echo/swift/README.md) is the
+reference. Its simulator proof exchanges authenticated relay traffic in both
+directions with the native Rust host. Swift bindings for the six standard
+protocol families are not part of this first facade.
 
 ## Discovery is still application-owned
 
@@ -195,7 +212,7 @@ expected Peer ID and Domain before exposing protocol bytes.
 
 - Bound every frame, queue, concurrent handler count, and deadline.
 - Keep product authorization separate from Domain authentication.
-- Use exact routes for portable native/Web/Python dialing.
+- Use exact routes for portable native/Web/Python/Swift dialing.
 - Close endpoints, senders, and receivers and cancel subscriptions before
   shutting down the peer.
 - Attempt cleanup even when the application operation fails.

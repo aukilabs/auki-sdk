@@ -32,6 +32,23 @@ use crate::{
 
 const PAYLOAD_KIND_NAMES: &str =
     "camera, point_cloud, joint_encoders, audio, scalar, pose, detection, or map";
+const REMOTE_PROVIDER_FAILURE_DETAIL: &str = "Stream provider failed";
+const REMOTE_SOURCE_FAILURE_DETAIL: &str = "Stream provider source failed";
+
+#[cfg(not(test))]
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console, js_name = error)]
+    fn console_error(value: &JsValue);
+}
+
+#[cfg(not(test))]
+fn report_local_stream_error(context: &str, detail: &str) {
+    console_error(&js_error(format!("{context}: {detail}")));
+}
+
+#[cfg(test)]
+fn report_local_stream_error(_context: &str, _detail: &str) {}
 
 /// Outbound Stream v2 client backed by the portable Rust protocol.
 #[wasm_bindgen]
@@ -182,8 +199,9 @@ struct BrowserStreamProvider {
 impl StreamProvider for BrowserStreamProvider {
     fn dispatch(&self, remote_peer: &AuthenticatedPeer, request: StreamRequest) -> StreamDispatch {
         browser_stream_dispatch(&self.provider, remote_peer, &request).unwrap_or_else(|error| {
+            report_local_stream_error("Stream provider dispatch failed", &js_error_message(error));
             StreamDispatch::Decline {
-                reason: DeclineReason::other(js_error_message(error)),
+                reason: DeclineReason::other(REMOTE_PROVIDER_FAILURE_DETAIL),
             }
         })
     }
@@ -293,37 +311,31 @@ where
         let next = match iterator.next() {
             Ok(next) => next,
             Err(error) => {
-                return Some((
-                    Err(format!(
-                        "Stream provider source next() failed: {}",
-                        js_error_message(error)
-                    )),
-                    iterator,
-                ));
+                report_local_stream_error(
+                    "Stream provider source next() failed",
+                    &js_error_message(error),
+                );
+                return Some((Err(REMOTE_SOURCE_FAILURE_DETAIL.to_owned()), iterator));
             }
         };
         let next = match JsFuture::from(next).await {
             Ok(next) => next,
             Err(error) => {
-                return Some((
-                    Err(format!(
-                        "Stream provider source rejected: {}",
-                        js_error_message(error)
-                    )),
-                    iterator,
-                ));
+                report_local_stream_error(
+                    "Stream provider source rejected",
+                    &js_error_message(error),
+                );
+                return Some((Err(REMOTE_SOURCE_FAILURE_DETAIL.to_owned()), iterator));
             }
         };
         let done = match Reflect::get(&next, &JsValue::from_str("done")) {
             Ok(done) => done.as_bool().unwrap_or(false),
             Err(error) => {
-                return Some((
-                    Err(format!(
-                        "Stream provider source result is invalid: {}",
-                        js_error_message(error)
-                    )),
-                    iterator,
-                ));
+                report_local_stream_error(
+                    "Stream provider source result is invalid",
+                    &js_error_message(error),
+                );
+                return Some((Err(REMOTE_SOURCE_FAILURE_DETAIL.to_owned()), iterator));
             }
         };
         if done {
@@ -331,12 +343,18 @@ where
         }
         let item = Reflect::get(&next, &JsValue::from_str("value"))
             .map_err(|error| {
-                format!(
-                    "Stream provider source result has no value: {}",
-                    js_error_message(error)
-                )
+                report_local_stream_error(
+                    "Stream provider source result has no value",
+                    &js_error_message(error),
+                );
+                REMOTE_SOURCE_FAILURE_DETAIL.to_owned()
             })
-            .and_then(source_item_from_js::<T>);
+            .and_then(|value| {
+                source_item_from_js::<T>(value).map_err(|error| {
+                    report_local_stream_error("Stream provider source item is invalid", &error);
+                    REMOTE_SOURCE_FAILURE_DETAIL.to_owned()
+                })
+            });
         Some((item, iterator))
     }))
 }
@@ -1056,6 +1074,24 @@ mod tests {
         Reflect::get(value, &JsValue::from_str(name)).unwrap()
     }
 
+    fn peer_id() -> auki_sdk::PeerId {
+        "12D3KooWH3okqZcRaHwy4keYWo9eAaCDwhePYajtHsCM4Egsptan"
+            .parse()
+            .unwrap()
+    }
+
+    fn authenticated_peer() -> AuthenticatedPeer {
+        AuthenticatedPeer {
+            peer_id: peer_id(),
+            subject: "b03a67cb-45d4-4f60-a8b8-d9687e91d018".parse().unwrap(),
+            peer_type: Some("robot".into()),
+            domain_ids: vec!["4e990513-b110-467b-84ca-09a42d786f6d".parse().unwrap()],
+            scopes: vec!["stream:serve".into()],
+            application: None,
+            verified_until: "2030-01-01T00:00:00Z".parse().unwrap(),
+        }
+    }
+
     fn pending_subscription() -> AukiStreamSubscription {
         AukiStreamSubscription::new(
             StreamPayloadKind::Camera,
@@ -1216,6 +1252,47 @@ mod tests {
         )
         .unwrap();
         assert!(decline_reason_from_js(invalid.into()).is_err());
+
+        let explicit = Object::new();
+        Reflect::set(
+            &explicit,
+            &JsValue::from_str("kind"),
+            &JsValue::from_str("other"),
+        )
+        .unwrap();
+        Reflect::set(
+            &explicit,
+            &JsValue::from_str("detail"),
+            &JsValue::from_str("camera is warming up"),
+        )
+        .unwrap();
+        let explicit = decline_reason_from_js(explicit.into()).unwrap();
+        let Some(decline_reason::Kind::Other(explicit)) = explicit.kind else {
+            panic!("expected explicit Other decline")
+        };
+        assert_eq!(explicit.detail, "camera is warming up");
+    }
+
+    #[wasm_bindgen_test]
+    fn thrown_provider_errors_are_not_exposed_in_decline_details() {
+        const SECRET: &str = "provider-secret-do-not-send";
+        let provider = Function::new_no_args("throw new Error('provider-secret-do-not-send')");
+        let dispatch = BrowserStreamProvider { provider }.dispatch(
+            &authenticated_peer(),
+            StreamRequest {
+                source_peer_id: peer_id().to_string(),
+                resource_id: "camera/front".into(),
+                from: ReadFrom::Latest,
+            },
+        );
+        let StreamDispatch::Decline { reason } = dispatch else {
+            panic!("expected provider failure to decline")
+        };
+        let Some(decline_reason::Kind::Other(other)) = reason.kind else {
+            panic!("expected generic Other decline")
+        };
+        assert_eq!(other.detail, REMOTE_PROVIDER_FAILURE_DETAIL);
+        assert!(!other.detail.contains(SECRET));
     }
 
     #[wasm_bindgen_test(async)]
@@ -1230,6 +1307,29 @@ mod tests {
         assert_eq!(item.timestamp_ns, 7);
         assert_eq!(item.payload, CameraFrame::default());
         assert!(source.next().await.is_none());
+    }
+
+    #[wasm_bindgen_test(async)]
+    async fn source_exceptions_and_decode_errors_are_not_exposed_remotely() {
+        const SECRET: &str = "source-secret-do-not-send";
+        let factory = Function::new_no_args(
+            "return (async function* () { throw new Error('source-secret-do-not-send'); })();",
+        );
+        let source = factory.call0(&JsValue::UNDEFINED).unwrap();
+        let iterator = async_iterator_from_js(source).unwrap();
+        let mut source = typed_source_stream::<CameraFrame>(iterator);
+        let error = source.next().await.unwrap().unwrap_err();
+        assert_eq!(error, REMOTE_SOURCE_FAILURE_DETAIL);
+        assert!(!error.contains(SECRET));
+
+        let factory = Function::new_no_args(
+            "return (async function* () { yield { timestampNs: 7n, payload: new Uint8Array([255]) }; })();",
+        );
+        let source = factory.call0(&JsValue::UNDEFINED).unwrap();
+        let iterator = async_iterator_from_js(source).unwrap();
+        let mut source = typed_source_stream::<CameraFrame>(iterator);
+        let error = source.next().await.unwrap().unwrap_err();
+        assert_eq!(error, REMOTE_SOURCE_FAILURE_DETAIL);
     }
 
     #[wasm_bindgen_test]

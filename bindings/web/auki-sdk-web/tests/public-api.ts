@@ -8,6 +8,8 @@ import {
   AukiMessageSender,
   AukiPeer,
   AukiRegistryClient,
+  AukiStreamClient,
+  AukiStreamSubscription,
   type AukiAuthenticatedPeer,
   type AukiBlobReceipt,
   type AukiCatalogMapsResponse,
@@ -18,6 +20,13 @@ import {
   type AukiParticipantInfo,
   type AukiRegistryEntry,
   type AukiRegistryListEntry,
+  type AukiStreamEndReason,
+  type AukiStreamEntry,
+  type AukiStreamManifest,
+  type AukiStreamNext,
+  type AukiStreamPayloadKind,
+  type AukiStreamReadFrom,
+  type AukiStreamRequest,
 } from "../pkg-test/auki_sdk_web.js";
 
 declare const peer: AukiPeer;
@@ -70,6 +79,35 @@ async function checkMessageSender(): Promise<void> {
   void authenticated;
 }
 
+const streamKind: AukiStreamPayloadKind = "camera";
+const streamFrom: AukiStreamReadFrom = { kind: "latest" };
+const streamRequest: AukiStreamRequest = {
+  sourcePeerId: target.peerId,
+  resourceId: "camera/front",
+  from: streamFrom,
+};
+
+async function checkStreamConsumer(): Promise<void> {
+  const subscription: AukiStreamSubscription = await new AukiStreamClient(peer).subscribeExact(
+    target,
+    streamKind,
+    streamRequest,
+  );
+  const manifest: AukiStreamManifest = subscription.manifest;
+  const next: AukiStreamNext | undefined = await subscription.next();
+  if (next?.kind === "entry") {
+    const entry: AukiStreamEntry = next.entry;
+    const timestamp: bigint = entry.timestampNs;
+    const payload: Uint8Array = entry.payload;
+    void [timestamp, payload];
+  } else if (next?.kind === "end") {
+    const reason: AukiStreamEndReason = next.reason;
+    void reason;
+  }
+  await subscription.cancel();
+  void manifest;
+}
+
 void [
   info,
   resources,
@@ -81,4 +119,5 @@ void [
   messageEvent,
   receiverClose,
   checkMessageSender,
+  checkStreamConsumer,
 ];

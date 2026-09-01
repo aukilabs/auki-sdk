@@ -7,7 +7,7 @@
     "node": "^20.19.0 || >=22.12.0"
   },
   "scripts": {
-    "build:wasm": "wasm-pack build . --target web --out-dir pkg-test --dev --features finite-protocols,message --locked",
+    "build:wasm": "wasm-pack build . --target web --out-dir pkg-test --dev --features finite-protocols,message,stream --locked",
     "check": "npm run build:wasm && tsc --noEmit"
   },
   "devDependencies": {

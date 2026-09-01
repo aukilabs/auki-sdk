@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": false,
+    "lib": ["ESNext", "DOM", "DOM.Iterable"]
+  },
+  "include": ["tests/**/*.ts"]
+}

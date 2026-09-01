@@ -561,6 +561,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-portable-echo-swift"
+version = "0.1.0"
+dependencies = [
+ "auki-portable-echo",
+ "auki-sdk",
+ "auki-sdk-swift",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uniffi",
+ "uuid",
+]
+
+[[package]]
 name = "auki-portable-echo-web"
 version = "0.1.0"
 dependencies = [

@@ -2,12 +2,19 @@ import {
   AukiBlobClient,
   AukiCatalogClient,
   AukiInfoClient,
+  AukiMessageClient,
+  AukiMessageEndpoint,
+  AukiMessageReceiver,
+  AukiMessageSender,
   AukiPeer,
   AukiRegistryClient,
+  type AukiAuthenticatedPeer,
   type AukiBlobReceipt,
   type AukiCatalogMapsResponse,
   type AukiCatalogResourcesResponse,
   type AukiExactTarget,
+  type AukiMessageChannelResource,
+  type AukiMessageEvent,
   type AukiParticipantInfo,
   type AukiRegistryEntry,
   type AukiRegistryListEntry,
@@ -40,4 +47,38 @@ const blob: Promise<AukiBlobReceipt> = new AukiBlobClient(peer).fetchExact(
   "0".repeat(64),
 );
 
-void [info, resources, maps, registryList, registryEntry, blob];
+const channel: AukiMessageChannelResource = {
+  variant: "message_channel",
+  owner_peer_id: target.peerId,
+  resource_id: "events",
+  clock: {
+    peer_id: target.peerId,
+    id: "session/monotonic",
+    hash: "0123456789abcdef0123456789abcdef",
+  },
+};
+const messageEndpoint: AukiMessageEndpoint = AukiMessageEndpoint.mount(peer);
+const messageReceiver: AukiMessageReceiver = messageEndpoint.declare(channel, 16);
+const messageEvent: Promise<AukiMessageEvent | null> = messageReceiver.next();
+const receiverClose: Promise<void> = messageReceiver.close();
+
+async function checkMessageSender(): Promise<void> {
+  const sender: AukiMessageSender = await new AukiMessageClient(peer).openExact(target, channel);
+  const authenticated: AukiAuthenticatedPeer = sender.remotePeer;
+  await sender.send("example.event", 1n, new Uint8Array([1, 2, 3]));
+  await sender.close();
+  void authenticated;
+}
+
+void [
+  info,
+  resources,
+  maps,
+  registryList,
+  registryEntry,
+  blob,
+  messageEndpoint,
+  messageEvent,
+  receiverClose,
+  checkMessageSender,
+];

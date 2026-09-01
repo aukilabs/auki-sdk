@@ -90,8 +90,13 @@ class Playground:
         playground = cls(peer)
         try:
             playground.mount()
-        except BaseException:
-            await playground.close()
+        except BaseException as operation:
+            try:
+                await playground.close()
+            except BaseException as cleanup:
+                raise RuntimeError(
+                    f"mount protocols: {operation}; cleanup also failed: {cleanup}"
+                ) from operation
             raise
         return playground
 
@@ -123,6 +128,7 @@ class Playground:
         self.stream = auki_sdk.AukiStreamClient(self.peer)
 
     def info_provider(self, _requester: dict[str, Any]) -> dict[str, Any]:
+        self.validate_requester(_requester)
         return {
             "app": APP,
             "app_version": APP_VERSION,
@@ -138,14 +144,17 @@ class Playground:
     def catalog_resources_provider(
         self, _requester: dict[str, Any], _request: dict[str, Any]
     ) -> dict[str, Any]:
+        self.validate_requester(_requester)
         return {"resources": [message_channel(self.peer_id)]}
 
     def catalog_maps_provider(self, _requester: dict[str, Any]) -> dict[str, Any]:
+        self.validate_requester(_requester)
         return {"resources": []}
 
     def registry_provider(
         self, _requester: dict[str, Any], request: dict[str, Any]
     ) -> dict[str, Any]:
+        self.validate_requester(_requester)
         if request["op"] == "list":
             return {
                 "op": "list",
@@ -156,6 +165,7 @@ class Playground:
     async def blob_provider(
         self, _requester: dict[str, Any], request: dict[str, Any]
     ) -> dict[str, Any] | None:
+        self.validate_requester(_requester)
         if request["sha256"] != BLOB_SHA256:
             return None
         start = request["offset"]
@@ -165,6 +175,7 @@ class Playground:
     def stream_provider(
         self, _requester: dict[str, Any], request: dict[str, Any]
     ) -> dict[str, Any]:
+        self.validate_requester(_requester)
         if request != {
             "source_peer_id": self.peer_id,
             "resource_id": STREAM_RESOURCE_ID,
@@ -178,6 +189,13 @@ class Playground:
             "source": self.scalar_source(),
         }
 
+    def validate_requester(self, requester: dict[str, Any]) -> None:
+        require(bool(requester["peer_id"]), "authenticated requester Peer ID is missing")
+        require(
+            self.peer.domain_id in requester["domain_ids"],
+            "authenticated requester does not share the selected Domain",
+        )
+
     async def scalar_source(self):
         yield {"timestamp_ns": STREAM_TIMESTAMP_NS, "payload": SCALAR_BYTES}
 
@@ -187,6 +205,13 @@ class Playground:
             event = await self.receiver.next()
             if event is None:
                 return
+            require(event["type"] == MESSAGE_TYPE, "received Message type mismatch")
+            require(
+                event["timestamp_ns"] == MESSAGE_TIMESTAMP_NS,
+                "received Message timestamp mismatch",
+            )
+            require(event["payload"] == MESSAGE_BYTES, "received Message payload mismatch")
+            require(bool(event["sender"]["peer_id"]), "received Message sender is missing")
             print(
                 f"message received from {event['sender']['peer_id']} "
                 f"type={event['type']} bytes={len(event['payload'])}",
@@ -218,7 +243,7 @@ class Playground:
             try:
                 await asyncio.wait_for(operation(), timeout=60)
                 checks[name] = True
-            except BaseException as error:
+            except Exception as error:
                 checks[name] = False
                 errors[name] = f"{type(error).__name__}: {error}"
 
@@ -265,6 +290,7 @@ class Playground:
         require(receipt["remote_peer_id"] == target["peerId"], "Blob Peer ID mismatch")
         require(receipt["sha256"] == BLOB_SHA256, "Blob hash mismatch")
         require(receipt["bytes"] == BLOB_BYTES, "Blob bytes mismatch")
+        require(receipt["relayed"] is True, "Blob did not use the relay circuit")
 
     async def probe_message(self, target: dict[str, Any]) -> None:
         sender = await self.message.open_exact(
@@ -273,6 +299,8 @@ class Playground:
             message_channel(target["peerId"]),
         )
         try:
+            require(sender.remote_peer["peer_id"] == target["peerId"], "Message Peer ID mismatch")
+            require(sender.relayed is True, "Message did not use the relay circuit")
             await sender.send(MESSAGE_TYPE, MESSAGE_TIMESTAMP_NS, MESSAGE_BYTES)
         finally:
             await sender.close()
@@ -342,9 +370,19 @@ class Playground:
 
 async def command_loop(playground: Playground) -> None:
     loop = asyncio.get_running_loop()
-    while line := await loop.run_in_executor(None, sys.stdin.readline):
+    reader = asyncio.StreamReader()
+    protocol = asyncio.StreamReaderProtocol(reader)
+    transport, _ = await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+    try:
+        await read_commands(playground, reader)
+    finally:
+        transport.close()
+
+
+async def read_commands(playground: Playground, reader: asyncio.StreamReader) -> None:
+    while line := await reader.readline():
         try:
-            command = json.loads(line)
+            command = json.loads(line.decode())
             if command["command"] == "probe_all":
                 result = await playground.probe_all(command["target"])
                 emit(
@@ -360,7 +398,7 @@ async def command_loop(playground: Playground) -> None:
                 return
             else:
                 raise ValueError(f"unknown command {command['command']!r}")
-        except BaseException as error:
+        except Exception as error:
             emit({"event": "command_error", "error": f"invalid command: {error}"})
 
 

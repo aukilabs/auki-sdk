@@ -94,7 +94,7 @@ struct MountedProtocols {
     blob: BlobEndpoint,
     message: MessageEndpoint,
     stream: StreamEndpoint,
-    message_drain: tokio::task::JoinHandle<()>,
+    message_drain: tokio::task::JoinHandle<Result<()>>,
 }
 
 #[derive(Clone)]
@@ -175,7 +175,10 @@ async fn main() -> Result<()> {
         "card": card,
     }))?;
 
-    let operation = command_loop(&protocols.clients).await;
+    let operation = tokio::select! {
+        operation = command_loop(&protocols.clients) => operation,
+        signal = tokio::signal::ctrl_c() => signal.context("wait for Ctrl-C"),
+    };
     let protocol_shutdown = protocols.close().await;
     let peer_shutdown = peer.shutdown().await.map_err(anyhow::Error::from);
     finish(
@@ -233,8 +236,9 @@ impl MountedProtocols {
         let mut receiver = message.declare(message_channel, 16)?;
         let message_drain = tokio::spawn(async move {
             while let Some(event) = receiver.recv().await {
-                log_message_event(&event);
+                validate_message_event(&event)?;
             }
+            Ok(())
         });
         let stream = StreamEndpoint::mount(
             protocols,
@@ -266,8 +270,10 @@ impl MountedProtocols {
         let mut errors = Vec::new();
         collect_close(&mut errors, "Stream", self.stream.close().await);
         collect_close(&mut errors, "Message", self.message.close().await);
-        if let Err(error) = self.message_drain.await {
-            errors.push(format!("Message receiver: {error}"));
+        match self.message_drain.await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => errors.push(format!("Message receiver: {error:#}")),
+            Err(error) => errors.push(format!("Message receiver task: {error}")),
         }
         collect_close(&mut errors, "Blob", self.blob.close().await);
         collect_close(&mut errors, "Registry", self.registry.close().await);
@@ -387,7 +393,7 @@ async fn probe_registry(client: &RegistryClient, peer_id: PeerId, route: Multiad
 
 async fn probe_blob(client: &BlobClient, peer_id: PeerId, route: Multiaddr) -> Result<()> {
     let receipt = client.fetch_exact(peer_id, route, blob_sha256()).await?;
-    if receipt.remote_peer_id != peer_id || receipt.bytes != BLOB_BYTES {
+    if receipt.remote_peer_id != peer_id || receipt.bytes != BLOB_BYTES || !receipt.relayed {
         bail!("unexpected Blob receipt from {peer_id}")
     }
     Ok(())
@@ -397,10 +403,18 @@ async fn probe_message(client: &MessageClient, peer_id: PeerId, route: Multiaddr
     let sender = client
         .open_exact(peer_id, route, &message_channel(peer_id))
         .await?;
+    let metadata = if sender.remote_peer().peer_id == peer_id && sender.is_relayed() {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "unexpected Message channel metadata from {peer_id}"
+        ))
+    };
     let send = sender
         .send(MESSAGE_TYPE, MESSAGE_TIMESTAMP_NS, MESSAGE_BYTES)
         .await;
     let close = sender.close().await;
+    metadata?;
     send?;
     close?;
     Ok(())
@@ -500,13 +514,23 @@ fn blob_sha256() -> String {
     hex::encode(Sha256::digest(BLOB_BYTES))
 }
 
-fn log_message_event(event: &MessageEvent) {
+fn validate_message_event(event: &MessageEvent) -> Result<()> {
+    if event.message_type() != MESSAGE_TYPE
+        || event.timestamp_ns() != MESSAGE_TIMESTAMP_NS
+        || event.payload() != MESSAGE_BYTES
+    {
+        bail!(
+            "received an invalid Message fixture from {}",
+            event.sender.peer_id
+        );
+    }
     eprintln!(
         "message received from {} type={} bytes={}",
         event.sender.peer_id,
         event.message_type(),
         event.payload().len()
     );
+    Ok(())
 }
 
 fn peer_card(peer: &AukiPeer) -> Result<PeerCard> {

@@ -9,6 +9,8 @@ use std::{
 
 use chrono::Utc;
 use futures::{FutureExt, StreamExt};
+#[cfg(target_os = "ios")]
+use libp2p::core::{upgrade::Version, Transport as _};
 use libp2p::{
     core::transport::{ListenerId, TransportError},
     multiaddr::Protocol,
@@ -23,6 +25,8 @@ use libp2p_stream::{Behaviour as StreamBehaviour, IncomingStreams};
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex as AsyncMutex};
 use uuid::Uuid;
 
+#[cfg(target_os = "ios")]
+use crate::system_dns::SystemDnsTransport;
 use crate::{
     authentication::{authenticate_duplex, SessionRequirements},
     authority::DomainAuthority,
@@ -830,6 +834,7 @@ enum Command {
     },
 }
 
+#[cfg(not(target_os = "ios"))]
 fn build_swarm(
     identity: libp2p::identity::Keypair,
     streams: StreamBehaviour,
@@ -844,6 +849,40 @@ fn build_swarm(
         )
         .map_err(|error| Error::TransportBuild(error.to_string()))?
         .with_dns()
+        .map_err(|error| Error::TransportBuild(error.to_string()))?
+        .with_relay_client(noise::Config::new, yamux::Config::default)
+        .map_err(|error| Error::TransportBuild(error.to_string()))?
+        .with_behaviour(|_, relay| Behaviour {
+            relay: relay_client::Behaviour::new(relay),
+            streams,
+            targeted_streams,
+        })
+        .map_err(|error| Error::TransportBuild(error.to_string()))
+        .map(|builder| {
+            builder
+                .with_swarm_config(|config| {
+                    config.with_idle_connection_timeout(Duration::from_secs(60))
+                })
+                .build()
+        })
+}
+
+#[cfg(target_os = "ios")]
+fn build_swarm(
+    identity: libp2p::identity::Keypair,
+    streams: StreamBehaviour,
+    targeted_streams: TargetedStreamBehaviour,
+) -> P2PResult<Swarm<Behaviour>> {
+    SwarmBuilder::with_existing_identity(identity)
+        .with_tokio()
+        .with_other_transport(|keypair| -> Result<_, Box<dyn StdError + Send + Sync>> {
+            let security = noise::Config::new(keypair)?;
+            let transport = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
+                .upgrade(Version::V1Lazy)
+                .authenticate(security)
+                .multiplex(yamux::Config::default());
+            Ok(SystemDnsTransport::new(transport))
+        })
         .map_err(|error| Error::TransportBuild(error.to_string()))?
         .with_relay_client(noise::Config::new, yamux::Config::default)
         .map_err(|error| Error::TransportBuild(error.to_string()))?
@@ -1323,6 +1362,10 @@ fn classify_dial_error(error: DialError) -> Error {
 
 fn error_chain_contains_dns_failure(error: &(dyn StdError + 'static)) -> bool {
     if error.is::<hickory_resolver::ResolveError>() {
+        return true;
+    }
+    #[cfg(any(test, target_os = "ios"))]
+    if error.is::<crate::system_dns::SystemDnsError>() {
         return true;
     }
     if let Some(io_error) = error.downcast_ref::<std::io::Error>() {
@@ -2281,6 +2324,14 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             TransportError::Other(io::Error::other(resolve_error)),
         )]);
         assert!(matches!(classify_dial_error(dns), Error::Dns(_)));
+
+        let system_dns = DialError::Transport(vec![(
+            address.clone(),
+            TransportError::Other(io::Error::other(crate::system_dns::SystemDnsError::new(
+                io::Error::from(io::ErrorKind::NotFound),
+            ))),
+        )]);
+        assert!(matches!(classify_dial_error(system_dns), Error::Dns(_)));
 
         let refused = DialError::Transport(vec![(
             address,

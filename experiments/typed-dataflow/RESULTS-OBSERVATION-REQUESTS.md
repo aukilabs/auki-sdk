@@ -1,8 +1,8 @@
 # Observation requests and lifecycle: Phase 1 results
 
-Date: 2026-08-28
+Date: 2026-08-28; revised 2026-09-02
 
-Branch: `codex/observation-requests-lifecycle`
+Branch: `codex/typed-dataflow-complete`
 
 ## Result
 
@@ -13,7 +13,7 @@ The Phase 1 distinction is coherent:
 - a Buffer remains a separate Product and can offer finite
   `LatestExisting` and clock-qualified `TimeRange` access;
 - sharing request vocabulary does not make the Product a Component;
-- a continuing relationship can report whether it is active, reconfigured,
+- a continuing relationship can report whether it is active, ended, failed,
   or cancelled instead of leaving an inert connection that still appears
   healthy;
 - local fan-out can share immutable payload storage while a serialized path
@@ -29,10 +29,9 @@ streaming code changed.
 - `ObservationHandle<T>` owns a continuing `FollowNew` relationship and exposes
   status, cancellation, delivery counts, coalescing counts, overruns, and
   serialized-transport counts;
-- a pinned handle becomes terminal `Reconfigured` and disconnects at an Output
-  replacement;
-- a follow-current handle remains active and delivers the explicit Output
-  transition;
+- every handle becomes terminal `Ended(Reconfigured)` and disconnects at a
+  configured-contract replacement;
+- observing the replacement requires an explicit new subscription;
 - the fresh Camera Observable advertises only `FollowNew` and explicitly
   rejects finite retained-data requests;
 - `RetainedProduct<T>` provides finite access without implementing
@@ -47,29 +46,30 @@ streaming code changed.
 - `SerializedInMemoryTransport` JSON-encodes and decodes observations,
   retained-data requests, retained-data responses, instructions, and results,
   while counting messages and bytes;
-- a clonable non-owning `ConnectionControl` lets a pinned relationship close
-  itself from its reconfiguration callback while the owning handle retains the
+- a clonable non-owning `ConnectionControl` lets a relationship close itself
+  after delivering its terminal notice while the owning handle retains the
   lifecycle responsibility.
 
 ## Correctness evidence
 
-Ten new integration tests prove:
+Eleven integration tests prove:
 
 1. a fresh Camera advertises and supports `FollowNew` only;
 2. the Catalog places observational meaning on the current Output Manifest;
 3. a Buffer Product answers latest-existing and time-range queries without
    appearing in the Component Catalog;
 4. retained time-range queries validate their clock and bounds;
-5. a pinned handle reports `Reconfigured`, names the replacement Output, and
+5. a handle reports terminal reconfiguration, may name the replacement, and
    disconnects;
-6. a follow-current handle remains active across the explicit transition and
-   can be cancelled;
-7. dropping a handle stops future delivery;
-8. serialized observation delivery preserves values but creates a distinct
+6. replacement observations require a newly created subscription;
+7. subscribing to an already ended configured Output immediately returns its
+   terminal notice rather than an inert active handle;
+8. dropping a handle stops future delivery;
+9. serialized observation delivery preserves values but creates a distinct
    payload allocation and reports encoded bytes;
-9. serialized Product queries preserve finite-selection semantics and report
+10. serialized Product queries preserve finite-selection semantics and report
    their transport work;
-10. `CoalesceLatest` reports replacements while bounded `EverySelected`
+11. `CoalesceLatest` reports replacements while bounded `EverySelected`
     preserves every accepted observation in order.
 
 The first experiment's sixteen tests and the identity slice's eight tests
@@ -83,12 +83,12 @@ reproducible benchmark matrix.
 
 | Case | Iterations per sample | Median ns/publication |
 |---|---:|---:|
-| Camera publication, no observer | 100,000 | 594.03 |
-| Pinned local observer | 100,000 | 596.28 |
-| Pinned plus follow-current local observers | 100,000 | 623.25 |
-| Serialized in-memory observer | 20,000 | 1,897.65 |
+| Camera publication, no observer | 100,000 | 401.69 |
+| One local subscription | 100,000 | 418.31 |
+| Two local subscriptions to the same Output | 100,000 | 447.40 |
+| Serialized in-memory observer | 20,000 | 1,711.45 |
 
-The marginal second local observer was about 27 ns per publication in this
+The marginal second local observer was about 29 ns per publication in this
 run. The serialized case encoded and decoded an approximately 423-byte JSON
 event for each three-byte RGB fixture payload. This demonstrates the copy
 boundary; it does not propose JSON as the wire format or estimate real network
@@ -99,8 +99,8 @@ latency.
 - A Component Observable with retained backing is not implemented. This phase
   proves fresh rejection and direct Product access; a later slice may test a
   Component deliberately routing finite requests to one of its Products.
-- `Completed` and `Failed` handle states are reserved but not yet driven by a
-  producer/error model. Failure and panic semantics belong to Phase 2.
+- terminal producer failure drives `Ended(Failed)`, while a relationship or
+  observer failure drives the distinct relationship `Failed` status;
 - The serialized fixture uses a synchronous callback and treats a serde failure
   as a test-fixture invariant violation. It is not a production transport.
 - Product access does not yet offer continuing follow behavior. Only the

@@ -99,9 +99,9 @@ allowing operational nonsense.
 ### 4. Product construction is fixture-specific or manual
 
 A Buffer can be created, but creating a `RetainedProduct<T>` requires manual
-Manifest assembly. Camera Buffer rolling is implemented only by
-`CameraBufferRoller`. `Episode<T>` has no corresponding typed Product wrapper
-or public Product lifecycle integration.
+Manifest assembly. Camera Buffer capture is implemented only by the
+fixture-specific `CameraBufferCapture`. `Episode<T>` has no corresponding
+typed Product wrapper or public Product lifecycle integration.
 
 The volume task cannot truthfully expose its session Episode through the
 Catalog without inventing application-specific glue.
@@ -137,9 +137,8 @@ descriptions together:
 ```rust,ignore
 let microphone = peer.component(ComponentSpec::new("microphone"))?;
 
-let audio = microphone.output::<AudioBlock>(OutputSpec {
-    slot: "audio",
-    payload: audio_contract,
+let audio = microphone.observable::<AudioBlock>(ObservableSpec {
+    contract: audio_contract,
     clock_id: session_clock,
     spatial_frame_id: None,
 })?;
@@ -165,4 +164,3 @@ Do not implement this change until the decision review confirms:
    smaller combination;
 3. how modality-specific configured contract fields remain standardized and
    extensible without returning to a loosely typed property bag.
-

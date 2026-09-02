@@ -5,10 +5,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use auki_typed_dataflow_experiment::{
-    Buffer, CameraBufferRoller, CameraComponent, CameraError, ConnectionOptions, CursorRead,
-    CursorStart, EveryFullPolicy, InputPort, ObservationEvent, ObservationStatus, OutputPort,
-    PeerRuntime, SerializedInMemoryTransport, SharedDelivery, SharedScheduler, VideoFrame, connect,
-    connect_buffer, connect_shared, observation_input,
+    Buffer, CameraBufferCapture, CameraComponent, CameraError, ConnectionOptions, CursorRead,
+    CursorStart, EveryFullPolicy, InputPort, ObservationEndReason, ObservationEvent,
+    ObservationStatus, OutputPort, PeerRuntime, SerializedInMemoryTransport, SharedDelivery,
+    SharedScheduler, VideoFrame, connect, connect_buffer, connect_shared, observation_input,
 };
 
 fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) {
@@ -247,7 +247,7 @@ fn producer_failure_is_terminal_and_closes_its_buffer_product() {
         Vec::<String>::new(),
     )
     .unwrap();
-    let products = CameraBufferRoller::attach(&camera, 4).unwrap();
+    let products = CameraBufferCapture::attach(&camera, 4).unwrap();
     let events = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&events);
     let observer = observation_input("observer", move |event| {
@@ -266,14 +266,18 @@ fn producer_failure_is_terminal_and_closes_its_buffer_product() {
     assert!(camera.fail_current_output(2, "camera driver disconnected"));
     assert!(!camera.fail_current_output(3, "duplicate failure"));
     wait_until(Duration::from_secs(1), || {
-        matches!(handle.status(), ObservationStatus::Failed(_))
+        matches!(
+            handle.status(),
+            ObservationStatus::Ended(ref end)
+                if matches!(end.reason, ObservationEndReason::Failed { .. })
+        )
     });
     assert!(matches!(
         camera.publish_rgb8(4, 1, 1, rgb8(1, 1, 4)),
         Err(CameraError::OutputFailed(reason)) if reason == "camera driver disconnected"
     ));
 
-    let product = products.current();
+    let product = products.product();
     assert!(product.latest_existing().unwrap().is_some());
     let mut cursor = product.buffer.subscribe(CursorStart::Latest);
     assert!(matches!(
@@ -282,7 +286,8 @@ fn producer_failure_is_terminal_and_closes_its_buffer_product() {
     ));
     assert!(matches!(
         events.lock().unwrap().last(),
-        Some(ObservationEvent::Failed(_))
+        Some(ObservationEvent::Ended(end))
+            if matches!(end.reason, ObservationEndReason::Failed { .. })
     ));
 }
 
@@ -361,7 +366,7 @@ fn camera_buffer_local_detector_and_serialized_remote_have_explicit_copy_boundar
         Vec::<String>::new(),
     )
     .unwrap();
-    let products = CameraBufferRoller::attach(&camera, 8).unwrap();
+    let products = CameraBufferCapture::attach(&camera, 8).unwrap();
     let local_storage = Arc::new(Mutex::new(None));
     let local = Arc::clone(&local_storage);
     let local_detector = observation_input(
@@ -406,7 +411,7 @@ fn camera_buffer_local_detector_and_serialized_remote_have_explicit_copy_boundar
     wait_until(Duration::from_secs(1), || {
         local_handle.stats().delivered == 1 && remote_handle.stats().delivered == 1
     });
-    let retained = products.current().latest_existing().unwrap().unwrap();
+    let retained = products.product().latest_existing().unwrap().unwrap();
 
     assert_eq!(*local_storage.lock().unwrap(), Some(source_address));
     assert_eq!(retained.payload.bytes.as_ptr() as usize, source_address);

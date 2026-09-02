@@ -4,10 +4,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use auki_typed_dataflow_experiment::{
-    CameraBufferRoller, CameraComponent, EveryFullPolicy, InMemoryTransport, InvocationContext,
-    ObservationAccess, ObservationDelivery, ObservationError, ObservationEvent, ObservationStatus,
-    PeerRuntime, ProductAccessError, SerializedInMemoryTransport, SetResolution, TimeRangeRequest,
-    VideoFrame, observation_input,
+    CameraBufferCapture, CameraComponent, EveryFullPolicy, InMemoryTransport, InvocationContext,
+    ObservationAccess, ObservationDelivery, ObservationEndReason, ObservationError,
+    ObservationEvent, ObservationStatus, PeerRuntime, ProductAccessError,
+    SerializedInMemoryTransport, SetResolution, TimeRangeRequest, VideoFrame, observation_input,
 };
 
 fn frame_bytes(width: u32, height: u32, value: u8) -> Arc<[u8]> {
@@ -88,13 +88,13 @@ fn fresh_camera_truthfully_supports_follow_new_only() {
 #[test]
 fn retained_product_answers_latest_and_time_range_without_becoming_a_component() {
     let (peer, camera) = camera();
-    let buffers = CameraBufferRoller::attach(&camera, 8).unwrap();
+    let buffers = CameraBufferCapture::attach(&camera, 8).unwrap();
 
     camera.publish_rgb8(10, 2, 2, frame_bytes(2, 2, 1)).unwrap();
     camera.publish_rgb8(20, 2, 2, frame_bytes(2, 2, 2)).unwrap();
     camera.publish_rgb8(30, 2, 2, frame_bytes(2, 2, 3)).unwrap();
 
-    let product = buffers.current();
+    let product = buffers.product();
     assert_eq!(
         product.manifest.access,
         vec![
@@ -130,9 +130,9 @@ fn retained_product_answers_latest_and_time_range_without_becoming_a_component()
 #[test]
 fn retained_time_range_rejects_wrong_clock_and_invalid_bounds() {
     let (_peer, camera) = camera();
-    let buffers = CameraBufferRoller::attach(&camera, 8).unwrap();
+    let buffers = CameraBufferCapture::attach(&camera, 8).unwrap();
     camera.publish_rgb8(10, 2, 2, frame_bytes(2, 2, 1)).unwrap();
-    let product = buffers.current();
+    let product = buffers.product();
 
     assert!(matches!(
         product.time_range(TimeRangeRequest {
@@ -158,11 +158,11 @@ fn retained_time_range_rejects_wrong_clock_and_invalid_bounds() {
 }
 
 #[test]
-fn pinned_handle_becomes_reconfigured_and_disconnects() {
+fn handle_ends_with_reconfiguration_notice_and_disconnects() {
     let (_peer, camera) = camera();
     let events = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&events);
-    let input = observation_input("pinned", move |event| {
+    let input = observation_input("configured-output", move |event| {
         sink.lock().unwrap().push(event.clone());
     });
     let handle = camera
@@ -174,11 +174,16 @@ fn pinned_handle_becomes_reconfigured_and_disconnects() {
     resize(&camera, 20);
 
     let status = handle.status();
-    let ObservationStatus::Reconfigured(transition) = status else {
-        panic!("expected reconfigured handle, got {status:?}");
+    let ObservationStatus::Ended(end) = status else {
+        panic!("expected ended handle, got {status:?}");
     };
-    assert_eq!(transition.previous.output_id, "frames-1");
-    assert_eq!(transition.replacement.output_id, "frames-2");
+    assert_eq!(end.output.output_id, "frames-1");
+    assert!(matches!(
+        end.reason,
+        ObservationEndReason::Reconfigured {
+            replacement: Some(ref replacement)
+        } if replacement.output_id == "frames-2"
+    ));
     assert!(handle.stats().closed);
 
     camera.publish_rgb8(21, 1, 1, frame_bytes(1, 1, 2)).unwrap();
@@ -186,28 +191,76 @@ fn pinned_handle_becomes_reconfigured_and_disconnects() {
 }
 
 #[test]
-fn follow_current_stays_active_until_explicitly_cancelled() {
+fn subscribing_to_an_already_reconfigured_output_returns_its_end_notice() {
     let (_peer, camera) = camera();
+    let stale_output = camera.current_output();
+    resize(&camera, 20);
+
     let events = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&events);
-    let input = observation_input("follow-current", move |event| {
+    let input = observation_input("late-stale-subscription", move |event| {
         sink.lock().unwrap().push(event.clone());
     });
-    let handle = camera
-        .follow_current_output()
+    let handle = stale_output
         .follow_new(&input, ObservationDelivery::inline_every_selected())
+        .unwrap();
+
+    assert!(matches!(
+        handle.status(),
+        ObservationStatus::Ended(ref end)
+            if matches!(end.reason, ObservationEndReason::Reconfigured { .. })
+    ));
+    assert!(handle.stats().closed);
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        events[0],
+        ObservationEvent::Ended(ref end)
+            if matches!(end.reason, ObservationEndReason::Reconfigured { .. })
+    ));
+}
+
+#[test]
+fn reconfiguration_requires_an_explicit_new_subscription() {
+    let (_peer, camera) = camera();
+    let first_events = Arc::new(Mutex::new(Vec::new()));
+    let first_sink = Arc::clone(&first_events);
+    let first_input = observation_input("first-subscription", move |event| {
+        first_sink.lock().unwrap().push(event.clone());
+    });
+    let first_handle = camera
+        .current_output()
+        .follow_new(&first_input, ObservationDelivery::inline_every_selected())
         .unwrap();
 
     camera.publish_rgb8(10, 2, 2, frame_bytes(2, 2, 1)).unwrap();
     resize(&camera, 20);
     camera.publish_rgb8(21, 1, 1, frame_bytes(1, 1, 2)).unwrap();
 
-    assert_eq!(handle.status(), ObservationStatus::Active);
-    assert_eq!(events.lock().unwrap().len(), 3);
-    handle.cancel();
-    assert_eq!(handle.status(), ObservationStatus::Cancelled);
+    assert!(matches!(
+        first_handle.status(),
+        ObservationStatus::Ended(ref end)
+            if matches!(end.reason, ObservationEndReason::Reconfigured { .. })
+    ));
+    assert_eq!(first_events.lock().unwrap().len(), 2);
+
+    let replacement_events = Arc::new(Mutex::new(Vec::new()));
+    let replacement_sink = Arc::clone(&replacement_events);
+    let replacement_input = observation_input("replacement-subscription", move |event| {
+        replacement_sink.lock().unwrap().push(event.clone());
+    });
+    let replacement_handle = camera
+        .current_output()
+        .follow_new(
+            &replacement_input,
+            ObservationDelivery::inline_every_selected(),
+        )
+        .unwrap();
     camera.publish_rgb8(22, 1, 1, frame_bytes(1, 1, 3)).unwrap();
-    assert_eq!(events.lock().unwrap().len(), 3);
+
+    assert_eq!(replacement_handle.status(), ObservationStatus::Active);
+    assert_eq!(replacement_events.lock().unwrap().len(), 1);
+    assert_eq!(first_events.lock().unwrap().len(), 2);
 }
 
 #[test]
@@ -269,9 +322,9 @@ fn serialized_follow_preserves_values_but_not_local_allocation_identity() {
 #[test]
 fn serialized_product_queries_report_transport_work() {
     let (_peer, camera) = camera();
-    let buffers = CameraBufferRoller::attach(&camera, 8).unwrap();
+    let buffers = CameraBufferCapture::attach(&camera, 8).unwrap();
     let source = camera.publish_rgb8(10, 2, 2, frame_bytes(2, 2, 5)).unwrap();
-    let product = buffers.current();
+    let product = buffers.product();
     let transport = SerializedInMemoryTransport::default();
 
     let remote = transport.latest_existing(&product).unwrap().unwrap();

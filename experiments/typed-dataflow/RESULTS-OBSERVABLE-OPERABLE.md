@@ -1,13 +1,13 @@
 # Observable/Operable vertical slice: first results
 
-Date: 2026-08-28
+Date: 2026-08-28; revised 2026-09-02
 
-Branch: `codex/observable-operable-data-plane`
+Branch: `codex/typed-dataflow-complete`
 
 ## Result
 
-The Component-versus-Output identity split is coherent enough to continue
-testing.
+The Component configuration boundary is coherent enough to continue testing,
+but a separate Output identity is no longer an accepted conclusion.
 
 The prototype demonstrates one stable Camera Component whose configured
 `frames` Output can be replaced without mutating the Component Manifest or
@@ -18,14 +18,17 @@ Camera Component @ component hash A
   Operable: set_resolution
 
   frames-1 @ output hash 1
-      | explicit Reconfigured transition
+      | terminal Reconfigured notice
       v
   frames-2 @ output hash 2
 ```
 
-This resolves the self-replacement problem in the earlier model. The Camera
-Operable remains addressable because it belongs to the stable Component. The
-configured production contract belongs to an immutable Component Output.
+The Camera Operable remains addressable because it belongs to the stable
+Component. A subscription observes one precisely described configuration and
+ends when that configuration changes. No subscription survives the boundary.
+The fixture still puts the configured production contract in an immutable
+Output Manifest, but terminal subscriptions remove the strongest reason for a
+stable Output slot and make that identity split provisional.
 
 ## Implemented behavior
 
@@ -34,15 +37,17 @@ configured production contract belongs to an immutable Component Output.
 - stable Component identity and Manifest hash across resolution changes;
 - new Output ID and Output Manifest hash for each contract-affecting resolution
   change;
-- an Observable pinned to one immutable Output;
-- an opt-in follow-current Observable for one stable output slot;
-- explicit `Reconfigured` events naming previous and replacement Outputs;
+- an Observable bound to one immutable configured Output;
+- an explicit terminal `Ended(Reconfigured)` notice that may name a
+  replacement only as a discovery hint;
 - a typed `set_resolution` Operable with caller context and authorization;
 - a local-only Operable omitted from the cluster Catalog;
 - a minimal Catalog containing visible Components and Products, with current
   Outputs nested under their Component;
 - truthful RGB8 frame validation against the current Output Manifest;
-- one Buffer Product per Output contract, rolled at reconfiguration;
+- one Buffer Product per configured contract; its subscription ends and its
+  Buffer closes at reconfiguration, while replacement retention requires a
+  new explicit attachment;
 - shared immutable frame bytes across observers and the retained Buffer;
 - an in-memory transport-shaped adapter that leaves production networking
   untouched.
@@ -53,13 +58,12 @@ Eight new integration tests prove:
 
 1. resolution replacement changes Output identity and hash but not Component
    identity or hash;
-2. the Catalog resolves the `frames` slot to the replacement Output;
-3. a pinned observer receives the old observation and terminal transition but
+2. the Catalog advertises the replacement configuration under the Camera;
+3. a subscriber receives the old observation and terminal notice but
    never receives replacement-Output observations;
-4. a follow-current observer sees old observations, the explicit transition,
-   and new observations in order;
-5. Buffer Products roll at the Output boundary and never mix producer Output
-   Manifests;
+4. receiving replacement observations requires an explicit new subscription;
+5. a Buffer closes at the configuration boundary and recording the replacement
+   requires a new explicit Buffer attachment;
 6. retained and directly observed camera frames share the same byte storage;
 7. a local Operable is neither Catalog-discoverable nor remotely invocable;
 8. an unauthorized remote caller cannot reconfigure the Camera;
@@ -78,8 +82,8 @@ crate's compile-fail doc test passes, and focused Clippy is warning-free.
 Catalog
 |- Component: front-camera
 |  |- Component Manifest @ stable component hash
-|  `- current output slot
-|     `- frames -> Output Manifest @ current output hash
+|  `- current configured Observable
+|     `- experimental Output Manifest @ current output hash
 `- Products
    |- front-camera.frames-1.buffer -> frames-1 Output Manifest
    `- front-camera.frames-2.buffer -> frames-2 Output Manifest
@@ -96,13 +100,10 @@ This result is semantic and correctness evidence, not production readiness.
 - Caller authorization is an explicit allow-list closure, not production auth.
 - Observable access implements continuing live observation only. Latest,
   first, all-available, and time-range requests remain unimplemented.
-- `Reconfigured` is semantically terminal for a pinned observation, but the
-  prototype does not yet expose an `ObservationSession` status object; its
-  underlying connection handle remains attached to an inert old Output port.
+- `Reconfigured` is terminal and the `ObservationHandle` reports the end
+  notice; the replacement reference is not an instruction to reconnect.
 - Operable invocation is synchronous and has no deadline, cancellation, or
   asynchronous completion model yet.
-- Follow-current duplicates event envelopes onto pinned and slot-level ports.
-  Payload bytes remain shared, but the dispatch cost has not been benchmarked.
 - Reconfiguration is serialized with frame publication by one mutex. Concurrent
   stress and failure injection have not been run.
 - Product lifecycle and Catalog garbage collection are not modeled. Concluded
@@ -115,16 +116,20 @@ This result is semantic and correctness evidence, not production readiness.
   external-memory, and agent-friendliness matrix in the design document has not
   yet been executed for this slice.
 
-## Recommendation
+## Revised recommendation
 
-Keep the separation:
+Keep the lifecycle rule:
 
 ```text
-Component ID/hash = stable behavior and interface contract
-Output ID/hash    = one immutable configured production contract
-Product ID/hash   = one retained or fetchable data product
+subscribe to one configured contract
+  -> receive observations
+  -> receive terminal notice when that contract changes
+  -> deliberately discover and subscribe again
 ```
 
-The next experiment should add finite/latest Observable requests and measure
-the extra slot-level follow-current dispatch before any of these types move
-into a production crate.
+Do not preserve a subscription across configurations. The next identity
+experiment should test whether a Product can pin a configured Component
+Manifest directly and whether named ports are needed only for Components with
+multiple genuine Observable interfaces. Separate Output identities should not
+move into a production crate until they earn their existence under this
+simpler lifecycle.

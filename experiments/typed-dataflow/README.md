@@ -14,8 +14,9 @@ prototype as a performance and ownership baseline:
   behavior;
 - **exposure** determines whether an interface is discoverable through the
   experimental Catalog;
-- a configured **Component Output** has an identity and immutable Manifest
-  separate from its Component;
+- the current experiment gives a configured **Component Output** an identity
+  and immutable Manifest separate from its Component, but that split is now
+  explicitly provisional;
 - a **Product Manifest** references the exact Output that produced it.
 
 Phase 1 adds explicit observation selection and lifecycle:
@@ -23,7 +24,7 @@ Phase 1 adds explicit observation selection and lifecycle:
 - a fresh Component Observable advertises `FollowNew` only;
 - a Buffer remains a Product and separately offers `LatestExisting` and
   clock-qualified `TimeRange` access;
-- `ObservationHandle<T>` reports active, reconfigured, and cancelled state;
+- `ObservationHandle<T>` reports active, ended, failed, and cancelled state;
 - `EverySelected` and `CoalesceLatest` name delivery behavior rather than
   selection;
 - a serialized in-memory fixture counts encoded messages and bytes instead of
@@ -41,8 +42,8 @@ networking:
 - Buffer eviction and cancellation release ownership without invalidating
   payload leases held elsewhere.
 
-The Camera vertical slice demonstrates why Component and Output identity are
-separate:
+The Camera vertical slice currently represents a configuration change with a
+replacement Output:
 
 ```text
 Camera Component @ stable Component Manifest hash
@@ -52,10 +53,16 @@ Camera Component @ stable Component Manifest hash
     frames-2 @ Output Manifest hash 2
 ```
 
-A pinned observation of `frames-1` ends at the explicit transition. An
-opt-in follow-current observation crosses to `frames-2` while reporting both
-identities. Buffer Products roll at the same boundary so one Product Manifest
-never claims observations produced under two Output contracts.
+Every observation of `frames-1` ends with an explicit reconfiguration notice.
+The notice may identify `frames-2`, but neither the consumer nor its Buffer is
+migrated. The application must deliberately create a new subscription and, if
+desired, attach a new Buffer to `frames-2`. One Product Manifest therefore
+never claims observations produced under two configured contracts.
+
+This simpler lifecycle removes the main reason for using a stable named slot
+as a subscription anchor. Separate Output identity and named slots remain in
+the fixture only so the next design review can test whether Products and
+multi-output Components still justify them.
 
 ```text
 Component OutputPort<T>

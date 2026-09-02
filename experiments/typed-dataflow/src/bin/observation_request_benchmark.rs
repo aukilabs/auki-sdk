@@ -66,46 +66,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("| Camera publication, no observer | {iterations} | {no_observer:.2} |");
 
     let camera = new_camera();
-    let pinned_checksum = Arc::new(AtomicU64::new(0));
-    let sink = Arc::clone(&pinned_checksum);
-    let pinned_input = observation_input("pinned", move |event| {
+    let first_checksum = Arc::new(AtomicU64::new(0));
+    let sink = Arc::clone(&first_checksum);
+    let first_input = observation_input("first-subscription", move |event| {
         if let ObservationEvent::Observation(observation) = event {
             sink.fetch_add(observation.sequence, Ordering::Relaxed);
         }
     });
-    let _pinned = camera
+    let _first = camera
         .current_output()
-        .follow_new(&pinned_input, ObservationDelivery::inline_every_selected())?;
-    let pinned = measure(iterations, |timestamp_ns| {
+        .follow_new(&first_input, ObservationDelivery::inline_every_selected())?;
+    let one_subscription = measure(iterations, |timestamp_ns| {
         black_box(
             camera
                 .publish_rgb8(timestamp_ns, 1, 1, Arc::clone(&bytes))
                 .unwrap(),
         );
     });
-    println!("| Pinned local observer | {iterations} | {pinned:.2} |");
+    println!("| One local subscription | {iterations} | {one_subscription:.2} |");
 
-    let follow_checksum = Arc::new(AtomicU64::new(0));
-    let sink = Arc::clone(&follow_checksum);
-    let following_input = observation_input("follow-current", move |event| {
+    let second_checksum = Arc::new(AtomicU64::new(0));
+    let sink = Arc::clone(&second_checksum);
+    let second_input = observation_input("second-subscription", move |event| {
         if let ObservationEvent::Observation(observation) = event {
             sink.fetch_add(observation.sequence, Ordering::Relaxed);
         }
     });
-    let _following = camera.follow_current_output().follow_new(
-        &following_input,
-        ObservationDelivery::inline_every_selected(),
-    )?;
-    let pinned_and_following = measure(iterations, |timestamp_ns| {
+    let _second = camera
+        .current_output()
+        .follow_new(&second_input, ObservationDelivery::inline_every_selected())?;
+    let two_subscriptions = measure(iterations, |timestamp_ns| {
         black_box(
             camera
                 .publish_rgb8(timestamp_ns, 1, 1, Arc::clone(&bytes))
                 .unwrap(),
         );
     });
-    println!(
-        "| Pinned + follow-current local observers | {iterations} | {pinned_and_following:.2} |"
-    );
+    println!("| Two local subscriptions | {iterations} | {two_subscriptions:.2} |");
 
     let serialized_iterations = iterations.min(20_000);
     let camera = new_camera();
@@ -134,8 +131,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     println!("| Serialized in-memory observer | {serialized_iterations} | {serialized:.2} |");
 
-    black_box(pinned_checksum.load(Ordering::Relaxed));
-    black_box(follow_checksum.load(Ordering::Relaxed));
+    black_box(first_checksum.load(Ordering::Relaxed));
+    black_box(second_checksum.load(Ordering::Relaxed));
     black_box(remote_checksum.load(Ordering::Relaxed));
 
     let transport = transport.stats();
@@ -149,7 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!(
         "Marginal second local observer in this run: {:.2} ns/publication.",
-        pinned_and_following - pinned
+        two_subscriptions - one_subscription
     );
 
     Ok(())

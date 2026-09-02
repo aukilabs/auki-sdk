@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use auki_typed_dataflow_experiment::{
-    CameraBufferRoller, CameraComponent, CatalogError, InMemoryTransport, InvocationContext,
-    InvocationError, ObservationDelivery, ObservationEvent, PeerRuntime, ReseedDriver,
-    SetResolution, observation_input,
+    CameraBufferCapture, CameraComponent, CatalogError, InMemoryTransport, InvocationContext,
+    InvocationError, ObservationDelivery, ObservationEndReason, ObservationEvent,
+    ObservationStatus, PeerRuntime, ReseedDriver, SetResolution, observation_input,
 };
 
 fn frame_bytes(width: u32, height: u32, value: u8) -> Arc<[u8]> {
@@ -82,7 +82,7 @@ fn resolution_change_replaces_output_not_component() {
 }
 
 #[test]
-fn pinned_observation_stops_at_transition_while_follow_current_crosses_it() {
+fn subscription_ends_at_reconfiguration_and_replacement_requires_resubscription() {
     let peer_a = PeerRuntime::new("peer-a");
     let camera = CameraComponent::new(
         peer_a.peer_id(),
@@ -95,25 +95,15 @@ fn pinned_observation_stops_at_transition_while_follow_current_crosses_it() {
     .unwrap();
     let output_before = camera.current_output_reference();
 
-    let pinned_events = Arc::new(Mutex::new(Vec::new()));
-    let pinned_sink = Arc::clone(&pinned_events);
-    let pinned_input = observation_input("pinned-preview", move |event| {
-        pinned_sink.lock().unwrap().push(event.clone());
+    let first_events = Arc::new(Mutex::new(Vec::new()));
+    let first_sink = Arc::clone(&first_events);
+    let first_input = observation_input("first-preview", move |event| {
+        first_sink.lock().unwrap().push(event.clone());
     });
-    let _pinned = camera
-        .current_output()
-        .follow_new(&pinned_input, ObservationDelivery::inline_every_selected())
-        .unwrap();
-
-    let following_events = Arc::new(Mutex::new(Vec::new()));
-    let following_sink = Arc::clone(&following_events);
-    let following_input = observation_input("following-preview", move |event| {
-        following_sink.lock().unwrap().push(event.clone());
-    });
-    let _following = InMemoryTransport
+    let subscription = InMemoryTransport
         .follow_new(
-            &camera.follow_current_output(),
-            &following_input,
+            &camera.current_output(),
+            &first_input,
             ObservationDelivery::inline_every_selected(),
         )
         .unwrap();
@@ -136,32 +126,57 @@ fn pinned_observation_stops_at_transition_while_follow_current_crosses_it() {
     let output_after = applied.replacement_output.clone();
     camera.publish_rgb8(21, 1, 1, frame_bytes(1, 1, 9)).unwrap();
 
-    let pinned = pinned_events.lock().unwrap();
-    assert_eq!(pinned.len(), 2);
-    match &pinned[0] {
+    let received = first_events.lock().unwrap();
+    assert_eq!(received.len(), 2);
+    match &received[0] {
         ObservationEvent::Observation(observation) => {
             assert_eq!(observation.output, output_before);
             assert_eq!(Arc::as_ptr(&observation.payload.bytes), first_storage);
         }
         other => panic!("expected initial observation, got {other:?}"),
     }
-    match &pinned[1] {
-        ObservationEvent::Reconfigured(transition) => {
-            assert_eq!(transition.previous, output_before);
-            assert_eq!(transition.replacement, output_after);
-            assert_eq!(transition.previous_last_sequence, Some(0));
+    match &received[1] {
+        ObservationEvent::Ended(end) => {
+            assert_eq!(end.output, output_before);
+            assert_eq!(end.last_sequence, Some(0));
+            assert!(matches!(
+                end.reason,
+                ObservationEndReason::Reconfigured {
+                    replacement: Some(ref replacement)
+                } if replacement == &output_after
+            ));
         }
-        other => panic!("expected explicit reconfiguration, got {other:?}"),
+        other => panic!("expected terminal reconfiguration notice, got {other:?}"),
     }
+    drop(received);
+    assert!(matches!(
+        subscription.status(),
+        ObservationStatus::Ended(ref end)
+            if matches!(end.reason, ObservationEndReason::Reconfigured { .. })
+    ));
 
-    let following = following_events.lock().unwrap();
-    assert_eq!(following.len(), 3);
-    assert!(matches!(following[0], ObservationEvent::Observation(_)));
-    assert!(matches!(following[1], ObservationEvent::Reconfigured(_)));
-    match &following[2] {
+    let replacement_events = Arc::new(Mutex::new(Vec::new()));
+    let replacement_sink = Arc::clone(&replacement_events);
+    let replacement_input = observation_input("replacement-preview", move |event| {
+        replacement_sink.lock().unwrap().push(event.clone());
+    });
+    let _replacement = InMemoryTransport
+        .follow_new(
+            &camera.current_output(),
+            &replacement_input,
+            ObservationDelivery::inline_every_selected(),
+        )
+        .unwrap();
+    camera
+        .publish_rgb8(22, 1, 1, frame_bytes(1, 1, 10))
+        .unwrap();
+
+    let replacement = replacement_events.lock().unwrap();
+    assert_eq!(replacement.len(), 1);
+    match &replacement[0] {
         ObservationEvent::Observation(observation) => {
             assert_eq!(observation.output, output_after);
-            assert_eq!(observation.sequence, 0);
+            assert_eq!(observation.sequence, 1);
             assert_eq!(observation.payload.width, 1);
             assert_eq!(observation.payload.height, 1);
         }
@@ -170,7 +185,7 @@ fn pinned_observation_stops_at_transition_while_follow_current_crosses_it() {
 }
 
 #[test]
-fn buffer_products_roll_at_output_boundary_without_mixing_contracts() {
+fn buffer_subscription_ends_and_replacement_buffer_requires_explicit_attachment() {
     let peer_a = PeerRuntime::new("peer-a");
     let camera = CameraComponent::new(
         peer_a.peer_id(),
@@ -181,7 +196,7 @@ fn buffer_products_roll_at_output_boundary_without_mixing_contracts() {
         ["peer-b".to_owned()],
     )
     .unwrap();
-    let roller = CameraBufferRoller::attach(&camera, 8).unwrap();
+    let old_capture = CameraBufferCapture::attach(&camera, 8).unwrap();
     let output_before = camera.current_output_reference();
 
     let first = camera.publish_rgb8(10, 2, 2, frame_bytes(2, 2, 1)).unwrap();
@@ -199,19 +214,20 @@ fn buffer_products_roll_at_output_boundary_without_mixing_contracts() {
         .unwrap()
         .result;
     let output_after = applied.replacement_output;
+    assert!(matches!(
+        old_capture.end_notice(),
+        Some(ref end)
+            if matches!(end.reason, ObservationEndReason::Reconfigured { .. })
+    ));
+    let new_capture = CameraBufferCapture::attach(&camera, 8).unwrap();
     camera.publish_rgb8(21, 1, 1, frame_bytes(1, 1, 2)).unwrap();
 
-    assert!(roller.errors().is_empty());
-    let products = roller.products();
-    assert_eq!(products.len(), 2);
-    let old = products
-        .iter()
-        .find(|product| product.manifest.producer == output_before)
-        .unwrap();
-    let new = products
-        .iter()
-        .find(|product| product.manifest.producer == output_after)
-        .unwrap();
+    assert!(old_capture.errors().is_empty());
+    assert!(new_capture.errors().is_empty());
+    let old = old_capture.product();
+    let new = new_capture.product();
+    assert_eq!(old.manifest.producer, output_before);
+    assert_eq!(new.manifest.producer, output_after);
     assert_ne!(old.manifest_hash, new.manifest_hash);
     assert_eq!(old.buffer.range().entries, 1);
     assert_eq!(new.buffer.range().entries, 1);

@@ -32,7 +32,7 @@ pub use buffer::{
     CursorRead, CursorStart, Gap, connect_buffer,
 };
 pub use camera::{
-    AppliedResolution, CameraBufferError, CameraBufferRoller, CameraComponent, CameraError,
+    AppliedResolution, CameraBufferCapture, CameraBufferError, CameraComponent, CameraError,
     CameraProductBuffer, DriverReseeded, ReseedDriver, SetResolution, VideoFrame,
 };
 pub use chunk::{Chunk, ChunkBuilder, ChunkBuilderConfig, ChunkBuilderError, ChunkBuilderStats};
@@ -40,11 +40,11 @@ pub use component::{
     Catalog, CatalogComponentEntry, CatalogError, CatalogOutputEntry, CatalogProductEntry,
     ComponentManifest, ComponentReference, EverySelectedDelivery, Exposure, InMemoryTransport,
     Invocation, InvocationContext, InvocationError, ManifestHash, Observable, ObservableContract,
-    ObservableTarget, Observation, ObservationAccess, ObservationDelivery, ObservationError,
-    ObservationEvent, ObservationFailure, ObservationHandle, ObservationStats, ObservationStatus,
-    Operable, OperableContract, OutputManifest, OutputReference, OutputTransition, PayloadContract,
-    PeerRuntime, ProductForm, ProductManifest, SerializedInMemoryTransport, TransportStats,
-    manifest_hash, observation_input,
+    Observation, ObservationAccess, ObservationDelivery, ObservationEnd, ObservationEndReason,
+    ObservationError, ObservationEvent, ObservationHandle, ObservationStats, ObservationStatus,
+    Operable, OperableContract, OutputManifest, OutputReference, PayloadContract, PeerRuntime,
+    ProductForm, ProductManifest, SerializedInMemoryTransport, TransportStats, manifest_hash,
+    observation_input,
 };
 pub use episode::{Episode, EpisodeError, EpisodeState, connect_episode};
 pub use ports::{

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use crate::component::{
     Catalog, CatalogError, ComponentManifest, ComponentReference, Exposure, InvocationError,
     Observable, ObservableContract, Observation, ObservationAccess, ObservationDelivery,
-    ObservationEmitter, ObservationError, ObservationEvent, ObservationFailure, ObservationHandle,
-    Operable, OperableContract, OutputManifest, OutputReference, OutputTransition, PayloadContract,
-    ProductForm, ProductManifest, current_output_observable, observation_input, pinned_observable,
+    ObservationEmitter, ObservationEnd, ObservationEndReason, ObservationError, ObservationEvent,
+    ObservationHandle, Operable, OperableContract, OutputManifest, OutputReference,
+    PayloadContract, ProductForm, ProductManifest, observation_input, output_observable,
 };
 use crate::{Buffer, BufferError, Envelope, RetainedProduct};
 
@@ -128,7 +128,7 @@ impl ActiveCameraOutput {
         };
         let reference = manifest.reference();
         let (observable, emitter) =
-            pinned_observable(reference.clone(), vec![ObservationAccess::FollowNew]);
+            output_observable(reference.clone(), vec![ObservationAccess::FollowNew]);
         Self {
             manifest,
             reference,
@@ -165,8 +165,6 @@ struct CameraInner {
     component_reference: ComponentReference,
     catalog: Catalog,
     allowed_remote_peers: BTreeSet<String>,
-    follow_current: Observable<VideoFrame>,
-    follow_emitter: ObservationEmitter<VideoFrame>,
     state: Mutex<CameraState>,
 }
 
@@ -220,12 +218,6 @@ impl CameraComponent {
         };
         let component_reference = component_manifest.reference();
         let active = ActiveCameraOutput::new(&component_reference, 1, width, height);
-        let (follow_current, follow_emitter) = current_output_observable(
-            &peer_id,
-            &component_id,
-            FRAMES_SLOT,
-            vec![ObservationAccess::FollowNew],
-        );
 
         catalog.register_component(component_manifest.clone());
         catalog.set_current_output(active.manifest.clone())?;
@@ -236,8 +228,6 @@ impl CameraComponent {
                 component_reference,
                 catalog,
                 allowed_remote_peers: allowed_remote_peers.into_iter().collect(),
-                follow_current,
-                follow_emitter,
                 state: Mutex::new(CameraState {
                     generation: 1,
                     active,
@@ -265,10 +255,6 @@ impl CameraComponent {
 
     pub fn current_output_reference(&self) -> OutputReference {
         self.inner.state.lock().unwrap().active.reference.clone()
-    }
-
-    pub fn follow_current_output(&self) -> Observable<VideoFrame> {
-        self.inner.follow_current.clone()
     }
 
     pub fn set_resolution_operable(&self) -> Operable<SetResolution, AppliedResolution> {
@@ -351,9 +337,10 @@ impl CameraComponent {
         };
         state.active.next_sequence += 1;
 
-        let event = ObservationEvent::Observation(observation.clone());
-        state.active.emitter.emit(timestamp_ns, event.clone());
-        self.inner.follow_emitter.emit(timestamp_ns, event);
+        state.active.emitter.emit(
+            timestamp_ns,
+            ObservationEvent::Observation(observation.clone()),
+        );
         Ok(observation)
     }
 
@@ -366,12 +353,13 @@ impl CameraComponent {
         }
         let reason = reason.into();
         state.active.failure = Some(reason.clone());
-        let event = ObservationEvent::Failed(ObservationFailure {
+        let event = ObservationEvent::Ended(ObservationEnd {
             output: state.active.reference.clone(),
-            reason,
+            last_sequence: state.active.next_sequence.checked_sub(1),
+            timestamp_ns,
+            reason: ObservationEndReason::Failed { reason },
         });
-        state.active.emitter.emit(timestamp_ns, event.clone());
-        self.inner.follow_emitter.emit(timestamp_ns, event);
+        state.active.emitter.emit(timestamp_ns, event);
         true
     }
 }
@@ -409,20 +397,18 @@ fn apply_resolution(
         .catalog
         .set_current_output(replacement.manifest.clone())?;
 
-    let transition = OutputTransition {
-        previous: previous.clone(),
-        replacement: replacement.reference.clone(),
-        previous_last_sequence,
-        effective_at_timestamp_ns: instruction.effective_at_timestamp_ns,
+    let end = ObservationEnd {
+        output: previous.clone(),
+        last_sequence: previous_last_sequence,
+        timestamp_ns: instruction.effective_at_timestamp_ns,
+        reason: ObservationEndReason::Reconfigured {
+            replacement: Some(replacement.reference.clone()),
+        },
     };
-    let event = ObservationEvent::Reconfigured(transition);
-    state
-        .active
-        .emitter
-        .emit(instruction.effective_at_timestamp_ns, event.clone());
-    inner
-        .follow_emitter
-        .emit(instruction.effective_at_timestamp_ns, event);
+    state.active.emitter.emit(
+        instruction.effective_at_timestamp_ns,
+        ObservationEvent::Ended(end),
+    );
 
     let replacement_reference = replacement.reference.clone();
     state.generation = next_generation;
@@ -454,8 +440,8 @@ fn rgb8_len(width: u32, height: u32) -> Result<usize, CameraError> {
 pub type CameraProductBuffer = RetainedProduct<VideoFrame>;
 
 struct CameraBufferState {
-    current_product_id: String,
-    products: BTreeMap<String, CameraProductBuffer>,
+    product: CameraProductBuffer,
+    end: Option<ObservationEnd>,
     errors: Vec<String>,
 }
 
@@ -488,41 +474,38 @@ impl From<ObservationError> for CameraBufferError {
     }
 }
 
-/// Rolls to one new Buffer Product whenever the Camera replaces its configured
-/// Output. Each Product Manifest references exactly one Output Manifest.
-pub struct CameraBufferRoller {
+/// Retains observations from exactly one configured Camera Output.
+///
+/// Reconfiguration closes this Buffer and ends its subscription. Recording a
+/// replacement Output requires an explicit new attachment.
+pub struct CameraBufferCapture {
     state: Arc<Mutex<CameraBufferState>>,
     _observation: ObservationHandle<VideoFrame>,
 }
 
-impl CameraBufferRoller {
+impl CameraBufferCapture {
     pub fn attach(camera: &CameraComponent, max_entries: usize) -> Result<Self, CameraBufferError> {
         let catalog = camera.inner.catalog.clone();
-        let initial =
-            create_product_buffer(&camera.current_output_manifest(), &catalog, max_entries)?;
-        let initial_product_id = initial.manifest.product_id.clone();
-        let mut products = BTreeMap::new();
-        products.insert(initial_product_id.clone(), initial);
+        let (output, observable) = {
+            let camera_state = camera.inner.state.lock().unwrap();
+            (
+                camera_state.active.manifest.clone(),
+                camera_state.active.observable.clone(),
+            )
+        };
+        let product = create_product_buffer(&output, &catalog, max_entries)?;
         let state = Arc::new(Mutex::new(CameraBufferState {
-            current_product_id: initial_product_id,
-            products,
+            product,
+            end: None,
             errors: Vec::new(),
         }));
 
         let input_state = Arc::clone(&state);
-        let input_catalog = catalog.clone();
-        let input = observation_input("camera-buffer-roller", move |event| {
+        let input = observation_input("camera-buffer", move |event| {
             let mut state = input_state.lock().unwrap();
             match event {
                 ObservationEvent::Observation(observation) => {
-                    let current_product_id = state.current_product_id.clone();
-                    let (producer, buffer) = {
-                        let current = state
-                            .products
-                            .get(&current_product_id)
-                            .expect("current Camera Product must exist");
-                        (current.manifest.producer.clone(), current.buffer.clone())
-                    };
+                    let producer = state.product.manifest.producer.clone();
                     if producer != observation.output {
                         state.errors.push(format!(
                             "observation from {} reached Buffer for {}",
@@ -530,7 +513,7 @@ impl CameraBufferRoller {
                         ));
                         return;
                     }
-                    if let Err(error) = buffer.append_shared(Arc::new(Envelope::new(
+                    if let Err(error) = state.product.buffer.append_shared(Arc::new(Envelope::new(
                         observation.sequence,
                         observation.timestamp_ns,
                         observation.clone(),
@@ -538,71 +521,22 @@ impl CameraBufferRoller {
                         state.errors.push(error.to_string());
                     }
                 }
-                ObservationEvent::Reconfigured(transition) => {
-                    let current_product_id = state.current_product_id.clone();
-                    let (producer, buffer) = {
-                        let current = state
-                            .products
-                            .get(&current_product_id)
-                            .expect("current Camera Product must exist");
-                        (current.manifest.producer.clone(), current.buffer.clone())
-                    };
-                    if producer != transition.previous {
+                ObservationEvent::Ended(end) => {
+                    let producer = state.product.manifest.producer.clone();
+                    if producer != end.output {
                         state.errors.push(format!(
-                            "transition from {} reached Buffer for {}",
-                            transition.previous.output_id, producer.output_id
+                            "end notice from {} reached Buffer for {}",
+                            end.output.output_id, producer.output_id
                         ));
                         return;
                     }
-                    buffer.close();
-                    let replacement_manifest = input_catalog
-                        .component(&transition.replacement.component_id)
-                        .and_then(|component| {
-                            component
-                                .current_outputs
-                                .get(&transition.replacement.slot)
-                                .map(|entry| entry.manifest.clone())
-                        })
-                        .filter(|manifest| manifest.reference() == transition.replacement);
-                    let Some(replacement_manifest) = replacement_manifest else {
-                        state.errors.push(format!(
-                            "Catalog did not resolve replacement Output {}",
-                            transition.replacement.output_id
-                        ));
-                        return;
-                    };
-                    match create_product_buffer(&replacement_manifest, &input_catalog, max_entries)
-                    {
-                        Ok(replacement) => {
-                            let product_id = replacement.manifest.product_id.clone();
-                            state.products.insert(product_id.clone(), replacement);
-                            state.current_product_id = product_id;
-                        }
-                        Err(error) => state.errors.push(error.to_string()),
-                    }
-                }
-                ObservationEvent::Failed(failure) => {
-                    let current_product_id = state.current_product_id.clone();
-                    let (producer, buffer) = {
-                        let current = state
-                            .products
-                            .get(&current_product_id)
-                            .expect("current Camera Product must exist");
-                        (current.manifest.producer.clone(), current.buffer.clone())
-                    };
-                    if producer != failure.output {
-                        state.errors.push(format!(
-                            "failure from {} reached Buffer for {}",
-                            failure.output.output_id, producer.output_id
-                        ));
-                    }
-                    buffer.close();
+                    state.product.buffer.close();
+                    state.end = Some(end.clone());
                 }
             }
         });
-        let observation = camera
-            .follow_current_output()
-            .follow_new(&input, ObservationDelivery::inline_every_selected())?;
+        let observation =
+            observable.follow_new(&input, ObservationDelivery::inline_every_selected())?;
 
         Ok(Self {
             state,
@@ -610,23 +544,12 @@ impl CameraBufferRoller {
         })
     }
 
-    pub fn current(&self) -> CameraProductBuffer {
-        let state = self.state.lock().unwrap();
-        state
-            .products
-            .get(&state.current_product_id)
-            .expect("current Camera Product must exist")
-            .clone()
+    pub fn product(&self) -> CameraProductBuffer {
+        self.state.lock().unwrap().product.clone()
     }
 
-    pub fn products(&self) -> Vec<CameraProductBuffer> {
-        self.state
-            .lock()
-            .unwrap()
-            .products
-            .values()
-            .cloned()
-            .collect()
+    pub fn end_notice(&self) -> Option<ObservationEnd> {
+        self.state.lock().unwrap().end.clone()
     }
 
     pub fn errors(&self) -> Vec<String> {

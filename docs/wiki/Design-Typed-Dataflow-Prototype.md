@@ -71,10 +71,10 @@ Peer: robot-7
 The Peer answers **who is participating and under whose authority**. The
 Component answers **what behavior or capability is provided**.
 
-### Component and Component Output identity
+### Component and configured-output identity (provisional)
 
-A Component and one configured output of that Component have separate
-identities:
+The current prototype gives a Component and one configured output of that
+Component separate identities:
 
 - **Component ID and Component Manifest hash** identify the stable unit of
   behavior and its declared Observable and Operable interface contract.
@@ -96,15 +96,26 @@ front-camera @ component-hash-a                 unchanged
   frames-18 @ output-hash-18, 1280x720          current
 ```
 
-The stable output slot name `frames` may resolve to the current Output. An
-observation pinned to `frames-17` never silently becomes an observation of
-`frames-18`. A separate follow-current request may cross the replacement only
-by reporting the old and new Output identities explicitly.
+An observation of `frames-17` never silently becomes an observation of
+`frames-18`. Reconfiguration terminates the subscription with notice. A
+consumer may discover the replacement and create a new subscription, but the
+SDK does not migrate the relationship automatically.
 
 Products reference the exact Output that produced their observations. A
 Product Manifest must therefore name the producer Component ID, Output ID, and
 Output Manifest hash. Hashes pin exact manifests for identity and integrity;
 consumers compare typed standardized fields, not hashes, for compatibility.
+
+Removing automatic migration also removes the strongest reason for treating a
+stable named output slot as a subscription anchor. The experiment retains
+Output identities and slots temporarily so existing Product and configuration
+tests remain comparable, but neither is now an accepted requirement. The next
+identity review must compare at least:
+
+- Component Manifest identity containing the configured observable contract;
+- a separate immutable configured-Output Manifest referenced by Products; and
+- named ports only for Components that genuinely expose multiple Observable
+  interfaces.
 
 ### Observable
 
@@ -350,13 +361,14 @@ Prototype the smallest coherent form of these concepts:
 ```rust
 Component
 ComponentManifest
-ComponentOutput<T>
-OutputManifest
+ConfiguredObservable<T> // exact name and identity boundary unresolved
+ConfiguredContract      // may live in Component or Output Manifest
 ProductManifest
 Observable<T>
 Operable<I, R>
 Observation<T>
 ObservationHandle<T>
+ObservationEnd
 RetainedProduct<T>
 FiniteObservations<T>
 Invocation
@@ -397,11 +409,11 @@ Observable therefore supports `follow_new` but not `latest_existing` or
 `time_range` unless it deliberately has retained backing storage.
 
 `ObservationHandle<T>` owns one continuing observation relationship. It must
-expose an inspectable status (`active`, `completed`, `reconfigured`, `failed`,
-or `cancelled`), explicit cancellation, delivery statistics, and a terminal
-reason. A pinned handle that encounters an Output replacement becomes
-`reconfigured` and names the replacement Output. A follow-current handle stays
-active but delivers the explicit transition.
+expose an inspectable status (`active`, `ended`, relationship `failed`, or
+`cancelled`), explicit cancellation, delivery statistics, and a terminal
+notice. An Output replacement ends the handle with a `Reconfigured` reason.
+The notice may name a replacement as a discovery hint, but following it always
+requires a new explicit subscription.
 
 A Buffer or Episode exposes retained-product access rather than pretending to
 be a Component. Its Product Manifest declares only the finite selection
@@ -549,18 +561,16 @@ that boundary reference the old Output Manifest hash; frames after it reference
 the new Output Manifest hash. The old Observable must not silently begin
 emitting observations governed by a different Output contract.
 
-The experiment must choose and document how an active observation relationship
-crosses this boundary. The simplest correct behavior is to conclude the old
-relationship with an explicit `Reconfigured` reason and require the observer
-to resolve and observe the replacement Output. A distinct follow-current
-request may automatically rebind only if the transition and new Output
-identity remain explicit to the observer.
+An active observation relationship does not cross this boundary. It concludes
+with an explicit `Reconfigured` reason. The observer may query discovery state
+and subscribe to the replacement deliberately; no live relationship is
+resolved through the Catalog and no subscription is rebound automatically.
 
 Any Buffer or Episode whose Product Manifest names the old producer Output
-must continue to describe only observations produced under that contract. The
-experiment should roll to a new Buffer when the replacement Output becomes
-effective rather than mixing two production contracts into one deceptively
-homogeneous product.
+must continue to describe only observations produced under that contract. Its
+subscription ends and the Buffer closes at reconfiguration. Recording the
+replacement requires explicitly attaching a new Buffer; one Buffer
+subscription must not survive by rolling itself across Products.
 
 ### Optional retention
 
@@ -591,8 +601,8 @@ Generate a minimal Catalog view from each Peer fixture. It must:
 
 - list cluster-exposed Observables by Component and interface name;
 - state which observation requests each Observable currently supports;
-- include the current Output ID and Output Manifest for each exposed output
-  slot;
+- include each currently configured Observable contract and its current
+  experimental Output identity;
 - list Product Manifests separately and state which retained-data selections
   their access implementation currently supports;
 - list cluster-exposed Operables with instruction and result contracts;
@@ -602,7 +612,8 @@ Generate a minimal Catalog view from each Peer fixture. It must:
   cannot currently serve.
 
 The Catalog is a projection of runtime exposure, not the owner of Component
-behavior.
+behavior. Catalog queries return descriptions and references; Peer runtime
+operations create subscriptions or invocations.
 
 ### Correctness gates
 
@@ -650,9 +661,11 @@ Automated tests must prove:
     hash.
 25. Observations on either side of the reconfiguration boundary reference the
     correct immutable Output Manifest.
-26. An existing observer receives an explicit reconfiguration transition and
-    cannot unknowingly consume observations governed by the replacement
-    contract.
+26. An existing subscription receives a terminal reconfiguration notice,
+    disconnects, and cannot consume replacement-contract observations without
+    a new explicit subscription. Attempting to subscribe to an already ended
+    configured Observable returns that same terminal notice instead of an inert
+    active handle.
 27. A Buffer whose Product Manifest references the old Output Manifest does
     not silently retain observations produced under the new Output Manifest.
 28. A fresh-only Observable does not advertise or accept latest-existing or
@@ -674,22 +687,23 @@ Typed ports, static and dynamic dispatch, explicit delivery policies, bounded
 Buffers, shared local payload ownership, StreamPumps, Episode promotion, and
 the initial performance controls are implemented in PR #361.
 
-### Completed foundation: Component and Output identity
+### Completed foundation: Component configuration boundary
 
-Stable Component identity, immutable configured Output identity, Output-bound
-Buffer Products, Catalog projection, typed Operable authorization, and pinned
-versus follow-current reconfiguration are implemented on
-`codex/observable-operable-data-plane`.
+Stable Component behavior, immutable configured contract descriptions,
+Output-bound Buffer Products, Catalog projection, typed Operable authorization,
+and terminal reconfiguration are implemented on
+`codex/typed-dataflow-complete`. Separate Output identity and named slots remain
+provisional pending the next identity review.
 
 ### Completed Phase 1: observation selection, delivery, and lifecycle
 
 The branch `codex/observation-requests-lifecycle` implements explicit
 latest-existing, time-range, and follow-new shapes; truthful request
 advertisement; retained Product access; inspectable continuing handles;
-cancellation; reconfiguration status; and serialized transport semantics.
+cancellation; terminal reconfiguration notice; and serialized transport semantics.
 Correctness gates 1–14 and 24–30 apply where relevant. Its targeted benchmark
-measures the extra follow-current dispatch and serialized-copy boundary; the
-full benchmark matrix remains Phase 4 work.
+measures same-Output fan-out and the serialized-copy boundary; the full
+benchmark matrix remains Phase 4 work.
 
 ### Completed Phase 2A: observation failure and shared scheduling
 

@@ -35,7 +35,9 @@ streaming implementation changed.
 - `PublishReport` and `ConnectionStats` distinguish failure from ordinary
   disconnection.
 - `ObservationHandle::status` reflects asynchronous connection failure.
-- `ObservationEvent::Failed` carries a terminal failure reported by a producer.
+- `ObservationEvent::Ended` carries a terminal producer notice whose reason may
+  be `Failed`; this remains distinct from failure of the subscription
+  relationship itself.
 - the Camera fixture stops publishing after terminal Output failure, and its
   Buffer Product closes while preserving observations already retained.
 - `SharedScheduler` owns a fixed number of workers. `SharedDispatcher` is the

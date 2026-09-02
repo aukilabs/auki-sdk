@@ -364,55 +364,48 @@ impl<T> Clone for Observation<T> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct OutputTransition {
-    pub previous: OutputReference,
-    pub replacement: OutputReference,
-    pub previous_last_sequence: Option<u64>,
-    pub effective_at_timestamp_ns: u64,
+pub enum ObservationEndReason {
+    /// The configured contract changed. A replacement is supplied only as a
+    /// discovery hint; the subscriber is never migrated automatically.
+    Reconfigured {
+        replacement: Option<OutputReference>,
+    },
+    /// The producing Component reported that this Output failed.
+    Failed { reason: String },
 }
 
+/// Terminal notice for one subscription to one precisely described Output.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ObservationFailure {
+pub struct ObservationEnd {
     pub output: OutputReference,
-    pub reason: String,
+    pub last_sequence: Option<u64>,
+    pub timestamp_ns: u64,
+    pub reason: ObservationEndReason,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ObservationEvent<T> {
     Observation(Observation<T>),
-    /// Terminal for an observation pinned to `previous`; transitional for an
-    /// explicit follow-current observation of the containing output slot.
-    Reconfigured(OutputTransition),
-    /// Terminal failure reported by the producing Component for this Output.
-    Failed(ObservationFailure),
+    /// Always terminal. A new Output requires a new explicit subscription.
+    Ended(ObservationEnd),
 }
 
 impl<T> Clone for ObservationEvent<T> {
     fn clone(&self) -> Self {
         match self {
             Self::Observation(observation) => Self::Observation(observation.clone()),
-            Self::Reconfigured(transition) => Self::Reconfigured(transition.clone()),
-            Self::Failed(failure) => Self::Failed(failure.clone()),
+            Self::Ended(end) => Self::Ended(end.clone()),
         }
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ObservableTarget {
-    Pinned(OutputReference),
-    CurrentOutputSlot {
-        peer_id: String,
-        component_id: String,
-        slot: String,
-    },
 }
 
 /// A typed interface through which a Component can show another Component
 /// observations. This first slice implements only continuing live observation.
 pub struct Observable<T> {
     name: Arc<str>,
-    target: ObservableTarget,
+    output: OutputReference,
     access: Arc<[ObservationAccess]>,
+    end: Arc<Mutex<Option<ObservationEnd>>>,
     port: OutputPort<ObservationEvent<T>>,
 }
 
@@ -420,8 +413,9 @@ impl<T> Clone for Observable<T> {
     fn clone(&self) -> Self {
         Self {
             name: Arc::clone(&self.name),
-            target: self.target.clone(),
+            output: self.output.clone(),
             access: Arc::clone(&self.access),
+            end: Arc::clone(&self.end),
             port: self.port.clone(),
         }
     }
@@ -432,7 +426,7 @@ impl<T> fmt::Debug for Observable<T> {
         formatter
             .debug_struct("Observable")
             .field("name", &self.name)
-            .field("target", &self.target)
+            .field("output", &self.output)
             .field("access", &self.access)
             .finish_non_exhaustive()
     }
@@ -512,8 +506,8 @@ impl From<ConnectionError> for ObservationError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ObservationStatus {
     Active,
-    Completed,
-    Reconfigured(Box<OutputTransition>),
+    Ended(Box<ObservationEnd>),
+    /// The relationship itself failed, rather than ending at the producer.
     Failed(String),
     Cancelled,
 }
@@ -653,8 +647,8 @@ impl<T: Send + Sync + 'static> Observable<T> {
         &self.name
     }
 
-    pub fn target(&self) -> &ObservableTarget {
-        &self.target
+    pub fn output(&self) -> &OutputReference {
+        &self.output
     }
 
     pub fn supported_access(&self) -> &[ObservationAccess] {
@@ -724,26 +718,25 @@ impl<T: Send + Sync + 'static> Observable<T> {
         let status = Arc::new(Mutex::new(ObservationStatus::Active));
         let control: Arc<Mutex<Option<ConnectionControl<ObservationEvent<T>>>>> =
             Arc::new(Mutex::new(None));
-        let pinned = matches!(self.target, ObservableTarget::Pinned(_));
         let observer = observer.clone();
         let callback_status = Arc::clone(&status);
         let callback_control = Arc::clone(&control);
         let input = InputPort::with_component_errors(
             format!("{}.follow-new", self.name),
             move |envelope: &Envelope<ObservationEvent<T>>| {
-                match &envelope.payload {
-                    ObservationEvent::Reconfigured(transition) if pinned => {
-                        *callback_status.lock().unwrap() =
-                            ObservationStatus::Reconfigured(Box::new(transition.clone()));
+                let terminal = {
+                    let mut status = callback_status.lock().unwrap();
+                    if *status != ObservationStatus::Active {
+                        return Ok(());
                     }
-                    ObservationEvent::Failed(failure) => {
-                        *callback_status.lock().unwrap() =
-                            ObservationStatus::Failed(failure.reason.clone());
+                    match &envelope.payload {
+                        ObservationEvent::Ended(end) => {
+                            *status = ObservationStatus::Ended(Box::new(end.clone()));
+                            true
+                        }
+                        ObservationEvent::Observation(_) => false,
                     }
-                    ObservationEvent::Observation(_) | ObservationEvent::Reconfigured(_) => {}
-                }
-                let terminal =
-                    !matches!(*callback_status.lock().unwrap(), ObservationStatus::Active);
+                };
                 observer.accept(envelope)?;
                 if terminal && let Some(control) = callback_control.lock().unwrap().as_ref() {
                     control.disconnect();
@@ -753,6 +746,16 @@ impl<T: Send + Sync + 'static> Observable<T> {
         );
         let connection = connector(&input)?;
         *control.lock().unwrap() = Some(connection.control());
+        if let Some(end) = self.end.lock().unwrap().clone() {
+            // This Output ended before or while the relationship was being
+            // installed. Deliver its terminal notice immediately rather than
+            // returning a permanently active subscription to an inert port.
+            let _ = input.accept(&Envelope::new(
+                end.last_sequence.unwrap_or(0),
+                end.timestamp_ns,
+                ObservationEvent::Ended(end),
+            ));
+        }
         if !matches!(*status.lock().unwrap(), ObservationStatus::Active) {
             connection.disconnect();
         }
@@ -765,12 +768,14 @@ impl<T: Send + Sync + 'static> Observable<T> {
 }
 
 pub(crate) struct ObservationEmitter<T> {
+    end: Arc<Mutex<Option<ObservationEnd>>>,
     port: OutputPort<ObservationEvent<T>>,
 }
 
 impl<T> Clone for ObservationEmitter<T> {
     fn clone(&self) -> Self {
         Self {
+            end: Arc::clone(&self.end),
             port: self.port.clone(),
         }
     }
@@ -778,11 +783,25 @@ impl<T> Clone for ObservationEmitter<T> {
 
 impl<T: Send + Sync + 'static> ObservationEmitter<T> {
     pub(crate) fn emit(&self, timestamp_ns: u64, event: ObservationEvent<T>) -> PublishReport {
+        let mut end = self.end.lock().unwrap();
+        match &event {
+            ObservationEvent::Ended(notice) => {
+                if end.is_some() {
+                    return PublishReport::default();
+                }
+                *end = Some(notice.clone());
+            }
+            ObservationEvent::Observation(_) if end.is_some() => {
+                return PublishReport::default();
+            }
+            ObservationEvent::Observation(_) => {}
+        }
+        drop(end);
         self.port.publish(timestamp_ns, event)
     }
 }
 
-pub(crate) fn pinned_observable<T: Send + Sync + 'static>(
+pub(crate) fn output_observable<T: Send + Sync + 'static>(
     output: OutputReference,
     access: impl Into<Arc<[ObservationAccess]>>,
 ) -> (Observable<T>, ObservationEmitter<T>) {
@@ -792,37 +811,16 @@ pub(crate) fn pinned_observable<T: Send + Sync + 'static>(
     )
     .into();
     let port = OutputPort::new(Arc::clone(&name));
+    let end = Arc::new(Mutex::new(None));
     (
         Observable {
             name,
-            target: ObservableTarget::Pinned(output),
+            output,
             access: access.into(),
+            end: Arc::clone(&end),
             port: port.clone(),
         },
-        ObservationEmitter { port },
-    )
-}
-
-pub(crate) fn current_output_observable<T: Send + Sync + 'static>(
-    peer_id: &str,
-    component_id: &str,
-    slot: &str,
-    access: impl Into<Arc<[ObservationAccess]>>,
-) -> (Observable<T>, ObservationEmitter<T>) {
-    let name: Arc<str> = format!("{component_id}.{slot}.current").into();
-    let port = OutputPort::new(Arc::clone(&name));
-    (
-        Observable {
-            name,
-            target: ObservableTarget::CurrentOutputSlot {
-                peer_id: peer_id.to_owned(),
-                component_id: component_id.to_owned(),
-                slot: slot.to_owned(),
-            },
-            access: access.into(),
-            port: port.clone(),
-        },
-        ObservationEmitter { port },
+        ObservationEmitter { end, port },
     )
 }
 

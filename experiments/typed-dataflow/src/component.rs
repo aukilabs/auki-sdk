@@ -104,6 +104,8 @@ pub struct CameraPayloadContract {
     pub encoding: String,
     pub width: u32,
     pub height: u32,
+    /// Configured output cadence. `None` means the producer does not declare a nominal rate.
+    pub nominal_frame_rate_hz: Option<u32>,
     pub observes: String,
 }
 

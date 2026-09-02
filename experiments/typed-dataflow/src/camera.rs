@@ -122,6 +122,7 @@ impl ActiveCameraOutput {
                 encoding: RGB8_ENCODING.to_owned(),
                 width,
                 height,
+                nominal_frame_rate_hz: None,
                 observes: "visible_light".to_owned(),
             }),
         };

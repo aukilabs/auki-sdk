@@ -46,10 +46,11 @@ six**. Alternatively, select **Discover**, choose the peer, and select **Probe
 selected peer**.
 
 The same flow runs on a physical iPhone. The live physical-iPhone/native-Rust
-gate uses **discover and advertise** on both peers, discovers each through DDS,
-and probes all six protocol families in both directions. The current dev relay
+gate uses **discover and advertise** on both peers. Native discovers the iPhone
+through DDS; the iPhone selects native through the explicit peer-card fallback;
+and all six protocol families pass in both directions. The current dev relay
 publishes `/dns4` routes, so this gate does not yet cover IPv6-only/NAT64
-networks.
+networks or live iOS-originated DDS selection.
 
 ## Offline simulator tests
 

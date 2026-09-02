@@ -63,7 +63,10 @@ export interface AccessPolicy {
 }
 
 export interface SnapshotReplyAddress {
-  readonly target: AukiExactTarget;
+  readonly target: {
+    readonly peerId: string;
+    readonly routes: readonly string[];
+  };
   readonly channel: AukiMessageChannelResource;
 }
 
@@ -329,7 +332,10 @@ export class CameraProtocols {
         );
         assert(!this.pendingSnapshots.has(requestId), "snapshot requestId is already pending");
         reply = {
-          target: { peerId: this.peer.peerId, route: this.peer.wssRoute },
+          target: {
+            peerId: this.peer.peerId,
+            routes: [this.peer.tcpRoute, this.peer.wssRoute],
+          },
           channel: required(this.replyChannel, "snapshot reply channel"),
         };
         validateReplyAddress(reply, this.peer.peerId);
@@ -575,10 +581,7 @@ export class CameraProtocols {
 
   private async sendSnapshotReady(reply: SnapshotReplyAddress, snapshot: SnapshotReady): Promise<void> {
     validateReplyAddress(reply, snapshot.requester.peerId);
-    const sender = await required(this.messageClient, "Message client").openExact(
-      reply.target,
-      reply.channel,
-    );
+    const sender = await this.openSnapshotReply(reply);
     try {
       assert(sender.remotePeer.peerId === snapshot.requester.peerId,
         "snapshot reply authenticated the wrong peer");
@@ -591,6 +594,23 @@ export class CameraProtocols {
         sender.free();
       }
     }
+  }
+
+  private async openSnapshotReply(reply: SnapshotReplyAddress) {
+    const routes = browserRoutes(reply.target.routes);
+    assert(routes.length > 0, "snapshot requester supplied no browser-compatible WSS route");
+    const failures: string[] = [];
+    for (const route of routes) {
+      try {
+        return await required(this.messageClient, "Message client").openExact(
+          { peerId: reply.target.peerId, route },
+          reply.channel,
+        );
+      } catch (error) {
+        failures.push(errorMessage(error));
+      }
+    }
+    throw new Error(`snapshot reply routes failed: ${failures.join("; ")}`);
   }
 
   private async stageBlobImpl(bytes: Uint8Array): Promise<StagedBlob> {
@@ -923,7 +943,7 @@ function replyAddress(value: unknown, requesterPeerId: string): SnapshotReplyAdd
   const result: SnapshotReplyAddress = {
     target: {
       peerId: stringField(target, "peerId", "snapshot reply target"),
-      route: stringField(target, "route", "snapshot reply target"),
+      routes: stringArray(target["routes"], "snapshot reply target.routes"),
     },
     channel: {
       variant: "message_channel",
@@ -938,7 +958,10 @@ function replyAddress(value: unknown, requesterPeerId: string): SnapshotReplyAdd
 
 function validateReplyAddress(reply: SnapshotReplyAddress, requesterPeerId: string): void {
   assert(reply.target.peerId === requesterPeerId, "snapshot reply target is not the requester");
-  assert(reply.target.route.length > 0, "snapshot reply route is empty");
+  assert(reply.target.routes.length > 0, "snapshot reply routes are empty");
+  assert(reply.target.routes.length <= 4, "snapshot reply has too many routes");
+  assert(new Set(reply.target.routes).size === reply.target.routes.length,
+    "snapshot reply routes contain duplicates");
   assert(reply.channel.owner_peer_id === requesterPeerId, "snapshot reply channel is not requester-owned");
   assert(reply.channel.clock.peer_id === requesterPeerId, "snapshot reply clock is not requester-owned");
   assert(reply.channel.resource_id === CAMERA_REPLY_RESOURCE_ID, "unexpected snapshot reply resource");
@@ -984,6 +1007,10 @@ function sameRef(left: AukiRegistryRef, right: AukiRegistryRef): boolean {
   return left.peer_id === right.peer_id && left.id === right.id && left.hash === right.hash;
 }
 
+function browserRoutes(routes: readonly string[]): string[] {
+  return routes.filter((route) => route.split("/").includes("wss"));
+}
+
 function record(value: unknown, label: string): Record<string, unknown> {
   assert(typeof value === "object" && value !== null && !Array.isArray(value), `${label} is not an object`);
   return value as Record<string, unknown>;
@@ -993,6 +1020,14 @@ function stringField(source: Record<string, unknown>, key: string, label: string
   const value = source[key];
   assert(typeof value === "string" && value.length > 0, `${label}.${key} is missing`);
   return value;
+}
+
+function stringArray(value: unknown, label: string): string[] {
+  assert(Array.isArray(value) && value.length > 0, `${label} must be a non-empty array`);
+  return value.map((entry, index) => {
+    assert(typeof entry === "string" && entry.length > 0, `${label}[${index}] is empty`);
+    return entry;
+  });
 }
 
 function positiveNumber(value: unknown, label: string): number {

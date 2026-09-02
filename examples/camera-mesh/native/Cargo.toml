@@ -1,0 +1,22 @@
+[package]
+name = "auki-camera-mesh-native"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "Native JSONL peer for the cross-runtime Camera Mesh playground."
+
+[dependencies]
+anyhow = { workspace = true }
+auki-camera-mesh = { path = ".." }
+auki-sdk = { path = "../../../crates/auki-sdk" }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt-multi-thread", "signal"] }
+uuid = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

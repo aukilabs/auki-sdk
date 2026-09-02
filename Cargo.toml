@@ -39,6 +39,8 @@ members = [
     "examples/portable-echo/swift/ffi",
     "examples/portable-echo/web",
     "examples/standard-protocols/native",
+    "examples/camera-mesh",
+    "examples/camera-mesh/native",
 ]
 
 [workspace.package]

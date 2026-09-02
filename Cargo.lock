@@ -315,6 +315,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-camera-mesh"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auki-datatypes",
+ "auki-protocols",
+ "auki-registry",
+ "auki-sdk",
+ "base64",
+ "futures",
+ "hex",
+ "libp2p-identity",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "auki-camera-mesh-native"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "auki-camera-mesh",
+ "auki-sdk",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "auki-datatypes"
 version = "0.0.0"
 dependencies = [

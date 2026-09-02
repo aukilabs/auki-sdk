@@ -40,8 +40,8 @@ The split is deliberate:
 - `auki-auth` turns User or trusted native App credentials into a validated
   `PreparedPeer` for one Domain.
 - `auki-sdk` owns authority renewal, authenticated transport, default DMS relay
-  allocation, atomic TCP/WSS route pairs, protocol registration, status, and
-  ordered shutdown.
+  allocation, atomic TCP/WSS route pairs, optional DDS discovery, protocol
+  registration, status, and ordered shutdown.
 - `auki-protocols` provides opt-in wire contracts and portable `Client` /
   `Endpoint` APIs. A peer serves nothing until an application mounts an
   endpoint.
@@ -52,9 +52,10 @@ The split is deliberate:
   subscribe to it.
 
 Routes are location hints, not authority. Relay allocation makes a peer
-reachable; it does not discover peers. Until discovery and route publication
-ship, applications exchange the expected Peer ID and complete route through
-configuration, a peer card, or their own control plane.
+reachable; opt-in DDS discovery publishes and finds short-lived route and
+mounted-protocol hints. Applications may instead exchange the expected Peer ID
+and complete route through configuration, a peer card, or their own control
+plane. See [Discover peers](docs/p2p/discovery.md).
 
 ## Protocols
 

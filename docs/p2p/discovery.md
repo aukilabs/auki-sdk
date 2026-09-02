@@ -1,7 +1,5 @@
 # Discover peers
 
-> This is the target API for Discovery v0. It is not implemented yet.
-
 Discovery finds peers in the same Domain without copying peer cards. V0 uses
 one provider: the DDS tracker.
 
@@ -144,6 +142,12 @@ does not terminate existing authenticated connections.
 
 DDS discovery is explicit. Without DDS tracker configuration, manual exact
 routes continue to work as before.
+
+`AukiPeerBootstrap::with_dds_tracker` is the normal configuration path and
+uses the same trusted DDS origin that authenticated the session. Low-level
+external-authority integrations may use
+`DdsTrackerConfig::for_trusted_dds`; its endpoint receives the renewable DDS
+P2P bearer and must therefore be controlled and trusted by the application.
 
 The DDS tracker is the only Discovery v0 provider. It is an HTTP tracker, not
 the libp2p Rendezvous protocol. Its bootstrap seed is the configured DDS URL;

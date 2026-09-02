@@ -216,15 +216,16 @@ endpoint_cleanup?;
 peer_cleanup?;
 ```
 
-## Share peer information explicitly
+## Keep discovery outside the protocol crate
 
-The SDK does not yet discover peers or publish their routes. Applications
-currently exchange Domain ID, expected Peer ID, protocol IDs, and complete TCP
-or WSS routes through configuration, a product control plane, or a manual peer
-card.
+Applications can obtain an expected Peer ID and complete TCP or WSS route from
+the opt-in DDS tracker, configuration, a product control plane, or a manual
+peer card. When DDS advertising is enabled, a mounted protocol is included
+automatically in its advertisement; the protocol crate does not publish or
+query discovery itself.
 
-Do not bake discovery into the protocol crate. Do not treat a received route as
-authority.
+Do not bake discovery into the protocol crate. Do not treat a discovered route
+as authority.
 
 ## Where the crate belongs
 

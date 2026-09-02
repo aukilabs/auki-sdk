@@ -20,6 +20,20 @@ raw transport streams, relay booking, or a Python-owned Tokio runtime.
 `peer.routes` is one atomic snapshot: `tcp` and `wss` are both required routes
 from the same relay-provider slot and reservation.
 
+DDS discovery is opt-in through the optional `discovery_mode` argument:
+
+```python
+peer = await session.start_peer(
+    domains[0].id,
+    "./state/peer.identity",
+    discovery_mode="discover_only",  # or "discover_and_advertise"
+)
+candidates = await peer.discover_protocol("/example/echo/1.0.0")
+```
+
+The candidates are fresh, untrusted route hints. Exact protocol dialing still
+verifies the expected Peer ID and Domain in Rust.
+
 Protocol adapters must compile into the same extension module as this facade so
 live Rust handles never cross native module boundaries. The
 [portable echo Python example](../../../examples/portable-echo/python/README.md)

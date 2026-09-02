@@ -14,7 +14,9 @@ deadlines, and cleanup. JavaScript only owns the form and lifecycle wiring.
 Browser identity is intentionally ephemeral in `0.1`: every start creates a new
 Peer ID and one atomic TCP/WSS relay-route pair. The page does not persist
 credentials or peer state.
-Trusted discovery and automatic route publication remain separate work.
+This deliberately small echo UI uses manual peer cards. Applications may
+instead enable the same Rust-owned optional
+[DDS discovery](../../../docs/p2p/discovery.md).
 
 Start with
 [Build with an existing protocol](../../../docs/p2p/getting-started.md).

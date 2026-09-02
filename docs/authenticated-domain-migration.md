@@ -31,13 +31,14 @@ An application now supplies:
 - a persistent native identity path, or an intentional ephemeral identity;
 - the exact protocols it serves;
 - product authorization policy; and
-- the expected remote Peer ID and route until discovery exists.
+- either opt-in DDS discovery or an explicitly exchanged remote Peer ID and route.
 
 The SDK owns:
 
 - authority renewal and expiry fencing;
 - mutually authenticated transport;
 - default DMS relay booking and renewal;
+- optional DDS discovery publication and fresh lookup;
 - route validation and exact-peer dialing;
 - protocol registration and handler lifecycle; and
 - bounded shutdown.
@@ -135,9 +136,10 @@ Relay-backed reachability is the normal native mode and mandatory Web mode. A
 native application can explicitly choose direct-only operation. An inbound
 direct peer needs a listener and a dialable route that the application shares.
 
-The SDK does not yet discover peers or publish routes. Exchange a small record
-containing Domain ID, Peer ID, supported protocols, and complete TCP/WSS routes
-through configuration, a product control plane, or a manual peer card.
+The SDK can optionally publish and query short-lived DDS discovery records.
+Applications may still exchange Domain ID, Peer ID, supported protocols, and
+complete TCP/WSS routes through configuration, a product control plane, or a
+manual peer card. See [Discover peers](p2p/discovery.md).
 
 On native Rust, `known_peers()` only reports successful authenticated
 connectivity. It is not discovery or authorization.
@@ -151,7 +153,7 @@ connectivity. It is not discovery or authorization.
 5. Move outbound calls to protocol Clients.
 6. Keep commands, capabilities, and safety policy in the product.
 7. Replace implicit time with named clocks and recorded transforms.
-8. Exchange Peer IDs and routes explicitly until discovery ships.
+8. Choose opt-in DDS discovery or exchange Peer IDs and routes explicitly.
 9. Close endpoints before the peer and attempt every cleanup barrier.
 10. Test wrong Peer ID, wrong Domain, expiry, rotation, malformed frames, and
     unavailable relay behavior.

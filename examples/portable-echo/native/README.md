@@ -83,5 +83,6 @@ browser-to-native using each remote peer's exact advertised route. Peers do not
 need to receive reservations on the same relay.
 
 The manual values and smoke-test peer cards are application-owned exchange
-records. The SDK does not automatically discover peers or publish their routes
-in `0.1`.
+records kept here so this remains the smallest protocol-authoring example.
+Applications may instead enable the SDK's optional
+[DDS discovery](../../../docs/p2p/discovery.md).

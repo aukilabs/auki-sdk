@@ -5,6 +5,13 @@ runtime. It exposes User login, explicit Domain selection, stable peer
 identity bytes, default relay-backed startup, route inspection, status, and
 ordered shutdown.
 
+DDS discovery is opt-in through `startPeerWithDiscovery`. Choose
+`.discoverOnly` to look up peers without publishing, or
+`.discoverAndAdvertise` to maintain a short-lived advertisement. The returned
+peer exposes async `discover()` and `discoverProtocol(protocolId:)`; candidates
+are untrusted route hints and exact dialing still verifies the Peer ID and
+Domain in Rust.
+
 Swift owns platform policy such as Keychain storage and foreground/background
 transitions. It does not implement authentication, relay booking, libp2p, or
 protocol framing.

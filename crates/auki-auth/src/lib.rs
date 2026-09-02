@@ -42,8 +42,8 @@
 //! generic Web facade wraps them in `AukiUserSession`, creates a fresh in-memory
 //! identity for each `0.1` peer start, and requires one confirmed WSS relay.
 //! App credentials remain native-only because their secret must never ship to a
-//! browser. Peer discovery and automatic route publication are separate work
-//! on every platform.
+//! browser. Optional discovery and route publication belong to the higher-level
+//! `auki-sdk` peer runtime, not this credential-preparation crate.
 
 mod client;
 mod error;

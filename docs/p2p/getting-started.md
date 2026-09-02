@@ -222,12 +222,18 @@ Everything else uses the same `AukiPeerBootstrap` and `AukiPeer` lifecycle.
 Never embed an App secret in a browser, mobile binary, public repository,
 container image, or log.
 
-## Relay is not discovery
+## Relay and discovery are separate
 
-Relay allocation made A reachable, but B still needed A's expected Peer ID and
-complete route. `0.1` does not automatically discover peers or publish routes.
-Applications obtain that information from configuration, a product control
-plane, or a manually shared record.
+Relay allocation makes A reachable. The optional DDS tracker lets B find A's
+short-lived Peer ID, routes, and exact mounted protocols without copying a peer
+card. Enable it explicitly with
+`with_dds_tracker(DdsTrackerMode::DiscoverOnly)` or
+`with_dds_tracker(DdsTrackerMode::DiscoverAndAdvertise)`; it remains disabled
+by default.
+
+Applications may still obtain Peer IDs and complete routes from configuration,
+a product control plane, or a manually shared record. See
+[Discover peers](discovery.md) for the small lookup flow and trust boundary.
 
 The route remains an untrusted hint. An exchange succeeds only after the SDK
 authenticates the expected remote Peer ID in the selected Domain.

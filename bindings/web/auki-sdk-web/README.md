@@ -15,6 +15,13 @@ The binding delegates authentication, explicit Domain authorization, ephemeral
 identity creation, and peer startup to Rust's `AukiPeerBootstrap`. This crate
 only maps browser values, object ownership, and Promise errors.
 
+DDS discovery is opt-in. Keep `startPeer(domainId)` for a private peer, or use
+`startPeerWithDiscovery(domainId, AukiDiscoveryMode.DiscoverOnly)` to look up
+fresh candidates without publishing. Select `DiscoverAndAdvertise` when the
+peer should also maintain a short-lived advertisement. `peer.discover()` and
+`peer.discoverProtocol(exactId)` return untrusted route hints; protocol dialing
+still verifies the expected Peer ID and Domain in Rust.
+
 ## Built-in protocol bindings
 
 Protocol behavior remains implemented in `auki-protocols`; these features

@@ -7,6 +7,7 @@ shutdown while leaving product policy explicit.
 
 - [Run an existing protocol](getting-started.md)
 - [Author a portable protocol](authoring-protocols.md)
+- [Discover peers by mounted protocol](discovery.md)
 - [Exercise all six standard protocols](../../examples/standard-protocols/README.md)
 - [Try the Web echo app](../../examples/portable-echo/web/README.md)
 - [Try the Python echo app](../../examples/portable-echo/python/README.md)
@@ -189,25 +190,17 @@ small custom-protocol reference. The
 mounts Info, Catalog, Registry, Blob, Message, and Stream through the same Rust
 implementations and probes native or browser peers through exact relay routes.
 
-## Discovery is still application-owned
+## Opt-in discovery
 
-Relay makes a peer reachable but does not tell another peer that it exists.
-Until discovery and route publication are designed, exchange:
+Relay makes a peer reachable; discovery lets other peers find that route. The
+optional DDS tracker publishes short-lived Peer ID, route, and exact mounted
+protocol hints. Applications explicitly choose `DiscoverOnly` or
+`DiscoverAndAdvertise`, then call `discover()` or `discover_protocol()`.
 
-```json
-{
-  "domainId": "<Domain UUID>",
-  "peerId": "<Peer ID>",
-  "protocols": ["/example/echo/1.0.0"],
-  "routes": {
-    "tcp": "<native circuit route>",
-    "wss": "<browser circuit route>"
-  }
-}
-```
-
-This record is application data, not authority. The SDK still verifies the
-expected Peer ID and Domain before exposing protocol bytes.
+Candidates remain untrusted until an exact-route protocol operation verifies
+the expected Peer ID and Domain. Discovery never inserts a candidate into
+`known_peers()`. Manual peer cards and product control planes remain supported
+when DDS discovery is disabled. See [Discover peers](discovery.md).
 
 ## Lifecycle rules
 

@@ -10,8 +10,8 @@ use std::{
 
 use auki_p2p::{
     ApplicationProtocol, ApplicationProtocolServer, AuthenticatedRouteStream, ExactRoute,
-    Multiaddr, Node, PeerId, SessionRequirements, TargetedStreamError, canonicalize_circuit_route,
-    validate_direct_route,
+    Multiaddr, Node, PeerId, SessionRequirements, TargetedStreamError,
+    canonicalize_candidate_route,
 };
 use parking_lot::Mutex;
 use tokio::time::timeout;
@@ -350,15 +350,12 @@ fn canonicalize_candidate(
     expected_peer: PeerId,
     route: Multiaddr,
 ) -> Result<Multiaddr, AukiProtocolError> {
-    match validate_direct_route(&route, expected_peer) {
-        Ok(route) => Ok(route),
-        Err(direct) => canonicalize_circuit_route(&route, expected_peer)
-            .map(|route| route.route)
-            .map_err(|circuit| AukiProtocolError::InvalidRoute {
-                peer_id: expected_peer,
-                reason: format!("direct: {direct}; circuit: {circuit}"),
-            }),
-    }
+    canonicalize_candidate_route(&route, expected_peer)
+        .map(|candidate| candidate.into_route())
+        .map_err(|error| AukiProtocolError::InvalidRoute {
+            peer_id: expected_peer,
+            reason: error.to_string(),
+        })
 }
 
 #[cfg(test)]

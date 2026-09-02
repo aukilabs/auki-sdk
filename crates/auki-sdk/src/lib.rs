@@ -6,6 +6,7 @@
 
 mod bootstrap;
 mod config;
+mod discovery;
 mod protocol_contract;
 mod runtime_policy;
 mod served_protocols;
@@ -73,6 +74,10 @@ pub use config::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use context::{AukiPeerProtocolContext, AukiPeerRoutes, AukiPeerRoutesError};
+pub use discovery::{
+    AukiDiscovery, AukiDiscoveryCandidate, AukiDiscoveryError, AukiDiscoverySource,
+    DEV_DDS_BASE_URL, DdsTrackerConfig, DdsTrackerMode,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use known_peers::{
     AukiKnownPeer, AukiKnownPeerEvent, AukiKnownPeerRecvError, AukiKnownPeerSnapshot,

@@ -7,7 +7,9 @@ use auki_auth::{
     AuthClient, AuthEnvironment, AuthSession, Credentials, DomainChoice, DomainSelection,
 };
 
-use crate::{AukiPeer, AukiPeerConfig, AukiPeerStartError, Identity};
+use crate::{
+    AukiPeer, AukiPeerConfig, AukiPeerStartError, DdsTrackerConfig, DdsTrackerMode, Identity,
+};
 
 /// Authenticated User/App session paired with one peer runtime configuration.
 ///
@@ -41,6 +43,17 @@ impl AukiPeerBootstrap {
         let client = AuthClient::new(AuthEnvironment::dev())
             .map_err(AukiPeerBootstrapError::ConfigureAuthentication)?;
         Self::authenticate(client, credentials, AukiPeerConfig::dev()).await
+    }
+
+    /// Enable DDS discovery using the same validated DDS origin as this auth session.
+    ///
+    /// The mode is explicit because observing other peers and publishing this
+    /// peer's reachability are separate product choices.
+    pub fn with_dds_tracker(mut self, mode: DdsTrackerMode) -> Self {
+        let tracker = DdsTrackerConfig::new(self.auth.dds_base_url(), mode)
+            .expect("an authenticated session always retains a validated DDS origin");
+        self.peer_config = self.peer_config.with_dds_tracker(tracker);
+        self
     }
 
     /// List the Domains the authenticated principal may explicitly select.

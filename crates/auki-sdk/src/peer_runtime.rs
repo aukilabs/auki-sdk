@@ -23,6 +23,10 @@ use crate::{
     },
     config::{AukiPeerConfig, AukiRelayConfig},
     context::{AukiPeerProtocolContext, ContextLifecycle},
+    discovery::{
+        AukiDiscoveryCandidate, AukiDiscoveryError, DdsDiscovery, DdsTrackerMode,
+        NativeDdsPublisher,
+    },
     known_peers::AukiKnownPeers,
     protocol_contract::AukiProtocolError,
     protocols::AukiPeerProtocols,
@@ -224,6 +228,9 @@ pub enum AukiPeerStartError {
     /// Required relay-backed reachability could not become ready.
     #[error("failed to establish required relay-backed reachability")]
     Relay(#[source] AukiPeerRelayError),
+    /// Required initial DDS self-advertisement could not be established.
+    #[error("failed to start DDS peer discovery")]
+    Discovery(#[source] AukiDiscoveryError),
     /// A retained startup status channel ended unexpectedly.
     #[error("an AukiPeer startup component stopped unexpectedly")]
     Supervisor,
@@ -231,6 +238,7 @@ pub enum AukiPeerStartError {
 
 #[derive(Debug, Default)]
 struct ShutdownFailures {
+    discovery: Option<AukiDiscoveryError>,
     relay: Option<AukiPeerRelayError>,
     routes: Vec<RouteCatalogError>,
     protocols: Option<AukiProtocolError>,
@@ -241,6 +249,7 @@ struct ShutdownFailures {
 impl ShutdownFailures {
     fn is_empty(&self) -> bool {
         self.relay.is_none()
+            && self.discovery.is_none()
             && self.routes.is_empty()
             && self.protocols.is_none()
             && self.transport.is_none()
@@ -268,6 +277,11 @@ pub struct AukiPeerShutdownError {
 }
 
 impl AukiPeerShutdownError {
+    /// DDS advertisement withdrawal or publisher cleanup failure.
+    pub fn discovery(&self) -> Option<&AukiDiscoveryError> {
+        self.failures.discovery.as_ref()
+    }
+
     /// Relay drain, booking deletion, or forced relay cleanup failure.
     pub fn relay(&self) -> Option<&AukiPeerRelayError> {
         self.failures.relay.as_ref()
@@ -297,6 +311,7 @@ impl AukiPeerShutdownError {
 impl fmt::Display for AukiPeerShutdownError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let count = usize::from(self.failures.relay.is_some())
+            + usize::from(self.failures.discovery.is_some())
             + self.failures.routes.len()
             + usize::from(self.failures.protocols.is_some())
             + usize::from(self.failures.transport.is_some())
@@ -311,6 +326,9 @@ impl fmt::Display for AukiPeerShutdownError {
 
 impl Error for AukiPeerShutdownError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
+        if let Some(error) = self.failures.discovery.as_ref() {
+            return Some(error);
+        }
         if let Some(error) = self.failures.relay.as_ref() {
             return Some(error);
         }
@@ -488,6 +506,8 @@ pub struct AukiPeer {
     listen_addresses: Vec<Multiaddr>,
     known_peers: AukiKnownPeers,
     protocols: AukiPeerProtocols,
+    discovery: Option<DdsDiscovery>,
+    discovery_publisher: Option<NativeDdsPublisher>,
     authority: Option<AuthoritySupervisor>,
     relay: Option<RelayBookingCoordinator>,
     relay_lifecycle: CancellationToken,
@@ -626,7 +646,7 @@ impl AukiPeer {
             relay_required: config.relay_required(),
         };
 
-        let relay = match config.relay() {
+        let mut relay = match config.relay() {
             Some(relay_config) => {
                 let client = match RelayBookingClient::new(
                     config.dms_base().clone(),
@@ -705,6 +725,49 @@ impl AukiPeer {
             }
         };
 
+        let (discovery, discovery_publisher) = match config.dds_tracker() {
+            Some(tracker) => {
+                let discovery = match DdsDiscovery::new(
+                    tracker,
+                    domain_id,
+                    identity_peer_id,
+                    authority.dds_authorization(),
+                ) {
+                    Ok(discovery) => discovery,
+                    Err(error) => {
+                        cleanup_relay_after_startup_failure(relay.take()).await;
+                        authority.shutdown().await;
+                        relay_lifecycle.cancel();
+                        node.shutdown_now().await;
+                        return Err(AukiPeerStartError::Discovery(error));
+                    }
+                };
+                let publisher = if tracker.mode() == DdsTrackerMode::DiscoverAndAdvertise {
+                    match discovery
+                        .start_native_publisher(
+                            route_catalog.clone(),
+                            protocols.clone(),
+                            authority.subscribe_status(),
+                        )
+                        .await
+                    {
+                        Ok(publisher) => Some(publisher),
+                        Err(error) => {
+                            cleanup_relay_after_startup_failure(relay.take()).await;
+                            authority.shutdown().await;
+                            relay_lifecycle.cancel();
+                            node.shutdown_now().await;
+                            return Err(AukiPeerStartError::Discovery(error));
+                        }
+                    }
+                } else {
+                    None
+                };
+                (Some(discovery), publisher)
+            }
+            None => (None, None),
+        };
+
         let protocol_context = AukiPeerProtocolContext::new(
             domain_id,
             identity_peer_id,
@@ -719,6 +782,9 @@ impl AukiPeer {
             status.clone(),
             monitor_shutdown.clone(),
             protocols.clone(),
+            discovery_publisher
+                .as_ref()
+                .map(NativeDdsPublisher::cancellation),
             signals,
         ));
 
@@ -730,6 +796,8 @@ impl AukiPeer {
                 listen_addresses,
                 known_peers,
                 protocols,
+                discovery,
+                discovery_publisher,
                 authority: Some(authority),
                 relay,
                 relay_lifecycle,
@@ -774,6 +842,36 @@ impl AukiPeer {
         self.known_peers.clone()
     }
 
+    /// Fetch a fresh bounded list of untrusted same-Domain dial candidates.
+    pub async fn discover(&self) -> Result<Vec<AukiDiscoveryCandidate>, AukiDiscoveryError> {
+        self.discovery
+            .as_ref()
+            .ok_or(AukiDiscoveryError::Disabled)?
+            .discover()
+            .await
+    }
+
+    /// Clone the configured Rust-owned discovery capability for an async
+    /// platform adapter without retaining this peer owner.
+    pub fn discovery_handle(&self) -> Result<crate::AukiDiscovery, AukiDiscoveryError> {
+        self.discovery
+            .clone()
+            .map(crate::AukiDiscovery::new)
+            .ok_or(AukiDiscoveryError::Disabled)
+    }
+
+    /// Fetch fresh candidates advertising one exact inbound protocol ID.
+    pub async fn discover_protocol(
+        &self,
+        protocol_id: impl AsRef<str>,
+    ) -> Result<Vec<AukiDiscoveryCandidate>, AukiDiscoveryError> {
+        self.discovery
+            .as_ref()
+            .ok_or(AukiDiscoveryError::Disabled)?
+            .discover_protocol(protocol_id.as_ref())
+            .await
+    }
+
     /// Current facade lifecycle and readiness snapshot.
     pub fn status(&self) -> AukiPeerStatus {
         self.status.status()
@@ -812,12 +910,22 @@ impl AukiPeer {
         self.protocol_context.fence();
         self.status.begin_shutdown();
         self.monitor_shutdown.cancel();
+        let discovery_publisher = self.discovery_publisher.take();
+        if let Some(publisher) = discovery_publisher.as_ref() {
+            publisher.abort();
+        }
         async move {
             let mut failures = ShutdownFailures::default();
             if let Some(monitor) = self.monitor.take()
                 && let Err(error) = monitor.await
             {
                 failures.supervisor = Some(error);
+            }
+
+            if let Some(publisher) = discovery_publisher
+                && let Err(error) = publisher.shutdown().await
+            {
+                failures.discovery = Some(error);
             }
 
             if let Some(relay) = self.relay.take() {
@@ -885,6 +993,10 @@ impl Drop for AukiPeer {
         if let Some(monitor) = self.monitor.take() {
             monitor.abort();
         }
+        if let Some(publisher) = self.discovery_publisher.take() {
+            publisher.abort();
+            drop(publisher);
+        }
         drop(self.relay.take());
         self.relay_lifecycle.cancel();
         let route_cleanup_failed = self.route_catalog.tombstone_all().is_err()
@@ -906,6 +1018,21 @@ impl Drop for AukiPeer {
         // local fencing but deliberately cannot confirm DMS DELETE or await
         // the transport's asynchronous cleanup barrier.
         self.closed = true;
+    }
+}
+
+async fn cleanup_relay_after_startup_failure(relay: Option<RelayBookingCoordinator>) {
+    let Some(relay) = relay else {
+        return;
+    };
+    match relay.shutdown(true, RELAY_SHUTDOWN_TIMEOUT).await {
+        Ok(RelayCoordinatorShutdownOutcome::Graceful) => {}
+        Ok(RelayCoordinatorShutdownOutcome::ForcedAfterTimeout) => {
+            warn!("relay discovery-startup cleanup timed out before DMS deletion was confirmed");
+        }
+        Err(error) => {
+            warn!(error = %error, "failed to clean up relay after discovery startup failure");
+        }
     }
 }
 
@@ -1068,6 +1195,7 @@ async fn monitor_runtime(
     status: PeerStatusController,
     shutdown: CancellationToken,
     protocols: AukiPeerProtocols,
+    discovery_shutdown: Option<CancellationToken>,
     mut signals: RuntimeSignals,
 ) {
     loop {
@@ -1077,6 +1205,9 @@ async fn monitor_runtime(
             // observe failure while a retained protocol handle still accepts
             // new work.
             protocols.abort_all();
+            if let Some(discovery_shutdown) = &discovery_shutdown {
+                discovery_shutdown.cancel();
+            }
             status.update(observed);
             return;
         }
@@ -1088,6 +1219,9 @@ async fn monitor_runtime(
         };
         if changed.is_err() {
             protocols.abort_all();
+            if let Some(discovery_shutdown) = &discovery_shutdown {
+                discovery_shutdown.cancel();
+            }
             status.update(AukiPeerStatus::Failed(AukiPeerFailure::Supervisor));
             return;
         }
@@ -1144,7 +1278,7 @@ fn observed_status(
 
 #[cfg(test)]
 mod tests {
-    use std::{str::FromStr, time::SystemTime};
+    use std::{net::TcpListener, str::FromStr, time::SystemTime};
 
     use async_trait::async_trait;
     use auki_auth::{
@@ -1155,12 +1289,12 @@ mod tests {
         P2P_TOKEN_TYPE, P2PAccessClaims, RouteCatalogLimits, SignedP2pCredential,
     };
     use chrono::{TimeZone, Utc};
-    use httpmock::{Method::DELETE, Method::GET, Method::POST, MockServer};
+    use httpmock::{Method::DELETE, Method::GET, Method::POST, Method::PUT, MockServer};
     use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
     use serde_json::json;
 
     use super::*;
-    use crate::{AukiPeerAuthorizationError, AukiPeerRoutesError, AukiRelayMode};
+    use crate::{AukiPeerAuthorizationError, AukiPeerRoutesError, AukiRelayMode, DdsTrackerConfig};
 
     const TEST_DDS_PRIVATE_KEY: &[u8] = br#"-----BEGIN PRIVATE KEY-----
 MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQggm4twpf4y/yNNw/k
@@ -1379,6 +1513,87 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn discovery_is_explicit_and_advertising_requires_a_publishable_route() {
+        let identity = auki_p2p::Identity::generate();
+        let domain_id = Uuid::new_v4();
+        let runtime = AukiPeer::start(
+            identity.clone(),
+            fixture(&identity, domain_id),
+            direct_config(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            runtime.discover().await.unwrap_err(),
+            AukiDiscoveryError::Disabled
+        );
+        runtime.shutdown().await.unwrap();
+
+        let dds = MockServer::start();
+        let discovering_identity = auki_p2p::Identity::generate();
+        let discover_only = direct_config().with_dds_tracker(
+            DdsTrackerConfig::new(dds.base_url(), DdsTrackerMode::DiscoverOnly).unwrap(),
+        );
+        let discover_only_runtime = AukiPeer::start(
+            discovering_identity.clone(),
+            fixture(&discovering_identity, domain_id),
+            discover_only,
+        )
+        .await
+        .expect("discover-only startup must not contact an unavailable tracker");
+        discover_only_runtime.shutdown().await.unwrap();
+
+        let advertising_identity = auki_p2p::Identity::generate();
+        let config = direct_config().with_dds_tracker(
+            DdsTrackerConfig::new(dds.base_url(), DdsTrackerMode::DiscoverAndAdvertise).unwrap(),
+        );
+        assert!(matches!(
+            AukiPeer::start(
+                advertising_identity.clone(),
+                fixture(&advertising_identity, domain_id),
+                config,
+            )
+            .await,
+            Err(AukiPeerStartError::Discovery(
+                AukiDiscoveryError::InvalidResponse { .. }
+            ))
+        ));
+
+        let route = Multiaddr::from_str("/ip4/127.0.0.1/tcp/4001").unwrap();
+        let rejected = dds.mock(|when, then| {
+            when.method(PUT);
+            then.status(400).header("cache-control", "no-store");
+        });
+        let rejected_cleanup = dds.mock(|when, then| {
+            when.method(DELETE).path(format!(
+                "/api/v1/domains/{domain_id}/p2p/advertisements/self"
+            ));
+            then.status(204).header("cache-control", "no-store");
+        });
+        let rejected_identity = auki_p2p::Identity::generate();
+        let config = direct_config()
+            .with_advertised_direct_routes([route])
+            .unwrap()
+            .with_dds_tracker(
+                DdsTrackerConfig::new(dds.base_url(), DdsTrackerMode::DiscoverAndAdvertise)
+                    .unwrap(),
+            );
+        assert!(matches!(
+            AukiPeer::start(
+                rejected_identity.clone(),
+                fixture(&rejected_identity, domain_id),
+                config,
+            )
+            .await,
+            Err(AukiPeerStartError::Discovery(
+                AukiDiscoveryError::HttpStatus { status: 400, .. }
+            ))
+        ));
+        rejected.assert_calls(1);
+        rejected_cleanup.assert_calls(1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unexpected_transport_stop_fences_protocols_before_waiters_observe_failure() {
         let identity = auki_p2p::Identity::generate();
         let prepared = fixture(&identity, Uuid::new_v4());
@@ -1503,6 +1718,169 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         client.shutdown().await.unwrap();
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn discovery_publishes_mounts_and_exact_dials_without_a_pasted_peer_card() {
+        const PROTOCOL: &str = "/example/discovery-e2e/1.0.0";
+
+        let dds = MockServer::start();
+        let domain_id = Uuid::new_v4();
+        let advertising_identity = auki_p2p::Identity::generate();
+        let advertising_peer_id = advertising_identity.peer_id();
+        let discovering_identity = auki_p2p::Identity::generate();
+
+        let socket = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = socket.local_addr().unwrap().port();
+        drop(socket);
+        let route = Multiaddr::from_str(&format!("/ip4/127.0.0.1/tcp/{port}")).unwrap();
+        let collection_path = format!("/api/v1/domains/{domain_id}/p2p/advertisements");
+        let self_path = format!("{collection_path}/self");
+        let expires_at = Utc::now() + chrono::Duration::minutes(2);
+
+        let initial_publish = dds.mock(|when, then| {
+            when.method(PUT).path(self_path.clone()).json_body(json!({
+                "routes": [route.to_string()],
+                "protocols": [],
+            }));
+            then.status(200)
+                .header("cache-control", "no-store")
+                .header("content-type", "application/json")
+                .json_body(json!({
+                    "peer_id": advertising_peer_id.to_string(),
+                    "routes": [route.to_string()],
+                    "protocols": [],
+                    "expires_at": expires_at,
+                }));
+        });
+        let mounted_publish = dds.mock(|when, then| {
+            when.method(PUT).path(self_path.clone()).json_body(json!({
+                "routes": [route.to_string()],
+                "protocols": [PROTOCOL],
+            }));
+            then.status(200)
+                .header("cache-control", "no-store")
+                .header("content-type", "application/json")
+                .json_body(json!({
+                    "peer_id": advertising_peer_id.to_string(),
+                    "routes": [route.to_string()],
+                    "protocols": [PROTOCOL],
+                    "expires_at": expires_at,
+                }));
+        });
+        let list = dds.mock(|when, then| {
+            when.method(GET)
+                .path(collection_path)
+                .query_param("limit", "100")
+                .query_param("protocol", PROTOCOL);
+            then.status(200)
+                .header("cache-control", "no-store")
+                .header("content-type", "application/json")
+                .json_body(json!({
+                    "advertisements": [{
+                        "peer_id": advertising_peer_id.to_string(),
+                        "routes": [route.to_string()],
+                        "protocols": [PROTOCOL],
+                        "expires_at": expires_at,
+                    }]
+                }));
+        });
+        let withdraw = dds.mock(|when, then| {
+            when.method(DELETE).path(self_path);
+            then.status(204).header("cache-control", "no-store");
+        });
+
+        let advertising_config = AukiPeerConfig::new("http://127.0.0.1:9")
+            .unwrap()
+            .direct_only()
+            .with_listen_addresses([route.clone()])
+            .unwrap()
+            .with_advertised_direct_routes([route.clone()])
+            .unwrap()
+            .with_dds_tracker(
+                DdsTrackerConfig::new(dds.base_url(), DdsTrackerMode::DiscoverAndAdvertise)
+                    .unwrap(),
+            );
+        let advertising = AukiPeer::start(
+            advertising_identity.clone(),
+            fixture(&advertising_identity, domain_id),
+            advertising_config,
+        )
+        .await
+        .unwrap();
+        initial_publish.assert_calls(1);
+
+        let (accepted_sender, accepted_receiver) = tokio::sync::oneshot::channel();
+        let accepted = Arc::new(Mutex::new(Some(accepted_sender)));
+        let handler_accepted = Arc::clone(&accepted);
+        let registration = advertising
+            .protocols()
+            .register(
+                crate::AukiProtocolSpec::new(PROTOCOL, 1, 32).unwrap(),
+                move |_stream| {
+                    let accepted = handler_accepted.lock().take();
+                    async move {
+                        if let Some(accepted) = accepted {
+                            let _ = accepted.send(());
+                        }
+                        pending::<()>().await;
+                    }
+                },
+            )
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while mounted_publish.calls() == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("protocol mount must asynchronously replace the advertisement");
+
+        let discovering_config = direct_config().with_dds_tracker(
+            DdsTrackerConfig::new(dds.base_url(), DdsTrackerMode::DiscoverOnly).unwrap(),
+        );
+        let discovering = AukiPeer::start(
+            discovering_identity.clone(),
+            fixture(&discovering_identity, domain_id),
+            discovering_config,
+        )
+        .await
+        .unwrap();
+        let candidates = discovering.discover_protocol(PROTOCOL).await.unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].peer_id(), advertising_peer_id);
+        assert_eq!(candidates[0].routes(), std::slice::from_ref(&route));
+        assert!(discovering.known_peers().snapshot().peers().is_empty());
+
+        let stream = discovering
+            .protocols()
+            .open_exact(
+                candidates[0].peer_id(),
+                candidates[0].routes()[0].clone(),
+                PROTOCOL,
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), accepted_receiver)
+            .await
+            .expect("discovered exact route must reach the mounted protocol")
+            .unwrap();
+        assert_eq!(
+            discovering.known_peers().snapshot().peers()[0].peer_id(),
+            advertising_peer_id
+        );
+        drop(stream);
+        list.assert_calls(1);
+
+        let retained_discovery = discovering.discovery_handle().unwrap();
+        discovering.shutdown().await.unwrap();
+        assert_eq!(
+            retained_discovery.discover().await.unwrap_err(),
+            AukiDiscoveryError::Authentication
+        );
+        advertising.shutdown().await.unwrap();
+        registration.close().await.unwrap();
+        withdraw.assert_calls(1);
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn external_direct_only_runtime_replaces_authority_and_shutdown_ends_control() {
         let identity = auki_p2p::Identity::generate();
@@ -1587,6 +1965,116 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             external_update_from_compact(&identity, domain_id, initial_compact, initial_expiration);
         let stopped = control.replace(stopped_update).await.unwrap_err();
         assert!(stopped.to_string().contains("stopped"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn externally_managed_authority_republishes_the_same_self_advertisement() {
+        let dds = MockServer::start();
+        let identity = auki_p2p::Identity::generate();
+        let peer_id = identity.peer_id();
+        let domain_id = Uuid::new_v4();
+        let route = Multiaddr::from_str("/ip4/127.0.0.1/tcp/4001").unwrap();
+        let path = format!("/api/v1/domains/{domain_id}/p2p/advertisements/self");
+        let publication = dds.mock(|when, then| {
+            when.method(PUT).path(path.clone()).json_body(json!({
+                "routes": [route.to_string()],
+                "protocols": [],
+            }));
+            then.status(200)
+                .header("cache-control", "no-store")
+                .header("content-type", "application/json")
+                .json_body(json!({
+                    "peer_id": peer_id.to_string(),
+                    "routes": [route.to_string()],
+                    "protocols": [],
+                    "expires_at": Utc::now() + chrono::Duration::minutes(2),
+                }));
+        });
+        let withdrawal = dds.mock(|when, then| {
+            when.method(DELETE).path(path);
+            then.status(204).header("cache-control", "no-store");
+        });
+        let config = direct_config()
+            .with_advertised_direct_routes([route])
+            .unwrap()
+            .with_dds_tracker(
+                DdsTrackerConfig::new(dds.base_url(), DdsTrackerMode::DiscoverAndAdvertise)
+                    .unwrap(),
+            );
+        let issued_at = unix_time().saturating_sub(2);
+        let (initial, _) = external_fixture(&identity, domain_id, issued_at);
+        let (runtime, control) = AukiPeer::start_external(identity.clone(), initial, config)
+            .await
+            .unwrap();
+        publication.assert_calls(1);
+
+        let (replacement, _) = external_fixture(&identity, domain_id, issued_at + 1);
+        assert!(matches!(
+            control.replace(replacement).await.unwrap(),
+            ExternalAuthorityReplaceOutcome::Replaced { .. }
+        ));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while publication.calls() < 2 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("authority revision must asynchronously refresh the advertisement");
+
+        runtime.shutdown().await.unwrap();
+        withdrawal.assert_calls(1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn constructing_shutdown_future_stops_discovery_before_it_is_polled() {
+        let dds = MockServer::start();
+        let identity = auki_p2p::Identity::generate();
+        let peer_id = identity.peer_id();
+        let domain_id = Uuid::new_v4();
+        let route = Multiaddr::from_str("/ip4/127.0.0.1/tcp/4001").unwrap();
+        let path = format!("/api/v1/domains/{domain_id}/p2p/advertisements/self");
+        let publication = dds.mock(|when, then| {
+            when.method(PUT).path(path.clone());
+            then.status(200)
+                .header("cache-control", "no-store")
+                .header("content-type", "application/json")
+                .json_body(json!({
+                    "peer_id": peer_id.to_string(),
+                    "routes": [route.to_string()],
+                    "protocols": [],
+                    "expires_at": Utc::now() + chrono::Duration::minutes(2),
+                }));
+        });
+        let withdrawal = dds.mock(|when, then| {
+            when.method(DELETE).path(path);
+            then.status(204).header("cache-control", "no-store");
+        });
+        let config = direct_config()
+            .with_advertised_direct_routes([route])
+            .unwrap()
+            .with_dds_tracker(
+                DdsTrackerConfig::new(dds.base_url(), DdsTrackerMode::DiscoverAndAdvertise)
+                    .unwrap(),
+            );
+        let issued_at = unix_time().saturating_sub(2);
+        let (initial, _) = external_fixture(&identity, domain_id, issued_at);
+        let (runtime, control) = AukiPeer::start_external(identity.clone(), initial, config)
+            .await
+            .unwrap();
+        publication.assert_calls(1);
+
+        let unpolled_shutdown = runtime.shutdown();
+        let (replacement, _) = external_fixture(&identity, domain_id, issued_at + 1);
+        control.replace(replacement).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while withdrawal.calls() < 1 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("constructing shutdown must cancel and withdraw discovery");
+        assert_eq!(publication.calls(), 1);
+        drop(unpolled_shutdown);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

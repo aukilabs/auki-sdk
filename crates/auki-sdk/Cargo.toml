@@ -15,9 +15,12 @@ auki-auth = { path = "../auki-auth" }
 auki-p2p = { path = "../auki-p2p" }
 auki-relay-booking = { path = "../auki-relay-booking" }
 chrono = { workspace = true }
+futures = { workspace = true }
+futures-timer = { workspace = true }
 parking_lot = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
@@ -27,8 +30,6 @@ uuid = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 async-channel = { workspace = true }
-futures = { workspace = true }
-futures-timer = { workspace = true }
 uuid = { workspace = true, features = ["js"] }
 wasm-bindgen-futures = { workspace = true }
 

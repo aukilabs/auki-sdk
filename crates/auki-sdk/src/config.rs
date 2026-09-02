@@ -185,6 +185,7 @@ impl InitialPeerRoutes {
 #[derive(Clone, Debug)]
 pub struct AukiPeerConfig {
     dms_base_url: Url,
+    dds_tracker: Option<crate::DdsTrackerConfig>,
     #[cfg(not(target_arch = "wasm32"))]
     listen_addresses: Vec<Multiaddr>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -204,6 +205,7 @@ impl AukiPeerConfig {
         let dms_base_url = parse_dms_base_url(dms_base_url.as_ref())?;
         Ok(Self {
             dms_base_url,
+            dds_tracker: None,
             #[cfg(not(target_arch = "wasm32"))]
             listen_addresses: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -336,9 +338,20 @@ impl AukiPeerConfig {
         Ok(self)
     }
 
+    /// Enable the explicitly selected DDS discovery behavior.
+    pub fn with_dds_tracker(mut self, tracker: crate::DdsTrackerConfig) -> Self {
+        self.dds_tracker = Some(tracker);
+        self
+    }
+
     /// Validated DMS base, including any caller-supplied path prefix.
     pub fn dms_base_url(&self) -> &str {
         self.dms_base_url.as_str()
+    }
+
+    /// Configured DDS tracker, or `None` when discovery is disabled.
+    pub fn dds_tracker(&self) -> Option<&crate::DdsTrackerConfig> {
+        self.dds_tracker.as_ref()
     }
 
     /// Requested local listener addresses.
@@ -690,11 +703,33 @@ mod tests {
         assert!(config.relay_required());
         assert_eq!(config.relay(), Some(AukiRelayConfig::default()));
         assert_eq!(config.dms_base_url(), DEV_DMS_BASE_URL);
+        assert!(config.dds_tracker().is_none());
         #[cfg(not(target_arch = "wasm32"))]
         {
             assert!(config.listen_addresses().is_empty());
             assert!(config.advertised_direct_routes().is_empty());
             assert!(config.initial_peer_routes().is_empty());
+        }
+    }
+
+    #[test]
+    fn dds_tracker_requires_an_explicit_mode_and_remains_independent_of_relay() {
+        let tracker = crate::DdsTrackerConfig::dev(crate::DdsTrackerMode::DiscoverOnly);
+        let config = AukiPeerConfig::dev().with_dds_tracker(tracker);
+        assert_eq!(
+            config.dds_tracker().map(crate::DdsTrackerConfig::mode),
+            Some(crate::DdsTrackerMode::DiscoverOnly)
+        );
+        assert!(config.relay_required());
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let direct = config.direct_only();
+            assert!(!direct.relay_required());
+            assert_eq!(
+                direct.dds_tracker().map(crate::DdsTrackerConfig::mode),
+                Some(crate::DdsTrackerMode::DiscoverOnly)
+            );
         }
     }
 

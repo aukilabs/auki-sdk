@@ -29,6 +29,7 @@ use crate::{
     authorization::{
         AukiPeerAuthorizationError, AukiPeerAuthorizationSnapshot, AuthorizationSnapshotSource,
     },
+    discovery::{AukiDiscoveryError, DdsAuthorizationProvider, DdsAuthorizationSnapshot},
     relay::{RelayAuthorizationError, RelayAuthorizationProvider, RelayAuthorizationSnapshot},
     runtime_policy::{
         RejectedAuthorityRevision, next_authority_revision, rejected_authority_revision,
@@ -577,11 +578,9 @@ impl AuthorityInner {
         }
     }
 
-    fn authorization_snapshot(
-        &self,
-    ) -> Result<RelayAuthorizationSnapshot, AuthoritySupervisorError> {
+    fn authorization_parts(&self) -> Result<(HeaderValue, u64), AuthoritySupervisorError> {
         self.expire_if_due();
-        let snapshot = {
+        let (header, revision) = {
             let state = self.state.read();
             if state.stopped {
                 return Err(AuthoritySupervisorError::Stopped);
@@ -591,22 +590,33 @@ impl AuthorityInner {
                 .as_ref()
                 .filter(|current| current.available)
                 .ok_or(AuthoritySupervisorError::RefreshUnavailable)?;
-            RelayAuthorizationSnapshot::new(
-                current.authorization.clone(),
-                current.credential_revision,
-            )
+            (current.authorization.clone(), current.credential_revision)
         };
         self.expire_if_due();
         let still_current = self.state.read().current.as_ref().is_some_and(|current| {
             current.available
-                && current.credential_revision == snapshot.revision()
+                && current.credential_revision == revision
                 && current.credential_expires_at > Utc::now()
         });
         if still_current {
-            Ok(snapshot)
+            Ok((header, revision))
         } else {
             Err(AuthoritySupervisorError::RefreshUnavailable)
         }
+    }
+
+    fn authorization_snapshot(
+        &self,
+    ) -> Result<RelayAuthorizationSnapshot, AuthoritySupervisorError> {
+        let (header, revision) = self.authorization_parts()?;
+        Ok(RelayAuthorizationSnapshot::new(header, revision))
+    }
+
+    fn dds_authorization_snapshot(
+        &self,
+    ) -> Result<DdsAuthorizationSnapshot, AuthoritySupervisorError> {
+        let (header, revision) = self.authorization_parts()?;
+        Ok(DdsAuthorizationSnapshot::new(header, revision))
     }
 
     fn public_authorization_snapshot(
@@ -1092,6 +1102,33 @@ struct AuthorityRelayAuthorization {
     inner: Weak<AuthorityInner>,
 }
 
+struct AuthorityDdsAuthorization {
+    inner: Weak<AuthorityInner>,
+}
+
+#[async_trait]
+impl DdsAuthorizationProvider for AuthorityDdsAuthorization {
+    async fn authorization(&self) -> Result<DdsAuthorizationSnapshot, AukiDiscoveryError> {
+        self.inner
+            .upgrade()
+            .ok_or(AukiDiscoveryError::Authentication)?
+            .dds_authorization_snapshot()
+            .map_err(|_| AukiDiscoveryError::Authentication)
+    }
+
+    async fn refresh_after_unauthorized(
+        &self,
+        rejected_revision: u64,
+    ) -> Result<(), AukiDiscoveryError> {
+        self.inner
+            .upgrade()
+            .ok_or(AukiDiscoveryError::Authentication)?
+            .refresh_after_unauthorized(rejected_revision)
+            .await
+            .map_err(|_| AukiDiscoveryError::Authentication)
+    }
+}
+
 #[async_trait]
 impl RelayAuthorizationProvider for AuthorityRelayAuthorization {
     async fn authorization(&self) -> Result<RelayAuthorizationSnapshot, RelayAuthorizationError> {
@@ -1241,6 +1278,12 @@ impl AuthoritySupervisor {
 
     pub(crate) fn relay_authorization(&self) -> Arc<dyn RelayAuthorizationProvider> {
         Arc::new(AuthorityRelayAuthorization {
+            inner: Arc::downgrade(&self.inner),
+        })
+    }
+
+    pub(crate) fn dds_authorization(&self) -> Arc<dyn DdsAuthorizationProvider> {
+        Arc::new(AuthorityDdsAuthorization {
             inner: Arc::downgrade(&self.inner),
         })
     }

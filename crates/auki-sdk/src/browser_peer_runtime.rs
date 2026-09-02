@@ -1,4 +1,9 @@
-use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
+use std::{
+    cell::Cell,
+    rc::Rc,
+    sync::{Arc, Weak},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use auki_auth::{AuthorityRenewal, PreparedPeer};
@@ -34,6 +39,10 @@ use crate::{
         relay_usable_until,
     },
     browser_protocols::AukiPeerProtocols,
+    discovery::{
+        AukiDiscoveryCandidate, AukiDiscoveryError, BrowserDdsPublisher, DdsAuthorizationProvider,
+        DdsAuthorizationSnapshot, DdsDiscovery, DdsTrackerMode,
+    },
     protocol_contract::AukiProtocolError,
     runtime_policy::{
         RejectedAuthorityRevision, booking_mode, next_authority_revision,
@@ -50,6 +59,8 @@ pub struct AukiPeer {
     node: Rc<BrowserNode>,
     reachability: AukiPeerReachability,
     protocols: AukiPeerProtocols,
+    discovery: Option<DdsDiscovery>,
+    discovery_publisher: Option<BrowserDdsPublisher>,
     relay: RelaySupervisor,
     closed: bool,
 }
@@ -202,10 +213,63 @@ impl AukiPeer {
             relay_policy,
         );
 
+        let tracker = config.dds_tracker().cloned();
+        let (discovery, discovery_publisher) = match tracker {
+            Some(tracker) => {
+                let discovery = match DdsDiscovery::new(
+                    &tracker,
+                    node.domain_id(),
+                    identity_peer_id,
+                    Arc::new(BrowserDdsAuthorization {
+                        authority: Arc::downgrade(&authority),
+                    }),
+                ) {
+                    Ok(discovery) => discovery,
+                    Err(error) => {
+                        protocols.abort_all();
+                        let _ = relay.stop().await;
+                        return Err(AukiPeerError::Discovery(error));
+                    }
+                };
+                let publisher = if tracker.mode() == DdsTrackerMode::DiscoverAndAdvertise {
+                    let routes = vec![reachability.tcp().clone(), reachability.wss().clone()];
+                    let advertisement = relay.attach_advertisement();
+                    match discovery
+                        .start_browser_publisher(
+                            routes,
+                            protocols.clone(),
+                            advertisement.cancellation,
+                            advertisement.cleanup_complete,
+                        )
+                        .await
+                    {
+                        Ok(publisher) if !relay.advertisement_stopped() => Some(publisher),
+                        Ok(publisher) => {
+                            let _ = publisher.shutdown().await;
+                            protocols.abort_all();
+                            let _ = relay.stop().await;
+                            return Err(AukiPeerError::RelayStoppedDuringDiscoveryStartup);
+                        }
+                        Err(error) => {
+                            protocols.abort_all();
+                            let _ = relay.stop().await;
+                            return Err(AukiPeerError::Discovery(error));
+                        }
+                    }
+                } else {
+                    None
+                };
+                (Some(discovery), publisher)
+            }
+            None => (None, None),
+        };
+
         Ok(Self {
             node,
             reachability,
             protocols,
+            discovery,
+            discovery_publisher,
             relay,
             closed: false,
         })
@@ -226,6 +290,36 @@ impl AukiPeer {
     /// Authenticated application protocol registration and opening surface.
     pub fn protocols(&self) -> AukiPeerProtocols {
         self.protocols.clone()
+    }
+
+    /// Fetch a fresh bounded list of untrusted same-Domain dial candidates.
+    pub async fn discover(&self) -> Result<Vec<AukiDiscoveryCandidate>, AukiDiscoveryError> {
+        self.discovery
+            .as_ref()
+            .ok_or(AukiDiscoveryError::Disabled)?
+            .discover()
+            .await
+    }
+
+    /// Fetch fresh candidates advertising one exact inbound protocol ID.
+    pub async fn discover_protocol(
+        &self,
+        protocol_id: impl AsRef<str>,
+    ) -> Result<Vec<AukiDiscoveryCandidate>, AukiDiscoveryError> {
+        self.discovery
+            .as_ref()
+            .ok_or(AukiDiscoveryError::Disabled)?
+            .discover_protocol(protocol_id.as_ref())
+            .await
+    }
+
+    /// Clone the configured Rust-owned discovery capability for an async
+    /// platform adapter without retaining this peer owner.
+    pub fn discovery_handle(&self) -> Result<crate::AukiDiscovery, AukiDiscoveryError> {
+        self.discovery
+            .clone()
+            .map(crate::AukiDiscovery::new)
+            .ok_or(AukiDiscoveryError::Disabled)
     }
 
     /// Observe terminal lifecycle without retaining this Peer owner.
@@ -251,17 +345,25 @@ impl AukiPeer {
         // This fence deliberately runs while constructing the future. Retained
         // protocol handles must reject new work even if cleanup is not polled yet.
         self.protocols.begin_shutdown();
+        let discovery_publisher = self.discovery_publisher.take();
+        if let Some(publisher) = discovery_publisher.as_ref() {
+            publisher.abort();
+        }
         async move {
+            let discovery_failure = match discovery_publisher {
+                Some(publisher) => publisher.shutdown().await.err(),
+                None => None,
+            };
             let protocol_failure = self.protocols.shutdown_all().await.err();
             let relay_failure = match self.relay.stop().await {
                 SupervisorExit::Failed { reason, .. } => Some(reason),
                 SupervisorExit::Shutdown | SupervisorExit::OwnersDropped => None,
             };
             self.closed = true;
-            match (protocol_failure, relay_failure) {
-                (None, None) => Ok(()),
-                (protocols, relay) => Err(AukiPeerError::Shutdown {
-                    details: shutdown_details(protocols, relay),
+            match (discovery_failure, protocol_failure, relay_failure) {
+                (None, None, None) => Ok(()),
+                (discovery, protocols, relay) => Err(AukiPeerError::Shutdown {
+                    details: shutdown_details(discovery, protocols, relay),
                 }),
             }
         }
@@ -271,6 +373,7 @@ impl AukiPeer {
 impl Drop for AukiPeer {
     fn drop(&mut self) {
         if !self.closed {
+            drop(self.discovery_publisher.take());
             self.protocols.abort_all();
         }
     }
@@ -301,6 +404,10 @@ pub enum AukiPeerError {
     RelayChangedDuringStartup,
     #[error("relay authority or provider lease reached its safety deadline during startup")]
     RelayAuthorityEndedDuringStartup,
+    #[error("browser relay runtime stopped while DDS advertisement startup was completing")]
+    RelayStoppedDuringDiscoveryStartup,
+    #[error("DDS peer discovery failed: {0}")]
+    Discovery(#[from] AukiDiscoveryError),
     #[error("Web Peer shutdown was incomplete: {details}")]
     Shutdown { details: String },
 }
@@ -308,15 +415,23 @@ pub enum AukiPeerError {
 pub type AukiPeerStartError = AukiPeerError;
 pub type AukiPeerShutdownError = AukiPeerError;
 
-fn shutdown_details(protocols: Option<AukiProtocolError>, relay: Option<String>) -> String {
-    match (protocols, relay) {
-        (Some(protocols), Some(relay)) => {
-            format!("protocol cleanup failed: {protocols}; relay cleanup failed: {relay}")
-        }
-        (Some(protocols), None) => format!("protocol cleanup failed: {protocols}"),
-        (None, Some(relay)) => format!("relay cleanup failed: {relay}"),
-        (None, None) => unreachable!("shutdown details require at least one failure"),
+fn shutdown_details(
+    discovery: Option<AukiDiscoveryError>,
+    protocols: Option<AukiProtocolError>,
+    relay: Option<String>,
+) -> String {
+    let mut failures = Vec::new();
+    if let Some(discovery) = discovery {
+        failures.push(format!("discovery cleanup failed: {discovery}"));
     }
+    if let Some(protocols) = protocols {
+        failures.push(format!("protocol cleanup failed: {protocols}"));
+    }
+    if let Some(relay) = relay {
+        failures.push(format!("relay cleanup failed: {relay}"));
+    }
+    debug_assert!(!failures.is_empty());
+    failures.join("; ")
 }
 
 impl From<ReadyRelayError> for AukiPeerError {
@@ -595,6 +710,47 @@ impl RelayAuthorizationProvider for AuthoritySupervisor {
     }
 }
 
+struct BrowserDdsAuthorization {
+    authority: Weak<AuthoritySupervisor>,
+}
+
+#[async_trait(?Send)]
+impl DdsAuthorizationProvider for BrowserDdsAuthorization {
+    async fn authorization(&self) -> Result<DdsAuthorizationSnapshot, AukiDiscoveryError> {
+        let authority = self
+            .authority
+            .upgrade()
+            .ok_or(AukiDiscoveryError::Authentication)?;
+        authority.maintain().await.map_err(|error| {
+            warn!(error = %error, "browser authority maintenance before DDS request failed");
+            AukiDiscoveryError::Authentication
+        })?;
+        let state = authority.state.lock().await;
+        if state.stopped || state.current.expires_at <= Utc::now() {
+            return Err(AukiDiscoveryError::Authentication);
+        }
+        Ok(DdsAuthorizationSnapshot::new(
+            state.current.header.clone(),
+            state.current.revision,
+        ))
+    }
+
+    async fn refresh_after_unauthorized(
+        &self,
+        rejected_revision: u64,
+    ) -> Result<(), AukiDiscoveryError> {
+        self.authority
+            .upgrade()
+            .ok_or(AukiDiscoveryError::Authentication)?
+            .renew_after_unauthorized(rejected_revision)
+            .await
+            .map_err(|error| {
+                warn!(error = %error, "browser authority refresh after DDS 401 failed");
+                AukiDiscoveryError::Authentication
+            })
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 enum AuthoritySupervisorError {
     #[error("authority renewal failed: {0}")]
@@ -609,10 +765,62 @@ enum AuthoritySupervisorError {
     RevisionExhausted,
 }
 
+struct BrowserAdvertisementTask {
+    cancellation: CancellationToken,
+    cleanup_complete: CancellationToken,
+}
+
+#[derive(Clone)]
+struct BrowserAdvertisementLifecycle {
+    cancellation: CancellationToken,
+    cleanup_complete: CancellationToken,
+    attached: Rc<Cell<bool>>,
+}
+
+impl BrowserAdvertisementLifecycle {
+    fn new() -> Self {
+        Self {
+            cancellation: CancellationToken::new(),
+            cleanup_complete: CancellationToken::new(),
+            attached: Rc::new(Cell::new(false)),
+        }
+    }
+
+    fn attach(&self) -> BrowserAdvertisementTask {
+        assert!(
+            !self.attached.replace(true),
+            "browser DDS advertisement lifecycle may only be attached once"
+        );
+        BrowserAdvertisementTask {
+            cancellation: self.cancellation.clone(),
+            cleanup_complete: self.cleanup_complete.clone(),
+        }
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.cancellation.is_cancelled()
+    }
+
+    async fn stop_and_wait(&self) -> Option<String> {
+        self.cancellation.cancel();
+        if !self.attached.get() {
+            return None;
+        }
+        if cleanup_before_deadline(self.cleanup_complete.cancelled(), CLEANUP_STAGE_TIMEOUT)
+            .await
+            .is_none()
+        {
+            Some("DDS advertisement cleanup timed out".to_owned())
+        } else {
+            None
+        }
+    }
+}
+
 struct RelaySupervisor {
     stop: async_channel::Sender<()>,
     stopped: Shared<oneshot::Receiver<SupervisorExit>>,
-    authority: Arc<AuthoritySupervisor>,
+    advertisement: BrowserAdvertisementLifecycle,
 }
 
 impl RelaySupervisor {
@@ -628,6 +836,8 @@ impl RelaySupervisor {
         let (stopped_sender, stopped_receiver) = oneshot::channel();
         let booking_id = ready.booking_id;
         let task_authority = Arc::clone(&authority);
+        let advertisement = BrowserAdvertisementLifecycle::new();
+        let task_advertisement = advertisement.clone();
         spawn_local(async move {
             let end = supervise_relay(
                 &client,
@@ -641,14 +851,26 @@ impl RelaySupervisor {
             if matches!(&end, SupervisionEnd::Node(_) | SupervisionEnd::Failed(_)) {
                 protocols.abort_all();
             }
+            // Fence publication, then wait for its bounded compensating DELETE
+            // before invalidating the renewable authority used by that request.
+            // Lease expiry remains the crash/panic fallback.
+            let advertisement_failure = task_advertisement.stop_and_wait().await;
             task_authority.cancel_renewal();
-            let status = finish_supervision(end, &client, &task_authority, &node, booking_id).await;
+            let status = finish_supervision(
+                end,
+                &client,
+                &task_authority,
+                &node,
+                booking_id,
+                advertisement_failure,
+            )
+            .await;
             let _ = stopped_sender.send(status);
         });
         Self {
             stop,
             stopped: stopped_receiver.shared(),
-            authority,
+            advertisement,
         }
     }
 
@@ -658,12 +880,19 @@ impl RelaySupervisor {
         }
     }
 
+    fn attach_advertisement(&self) -> BrowserAdvertisementTask {
+        self.advertisement.attach()
+    }
+
+    fn advertisement_stopped(&self) -> bool {
+        self.advertisement.is_stopped()
+    }
+
     async fn wait_stopped(&self) -> SupervisorExit {
         wait_for_supervisor(self.stopped.clone()).await
     }
 
     async fn stop(&self) -> SupervisorExit {
-        self.authority.cancel_renewal();
         let _ = self.stop.try_send(());
         self.wait_stopped().await
     }
@@ -671,7 +900,6 @@ impl RelaySupervisor {
 
 impl Drop for RelaySupervisor {
     fn drop(&mut self) {
-        self.authority.cancel_renewal();
         let _ = self.stop.try_send(());
     }
 }
@@ -845,6 +1073,7 @@ async fn finish_supervision(
     authority: &AuthoritySupervisor,
     node: &BrowserNode,
     booking_id: Uuid,
+    advertisement_failure: Option<String>,
 ) -> SupervisorExit {
     let (success, root_failure, context) = match end {
         SupervisionEnd::Shutdown => (Some(SupervisorExit::Shutdown), None, "shutdown".to_owned()),
@@ -869,6 +1098,9 @@ async fn finish_supervision(
     };
 
     let mut cleanup_failures = Vec::new();
+    if let Some(failure) = advertisement_failure {
+        cleanup_failures.push(failure);
+    }
     match cleanup_before_deadline(node.shutdown(), CLEANUP_STAGE_TIMEOUT).await {
         Some(Ok(())) | Some(Err(auki_p2p::Error::SwarmStopped)) => {}
         Some(Err(error)) => cleanup_failures.push(format!("node cleanup failed: {error}")),
@@ -955,6 +1187,7 @@ impl SupervisorError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::task::Poll;
     use wasm_bindgen_test::wasm_bindgen_test;
 
     struct DropProbe(Rc<Cell<bool>>);
@@ -1001,5 +1234,44 @@ mod tests {
                 .is_none()
         );
         assert!(dropped.get());
+    }
+
+    #[wasm_bindgen_test(async)]
+    async fn relay_stop_waits_for_attached_advertisement_cleanup() {
+        let lifecycle = BrowserAdvertisementLifecycle::new();
+        let advertisement = lifecycle.attach();
+        let wait = lifecycle.stop_and_wait();
+        pin_mut!(wait);
+
+        assert!(matches!(futures::poll!(&mut wait), Poll::Pending));
+        assert!(advertisement.cancellation.is_cancelled());
+
+        advertisement.cleanup_complete.cancel();
+        assert_eq!(wait.await, None);
+    }
+
+    #[wasm_bindgen_test(async)]
+    async fn relay_stop_does_not_wait_when_no_advertisement_attached() {
+        let lifecycle = BrowserAdvertisementLifecycle::new();
+        assert_eq!(lifecycle.stop_and_wait().await, None);
+        assert!(lifecycle.is_stopped());
+    }
+
+    #[wasm_bindgen_test(async)]
+    async fn retained_discovery_authority_does_not_own_the_runtime() {
+        let authorization = BrowserDdsAuthorization {
+            authority: Weak::new(),
+        };
+        assert_eq!(
+            authorization.authorization().await.unwrap_err(),
+            AukiDiscoveryError::Authentication
+        );
+        assert_eq!(
+            authorization
+                .refresh_after_unauthorized(1)
+                .await
+                .unwrap_err(),
+            AukiDiscoveryError::Authentication
+        );
     }
 }

@@ -478,6 +478,14 @@ impl AuthSession {
         self.inner.principal_kind
     }
 
+    /// Validated DDS origin retained by this authenticated session.
+    ///
+    /// This exposes only non-secret environment configuration so higher-level
+    /// runtimes can address DDS with the same renewable session authority.
+    pub fn dds_base_url(&self) -> &str {
+        self.inner.client.inner.environment.dds_base_url()
+    }
+
     pub async fn accessible_domains(&self) -> Result<Vec<DomainChoice>> {
         let cancellation = CancellationToken::new();
         self.accessible_domains_with_cancellation(&cancellation)

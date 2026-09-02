@@ -8,7 +8,7 @@ use std::{
 
 use auki_p2p::{
     ApplicationProtocol, ApplicationProtocolServer, BrowserAuthenticatedRouteStream, BrowserNode,
-    Multiaddr, PeerId, SessionRequirements,
+    CandidateRouteKind, Multiaddr, PeerId, SessionRequirements, canonicalize_candidate_route,
 };
 use futures::{FutureExt, pin_mut};
 use futures_timer::Delay;
@@ -125,12 +125,24 @@ impl AukiPeerProtocols {
         if !self.inner.lifecycle.is_running() {
             return Err(AukiProtocolError::Stopped);
         }
+        let route = canonicalize_candidate_route(&route, expected_peer).map_err(|error| {
+            AukiProtocolError::InvalidRoute {
+                peer_id: expected_peer,
+                reason: error.to_string(),
+            }
+        })?;
+        if route.kind() != CandidateRouteKind::RelayWss {
+            return Err(AukiProtocolError::InvalidRoute {
+                peer_id: expected_peer,
+                reason: "browser peers require an exact WSS relay route".into(),
+            });
+        }
         let protocol =
             ApplicationProtocol::new(protocol_id.into()).map_err(AukiProtocolError::P2p)?;
         let opening = self
             .inner
             .node
-            .open_exact_route(expected_peer, route, protocol)
+            .open_exact_route(expected_peer, route.into_route(), protocol)
             .fuse();
         let cancelled = self.inner.lifecycle.cancelled().fuse();
         pin_mut!(opening, cancelled);

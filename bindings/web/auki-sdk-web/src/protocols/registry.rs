@@ -2,11 +2,18 @@ use std::cell::RefCell;
 
 use auki_protocols::registry::{
     RegistryClient, RegistryEndpoint, RegistryProvider,
-    v3::{ID, RegistryKind, RegistryListEntry, RegistryRequest, RegistryResponse},
+    v3::{
+        ID, RegistryEntryEnvelope, RegistryKind, RegistryListEntry, RegistryRequest,
+        RegistryResponse,
+    },
 };
-use auki_sdk::AuthenticatedPeer;
+use auki_registry::{
+    ClockRegistryEntry, DetectorRegistryEntry, DeviceModelRegistryEntry, FrameRegistryEntry,
+    MapRegistryEntry, SensorBody, SensorRegistryEntry,
+};
+use auki_sdk::{AuthenticatedPeer, PeerId};
 use js_sys::{Function, Promise};
-use serde::Serialize;
+use serde::{Serialize, de::DeserializeOwned};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
@@ -17,6 +24,220 @@ use crate::{
         parse_exact_target, peer_protocols, to_js_value,
     },
 };
+
+/// Validate and content-address one typed Registry entry in Rust.
+///
+/// The returned envelope derives its owner, Registry ID, canonical JSON, and
+/// XXH3-128 hash from the decoded entry. JavaScript supplies no parallel
+/// envelope metadata that could disagree with those typed fields.
+#[wasm_bindgen(
+    js_name = prepareRegistryEntry,
+    unchecked_return_type = "AukiRegistryEntryEnvelope"
+)]
+pub fn prepare_registry_entry(
+    #[wasm_bindgen(unchecked_param_type = "AukiRegistryKind")] kind: String,
+    #[wasm_bindgen(unchecked_param_type = "AukiRegistryEntry")] entry: JsValue,
+) -> Result<JsValue, JsValue> {
+    let envelope = match parse_registry_kind(&kind)? {
+        RegistryKind::Sensor => prepare_typed_registry_entry::<SensorRegistryEntry>(entry),
+        RegistryKind::Clock => prepare_typed_registry_entry::<ClockRegistryEntry>(entry),
+        RegistryKind::Frame => prepare_typed_registry_entry::<FrameRegistryEntry>(entry),
+        RegistryKind::Detector => prepare_typed_registry_entry::<DetectorRegistryEntry>(entry),
+        RegistryKind::Map => prepare_typed_registry_entry::<MapRegistryEntry>(entry),
+        RegistryKind::DeviceModel => {
+            prepare_typed_registry_entry::<DeviceModelRegistryEntry>(entry)
+        }
+    }?;
+    to_js_value("convert prepared Registry entry", &envelope)
+}
+
+trait PreparedRegistryEntry: DeserializeOwned {
+    const KIND: RegistryKind;
+
+    fn owner_peer_id(&self) -> &str;
+    fn registry_id(&self) -> &str;
+    fn canonical_bytes(&self) -> Vec<u8>;
+    fn hash(&self) -> String;
+
+    fn validate_entry(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+fn prepare_typed_registry_entry<T>(entry: JsValue) -> Result<RegistryEntryEnvelope, JsValue>
+where
+    T: PreparedRegistryEntry,
+{
+    let entry: T = serde_wasm_bindgen::from_value(entry).map_err(|error| {
+        js_context(
+            "prepare Registry entry",
+            format!("invalid {} entry: {error}", T::KIND),
+        )
+    })?;
+    entry.owner_peer_id().parse::<PeerId>().map_err(|error| {
+        js_context(
+            "prepare Registry entry",
+            format!("invalid {} peer_id: {error}", T::KIND),
+        )
+    })?;
+    auki_registry::validate_registry_id(entry.registry_id()).map_err(|error| {
+        js_context(
+            "prepare Registry entry",
+            format!("invalid {} id: {error}", T::KIND),
+        )
+    })?;
+    entry
+        .validate_entry()
+        .map_err(|error| js_context("prepare Registry entry", error))?;
+
+    let canonical_json = String::from_utf8(entry.canonical_bytes()).map_err(|error| {
+        js_context(
+            "prepare Registry entry",
+            format!("{} canonical JSON is not UTF-8: {error}", T::KIND),
+        )
+    })?;
+    Ok(RegistryEntryEnvelope {
+        kind: T::KIND,
+        id: entry.registry_id().to_owned(),
+        hash: entry.hash(),
+        canonical_json,
+    })
+}
+
+impl PreparedRegistryEntry for SensorRegistryEntry {
+    const KIND: RegistryKind = RegistryKind::Sensor;
+
+    fn owner_peer_id(&self) -> &str {
+        &self.peer_id
+    }
+
+    fn registry_id(&self) -> &str {
+        &self.sensor_id
+    }
+
+    fn canonical_bytes(&self) -> Vec<u8> {
+        self.canonical_bytes()
+    }
+
+    fn hash(&self) -> String {
+        self.hash()
+    }
+
+    fn validate_entry(&self) -> Result<(), String> {
+        match &self.body {
+            SensorBody::Camera(camera) => camera
+                .validate_image_layout()
+                .and_then(|()| camera.validate_calibration()),
+            SensorBody::Scalar(scalar) => scalar.validate(),
+            _ => Ok(()),
+        }
+        .map_err(|error| error.to_string())
+    }
+}
+
+macro_rules! prepared_registry_entry {
+    ($entry:ty, $kind:expr, $owner:ident, $id:ident) => {
+        impl PreparedRegistryEntry for $entry {
+            const KIND: RegistryKind = $kind;
+
+            fn owner_peer_id(&self) -> &str {
+                &self.$owner
+            }
+
+            fn registry_id(&self) -> &str {
+                &self.$id
+            }
+
+            fn canonical_bytes(&self) -> Vec<u8> {
+                self.canonical_bytes()
+            }
+
+            fn hash(&self) -> String {
+                self.hash()
+            }
+        }
+    };
+}
+
+prepared_registry_entry!(ClockRegistryEntry, RegistryKind::Clock, peer_id, clock_id);
+prepared_registry_entry!(
+    DetectorRegistryEntry,
+    RegistryKind::Detector,
+    peer_id,
+    detector_id
+);
+
+impl PreparedRegistryEntry for FrameRegistryEntry {
+    const KIND: RegistryKind = RegistryKind::Frame;
+
+    fn owner_peer_id(&self) -> &str {
+        &self.peer_id
+    }
+
+    fn registry_id(&self) -> &str {
+        &self.frame_id
+    }
+
+    fn canonical_bytes(&self) -> Vec<u8> {
+        self.canonical_bytes()
+    }
+
+    fn hash(&self) -> String {
+        self.hash()
+    }
+
+    fn validate_entry(&self) -> Result<(), String> {
+        self.validate().map_err(|error| error.to_string())
+    }
+}
+
+impl PreparedRegistryEntry for MapRegistryEntry {
+    const KIND: RegistryKind = RegistryKind::Map;
+
+    fn owner_peer_id(&self) -> &str {
+        &self.peer_id
+    }
+
+    fn registry_id(&self) -> &str {
+        &self.map_id
+    }
+
+    fn canonical_bytes(&self) -> Vec<u8> {
+        self.canonical_bytes()
+    }
+
+    fn hash(&self) -> String {
+        self.hash()
+    }
+
+    fn validate_entry(&self) -> Result<(), String> {
+        self.validate().map_err(|error| error.to_string())
+    }
+}
+
+impl PreparedRegistryEntry for DeviceModelRegistryEntry {
+    const KIND: RegistryKind = RegistryKind::DeviceModel;
+
+    fn owner_peer_id(&self) -> &str {
+        &self.peer_id
+    }
+
+    fn registry_id(&self) -> &str {
+        &self.device_model_id
+    }
+
+    fn canonical_bytes(&self) -> Vec<u8> {
+        self.canonical_bytes()
+    }
+
+    fn hash(&self) -> String {
+        self.hash()
+    }
+
+    fn validate_entry(&self) -> Result<(), String> {
+        self.validate().map_err(|error| error.to_string())
+    }
+}
 
 /// Outbound Registry v3 client backed by the portable Rust protocol.
 #[wasm_bindgen]
@@ -340,10 +561,219 @@ export type AukiRegistryProvider = (
 
 #[cfg(test)]
 mod tests {
+    use auki_registry::{
+        AxisConvention, AxisDirection, Camera, ClockBody, ClockMeta, DetectorBody, DeviceModelBody,
+        DeviceModelFormat, FiniteF64, Handedness, LengthUnit, MapBody, Qr, RegistryRef, Scope,
+        VoxelMap, VoxelValueModel,
+    };
     use js_sys::{Array, Reflect};
     use wasm_bindgen_test::wasm_bindgen_test;
 
     use super::*;
+
+    const PEER_ID: &str = "12D3KooWH3okqZcRaHwy4keYWo9eAaCDwhePYajtHsCM4Egsptan";
+
+    fn prepared<T: Serialize>(kind: &str, entry: &T) -> RegistryEntryEnvelope {
+        let value = serde_wasm_bindgen::to_value(entry).unwrap();
+        let prepared = prepare_registry_entry(kind.to_owned(), value).unwrap();
+        serde_wasm_bindgen::from_value(prepared).unwrap()
+    }
+
+    fn camera_sensor() -> SensorRegistryEntry {
+        SensorRegistryEntry {
+            peer_id: PEER_ID.into(),
+            sensor_id: "camera/front".into(),
+            body: SensorBody::Camera(Camera {
+                r#type: "rgb".into(),
+                width: 320,
+                height: 240,
+                frame_rate_hz: 5,
+                image_encoding: "jpeg".into(),
+                pixel_format: "rgb8".into(),
+                row_stride_bytes: 0,
+                color_space: "srgb".into(),
+                intrinsics_model: "none".into(),
+                distortion_model: "none".into(),
+                calibration: None,
+                frame: RegistryRef {
+                    peer_id: PEER_ID.into(),
+                    id: "camera/front/optical".into(),
+                    hash: "0".repeat(32),
+                },
+            }),
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn prepares_all_six_typed_registry_kinds() {
+        let sensor = camera_sensor();
+        let clock = ClockRegistryEntry {
+            peer_id: PEER_ID.into(),
+            session_id: "browser-session".into(),
+            clock_id: "session/monotonic".into(),
+            body: ClockBody::MonotonicClock(ClockMeta {
+                unit: "nanoseconds".into(),
+                monotonic: true,
+                epoch: None,
+                scope: Scope::DeviceLocal,
+            }),
+        };
+        let frame = FrameRegistryEntry::ros_optical(PEER_ID, "camera/front/optical");
+        let detector = DetectorRegistryEntry {
+            peer_id: PEER_ID.into(),
+            detector_id: "qr".into(),
+            body: DetectorBody::Qr(Qr {}),
+            input_types: Vec::new(),
+            output_types: vec!["qr".into()],
+        };
+        let map = MapRegistryEntry {
+            peer_id: PEER_ID.into(),
+            map_id: "map/world".into(),
+            body: MapBody::Voxel(VoxelMap {
+                frame: RegistryRef {
+                    peer_id: PEER_ID.into(),
+                    id: "world".into(),
+                    hash: "1".repeat(32),
+                },
+                voxel_size_m: FiniteF64(0.1),
+                chunk_dimension: 16,
+                value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                color_model: None,
+                semantic_classes: Vec::new(),
+            }),
+        };
+        let device_model = DeviceModelRegistryEntry {
+            peer_id: PEER_ID.into(),
+            device_model_id: "browser-camera".into(),
+            body: DeviceModelBody {
+                model_id: "browser-camera".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: "2".repeat(64),
+                    meshes: Vec::new(),
+                },
+                root_convention: None,
+            },
+        };
+
+        let cases = [
+            ("sensor", prepared("sensor", &sensor), sensor.hash()),
+            ("clock", prepared("clock", &clock), clock.hash()),
+            ("frame", prepared("frame", &frame), frame.hash()),
+            ("detector", prepared("detector", &detector), detector.hash()),
+            ("map", prepared("map", &map), map.hash()),
+            (
+                "device_model",
+                prepared("device_model", &device_model),
+                device_model.hash(),
+            ),
+        ];
+
+        for (kind, envelope, expected_hash) in cases {
+            assert_eq!(envelope.kind.as_str(), kind);
+            assert_eq!(envelope.hash, expected_hash);
+            assert_eq!(envelope.hash.len(), 32);
+            assert!(envelope.hash.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        }
+        assert_eq!(prepared("sensor", &sensor).id, sensor.sensor_id);
+        assert_eq!(prepared("clock", &clock).id, clock.clock_id);
+        assert_eq!(prepared("frame", &frame).id, frame.frame_id);
+        assert_eq!(prepared("detector", &detector).id, detector.detector_id);
+        assert_eq!(prepared("map", &map).id, map.map_id);
+        assert_eq!(
+            prepared("device_model", &device_model).id,
+            device_model.device_model_id
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn prepared_envelope_uses_the_typed_entry_identity_and_canonical_json() {
+        let sensor = camera_sensor();
+        let envelope = prepared("sensor", &sensor);
+
+        assert_eq!(envelope.kind, RegistryKind::Sensor);
+        assert_eq!(envelope.id, "camera/front");
+        assert_eq!(envelope.hash, sensor.hash());
+        assert_eq!(
+            envelope.canonical_json.as_bytes(),
+            sensor.canonical_bytes().as_slice()
+        );
+        let decoded: SensorRegistryEntry =
+            serde_wasm_bindgen::from_value(js_sys::JSON::parse(&envelope.canonical_json).unwrap())
+                .unwrap();
+        assert_eq!(decoded.peer_id, PEER_ID);
+        assert_eq!(decoded.sensor_id, envelope.id);
+    }
+
+    #[wasm_bindgen_test]
+    fn rejects_kind_shape_mismatches_and_invalid_typed_semantics() {
+        let sensor = camera_sensor();
+        let wrong_kind = prepare_registry_entry(
+            "frame".into(),
+            serde_wasm_bindgen::to_value(&sensor).unwrap(),
+        )
+        .unwrap_err();
+        assert!(
+            String::from(js_sys::Error::from(wrong_kind).message()).contains("invalid frame entry")
+        );
+
+        let mut invalid_owner = sensor.clone();
+        invalid_owner.peer_id = "not-a-peer-id".into();
+        let invalid_owner = prepare_registry_entry(
+            "sensor".into(),
+            serde_wasm_bindgen::to_value(&invalid_owner).unwrap(),
+        )
+        .unwrap_err();
+        assert!(
+            String::from(js_sys::Error::from(invalid_owner).message())
+                .contains("invalid sensor peer_id")
+        );
+
+        let mut invalid_id = sensor.clone();
+        invalid_id.sensor_id = "camera front".into();
+        let invalid_id = prepare_registry_entry(
+            "sensor".into(),
+            serde_wasm_bindgen::to_value(&invalid_id).unwrap(),
+        )
+        .unwrap_err();
+        assert!(
+            String::from(js_sys::Error::from(invalid_id).message()).contains("invalid sensor id")
+        );
+
+        let mut invalid_camera = sensor;
+        let SensorBody::Camera(camera) = &mut invalid_camera.body else {
+            unreachable!()
+        };
+        camera.width = 0;
+        let invalid_camera = prepare_registry_entry(
+            "sensor".into(),
+            serde_wasm_bindgen::to_value(&invalid_camera).unwrap(),
+        )
+        .unwrap_err();
+        assert!(
+            String::from(js_sys::Error::from(invalid_camera).message())
+                .contains("invalid image layout")
+        );
+
+        let invalid_frame = FrameRegistryEntry {
+            peer_id: PEER_ID.into(),
+            frame_id: "camera/front/optical".into(),
+            handedness: Handedness::Right,
+            axes: AxisConvention {
+                x: AxisDirection::Forward,
+                y: AxisDirection::Backward,
+                z: AxisDirection::Up,
+            },
+            units: LengthUnit::Meters,
+        };
+        let invalid_frame = prepare_registry_entry(
+            "frame".into(),
+            serde_wasm_bindgen::to_value(&invalid_frame).unwrap(),
+        )
+        .unwrap_err();
+        assert!(
+            String::from(js_sys::Error::from(invalid_frame).message()).contains("invalid axes")
+        );
+    }
 
     #[wasm_bindgen_test]
     fn parses_only_the_six_exact_snake_case_registry_kinds() {

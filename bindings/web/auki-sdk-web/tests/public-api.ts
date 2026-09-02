@@ -17,6 +17,9 @@ import {
   AukiStreamClient,
   AukiStreamEndpoint,
   AukiStreamSubscription,
+  decodeCameraFrameImage,
+  encodeCameraFrameImage,
+  prepareRegistryEntry,
   type AukiAuthenticatedPeer,
   type AukiBlobReceipt,
   type AukiBlobProvider,
@@ -34,6 +37,8 @@ import {
   type AukiParticipantInfo,
   type AukiInfoProvider,
   type AukiRegistryEntry,
+  type AukiRegistryEntryEnvelope,
+  type AukiRegistryKind,
   type AukiRegistryListEntry,
   type AukiRegistryProvider,
   type AukiRegistryProviderRequest,
@@ -125,6 +130,15 @@ const registryEntry: Promise<AukiRegistryEntry> = new AukiRegistryClient(peer).f
   "camera",
   "0123456789abcdef0123456789abcdef",
 );
+async function checkRegistryEntryPreparation(): Promise<void> {
+  const entry = await registryEntry;
+  const envelope: AukiRegistryEntryEnvelope = prepareRegistryEntry("sensor", entry);
+  const kind: AukiRegistryKind = envelope.kind;
+  const id: string = envelope.id;
+  const hash: string = envelope.hash;
+  const canonicalJson: string = envelope.canonical_json;
+  void [kind, id, hash, canonicalJson];
+}
 const registryProvider: AukiRegistryProvider = (
   _requester,
   request: AukiRegistryProviderRequest,
@@ -170,6 +184,10 @@ async function checkMessageSender(): Promise<void> {
 }
 
 const streamKind: AukiStreamPayloadKind = "camera";
+const encodedCameraFrame: Uint8Array = encodeCameraFrameImage(
+  new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+);
+const decodedCameraImage: Uint8Array = decodeCameraFrameImage(encodedCameraFrame);
 const streamFrom: AukiStreamReadFrom = { kind: "latest" };
 const streamRequest: AukiStreamRequest = {
   sourcePeerId: target.peerId,
@@ -247,6 +265,7 @@ void [
   catalogClose,
   registryList,
   registryEntry,
+  checkRegistryEntryPreparation,
   registryEndpoint,
   registryClose,
   blob,
@@ -259,6 +278,8 @@ void [
   checkStreamConsumer,
   streamEndpoint,
   streamClose,
+  encodedCameraFrame,
+  decodedCameraImage,
   browserRoute,
   nativeRoute,
   discoverOnlyPeer,

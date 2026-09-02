@@ -12,7 +12,10 @@ use auki_protocols::stream::v2::decline_reason;
 use auki_protocols::stream::{
     SourceStream, StreamClient, StreamDispatch, StreamEndpoint, StreamEntry, StreamError,
     StreamItem, StreamProvider, StreamSubscription, SubscriptionEntries,
-    v2::{DeclineReason, EndReason, ID, ReadFrom, StreamManifest, StreamRequest, end_reason},
+    v2::{
+        DeclineReason, EndReason, ID, MAX_FRAME_BYTES, ReadFrom, StreamManifest, StreamRequest,
+        end_reason,
+    },
 };
 use auki_sdk::AuthenticatedPeer;
 use futures::{FutureExt, StreamExt, pin_mut};
@@ -34,6 +37,7 @@ const PAYLOAD_KIND_NAMES: &str =
     "camera, point_cloud, joint_encoders, audio, scalar, pose, detection, or map";
 const REMOTE_PROVIDER_FAILURE_DETAIL: &str = "Stream provider failed";
 const REMOTE_SOURCE_FAILURE_DETAIL: &str = "Stream provider source failed";
+const CAMERA_FRAME_CODEC_OVERHEAD_BYTES: usize = 1_024;
 
 #[cfg(not(test))]
 #[wasm_bindgen]
@@ -49,6 +53,50 @@ fn report_local_stream_error(context: &str, detail: &str) {
 
 #[cfg(test)]
 fn report_local_stream_error(_context: &str, _detail: &str) {}
+
+/// Encode opaque camera-frame bytes with the canonical Auki protobuf type.
+///
+/// The initial browser camera demo publishes independently decodable JPEG
+/// images and therefore omits per-frame dynamic intrinsics. Static camera
+/// metadata belongs in the Sensor Registry entry referenced by the Stream
+/// manifest.
+#[wasm_bindgen(js_name = encodeCameraFrameImage)]
+pub fn encode_camera_frame_image(frame: Uint8Array) -> Result<Uint8Array, JsValue> {
+    let frame = frame.to_vec();
+    let maximum = MAX_FRAME_BYTES as usize - CAMERA_FRAME_CODEC_OVERHEAD_BYTES;
+    if frame.len() > maximum {
+        return Err(js_context(
+            "encode CameraFrame image",
+            format!("image is {} bytes; maximum is {maximum}", frame.len()),
+        ));
+    }
+    Ok(Uint8Array::from(
+        CameraFrame {
+            dynamic_intrinsics: None,
+            frame,
+        }
+        .encode_to_vec()
+        .as_slice(),
+    ))
+}
+
+/// Decode canonical Auki camera-frame protobuf bytes into their opaque image
+/// payload.
+#[wasm_bindgen(js_name = decodeCameraFrameImage)]
+pub fn decode_camera_frame_image(payload: Uint8Array) -> Result<Uint8Array, JsValue> {
+    if payload.length() > MAX_FRAME_BYTES {
+        return Err(js_context(
+            "decode CameraFrame image",
+            format!(
+                "payload is {} bytes; maximum is {MAX_FRAME_BYTES}",
+                payload.length()
+            ),
+        ));
+    }
+    let frame = CameraFrame::decode(payload.to_vec().as_slice())
+        .map_err(|error| js_context("decode CameraFrame", error))?;
+    Ok(Uint8Array::from(frame.frame.as_slice()))
+}
 
 /// Outbound Stream v2 client backed by the portable Rust protocol.
 #[wasm_bindgen]
@@ -1069,6 +1117,16 @@ mod tests {
     use wasm_bindgen_test::wasm_bindgen_test;
 
     use super::*;
+
+    #[wasm_bindgen_test]
+    fn camera_frame_codec_uses_the_canonical_protobuf_shape() {
+        let jpeg = [0xff, 0xd8, 0xff, 0xd9];
+        let encoded = encode_camera_frame_image(Uint8Array::from(jpeg.as_slice())).unwrap();
+        assert_eq!(encoded.to_vec(), [0x12, 0x04, 0xff, 0xd8, 0xff, 0xd9]);
+        assert_eq!(decode_camera_frame_image(encoded).unwrap().to_vec(), jpeg);
+
+        assert!(decode_camera_frame_image(Uint8Array::from([0xff].as_slice())).is_err());
+    }
 
     fn property(value: &JsValue, name: &str) -> JsValue {
         Reflect::get(value, &JsValue::from_str(name)).unwrap()

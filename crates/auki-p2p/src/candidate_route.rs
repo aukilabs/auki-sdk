@@ -1,5 +1,7 @@
 //! Target-neutral validation of untrusted route hints.
 
+use std::borrow::Cow;
+
 use libp2p::{multiaddr::Protocol, Multiaddr, PeerId};
 
 use crate::relay::canonicalize_provider_base;
@@ -107,26 +109,30 @@ fn canonicalize_direct_route(
         [network, Protocol::Tcp(port), Protocol::P2p(peer_id)] => (network, *port, Some(*peer_id)),
         _ => return Err(CandidateRouteError::InvalidGrammar),
     };
-    if !matches!(
-        network,
-        Protocol::Ip4(_)
-            | Protocol::Ip6(_)
-            | Protocol::Dns(_)
-            | Protocol::Dns4(_)
-            | Protocol::Dns6(_)
-    ) || port == 0
-    {
+    if port == 0 {
         return Err(CandidateRouteError::InvalidGrammar);
     }
     if target_peer_id.is_some_and(|peer_id| peer_id != expected_target_peer_id) {
         return Err(CandidateRouteError::TargetPeerMismatch);
     }
 
-    let mut canonical = route.clone();
-    if target_peer_id.is_some() {
-        canonical.pop();
+    let network = match network {
+        Protocol::Ip4(address) => Protocol::Ip4(*address),
+        Protocol::Ip6(address) => Protocol::Ip6(*address),
+        Protocol::Dns(host) => Protocol::Dns(canonical_dns_host(host)?),
+        Protocol::Dns4(host) => Protocol::Dns4(canonical_dns_host(host)?),
+        Protocol::Dns6(host) => Protocol::Dns6(canonical_dns_host(host)?),
+        _ => return Err(CandidateRouteError::InvalidGrammar),
+    };
+    Ok(Multiaddr::empty().with(network).with(Protocol::Tcp(port)))
+}
+
+fn canonical_dns_host(host: &str) -> CandidateRouteResult<Cow<'static, str>> {
+    let host = host.strip_suffix('.').unwrap_or(host);
+    if host.is_empty() {
+        return Err(CandidateRouteError::InvalidGrammar);
     }
-    Ok(canonical)
+    Ok(Cow::Owned(host.to_ascii_lowercase()))
 }
 
 fn canonicalize_relay_route(
@@ -196,6 +202,18 @@ mod tests {
             canonical.route().to_string(),
             "/dns6/peer.example.com/tcp/9443"
         );
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn direct_dns_route_normalizes_case_and_trailing_dot() {
+        let target = peer_id();
+        let candidate = route(format!("/dns4/ROBOT.LOCAL./tcp/9443/p2p/{target}"));
+
+        let canonical = canonicalize_candidate_route(&candidate, target).unwrap();
+
+        assert_eq!(canonical.kind(), CandidateRouteKind::DirectTcp);
+        assert_eq!(canonical.route().to_string(), "/dns4/robot.local/tcp/9443");
     }
 
     #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]

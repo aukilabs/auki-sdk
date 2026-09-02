@@ -131,14 +131,14 @@ artifact.
 
 [`examples/portable-echo`](examples/portable-echo) demonstrates one bounded
 Rust protocol shared by native, Web, Python, and Swift applications. Its hosts
-prove that exact relay routes interoperate across those runtimes; they do not
-provide discovery.
+opt in to DDS discovery and keep custom-protocol application code small.
 
 The [standard protocol playground](examples/standard-protocols) exposes matching
 client and serving roles for all six families in Rust, Web/Wasm, Python, and
-Swift/iOS. It proves the same Rust wire implementations across native, browser,
-Python, and iOS simulator peers; portable echo remains the small custom-protocol
-authoring example.
+Swift/iOS. Its protected matrix proves the same Rust wire implementations across
+Native, Python, Browser A, and Browser B. A separate physical-iPhone/native gate
+proves all six families in both directions; portable echo remains the small
+custom-protocol authoring example.
 
 ## Release status
 

@@ -192,6 +192,9 @@ small custom-protocol reference. The
 [standard protocol iOS app](../../examples/standard-protocols/swift/README.md)
 mounts Info, Catalog, Registry, Blob, Message, and Stream through the same Rust
 implementations and probes native or browser peers through exact relay routes.
+The live physical-device gate currently proves iPhone-to-native and
+native-to-iPhone traffic for all six families; Swift/browser remains a separate
+manual gate.
 
 ## Opt-in discovery
 

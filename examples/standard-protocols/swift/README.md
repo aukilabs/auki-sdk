@@ -45,6 +45,12 @@ then paste a native, Python, Web, or second iOS peer card and select **Probe all
 six**. Alternatively, select **Discover**, choose the peer, and select **Probe
 selected peer**.
 
+The same flow runs on a physical iPhone. The live physical-iPhone/native-Rust
+gate uses **discover and advertise** on both peers, discovers each through DDS,
+and probes all six protocol families in both directions. The current dev relay
+publishes `/dns4` routes, so this gate does not yet cover IPv6-only/NAT64
+networks.
+
 ## Offline simulator tests
 
 ```sh

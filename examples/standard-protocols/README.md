@@ -95,8 +95,14 @@ their relay bookings, Chromium, and temporary state have shut down cleanly.
 The [Swift playground](swift/README.md) uses the same seven wire IDs and six
 family checks. Its offline simulator tests lock the portable fixtures, peer-card
 parsing, and discovery-route selection; they do not make network connections.
-Live Swift/native and Swift/browser interoperability is currently a separate
-manual check, so the protected four-peer matrix does not require Xcode.
+Live Swift interoperability is a separate manual gate, so the protected
+four-peer matrix does not require Xcode. The physical-device gate has proven a
+Swift peer and a native peer discovering and probing each other through the dev
+relay, with all six protocol families passing in both directions.
+
+The current dev relay advertises `/dns4` routes. The physical-device gate
+therefore covers an IPv4-reachable network; IPv6-only/NAT64 support requires
+family-neutral `/dns` relay routes.
 
 ## Try the browser node manually
 

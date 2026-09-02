@@ -874,6 +874,19 @@ impl AukiPeer {
             .await
     }
 
+    /// Replace dial candidates for one expected peer after start.
+    ///
+    /// Empty `routes` clears the peer. Protocol `open` / client `fetch` use
+    /// these candidates; phonebooks should call this after Discovery poll.
+    pub fn replace_peer_routes(
+        &self,
+        expected_peer: PeerId,
+        routes: impl IntoIterator<Item = Multiaddr>,
+    ) -> Result<(), AukiProtocolError> {
+        self.protocols
+            .replace_peer_routes(expected_peer, routes)
+    }
+
     /// Current facade lifecycle and readiness snapshot.
     pub fn status(&self) -> AukiPeerStatus {
         self.status.status()

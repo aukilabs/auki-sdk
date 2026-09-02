@@ -31,6 +31,11 @@ The default interface stays focused on the camera experience:
 - camera and quality selection where the platform supports them; and
 - start, pause, resume, snapshot, and stop actions.
 
+Start and stop are local publisher lifecycle controls: they mount or close the
+camera endpoints and update discovery publication. Pause, resume, quality,
+camera selection, and snapshot are remote Message controls available only after
+the publisher approves the requester.
+
 A separate **Protocol Inspector** reveals the technical detail. On desktop it
 can be a side drawer; on mobile it can be a bottom sheet. The camera remains
 usable while the inspector is closed, and raw protocol detail appears only on
@@ -50,7 +55,7 @@ publish credentials, bearer authority, routes, or Domain membership.
 The demo may expose a minimal Info document to authenticated same-Domain peers,
 but receiving it does not place the requester on the camera access list.
 
-### Catalog v3/v4: advertise available resources
+### Catalog v3: advertise available resources
 
 Catalog advertises currently usable camera resources and live Message channels.
 A camera row identifies its source, writer, stable resource ID, availability,
@@ -236,6 +241,8 @@ platform-specific background execution policy are non-goals.
   current session before exposing camera resources or bytes.
 - One publishes a webcam through an exact WSS relay route.
 - The other resolves its metadata and displays the feed.
+- The same application supports swapping publisher and viewer roles in a second
+  run; simultaneous bidirectional publishing is not required for Phase 1.
 - The Protocol Inspector explains Info, Catalog, Registry, and Stream activity.
 - Message pause/resume and snapshot request are available.
 - Blob fetches and verifies the requested snapshot.
@@ -267,8 +274,9 @@ platform-specific background execution policy are non-goals.
 
 The first meaningful demo is complete when:
 
-1. two browser tabs can publish and consume a webcam feed in both directions over
-   authenticated, relay-backed `AukiPeer` connections;
+1. one browser tab can publish a webcam and a second can consume it over an
+   authenticated, relay-backed `AukiPeer` connection, and the same flow passes
+   again after swapping publisher and viewer roles;
 2. the opt-in DDS tracker can advertise and discover a publisher by the exact
    Stream protocol ID, while manual peer-card entry remains available;
 3. the target Peer ID, selected Domain, and exact route are verified before

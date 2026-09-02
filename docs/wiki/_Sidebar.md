@@ -10,6 +10,7 @@
 
 - [Overview](Design-and-Architecture)
 - [Component execution](Component-Execution)
+- [Typed dataflow prototype](Design-Typed-Dataflow-Prototype)
 - [The Five Questions](The-Five-Questions)
 - [Glossary](Glossary)
 - [Crate map](Crate-Map)

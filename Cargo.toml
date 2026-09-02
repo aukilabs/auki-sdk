@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
+    "experiments/typed-dataflow",
+    "experiments/typed-dataflow-volume-monitor",
     "crates/auki-hash",
     "crates/auki-geometry",
     "crates/auki-maps",

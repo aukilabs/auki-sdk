@@ -1,0 +1,44 @@
+[package]
+name = "auki-typed-dataflow-experiment"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+auki-datatypes = { path = "../../crates/auki-datatypes", optional = true }
+auki-session = { path = "../../crates/auki-session", optional = true }
+crossbeam-channel = "0.5"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[features]
+current-sdk-baseline = ["dep:auki-datatypes", "dep:auki-session"]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[[bin]]
+name = "typed-dataflow-demo"
+path = "src/bin/demo.rs"
+
+[[bin]]
+name = "typed-dataflow-bench"
+path = "src/bin/benchmark.rs"
+
+[[bin]]
+name = "observable-operable-demo"
+path = "src/bin/observable_operable_demo.rs"
+
+[[bin]]
+name = "observation-request-bench"
+path = "src/bin/observation_request_benchmark.rs"
+
+[[bin]]
+name = "dataflow-scheduler-stress"
+path = "src/bin/scheduler_stress_benchmark.rs"
+
+[[bin]]
+name = "operable-bench"
+path = "src/bin/operable_benchmark.rs"

@@ -1,0 +1,17 @@
+[package]
+name = "auki-typed-dataflow-volume-monitor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+auki-typed-dataflow-experiment = { path = "../typed-dataflow" }
+serde = { version = "1", features = ["derive", "rc"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[[bin]]
+name = "typed-dataflow-volume-monitor"
+path = "src/main.rs"

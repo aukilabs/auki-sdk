@@ -42,6 +42,28 @@ networking:
 - Buffer eviction and cancellation release ownership without invalidating
   payload leases held elsewhere.
 
+The complete network-independent pass adds the public construction and
+retention APIs that the first clean-room attempt found missing:
+
+- `PeerRuntime::component` constructs a live `Component` without mutating the
+  Catalog;
+- `Component::configured_observable` and `Component::operable` bind typed live
+  behavior to declared contracts;
+- `Component::expose` projects into the Catalog only after every declared
+  interface is live;
+- direct Catalog mutation is crate-private;
+- `ContractType` prevents a Rust payload or instruction type from contradicting
+  its advertised datatype;
+- camera, audio, Gauge, and structured payload contracts have distinct typed
+  fields instead of one optional-property bag;
+- `PeerRuntime::capture_buffer` and `capture_episode` construct live Product
+  behavior and Catalog entries together;
+- Operables support bounded outstanding work, serial acceptance ordering,
+  inspectable asynchronous completion, cancellation, deadlines, and failure;
+- Buffer duration retention declares source-time or arrival-time policy;
+- external storage is exercised with explicit leases, accounting, and
+  serialized readback.
+
 The Camera vertical slice currently represents a configuration change with a
 replacement Output:
 
@@ -125,15 +147,23 @@ Eviction and transport loss remain visible because source sequence numbers are
 preserved. A reader that falls behind receives an explicit gap with both the
 requested sequence and the first sequence still available.
 
+Source timestamps are mandatory. A Buffer chooses `StrictlyIncreasing`,
+`NonDecreasing`, or `Unordered` source-time handling and independently chooses
+source or arrival time for duration eviction. Unordered source time cannot be
+used for source-time duration eviction.
+
 ## Run it
 
 ```sh
 cargo run -p auki-typed-dataflow-experiment --bin typed-dataflow-demo
 cargo run -p auki-typed-dataflow-experiment --bin observable-operable-demo
+cargo run -p auki-typed-dataflow-volume-monitor
 cargo run --release -p auki-typed-dataflow-experiment \
   --bin observation-request-bench -- --iterations 100000
 cargo run --release -p auki-typed-dataflow-experiment \
   --bin dataflow-scheduler-stress
+cargo run --release -p auki-typed-dataflow-experiment \
+  --bin operable-bench -- --iterations 50000
 cargo test -p auki-typed-dataflow-experiment --all-targets
 cargo test -p auki-typed-dataflow-experiment --doc
 cargo run --release -p auki-typed-dataflow-experiment \
@@ -153,12 +183,17 @@ lifecycle results are in
 failure and scheduler results are in
 [`RESULTS-DATAFLOW-STRESS.md`](RESULTS-DATAFLOW-STRESS.md).
 
-The next agent-friendliness phase is specified by
+The complete network-independent pass, second clean-room implementation,
+timestamp/external-storage evidence, chunk recommendation, and latest benchmark
+controls are recorded in
+[`RESULTS-COMPLETE-PROTOTYPE.md`](RESULTS-COMPLETE-PROTOTYPE.md).
+
+The remaining blind agent-friendliness validation is specified by
 [`CLEAN-ROOM-VOLUME-MONITOR-TASK.md`](CLEAN-ROOM-VOLUME-MONITOR-TASK.md) and
 [`CLEAN-ROOM-EVALUATION-RUBRIC.md`](CLEAN-ROOM-EVALUATION-RUBRIC.md). Its
 initial public-API feasibility gate failed before a generic live Component
-could be constructed; the result and proposed smallest next step are recorded
-in [`CLEAN-ROOM-FIRST-ATTEMPT.md`](CLEAN-ROOM-FIRST-ATTEMPT.md).
+could be constructed. That failure and the now-completed reviewed second pass
+are recorded in [`CLEAN-ROOM-FIRST-ATTEMPT.md`](CLEAN-ROOM-FIRST-ATTEMPT.md).
 
 This code is intentionally disposable. The design should be rejected or
 changed if the evidence does not support it.

@@ -623,35 +623,35 @@ This table describes the branch as implemented, not the intended final state:
   complete gate.
 - **Partial** means useful code or evidence exists, but some part of the stated
   gate is not tested.
-- **Not implemented** means the gate depends on a fixture, policy, or mechanism
-  the experiment does not yet contain.
+- **Experimentally resolved** means evidence caused the proposed requirement to
+  be rejected rather than implemented literally.
 
-Current total: **15 implemented, 11 partial, 4 not implemented**.
+Current total: **29 implemented or experimentally resolved, 1 partial**.
 
 | # | Correctness gate | Status | Current evidence or missing work |
 |---:|---|---|---|
-| 1 | A Component may expose only Observables, only Operables, or both. | **Partial** | `ComponentManifest` permits all three shapes, but there is no generic public Component constructor and no test instantiates each shape. |
-| 2 | Incompatible typed Observable paths do not compile. | **Partial** | The compile-fail documentation test proves incompatible `OutputPort<T>` and `InputPort<U>` connections fail. Add an Observable-specific compile-fail test after generic Observable construction is public. |
-| 3 | Incompatible typed Operable instructions do not compile. | **Partial** | `Operable<I, R>` is statically typed, but there is no compile-fail test for an incorrect instruction or result type. |
-| 4 | Local and transported Observable paths preserve selection and delivery semantics. | **Partial** | Tests cover local live delivery, serialized live delivery, and serialized retained queries. They do not run every selection and delivery policy through both paths. |
-| 5 | Local and transported Operable paths produce equivalent typed results. | **Partial** | Both adapters can invoke the same typed Operable and the demo exercises serialized invocation, but no automated equivalence test compares the two results and errors. |
+| 1 | A Component may expose only Observables, only Operables, or both. | **Implemented** | Public `PeerRuntime::component` tests construct and expose all three shapes. Exposure requires every declared cluster interface to have a live handle. |
+| 2 | Incompatible typed Observable paths do not compile. | **Implemented** | Compile-fail tests cover raw typed ports and a public `Observable<AudioBlock>` connected to a Gauge observation input. |
+| 3 | Incompatible typed Operable instructions do not compile. | **Implemented** | A compile-fail test passes `PlayAudio` to `Operable<SetResolution, Applied>`. `ContractType` also ties public construction to advertised instruction/result datatypes. |
+| 4 | Local and transported Observable paths preserve selection and delivery semantics. | **Implemented** | The same output is exercised locally and through serialization with queued `EverySelected` and `CoalesceLatest`; retained latest/time-range queries are also exercised locally and through serialization. |
+| 5 | Local and transported Operable paths produce equivalent typed results. | **Implemented** | `local_and_serialized_paths_preserve_semantics_and_caller_identity` compares typed results through both adapters; authorization/exposure failures remain target-attributed. |
 | 6 | An Operable invocation visibly changes Component behavior. | **Implemented** | Camera resolution invocation replaces the configured contract, and subsequent frame validation and metadata use the new resolution. |
 | 7 | Private and local-only interfaces are absent from the cluster Catalog. | **Implemented** | `local_operable_is_not_discoverable_or_remotely_invocable` verifies the local-only interface is omitted; the private reset method is never manifested. |
 | 8 | A remote Component cannot invoke a local-only Operable. | **Implemented** | The remote invocation test returns `InvocationError::NotExposed`. |
-| 9 | Caller Peer and Component identity reach the Operable invocation context. | **Partial** | Both identities are carried by `InvocationContext`, and Peer identity drives authorization. No handler test yet asserts the caller Component identity. |
+| 9 | Caller Peer and Component identity reach the Operable invocation context. | **Implemented** | A target handler asserts both local/remote Peer identity and `local-controller`/`remote-controller` Component identity. |
 | 10 | Eight observers share one large immutable payload allocation. | **Implemented** | `owning_fanout_shares_one_envelope_and_payload` checks one envelope and one 6 MiB payload allocation across eight consumers. |
 | 11 | A stalled dynamic observer cannot create unbounded memory growth. | **Implemented** | Bounded Every and one-slot latest queues are tested, including a blocked observer isolated from unrelated work. |
 | 12 | Adding or removing a Buffer does not change Observable payload semantics. | **Implemented** | The Camera/Buffer/local-detector test verifies the Buffer and local observer see the same immutable payload while serialization creates the explicit remote copy. |
-| 13 | Dropping an observation or invocation handle releases owned runtime state. | **Partial** | Observation and connection cancellation release relationships and queued ownership. Operable invocation has no continuing handle to test. |
+| 13 | Dropping an observation or invocation handle releases owned runtime state. | **Implemented** | Observation cancellation clears queues. `InvocationHandle` cancellation is inspectable; a blocked-scheduler test proves the queued instruction is released when its cancelled job drains and the per-Operable pending count returns to zero. |
 | 14 | No local static path serializes or performs disk I/O. | **Partial** | The static path is an in-process concrete callback and its benchmark runs without serde or storage APIs, but there is no instrumentation test proving zero serialization and disk calls. |
-| 15 | Returned Component errors create an explicit inspectable relationship state. | **Partial** | Returned observer errors and panics produce failed observation handles. Operable invocation has typed errors but no continuing invocation relationship state. |
+| 15 | Returned Component errors create an explicit inspectable relationship state. | **Implemented** | Observation and invocation handles expose terminal failure. Operable rejection, panic, deadline, cancellation, and overload remain distinguishable from observation loss. |
 | 16 | An asynchronous panic cannot silently kill a worker while its handle remains live. | **Implemented** | Shared-scheduler panic tests produce a failed handle, keep the worker pool healthy, and preserve unrelated observers. The result document records the experimental panic boundary. |
-| 17 | One failed observer or Operable invocation does not terminate unrelated work. | **Partial** | Observer isolation is tested for returned errors and panics. Concurrent Operable isolation remains Phase 2B work. |
-| 18 | Buffers handle equal, missing, and out-of-order source timestamps under an explicit policy. | **Not implemented** | Existing duration tests use monotonic timestamps. Missing timestamps, equal timestamps, backward clocks, and out-of-order arrival remain unspecified. |
-| 19 | Time-range queries and duration eviction use a declared time basis without mixing source and arrival time. | **Partial** | Queries validate the declared clock and both mechanisms currently use envelope timestamps. Arrival-time disagreement and invalid source-time behavior are not modeled or tested. |
-| 20 | An Episode and Buffer share sealed retained storage without copying and release it independently. | **Not implemented** | Promotion shares per-observation `Arc<Envelope<T>>` storage. Episodes do not reference the chunk builder's sealed chunks. |
-| 21 | Evicting externally backed payloads cannot recycle storage while another lease exists. | **Not implemented** | Ordinary `Arc` lease survival is tested. No external, pooled, GPU, or DMA-backed payload fixture exists. |
-| 22 | External-memory accounting contributes truthful bytes to hard Buffer limits. | **Not implemented** | Buffers accept an explicit byte-accounting function and enforce limits, but no external-allocation accounting fixture exists. |
+| 17 | One failed observer or Operable invocation does not terminate unrelated work. | **Implemented** | Observer errors/panics and Operable panics are contained; healthy observers, later Operables, and the shared worker pool remain usable. |
+| 18 | Buffers handle equal, missing, and out-of-order source timestamps under an explicit policy. | **Implemented** | Buffers choose strict, non-decreasing, or unordered source timestamps. Equal/backward cases are tested. Source timestamps are required by `Envelope` and a missing value fails to compile. |
+| 19 | Time-range queries and duration eviction use a declared time basis without mixing source and arrival time. | **Implemented** | `BufferTimePolicy` separates source ordering from source/arrival duration basis. Unordered-source/source-duration construction is rejected; deterministic arrival/source disagreement and wrong-clock queries are tested. |
+| 20 | An Episode and Buffer share retained storage without copying and release it independently. | **Implemented; sealed chunks rejected** | Buffer/Episode share exact envelope and external-allocation leases through eviction and final release. Promotion works before an open chunk seals. No measured benefit justifies making chunks part of this invariant. |
+| 21 | Evicting externally backed payloads cannot recycle storage while another lease exists. | **Implemented** | A simulated external allocation remains live through Buffer eviction while an outside or Episode lease exists, then releases after the final lease. Serialized readback creates an explicit distinct allocation. |
+| 22 | External-memory accounting contributes truthful bytes to hard Buffer limits. | **Implemented** | The external fixture reports backing allocation bytes, drives eviction at a 150-byte hard limit, and rejects one 200-byte allocation. |
 | 23 | A bounded shared scheduler cancels and drains work without one OS thread per observer. | **Implemented** | Fixed-worker tests cover 256 relationships, blocked-observer isolation, cancellation, payload release, and scheduler shutdown. |
 | 24 | `set_resolution` preserves Component identity while replacing Output identity and hash. | **Implemented, provisional** | The Camera tests prove the current representation. Separate Output identity is now an unresolved design choice, so this evidence must not be mistaken for a final decision. |
 | 25 | Observations on both sides of reconfiguration reference the correct immutable configured contract. | **Implemented** | Frame validation and replacement-subscription tests prove old and new observations retain their respective Output references and dimensions. |
@@ -688,9 +688,8 @@ The unified branch implements explicit latest-existing, time-range, and
 follow-new shapes; truthful request advertisement; retained Product access;
 inspectable continuing handles; cancellation; terminal reconfiguration notice;
 and serialized transport semantics. `RESULTS-OBSERVATION-REQUESTS.md` records
-the evidence. The status table above identifies the gates that remain only
-partial. The targeted benchmark measures same-Output fan-out and the
-serialized-copy boundary; the full benchmark matrix remains Phase 4 work.
+the initial evidence. The completed network-independent result is in
+`RESULTS-COMPLETE-PROTOTYPE.md`.
 
 ### Completed Phase 2A: observation failure and shared scheduling
 
@@ -699,32 +698,37 @@ panics, terminal producer failure, overwrite-safe payload leases, cancellation
 cleanup, and a fixed shared worker pool. It compares one, eight, 64, and 256
 simultaneous relationships against the first prototype's
 thread-per-relationship path. Operable-side coverage remains partial. See
-`RESULTS-DATAFLOW-STRESS.md`.
+`RESULTS-DATAFLOW-STRESS.md`; the following Phase 2B closes the Operable side.
 
-### Phase 2B: Operable concurrency
+### Completed Phase 2B: Operable concurrency
 
-Implement Operable deadlines and cancellation, concurrent instruction ordering,
-and failure isolation for simultaneous invocations. Phase 2A's scheduler result
-does not choose a final global SDK executor.
+`InvocationHandle` now exposes asynchronous completion, typed failure,
+cancellation, and deadline state. Operables declare concurrent or serial
+acceptance-order execution, contain target panics, and enforce a hard
+outstanding-invocation limit. Tests cover ordering, overload, cleanup, and
+failure isolation. Phase 2A's scheduler result still does not choose a final
+global SDK executor.
 
-### Phase 3: time and retained storage
+### Completed Phase 3: time and retained storage
 
-Resolve timestamp policy, duration retention, shared Buffer/Episode storage,
-chunk evidence, and external-memory leases and accounting. Correctness gates
-18–22 apply.
+Buffers now declare source-timestamp ordering and source/arrival duration basis.
+Tests cover equal, backward, unordered, missing, wrong-clock, and
+arrival-disagreement cases. Buffer/Episode promotion shares immutable storage,
+including simulated external allocations with explicit leases and byte
+accounting. The chunk sidecar produced no measured benefit and is rejected as a
+semantic requirement; it remains only as a negative experiment control.
 
-### Phase 4: evaluation
+### Phase 4: evaluation (network-independent portion complete)
 
-Run the reproducible performance matrix, stored-Log comparison, and clean-room
-agent-friendliness exercise. Produce the final recommendation about the public
-semantic model and optimized implementation paths.
+The publication, Observable, Operable, pump, and scheduler controls have been
+rerun. The two-Peer volume-monitor application is implemented as a separate
+crate against public APIs. See `RESULTS-COMPLETE-PROTOTYPE.md`.
 
-The first public-API feasibility gate for the clean-room volume-monitor task
-failed before a generic live Component could be constructed. The Catalog can
-accept Component and Output Manifests independently, while `Observable<T>` has
-no public generic construction path. The full blind exercise is paused until a
-reviewed second pass couples live typed interface construction to Catalog
-exposure. See `CLEAN-ROOM-FIRST-ATTEMPT.md`.
+The current stored-Log comparison is excluded because this implementation round
+does not integrate production SDK code. A genuinely blind agent/developer run
+also remains external validation: the API author cannot supply that evidence.
+The preserved prompt and first/second-pass record are in
+`CLEAN-ROOM-FIRST-ATTEMPT.md`.
 
 ### Performance comparisons
 
@@ -841,8 +845,8 @@ the cost of the alternative.
 ### Component errors and panics
 
 Phase 2A implements and tests this boundary for Observable observers and one
-producer-reported terminal Output failure. Operable deadline and concurrent
-failure behavior remains Phase 2B.
+producer-reported terminal Output failure. Phase 2B adds Operable deadline,
+ordering, overload, panic, cancellation, and concurrent-failure behavior.
 
 Give Observable delivery and Operable invocation explicit failure state. Test
 at least:

@@ -17,6 +17,31 @@ pub struct BufferLimits {
     pub target_duration: Option<Duration>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SourceTimestampPolicy {
+    /// Every accepted source timestamp must be greater than the previous one.
+    #[default]
+    StrictlyIncreasing,
+    /// Equal source timestamps are accepted; backwards timestamps are not.
+    NonDecreasing,
+    /// Source timestamps may arrive in any order. Duration eviction must then
+    /// use arrival time, while source-time range queries remain a scan.
+    Unordered,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DurationTimeBasis {
+    #[default]
+    SourceTimestamp,
+    ArrivalTime,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BufferTimePolicy {
+    pub source_timestamps: SourceTimestampPolicy,
+    pub duration_basis: DurationTimeBasis,
+}
+
 impl BufferLimits {
     pub const fn entries(max_entries: usize) -> Self {
         Self {
@@ -67,8 +92,20 @@ pub enum BufferError {
     MissingHardLimit,
     ZeroEntryLimit,
     ZeroByteLimit,
-    PayloadExceedsByteLimit { payload_bytes: usize, limit: usize },
-    NonMonotonicSequence { previous: u64, incoming: u64 },
+    PayloadExceedsByteLimit {
+        payload_bytes: usize,
+        limit: usize,
+    },
+    NonMonotonicSequence {
+        previous: u64,
+        incoming: u64,
+    },
+    NonMonotonicTimestamp {
+        previous: u64,
+        incoming: u64,
+        policy: SourceTimestampPolicy,
+    },
+    UnorderedSourceDuration,
     Closed,
 }
 
@@ -91,6 +128,17 @@ impl fmt::Display for BufferError {
                 formatter,
                 "incoming sequence {incoming} is not newer than {previous}"
             ),
+            Self::NonMonotonicTimestamp {
+                previous,
+                incoming,
+                policy,
+            } => write!(
+                formatter,
+                "incoming source timestamp {incoming} violates {policy:?} policy after {previous}"
+            ),
+            Self::UnorderedSourceDuration => formatter.write_str(
+                "source-time duration eviction requires ordered source timestamps; use arrival time",
+            ),
             Self::Closed => formatter.write_str("Buffer is closed"),
         }
     }
@@ -106,12 +154,14 @@ pub struct Buffer<T> {
 struct Retained<T> {
     envelope: Arc<Envelope<T>>,
     bytes: usize,
+    arrival: Instant,
 }
 
 struct BufferState<T> {
     entries: VecDeque<Retained<T>>,
     retained_bytes: usize,
     high_water: Option<u64>,
+    last_source_timestamp_ns: Option<u64>,
     closed: bool,
 }
 
@@ -119,6 +169,7 @@ struct BufferInner<T> {
     name: Arc<str>,
     limits: BufferLimits,
     retained_size: Arc<dyn Fn(&T) -> usize + Send + Sync>,
+    time_policy: BufferTimePolicy,
     state: Mutex<BufferState<T>>,
     changed: Condvar,
 }
@@ -154,16 +205,33 @@ impl<T> Buffer<T> {
         limits: BufferLimits,
         retained_size: impl Fn(&T) -> usize + Send + Sync + 'static,
     ) -> Result<Self, BufferError> {
+        Self::with_limits_and_time_policy(name, limits, BufferTimePolicy::default(), retained_size)
+    }
+
+    pub fn with_limits_and_time_policy(
+        name: impl Into<Arc<str>>,
+        limits: BufferLimits,
+        time_policy: BufferTimePolicy,
+        retained_size: impl Fn(&T) -> usize + Send + Sync + 'static,
+    ) -> Result<Self, BufferError> {
         validate_limits(limits)?;
+        if limits.target_duration.is_some()
+            && time_policy.duration_basis == DurationTimeBasis::SourceTimestamp
+            && time_policy.source_timestamps == SourceTimestampPolicy::Unordered
+        {
+            return Err(BufferError::UnorderedSourceDuration);
+        }
         Ok(Self {
             inner: Arc::new(BufferInner {
                 name: name.into(),
                 limits,
                 retained_size: Arc::new(retained_size),
+                time_policy,
                 state: Mutex::new(BufferState {
                     entries: VecDeque::new(),
                     retained_bytes: 0,
                     high_water: None,
+                    last_source_timestamp_ns: None,
                     closed: false,
                 }),
                 changed: Condvar::new(),
@@ -179,8 +247,21 @@ impl<T> Buffer<T> {
         self.inner.limits
     }
 
+    pub fn time_policy(&self) -> BufferTimePolicy {
+        self.inner.time_policy
+    }
+
     /// Retains an already shared envelope without copying its payload.
     pub fn append_shared(&self, envelope: Arc<Envelope<T>>) -> Result<(), BufferError> {
+        self.append_shared_at(envelope, Instant::now())
+    }
+
+    /// Deterministic arrival-time variant used by transport/storage tests.
+    pub fn append_shared_at(
+        &self,
+        envelope: Arc<Envelope<T>>,
+        arrival: Instant,
+    ) -> Result<(), BufferError> {
         let bytes = (self.inner.retained_size)(&envelope.payload);
         if let Some(limit) = self.inner.limits.max_bytes
             && bytes > limit
@@ -204,10 +285,30 @@ impl<T> Buffer<T> {
             });
         }
 
+        if let Some(previous) = state.last_source_timestamp_ns {
+            let invalid = match self.inner.time_policy.source_timestamps {
+                SourceTimestampPolicy::StrictlyIncreasing => envelope.timestamp_ns <= previous,
+                SourceTimestampPolicy::NonDecreasing => envelope.timestamp_ns < previous,
+                SourceTimestampPolicy::Unordered => false,
+            };
+            if invalid {
+                return Err(BufferError::NonMonotonicTimestamp {
+                    previous,
+                    incoming: envelope.timestamp_ns,
+                    policy: self.inner.time_policy.source_timestamps,
+                });
+            }
+        }
+
         state.high_water = Some(envelope.sequence);
+        state.last_source_timestamp_ns = Some(envelope.timestamp_ns);
         state.retained_bytes += bytes;
-        state.entries.push_back(Retained { envelope, bytes });
-        evict_to_limits(&mut state, self.inner.limits);
+        state.entries.push_back(Retained {
+            envelope,
+            bytes,
+            arrival,
+        });
+        evict_to_limits(&mut state, self.inner.limits, self.inner.time_policy);
         drop(state);
         self.inner.changed.notify_all();
         Ok(())
@@ -298,7 +399,11 @@ fn validate_limits(limits: BufferLimits) -> Result<(), BufferError> {
     Ok(())
 }
 
-fn evict_to_limits<T>(state: &mut BufferState<T>, limits: BufferLimits) {
+fn evict_to_limits<T>(
+    state: &mut BufferState<T>,
+    limits: BufferLimits,
+    time_policy: BufferTimePolicy,
+) {
     loop {
         let exceeds_entries = limits
             .max_entries
@@ -313,11 +418,17 @@ fn evict_to_limits<T>(state: &mut BufferState<T>, limits: BufferLimits) {
             let Some(last) = state.entries.back() else {
                 return false;
             };
-            Duration::from_nanos(
-                last.envelope
-                    .timestamp_ns
-                    .saturating_sub(first.envelope.timestamp_ns),
-            ) > target
+            let retained_duration = match time_policy.duration_basis {
+                DurationTimeBasis::SourceTimestamp => Duration::from_nanos(
+                    last.envelope
+                        .timestamp_ns
+                        .saturating_sub(first.envelope.timestamp_ns),
+                ),
+                DurationTimeBasis::ArrivalTime => {
+                    last.arrival.saturating_duration_since(first.arrival)
+                }
+            };
+            retained_duration > target
         });
 
         if !(exceeds_entries || exceeds_bytes || exceeds_duration) {

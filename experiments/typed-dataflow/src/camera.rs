@@ -5,11 +5,12 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::component::{
-    Catalog, CatalogError, ComponentManifest, ComponentReference, Exposure, InvocationError,
-    Observable, ObservableContract, Observation, ObservationAccess, ObservationDelivery,
-    ObservationEmitter, ObservationEnd, ObservationEndReason, ObservationError, ObservationEvent,
-    ObservationHandle, Operable, OperableContract, OutputManifest, OutputReference,
-    PayloadContract, ProductForm, ProductManifest, observation_input, output_observable,
+    CameraPayloadContract, Catalog, CatalogError, ComponentManifest, ComponentReference, Exposure,
+    InvocationError, Observable, ObservableContract, Observation, ObservationAccess,
+    ObservationDelivery, ObservationEmitter, ObservationEnd, ObservationEndReason,
+    ObservationError, ObservationEvent, ObservationHandle, Operable, OperableContract,
+    OutputManifest, OutputReference, PayloadContract, ProductForm, ProductManifest,
+    observation_input, output_observable,
 };
 use crate::{Buffer, BufferError, Envelope, RetainedProduct};
 
@@ -115,16 +116,14 @@ impl ActiveCameraOutput {
             output_id: format!("frames-{generation}"),
             clock_id: format!("{}.session-clock", component.peer_id),
             spatial_frame_id: Some(format!("{}.optical-frame", component.component_id)),
-            payload: PayloadContract {
-                kind: "camera".to_owned(),
+            payload: PayloadContract::Camera(CameraPayloadContract {
                 datatype: "video_frame".to_owned(),
                 schema: "auki.video-frame/v1".to_owned(),
-                encoding: Some(RGB8_ENCODING.to_owned()),
-                width: Some(width),
-                height: Some(height),
+                encoding: RGB8_ENCODING.to_owned(),
+                width,
+                height,
                 observes: "visible_light".to_owned(),
-                unit: None,
-            },
+            }),
         };
         let reference = manifest.reference();
         let (observable, emitter) =
@@ -140,17 +139,17 @@ impl ActiveCameraOutput {
     }
 
     fn width(&self) -> u32 {
-        self.manifest
-            .payload
-            .width
-            .expect("Camera Output always declares width")
+        let PayloadContract::Camera(contract) = &self.manifest.payload else {
+            unreachable!("Camera Output always has a Camera payload contract")
+        };
+        contract.width
     }
 
     fn height(&self) -> u32 {
-        self.manifest
-            .payload
-            .height
-            .expect("Camera Output always declares height")
+        let PayloadContract::Camera(contract) = &self.manifest.payload else {
+            unreachable!("Camera Output always has a Camera payload contract")
+        };
+        contract.height
     }
 }
 
@@ -219,7 +218,7 @@ impl CameraComponent {
         let component_reference = component_manifest.reference();
         let active = ActiveCameraOutput::new(&component_reference, 1, width, height);
 
-        catalog.register_component(component_manifest.clone());
+        catalog.register_component(component_manifest.clone())?;
         catalog.set_current_output(active.manifest.clone())?;
 
         Ok(Self {
@@ -448,6 +447,7 @@ struct CameraBufferState {
 #[derive(Debug)]
 pub enum CameraBufferError {
     Buffer(BufferError),
+    Catalog(CatalogError),
     Observation(ObservationError),
 }
 
@@ -455,6 +455,7 @@ impl fmt::Display for CameraBufferError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Buffer(error) => error.fmt(formatter),
+            Self::Catalog(error) => error.fmt(formatter),
             Self::Observation(error) => error.fmt(formatter),
         }
     }
@@ -471,6 +472,12 @@ impl From<BufferError> for CameraBufferError {
 impl From<ObservationError> for CameraBufferError {
     fn from(error: ObservationError) -> Self {
         Self::Observation(error)
+    }
+}
+
+impl From<CatalogError> for CameraBufferError {
+    fn from(error: CatalogError) -> Self {
+        Self::Catalog(error)
     }
 }
 
@@ -561,7 +568,7 @@ fn create_product_buffer(
     output: &OutputManifest,
     catalog: &Catalog,
     max_entries: usize,
-) -> Result<CameraProductBuffer, BufferError> {
+) -> Result<CameraProductBuffer, CameraBufferError> {
     let output_reference = output.reference();
     let product_id = format!(
         "{}.{}.buffer",
@@ -584,7 +591,7 @@ fn create_product_buffer(
         crate::BufferLimits::entries(max_entries),
         |observation: &Observation<VideoFrame>| observation.payload.bytes.len(),
     )?;
-    catalog.register_product(manifest.clone());
+    catalog.register_product(manifest.clone())?;
     Ok(RetainedProduct {
         manifest,
         manifest_hash,

@@ -1,9 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use auki_typed_dataflow_experiment::{
-    CameraBufferCapture, CameraComponent, CatalogError, InMemoryTransport, InvocationContext,
-    InvocationError, ObservationDelivery, ObservationEndReason, ObservationEvent,
-    ObservationStatus, PeerRuntime, ReseedDriver, SetResolution, observation_input,
+    CameraBufferCapture, CameraComponent, InMemoryTransport, InvocationContext, InvocationError,
+    ObservationDelivery, ObservationEndReason, ObservationEvent, ObservationStatus,
+    PayloadContract, PeerRuntime, ReseedDriver, SetResolution, observation_input,
 };
 
 fn frame_bytes(width: u32, height: u32, value: u8) -> Arc<[u8]> {
@@ -67,10 +67,14 @@ fn resolution_change_replaces_output_not_component() {
     );
     assert_ne!(output_before.output_id, output_after.output_id);
     assert_ne!(output_before.manifest_hash, output_after.manifest_hash);
-    assert_eq!(manifest_before.payload.width, Some(2));
-    assert_eq!(manifest_before.payload.height, Some(2));
-    assert_eq!(manifest_after.payload.width, Some(1));
-    assert_eq!(manifest_after.payload.height, Some(1));
+    let PayloadContract::Camera(before_contract) = &manifest_before.payload else {
+        panic!("expected Camera payload contract")
+    };
+    let PayloadContract::Camera(after_contract) = &manifest_after.payload else {
+        panic!("expected Camera payload contract")
+    };
+    assert_eq!((before_contract.width, before_contract.height), (2, 2));
+    assert_eq!((after_contract.width, after_contract.height), (1, 1));
 
     let catalog_component = peer_a.catalog().component("front-camera").unwrap();
     assert_eq!(
@@ -377,37 +381,4 @@ fn setting_the_existing_resolution_does_not_create_a_new_output() {
     assert_eq!(result.previous_output, before);
     assert_eq!(result.replacement_output, before);
     assert_eq!(camera.current_output_reference(), before);
-}
-
-#[test]
-fn catalog_rejects_output_that_does_not_pin_its_component_manifest() {
-    let peer_a = PeerRuntime::new("peer-a");
-    let camera = CameraComponent::new(
-        peer_a.peer_id(),
-        "front-camera",
-        2,
-        2,
-        peer_a.catalog().clone(),
-        ["peer-b".to_owned()],
-    )
-    .unwrap();
-    let mut invalid = camera.current_output_manifest();
-    invalid.output_id = "forged-output".to_owned();
-    invalid.component_manifest_hash = "sha256:not-the-component".to_owned();
-
-    let result = peer_a.catalog().set_current_output(invalid);
-    assert!(matches!(
-        result,
-        Err(CatalogError::ComponentManifestMismatch { .. })
-    ));
-    assert_eq!(
-        peer_a
-            .catalog()
-            .component("front-camera")
-            .unwrap()
-            .current_outputs["frames"]
-            .manifest
-            .output_id,
-        "frames-1"
-    );
 }

@@ -1124,6 +1124,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-typed-dataflow-volume-monitor"
+version = "0.0.1"
+dependencies = [
+ "auki-typed-dataflow-experiment",
+ "serde",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

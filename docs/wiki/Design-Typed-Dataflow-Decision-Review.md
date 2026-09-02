@@ -36,12 +36,16 @@ the semantic rule, not the current Rust implementation or exact API spelling.
 | 14 | A contract-affecting reconfiguration terminates every affected subscription with explicit notice. | **Accept** | No subscription migrates automatically. Consumers and Buffer Products cannot silently mix observations governed by different configured contracts; observing the replacement requires deliberate recomposition. |
 | 15 | Catalog visibility is explicit exposure, not proof that a Component is currently producing or that a Product is durable. | **Accept** | Discoverability and momentary runtime health are separate. Dynamic availability still needs a defined inventory/health mechanism. |
 | 16 | Payload contracts describe the final emitted SDK payload truthfully. | **Accept** | Source hardware may also be described, but it must not be confused with the bytes and typed fields actually emitted. Automated media validation remains out of scope. |
-| 17 | The present public API is ready for unfamiliar developers or agents. | **Reject pending evidence** | The Camera fixture proves internal semantics, but there is no generic public Component/Output construction path. A clean-room application test is required before making an agent-friendliness claim. |
+| 17 | The present public API is ready for unfamiliar developers or agents. | **Revise pending blind evidence** | A separate application crate now builds the complete volume graph through generic public construction with Catalog truthfulness by construction. The API author performed that second pass, so an unfamiliar implementer must still run the preserved prompt before an agent-friendliness claim is accepted. |
 
-The initial public-API feasibility probe has now confirmed proposition 17's
-rejection: the Catalog accepts Component and Output descriptions before any
-corresponding generic live interface can be constructed. See
-[`CLEAN-ROOM-FIRST-ATTEMPT.md`](../../experiments/typed-dataflow/CLEAN-ROOM-FIRST-ATTEMPT.md).
+The initial public-API feasibility probe confirmed proposition 17's original
+rejection. The reviewed second pass has since made Catalog mutation private and
+coupled live Component, configured Observable, Operable, Buffer, and Episode
+construction to Catalog projection. The external volume-monitor crate now
+passes, but it is not a blind trial. See
+[`CLEAN-ROOM-FIRST-ATTEMPT.md`](../../experiments/typed-dataflow/CLEAN-ROOM-FIRST-ATTEMPT.md)
+and
+[`RESULTS-COMPLETE-PROTOTYPE.md`](../../experiments/typed-dataflow/RESULTS-COMPLETE-PROTOTYPE.md).
 
 ## Explicit non-decisions
 
@@ -98,3 +102,4 @@ Questions that block the next experiment:
 - [`RESULTS-OBSERVATION-REQUESTS.md`](../../experiments/typed-dataflow/RESULTS-OBSERVATION-REQUESTS.md)
 - [`RESULTS-DATAFLOW-STRESS.md`](../../experiments/typed-dataflow/RESULTS-DATAFLOW-STRESS.md)
 - [`CLEAN-ROOM-FIRST-ATTEMPT.md`](../../experiments/typed-dataflow/CLEAN-ROOM-FIRST-ATTEMPT.md)
+- [`RESULTS-COMPLETE-PROTOTYPE.md`](../../experiments/typed-dataflow/RESULTS-COMPLETE-PROTOTYPE.md)

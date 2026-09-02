@@ -38,3 +38,7 @@ path = "src/bin/observation_request_benchmark.rs"
 [[bin]]
 name = "dataflow-scheduler-stress"
 path = "src/bin/scheduler_stress_benchmark.rs"
+
+[[bin]]
+name = "operable-bench"
+path = "src/bin/operable_benchmark.rs"

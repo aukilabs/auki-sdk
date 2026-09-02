@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -97,15 +98,119 @@ pub struct ComponentReference {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct PayloadContract {
-    pub kind: String,
+pub struct CameraPayloadContract {
     pub datatype: String,
     pub schema: String,
-    pub encoding: Option<String>,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
+    pub encoding: String,
+    pub width: u32,
+    pub height: u32,
+    pub observes: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioSampleFormat {
+    F32,
+    I16,
+    I24,
+    I32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioLayout {
+    Interleaved,
+    Planar,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AudioPayloadContract {
+    pub datatype: String,
+    pub schema: String,
+    pub sample_format: AudioSampleFormat,
+    pub layout: AudioLayout,
+    pub sample_rate_hz: u32,
+    pub channels: u16,
+    pub frames_per_block: u32,
     pub observes: String,
     pub unit: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct GaugePayloadContract {
+    pub datatype: String,
+    pub schema: String,
+    pub observes: String,
+    pub unit: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct StructuredPayloadContract {
+    pub modality: String,
+    pub datatype: String,
+    pub schema: String,
+    pub observes: String,
+    pub unit: Option<String>,
+}
+
+/// Standardized, modality-specific description of the final emitted payload.
+///
+/// The tagged variants prevent camera dimensions, audio layout, and gauge
+/// units from being mixed into one bag of optional properties.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PayloadContract {
+    Camera(CameraPayloadContract),
+    Audio(AudioPayloadContract),
+    Gauge(GaugePayloadContract),
+    Structured(StructuredPayloadContract),
+}
+
+impl PayloadContract {
+    pub fn kind(&self) -> &str {
+        match self {
+            Self::Camera(_) => "camera",
+            Self::Audio(_) => "audio",
+            Self::Gauge(_) => "gauge",
+            Self::Structured(contract) => &contract.modality,
+        }
+    }
+
+    pub fn datatype(&self) -> &str {
+        match self {
+            Self::Camera(contract) => &contract.datatype,
+            Self::Audio(contract) => &contract.datatype,
+            Self::Gauge(contract) => &contract.datatype,
+            Self::Structured(contract) => &contract.datatype,
+        }
+    }
+
+    pub fn schema(&self) -> &str {
+        match self {
+            Self::Camera(contract) => &contract.schema,
+            Self::Audio(contract) => &contract.schema,
+            Self::Gauge(contract) => &contract.schema,
+            Self::Structured(contract) => &contract.schema,
+        }
+    }
+
+    pub fn observes(&self) -> &str {
+        match self {
+            Self::Camera(contract) => &contract.observes,
+            Self::Audio(contract) => &contract.observes,
+            Self::Gauge(contract) => &contract.observes,
+            Self::Structured(contract) => &contract.observes,
+        }
+    }
+
+    pub fn unit(&self) -> Option<&str> {
+        match self {
+            Self::Camera(_) => None,
+            Self::Audio(contract) => contract.unit.as_deref(),
+            Self::Gauge(contract) => Some(&contract.unit),
+            Self::Structured(contract) => contract.unit.as_deref(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -189,6 +294,20 @@ pub struct CatalogComponentEntry {
 pub struct CatalogProductEntry {
     pub manifest: ProductManifest,
     pub manifest_hash: ManifestHash,
+    pub state: ProductState,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProductState {
+    Buffer {
+        entries: usize,
+        at_entry_capacity: bool,
+    },
+    Episode {
+        observations: usize,
+        concluded_at_ns: Option<u64>,
+    },
+    Artifact,
 }
 
 #[derive(Default)]
@@ -219,6 +338,8 @@ impl fmt::Debug for Catalog {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CatalogError {
+    DuplicateComponent(String),
+    DuplicateProduct(String),
     UnknownComponent(String),
     ComponentManifestMismatch {
         component_id: String,
@@ -230,6 +351,12 @@ pub enum CatalogError {
 impl fmt::Display for CatalogError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::DuplicateComponent(component_id) => {
+                write!(formatter, "Catalog already has Component {component_id}")
+            }
+            Self::DuplicateProduct(product_id) => {
+                write!(formatter, "Catalog already has Product {product_id}")
+            }
             Self::UnknownComponent(component_id) => {
                 write!(formatter, "Catalog has no Component {component_id}")
             }
@@ -249,9 +376,16 @@ impl fmt::Display for CatalogError {
 impl std::error::Error for CatalogError {}
 
 impl Catalog {
-    pub fn register_component(&self, manifest: ComponentManifest) {
+    pub(crate) fn register_component(
+        &self,
+        manifest: ComponentManifest,
+    ) -> Result<(), CatalogError> {
         let manifest_hash = manifest.hash();
-        self.inner.write().unwrap().components.insert(
+        let mut state = self.inner.write().unwrap();
+        if state.components.contains_key(&manifest.component_id) {
+            return Err(CatalogError::DuplicateComponent(manifest.component_id));
+        }
+        state.components.insert(
             manifest.component_id.clone(),
             CatalogComponentEntry {
                 manifest,
@@ -259,9 +393,10 @@ impl Catalog {
                 current_outputs: BTreeMap::new(),
             },
         );
+        Ok(())
     }
 
-    pub fn set_current_output(&self, manifest: OutputManifest) -> Result<(), CatalogError> {
+    pub(crate) fn set_current_output(&self, manifest: OutputManifest) -> Result<(), CatalogError> {
         let manifest_hash = manifest.hash();
         let mut state = self.inner.write().unwrap();
         let component = state
@@ -285,15 +420,46 @@ impl Catalog {
         Ok(())
     }
 
-    pub fn register_product(&self, manifest: ProductManifest) {
+    pub(crate) fn register_product(&self, manifest: ProductManifest) -> Result<(), CatalogError> {
+        let state = match manifest.form {
+            ProductForm::Buffer => ProductState::Buffer {
+                entries: 0,
+                at_entry_capacity: false,
+            },
+            ProductForm::Episode => ProductState::Episode {
+                observations: 0,
+                concluded_at_ns: None,
+            },
+            ProductForm::Artifact => ProductState::Artifact,
+        };
+        self.register_product_with_state(manifest, state)
+    }
+
+    pub(crate) fn register_product_with_state(
+        &self,
+        manifest: ProductManifest,
+        product_state: ProductState,
+    ) -> Result<(), CatalogError> {
         let manifest_hash = manifest.hash();
-        self.inner.write().unwrap().products.insert(
+        let mut state = self.inner.write().unwrap();
+        if state.products.contains_key(&manifest.product_id) {
+            return Err(CatalogError::DuplicateProduct(manifest.product_id));
+        }
+        state.products.insert(
             manifest.product_id.clone(),
             CatalogProductEntry {
                 manifest,
                 manifest_hash,
+                state: product_state,
             },
         );
+        Ok(())
+    }
+
+    pub(crate) fn update_product_state(&self, product_id: &str, product_state: ProductState) {
+        if let Some(product) = self.inner.write().unwrap().products.get_mut(product_id) {
+            product.state = product_state;
+        }
     }
 
     pub fn component(&self, component_id: &str) -> Option<CatalogComponentEntry> {
@@ -314,6 +480,16 @@ impl Catalog {
             .read()
             .unwrap()
             .products
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    pub fn components(&self) -> Vec<CatalogComponentEntry> {
+        self.inner
+            .read()
+            .unwrap()
+            .components
             .values()
             .cloned()
             .collect()
@@ -843,6 +1019,11 @@ pub enum InvocationError {
     Unauthorized,
     TargetUnavailable,
     Rejected(String),
+    Cancelled,
+    DeadlineExceeded,
+    TargetPanicked(String),
+    RuntimeUnavailable,
+    Overloaded { limit: usize },
 }
 
 impl fmt::Display for InvocationError {
@@ -852,6 +1033,16 @@ impl fmt::Display for InvocationError {
             Self::Unauthorized => formatter.write_str("caller is not authorized"),
             Self::TargetUnavailable => formatter.write_str("target Component is unavailable"),
             Self::Rejected(reason) => write!(formatter, "instruction rejected: {reason}"),
+            Self::Cancelled => formatter.write_str("invocation was cancelled"),
+            Self::DeadlineExceeded => formatter.write_str("invocation deadline was exceeded"),
+            Self::TargetPanicked(reason) => write!(formatter, "target Operable panicked: {reason}"),
+            Self::RuntimeUnavailable => formatter.write_str("invocation runtime is unavailable"),
+            Self::Overloaded { limit } => {
+                write!(
+                    formatter,
+                    "Operable has reached its {limit}-invocation hard limit"
+                )
+            }
         }
     }
 }
@@ -862,6 +1053,48 @@ type OperationHandler<I, R> =
     dyn Fn(&InvocationContext, I) -> Result<R, InvocationError> + Send + Sync;
 type Authorizer = dyn Fn(&InvocationContext) -> bool + Send + Sync;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum InvocationOrdering {
+    /// Invocations may execute concurrently.
+    #[default]
+    Concurrent,
+    /// Invocations execute one at a time in the order accepted by the
+    /// Operable, including invocations which are cancelled before their turn.
+    SerialInAcceptanceOrder,
+}
+
+struct SerialGate {
+    next_ticket: AtomicU64,
+    serving: Mutex<u64>,
+    changed: Condvar,
+}
+
+impl SerialGate {
+    fn new() -> Self {
+        Self {
+            next_ticket: AtomicU64::new(0),
+            serving: Mutex::new(0),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn reserve(&self) -> u64 {
+        self.next_ticket.fetch_add(1, Ordering::AcqRel)
+    }
+
+    fn wait(&self, ticket: u64) {
+        let mut serving = self.serving.lock().unwrap();
+        while *serving != ticket {
+            serving = self.changed.wait(serving).unwrap();
+        }
+    }
+
+    fn advance(&self) {
+        *self.serving.lock().unwrap() += 1;
+        self.changed.notify_all();
+    }
+}
+
 /// A typed interface through which another Component may intentionally cause
 /// configuration or execution.
 pub struct Operable<I, R> {
@@ -870,6 +1103,11 @@ pub struct Operable<I, R> {
     exposure: Exposure,
     handler: Arc<OperationHandler<I, R>>,
     authorizer: Arc<Authorizer>,
+    ordering: InvocationOrdering,
+    serial_gate: Arc<SerialGate>,
+    liveness: Arc<()>,
+    max_pending: usize,
+    pending: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl<I, R> Clone for Operable<I, R> {
@@ -880,6 +1118,11 @@ impl<I, R> Clone for Operable<I, R> {
             exposure: self.exposure,
             handler: Arc::clone(&self.handler),
             authorizer: Arc::clone(&self.authorizer),
+            ordering: self.ordering,
+            serial_gate: Arc::clone(&self.serial_gate),
+            liveness: Arc::clone(&self.liveness),
+            max_pending: self.max_pending,
+            pending: Arc::clone(&self.pending),
         }
     }
 }
@@ -891,6 +1134,7 @@ impl<I, R> fmt::Debug for Operable<I, R> {
             .field("name", &self.name)
             .field("owner", &self.owner)
             .field("exposure", &self.exposure)
+            .field("ordering", &self.ordering)
             .finish_non_exhaustive()
     }
 }
@@ -903,12 +1147,35 @@ impl<I, R> Operable<I, R> {
         authorizer: impl Fn(&InvocationContext) -> bool + Send + Sync + 'static,
         handler: impl Fn(&InvocationContext, I) -> Result<R, InvocationError> + Send + Sync + 'static,
     ) -> Self {
+        Self::new_ordered(
+            name,
+            owner,
+            exposure,
+            InvocationOrdering::Concurrent,
+            authorizer,
+            handler,
+        )
+    }
+
+    pub fn new_ordered(
+        name: impl Into<Arc<str>>,
+        owner: ComponentReference,
+        exposure: Exposure,
+        ordering: InvocationOrdering,
+        authorizer: impl Fn(&InvocationContext) -> bool + Send + Sync + 'static,
+        handler: impl Fn(&InvocationContext, I) -> Result<R, InvocationError> + Send + Sync + 'static,
+    ) -> Self {
         Self {
             name: name.into(),
             owner,
             exposure,
             handler: Arc::new(handler),
             authorizer: Arc::new(authorizer),
+            ordering,
+            serial_gate: Arc::new(SerialGate::new()),
+            liveness: Arc::new(()),
+            max_pending: 64,
+            pending: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -920,7 +1187,55 @@ impl<I, R> Operable<I, R> {
         self.exposure
     }
 
+    pub fn ordering(&self) -> InvocationOrdering {
+        self.ordering
+    }
+
+    pub(crate) fn liveness(&self) -> std::sync::Weak<()> {
+        Arc::downgrade(&self.liveness)
+    }
+
+    pub fn with_max_pending(mut self, max_pending: usize) -> Self {
+        assert!(max_pending > 0, "max_pending must be positive");
+        self.max_pending = max_pending;
+        self
+    }
+
+    pub fn pending_invocations(&self) -> usize {
+        self.pending.load(Ordering::Acquire)
+    }
+
     pub fn invoke(
+        &self,
+        context: InvocationContext,
+        instruction: I,
+    ) -> Result<Invocation<R>, InvocationError> {
+        let ticket = self.reserve_ticket();
+        self.invoke_reserved(context, instruction, ticket)
+    }
+
+    fn reserve_ticket(&self) -> Option<u64> {
+        (self.ordering == InvocationOrdering::SerialInAcceptanceOrder)
+            .then(|| self.serial_gate.reserve())
+    }
+
+    fn invoke_reserved(
+        &self,
+        context: InvocationContext,
+        instruction: I,
+        ticket: Option<u64>,
+    ) -> Result<Invocation<R>, InvocationError> {
+        if let Some(ticket) = ticket {
+            self.serial_gate.wait(ticket);
+        }
+        let result = self.invoke_authorized(context, instruction);
+        if ticket.is_some() {
+            self.serial_gate.advance();
+        }
+        result
+    }
+
+    fn invoke_authorized(
         &self,
         context: InvocationContext,
         instruction: I,
@@ -929,14 +1244,235 @@ impl<I, R> Operable<I, R> {
         if remote && self.exposure != Exposure::Cluster {
             return Err(InvocationError::NotExposed);
         }
-        if !(self.authorizer)(&context) {
+        let authorized =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (self.authorizer)(&context)))
+                .map_err(|payload| {
+                    InvocationError::TargetPanicked(invocation_panic_reason(payload))
+                })?;
+        if !authorized {
             return Err(InvocationError::Unauthorized);
         }
-        let result = (self.handler)(&context, instruction)?;
+        let invocation_id = context.invocation_id.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            (self.handler)(&context, instruction)
+        }))
+        .map_err(|payload| InvocationError::TargetPanicked(invocation_panic_reason(payload)))??;
         Ok(Invocation {
-            invocation_id: context.invocation_id,
+            invocation_id,
             result,
         })
+    }
+}
+
+fn invocation_panic_reason(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(reason) = payload.downcast_ref::<&str>() {
+        (*reason).to_owned()
+    } else if let Some(reason) = payload.downcast_ref::<String>() {
+        reason.clone()
+    } else {
+        "non-string panic payload".to_owned()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct InvocationOptions {
+    pub deadline_after: Option<Duration>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum InvocationStatus {
+    Pending,
+    Running,
+    Completed,
+    Failed(InvocationError),
+    Cancelled,
+    DeadlineExceeded,
+}
+
+struct InvocationHandleState<R> {
+    status: InvocationStatus,
+    outcome: Option<Result<Invocation<R>, InvocationError>>,
+}
+
+/// Inspectable ownership of one asynchronously scheduled invocation.
+///
+/// Cancellation and deadlines are non-cooperative in this experiment: they
+/// make the caller-visible relationship terminal and discard a late result,
+/// but cannot unwind arbitrary Component code already running.
+#[must_use = "dropping an InvocationHandle cancels caller interest"]
+pub struct InvocationHandle<R> {
+    state: Arc<(Mutex<InvocationHandleState<R>>, Condvar)>,
+    deadline: Option<Instant>,
+}
+
+impl<R> fmt::Debug for InvocationHandle<R> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("InvocationHandle")
+            .field("status", &self.status())
+            .finish()
+    }
+}
+
+impl<R> InvocationHandle<R> {
+    fn expire_if_needed(&self, state: &mut InvocationHandleState<R>) {
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+            && matches!(
+                state.status,
+                InvocationStatus::Pending | InvocationStatus::Running
+            )
+        {
+            state.status = InvocationStatus::DeadlineExceeded;
+            state.outcome = Some(Err(InvocationError::DeadlineExceeded));
+        }
+    }
+
+    pub fn status(&self) -> InvocationStatus {
+        let (state, changed) = &*self.state;
+        let mut state = state.lock().unwrap();
+        self.expire_if_needed(&mut state);
+        changed.notify_all();
+        state.status.clone()
+    }
+
+    pub fn cancel(&self) {
+        let (state, changed) = &*self.state;
+        let mut state = state.lock().unwrap();
+        if matches!(
+            state.status,
+            InvocationStatus::Pending | InvocationStatus::Running
+        ) {
+            state.status = InvocationStatus::Cancelled;
+            state.outcome = Some(Err(InvocationError::Cancelled));
+            changed.notify_all();
+        }
+    }
+
+    pub fn wait_timeout(&self, timeout: Duration) -> Option<Result<Invocation<R>, InvocationError>>
+    where
+        R: Clone,
+    {
+        let wait_deadline = Instant::now() + timeout;
+        let (state, changed) = &*self.state;
+        let mut state = state.lock().unwrap();
+        loop {
+            self.expire_if_needed(&mut state);
+            if let Some(outcome) = &state.outcome {
+                return Some(outcome.clone());
+            }
+            let now = Instant::now();
+            if now >= wait_deadline {
+                return None;
+            }
+            let mut remaining = wait_deadline.saturating_duration_since(now);
+            if let Some(deadline) = self.deadline {
+                remaining = remaining.min(deadline.saturating_duration_since(now));
+            }
+            let (next, _) = changed.wait_timeout(state, remaining).unwrap();
+            state = next;
+        }
+    }
+}
+
+impl<R> Drop for InvocationHandle<R> {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+impl<I, R> Operable<I, R>
+where
+    I: Send + 'static,
+    R: Send + 'static,
+{
+    pub fn invoke_async(
+        &self,
+        context: InvocationContext,
+        instruction: I,
+        dispatcher: &SharedDispatcher,
+        options: InvocationOptions,
+    ) -> Result<InvocationHandle<R>, InvocationError> {
+        self.pending
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
+                (pending < self.max_pending).then_some(pending + 1)
+            })
+            .map_err(|_| InvocationError::Overloaded {
+                limit: self.max_pending,
+            })?;
+        let deadline = options
+            .deadline_after
+            .map(|duration| Instant::now() + duration);
+        let state = Arc::new((
+            Mutex::new(InvocationHandleState {
+                status: InvocationStatus::Pending,
+                outcome: None,
+            }),
+            Condvar::new(),
+        ));
+        let worker_state = Arc::clone(&state);
+        let worker = self.clone();
+        let pending = Arc::clone(&self.pending);
+        let ticket = self.reserve_ticket();
+        dispatcher
+            .schedule(Box::new(move || {
+                struct PendingGuard(Arc<std::sync::atomic::AtomicUsize>);
+                impl Drop for PendingGuard {
+                    fn drop(&mut self) {
+                        self.0.fetch_sub(1, Ordering::AcqRel);
+                    }
+                }
+                let _pending = PendingGuard(pending);
+                let (state, changed) = &*worker_state;
+                if let Some(ticket) = ticket {
+                    worker.serial_gate.wait(ticket);
+                }
+                {
+                    let mut state = state.lock().unwrap();
+                    if !matches!(state.status, InvocationStatus::Pending) {
+                        if ticket.is_some() {
+                            worker.serial_gate.advance();
+                        }
+                        changed.notify_all();
+                        return;
+                    }
+                    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                        state.status = InvocationStatus::DeadlineExceeded;
+                        state.outcome = Some(Err(InvocationError::DeadlineExceeded));
+                        changed.notify_all();
+                        if ticket.is_some() {
+                            worker.serial_gate.advance();
+                        }
+                        return;
+                    }
+                    state.status = InvocationStatus::Running;
+                }
+
+                let outcome = worker.invoke_authorized(context, instruction);
+                if ticket.is_some() {
+                    worker.serial_gate.advance();
+                }
+                let mut state = state.lock().unwrap();
+                if matches!(state.status, InvocationStatus::Running) {
+                    if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                        state.status = InvocationStatus::DeadlineExceeded;
+                        state.outcome = Some(Err(InvocationError::DeadlineExceeded));
+                    } else {
+                        state.status = match &outcome {
+                            Ok(_) => InvocationStatus::Completed,
+                            Err(error) => InvocationStatus::Failed(error.clone()),
+                        };
+                        state.outcome = Some(outcome);
+                    }
+                }
+                changed.notify_all();
+            }))
+            .map_err(|_| {
+                self.pending.fetch_sub(1, Ordering::AcqRel);
+                InvocationError::RuntimeUnavailable
+            })?;
+        Ok(InvocationHandle { state, deadline })
     }
 }
 

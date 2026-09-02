@@ -485,6 +485,11 @@ fn live_pump_does_not_wait_for_chunk_sealing() {
     wait_until(Duration::from_secs(1), || remote.range().entries == 1);
     assert!(started.elapsed() < Duration::from_secs(1));
     assert!(builder.chunks().is_empty());
+    let episode = Episode::promote("before-chunk-seal", &source, 0, 0).unwrap();
+    assert!(Arc::ptr_eq(
+        &episode.snapshot()[0],
+        &source.snapshot(0, 0)[0]
+    ));
     builder.stop();
     assert_eq!(builder.chunks().len(), 1);
 }

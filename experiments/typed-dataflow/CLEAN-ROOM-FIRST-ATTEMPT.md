@@ -164,3 +164,44 @@ Do not implement this change until the decision review confirms:
    smaller combination;
 3. how modality-specific configured contract fields remain standardized and
    extensible without returning to a loosely typed property bag.
+
+## Reviewed second pass
+
+Date: 2026-09-02
+
+The network-independent second pass is implemented in two crates:
+
+- `auki-typed-dataflow-experiment` now provides the generic public construction
+  and Product APIs;
+- `auki-typed-dataflow-volume-monitor` is an external application crate using
+  only those public APIs.
+
+The three blocking questions were resolved experimentally as follows:
+
+1. direct Catalog mutation is crate-private; `Component::expose`,
+   `PeerRuntime::capture_buffer`, and `PeerRuntime::capture_episode` own
+   projection;
+2. `Component` is a runtime handle produced by `PeerRuntime::component`;
+3. `PayloadContract` is a tagged enum with typed Camera, Audio, Gauge, and
+   Structured variants, while `ContractType` binds the Rust type to its
+   advertised datatype.
+
+Exposure is transactional at the Component API boundary: it refuses to add a
+Catalog entry until every declared cluster interface has a live handle. It also
+rejects an Observable whose configured payload datatype/schema disagrees with
+the Component declaration, a Rust datatype mismatch, and retained access on a
+fresh-only Observable.
+
+Generic Buffer and Episode capture derive Product Manifests from the exact
+configured Observable reference. The Episode Catalog entry carries dynamic
+conclusion state separately from its Manifest.
+
+The external application completes the two-Peer volume graph, uses a truthful
+interleaved `f32` Audio contract, computes dBFS, maintains 6,000-block Buffers,
+concludes session Episodes, and crosses a counted serialization boundary. Four
+runtime tests and one compile-fail test pass.
+
+This second pass removes the original hard blocker, but it is not a valid blind
+agent score because the API author also wrote the application. Preserve the
+prompt for an unfamiliar implementer. See `RESULTS-COMPLETE-PROTOTYPE.md` for
+the full evidence and limitations.

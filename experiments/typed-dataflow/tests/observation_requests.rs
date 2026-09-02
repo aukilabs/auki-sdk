@@ -76,7 +76,7 @@ fn fresh_camera_truthfully_supports_follow_new_only() {
         vec![ObservationAccess::FollowNew]
     );
     assert_eq!(
-        catalog.current_outputs["frames"].manifest.payload.kind,
+        catalog.current_outputs["frames"].manifest.payload.kind(),
         "camera"
     );
     assert_eq!(

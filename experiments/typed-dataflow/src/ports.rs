@@ -885,7 +885,7 @@ impl fmt::Debug for SharedDispatcher {
 }
 
 impl SharedDispatcher {
-    fn schedule(&self, job: ScheduledJob) -> Result<(), SchedulerError> {
+    pub(crate) fn schedule(&self, job: ScheduledJob) -> Result<(), SchedulerError> {
         if self.counters.closed.load(Ordering::Acquire) {
             return Err(SchedulerError::Unavailable);
         }

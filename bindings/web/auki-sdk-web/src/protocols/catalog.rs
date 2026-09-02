@@ -8,6 +8,8 @@ use js_sys::{Function, Promise};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
+#[cfg(not(test))]
+use crate::protocol_support::{javascript_error_reason, js_error};
 use crate::{
     AukiPeer,
     protocol_support::{
@@ -16,8 +18,42 @@ use crate::{
     },
 };
 
+#[cfg(not(test))]
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console, js_name = error)]
+    fn console_error(value: &JsValue);
+}
+
+#[cfg(not(test))]
+fn report_local_catalog_error(context: &str, error: &JsValue) {
+    console_error(&js_error(format!(
+        "{context}: {}",
+        javascript_error_reason(error)
+    )));
+}
+
+#[cfg(test)]
+fn report_local_catalog_error(_context: &str, _error: &JsValue) {}
+
 const RESOURCE_VARIANT_NAMES: &str =
     "sensor_log, pose_log, time_transform_log, detection_log, or message_channel";
+
+/// Validate and normalize one Catalog v3 provider snapshot in Rust.
+///
+/// Preparing static snapshots when an application mounts its endpoint turns
+/// schema mistakes into local startup errors instead of an empty, fail-closed
+/// response observed only by a remote peer.
+#[wasm_bindgen(
+    js_name = prepareCatalogResources,
+    unchecked_return_type = "AukiCatalogResourcesResponse"
+)]
+pub fn prepare_catalog_resources(
+    #[wasm_bindgen(unchecked_param_type = "AukiCatalogResourcesResponse")] response: JsValue,
+) -> Result<JsValue, JsValue> {
+    let response = resources_from_js(response)?;
+    resources_to_js(&response)
+}
 
 /// Outbound Catalog v3/v4 client backed by the portable Rust protocols.
 #[wasm_bindgen]
@@ -167,17 +203,29 @@ impl CatalogProvider for JavaScriptCatalogProvider {
         requester: &AuthenticatedPeer,
         request: &v3::ResourcesRequest,
     ) -> v3::ResourcesResponse {
-        self.resources
-            .as_ref()
-            .and_then(|callback| invoke_resources_provider(callback, requester, request).ok())
-            .unwrap_or_else(empty_resources)
+        let Some(callback) = self.resources.as_ref() else {
+            return empty_resources();
+        };
+        match invoke_resources_provider(callback, requester, request) {
+            Ok(response) => response,
+            Err(error) => {
+                report_local_catalog_error("Catalog resources provider failed", &error);
+                empty_resources()
+            }
+        }
     }
 
     fn maps(&self, requester: &AuthenticatedPeer) -> v4::ResourcesResponse {
-        self.maps
-            .as_ref()
-            .and_then(|callback| invoke_maps_provider(callback, requester).ok())
-            .unwrap_or_else(empty_maps)
+        let Some(callback) = self.maps.as_ref() else {
+            return empty_maps();
+        };
+        match invoke_maps_provider(callback, requester) {
+            Ok(response) => response,
+            Err(error) => {
+                report_local_catalog_error("Catalog maps provider failed", &error);
+                empty_maps()
+            }
+        }
     }
 }
 
@@ -461,6 +509,38 @@ mod tests {
             response
         );
         assert_eq!(maps_from_js(value).unwrap(), maps);
+    }
+
+    #[wasm_bindgen_test]
+    fn flattened_catalog_rows_are_plain_javascript_records() {
+        let fixture = js_sys::JSON::parse(include_str!(
+            "../../../../../crates/auki-protocols/tests/locked/catalog_row_sensor_log_camera_live_rolling.json"
+        ))
+        .unwrap();
+        let row: auki_protocols::catalog::v2::ResourceEntry =
+            serde_wasm_bindgen::from_value(fixture).unwrap();
+        let response = v3::ResourcesResponse {
+            resources: vec![v3::ResourceEntry::V2(Box::new(row))],
+        };
+
+        let value = resources_to_js(&response).unwrap();
+        let resources =
+            Array::from(&Reflect::get(&value, &JsValue::from_str("resources")).unwrap());
+        let row = resources.get(0);
+        assert_eq!(
+            Reflect::get(&row, &JsValue::from_str("variant"))
+                .unwrap()
+                .as_string()
+                .as_deref(),
+            Some("sensor_log")
+        );
+        assert_eq!(
+            Reflect::get(&row, &JsValue::from_str("resource_id"))
+                .unwrap()
+                .as_string()
+                .as_deref(),
+            Some("head_left_rgb")
+        );
     }
 
     #[wasm_bindgen_test]

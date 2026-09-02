@@ -109,8 +109,9 @@ pub(crate) fn to_js_value(
     context: &'static str,
     value: &impl Serialize,
 ) -> Result<JsValue, JsValue> {
-    let serializer =
-        serde_wasm_bindgen::Serializer::new().serialize_large_number_types_as_bigints(true);
+    let serializer = serde_wasm_bindgen::Serializer::new()
+        .serialize_maps_as_objects(true)
+        .serialize_large_number_types_as_bigints(true);
     value
         .serialize(&serializer)
         .map_err(|error| js_context(context, error))

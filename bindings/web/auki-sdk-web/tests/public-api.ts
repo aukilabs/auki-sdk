@@ -19,6 +19,7 @@ import {
   AukiStreamSubscription,
   decodeCameraFrameImage,
   encodeCameraFrameImage,
+  prepareCatalogResources,
   prepareRegistryEntry,
   type AukiAuthenticatedPeer,
   type AukiBlobReceipt,
@@ -188,6 +189,7 @@ const encodedCameraFrame: Uint8Array = encodeCameraFrameImage(
   new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
 );
 const decodedCameraImage: Uint8Array = decodeCameraFrameImage(encodedCameraFrame);
+const preparedCatalog: AukiCatalogResourcesResponse = prepareCatalogResources({ resources: [] });
 const streamFrom: AukiStreamReadFrom = { kind: "latest" };
 const streamRequest: AukiStreamRequest = {
   sourcePeerId: target.peerId,
@@ -280,6 +282,7 @@ void [
   streamClose,
   encodedCameraFrame,
   decodedCameraImage,
+  preparedCatalog,
   browserRoute,
   nativeRoute,
   discoverOnlyPeer,

@@ -3,6 +3,7 @@ import {
   AukiBlobEndpoint,
   AukiCatalogClient,
   AukiCatalogEndpoint,
+  AukiDiscoveryMode,
   AukiInfoClient,
   AukiInfoEndpoint,
   AukiMessageClient,
@@ -10,6 +11,7 @@ import {
   AukiMessageReceiver,
   AukiMessageSender,
   AukiPeer,
+  AukiUserSession,
   AukiRegistryClient,
   AukiRegistryEndpoint,
   AukiStreamClient,
@@ -26,6 +28,7 @@ import {
   type AukiCatalogResourcesRequest,
   type AukiCatalogResourcesResponse,
   type AukiExactTarget,
+  type AukiDiscoveryCandidate,
   type AukiMessageChannelResource,
   type AukiMessageEvent,
   type AukiParticipantInfo,
@@ -48,8 +51,33 @@ import {
 } from "../pkg-test/auki_sdk_web.js";
 
 declare const peer: AukiPeer;
+declare const session: AukiUserSession;
 const browserRoute: string = peer.wssRoute;
 const nativeRoute: string = peer.tcpRoute;
+const discoverOnlyPeer: Promise<AukiPeer> = session.startPeerWithDiscovery(
+  "00000000-0000-0000-0000-000000000001",
+  AukiDiscoveryMode.DiscoverOnly,
+);
+const advertisingPeer: Promise<AukiPeer> = session.startPeerWithDiscovery(
+  "00000000-0000-0000-0000-000000000001",
+  AukiDiscoveryMode.DiscoverAndAdvertise,
+);
+const discoveredPeers: Promise<AukiDiscoveryCandidate[]> = peer.discover();
+const discoveredEchoPeers: Promise<AukiDiscoveryCandidate[]> = peer.discoverProtocol(
+  "/example/echo/1.0.0",
+);
+
+async function checkDiscoveryCandidate(): Promise<void> {
+  const candidate = (await discoveredPeers)[0];
+  if (candidate !== undefined) {
+    const peerId: string = candidate.peerId;
+    const routes: string[] = candidate.routes;
+    const protocols: string[] = candidate.servedProtocols;
+    const expiresAt: string = candidate.expiresAt;
+    const source: string = candidate.source;
+    void [peerId, routes, protocols, expiresAt, source];
+  }
+}
 
 const target: AukiExactTarget = {
   peerId: "12D3KooW...",
@@ -233,4 +261,8 @@ void [
   streamClose,
   browserRoute,
   nativeRoute,
+  discoverOnlyPeer,
+  advertisingPeer,
+  discoveredEchoPeers,
+  checkDiscoveryCandidate,
 ];

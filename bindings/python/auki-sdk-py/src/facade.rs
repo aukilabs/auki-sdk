@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use auki_sdk_rs::{
-    AukiPeer, AukiPeerBootstrap, AukiPeerExit, AukiPeerLifecycle, AukiPeerProtocols,
-    AukiPeerRoutes, Credentials, DomainDescriptor, DomainSelection,
+    AukiDiscovery, AukiDiscoveryCandidate, AukiDiscoveryError, AukiDiscoverySource, AukiPeer,
+    AukiPeerBootstrap, AukiPeerExit, AukiPeerLifecycle, AukiPeerProtocols, AukiPeerRoutes,
+    Credentials, DdsTrackerMode, DomainDescriptor, DomainSelection,
 };
 use parking_lot::Mutex;
 use pyo3::{
@@ -16,6 +17,17 @@ use crate::cleanup::{DetachedCleanup, wait_cleanup};
 
 fn runtime_error(context: &'static str, error: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(format!("{context}: {error}"))
+}
+
+fn parse_discovery_mode(mode: Option<String>) -> PyResult<Option<DdsTrackerMode>> {
+    mode.map(|mode| match mode.as_str() {
+        "discover_only" => Ok(DdsTrackerMode::DiscoverOnly),
+        "discover_and_advertise" => Ok(DdsTrackerMode::DiscoverAndAdvertise),
+        _ => Err(PyValueError::new_err(
+            "discovery_mode must be 'discover_only' or 'discover_and_advertise'",
+        )),
+    })
+    .transpose()
 }
 
 struct PeerOwner {
@@ -135,6 +147,66 @@ impl PyAukiPeerRoutes {
     }
 }
 
+/// One bounded, untrusted DDS dial candidate.
+#[pyclass(name = "AukiDiscoveryCandidate", frozen)]
+struct PyAukiDiscoveryCandidate {
+    peer_id: String,
+    routes: Vec<String>,
+    served_protocols: Vec<String>,
+    expires_at: String,
+    source: String,
+}
+
+impl From<AukiDiscoveryCandidate> for PyAukiDiscoveryCandidate {
+    fn from(candidate: AukiDiscoveryCandidate) -> Self {
+        Self {
+            peer_id: candidate.peer_id().to_string(),
+            routes: candidate.routes().iter().map(ToString::to_string).collect(),
+            served_protocols: candidate.served_protocols().to_vec(),
+            expires_at: candidate.expires_at().to_rfc3339(),
+            source: match candidate.source() {
+                AukiDiscoverySource::DdsTracker => "dds_tracker".into(),
+            },
+        }
+    }
+}
+
+#[pymethods]
+impl PyAukiDiscoveryCandidate {
+    #[getter]
+    fn peer_id(&self) -> String {
+        self.peer_id.clone()
+    }
+
+    #[getter]
+    fn routes(&self) -> Vec<String> {
+        self.routes.clone()
+    }
+
+    #[getter]
+    fn served_protocols(&self) -> Vec<String> {
+        self.served_protocols.clone()
+    }
+
+    #[getter]
+    fn expires_at(&self) -> String {
+        self.expires_at.clone()
+    }
+
+    #[getter]
+    fn source(&self) -> String {
+        self.source.clone()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "AukiDiscoveryCandidate(peer_id={:?}, protocols={})",
+            self.peer_id,
+            self.served_protocols.len()
+        )
+    }
+}
+
 #[pyclass(name = "AukiSession")]
 struct PyAukiSession {
     bootstrap: AukiPeerBootstrap,
@@ -191,15 +263,21 @@ impl PyAukiSession {
     }
 
     /// Start one persistent, relay-backed peer in an explicitly selected Domain.
+    #[pyo3(signature = (domain_id, identity_file, discovery_mode=None))]
     fn start_peer<'py>(
         &self,
         py: Python<'py>,
         domain_id: String,
         identity_file: PathBuf,
+        discovery_mode: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let domain_id = Uuid::parse_str(&domain_id)
             .map_err(|_| PyValueError::new_err("Domain ID must be a UUID"))?;
-        let bootstrap = self.bootstrap.clone();
+        let discovery_mode = parse_discovery_mode(discovery_mode)?;
+        let bootstrap = match discovery_mode {
+            Some(mode) => self.bootstrap.clone().with_dds_tracker(mode),
+            None => self.bootstrap.clone(),
+        };
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let peer = bootstrap
                 .start_persistent_peer(DomainSelection::new(domain_id), identity_file)
@@ -220,6 +298,7 @@ pub struct PyAukiPeer {
     routes: AukiPeerRoutes,
     lifecycle: AukiPeerLifecycle,
     protocols: AukiPeerProtocols,
+    discovery: Option<AukiDiscovery>,
 }
 
 impl PyAukiPeer {
@@ -232,6 +311,7 @@ impl PyAukiPeer {
             .map(ToString::to_string)
             .collect();
         let context = peer.protocol_context();
+        let discovery = peer.discovery_handle().ok();
         Self {
             peer_id,
             domain_id,
@@ -239,6 +319,7 @@ impl PyAukiPeer {
             routes: context.routes(),
             lifecycle: peer.lifecycle(),
             protocols: context.protocols(),
+            discovery,
             owner: PeerOwner::new(peer),
         }
     }
@@ -297,6 +378,20 @@ impl PyAukiPeer {
         )
     }
 
+    /// Fetch every fresh same-Domain DDS candidate.
+    fn discover<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.discover_inner(py, None)
+    }
+
+    /// Fetch fresh candidates advertising one exact protocol ID.
+    fn discover_protocol<'py>(
+        &self,
+        py: Python<'py>,
+        protocol_id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.discover_inner(py, Some(protocol_id))
+    }
+
     /// Resolve after requested shutdown or raise after unexpected terminal failure.
     fn wait_stopped<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let lifecycle = self.lifecycle.clone();
@@ -329,9 +424,37 @@ impl PyAukiPeer {
     }
 }
 
+impl PyAukiPeer {
+    fn discover_inner<'py>(
+        &self,
+        py: Python<'py>,
+        protocol_id: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let discovery = self.discovery.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let discovery = discovery.ok_or_else(|| {
+                runtime_error("discover Auki peers", AukiDiscoveryError::Disabled)
+            })?;
+            let candidates = match protocol_id {
+                Some(protocol_id) => discovery.discover_protocol(protocol_id).await,
+                None => discovery.discover().await,
+            }
+            .map_err(|error| runtime_error("discover Auki peers", error))?;
+            Python::with_gil(|py| {
+                let values = PyList::empty_bound(py);
+                for candidate in candidates {
+                    values.append(Py::new(py, PyAukiDiscoveryCandidate::from(candidate))?)?;
+                }
+                Ok(values.unbind().into_any())
+            })
+        })
+    }
+}
+
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyAukiDomain>()?;
     module.add_class::<PyAukiPeerRoutes>()?;
+    module.add_class::<PyAukiDiscoveryCandidate>()?;
     module.add_class::<PyAukiSession>()?;
     module.add_class::<PyAukiPeer>()?;
     Ok(())
@@ -350,6 +473,7 @@ mod tests {
         assert_send::<AukiPeer>();
         assert_send_sync::<AukiPeerProtocols>();
         assert_send_sync::<AukiPeerRoutes>();
+        assert_send_sync::<AukiDiscovery>();
     }
 
     #[test]
@@ -360,7 +484,22 @@ mod tests {
             assert!(module.getattr("AukiSession").is_ok());
             assert!(module.getattr("AukiDomain").is_ok());
             assert!(module.getattr("AukiPeer").is_ok());
+            assert!(module.getattr("AukiDiscoveryCandidate").is_ok());
         });
+    }
+
+    #[test]
+    fn discovery_mode_is_explicit_and_bounded() {
+        assert_eq!(
+            parse_discovery_mode(Some("discover_only".into())).unwrap(),
+            Some(DdsTrackerMode::DiscoverOnly)
+        );
+        assert_eq!(
+            parse_discovery_mode(Some("discover_and_advertise".into())).unwrap(),
+            Some(DdsTrackerMode::DiscoverAndAdvertise)
+        );
+        assert!(parse_discovery_mode(Some("automatic".into())).is_err());
+        assert_eq!(parse_discovery_mode(None).unwrap(), None);
     }
 
     #[test]

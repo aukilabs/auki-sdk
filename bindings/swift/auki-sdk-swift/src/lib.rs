@@ -7,9 +7,11 @@
 use std::sync::Arc;
 
 use auki_sdk_rs::{
-    AukiPeer as RustAukiPeer, AukiPeerBootstrap, AukiPeerExit, AukiPeerFailure, AukiPeerLifecycle,
-    AukiPeerProtocols, AukiPeerRoutes as RustAukiPeerRoutes, AukiPeerStatus as RustAukiPeerStatus,
-    Credentials, DomainDescriptor, DomainSelection, Identity, Multiaddr, PeerId,
+    AukiDiscovery as RustAukiDiscovery, AukiDiscoveryCandidate as RustAukiDiscoveryCandidate,
+    AukiDiscoveryError, AukiDiscoverySource as RustAukiDiscoverySource, AukiPeer as RustAukiPeer,
+    AukiPeerBootstrap, AukiPeerExit, AukiPeerFailure, AukiPeerLifecycle, AukiPeerProtocols,
+    AukiPeerRoutes as RustAukiPeerRoutes, AukiPeerStatus as RustAukiPeerStatus, Credentials,
+    DdsTrackerMode, DomainDescriptor, DomainSelection, Identity, Multiaddr, PeerId,
     validate_relay_circuit_routes,
 };
 use parking_lot::Mutex;
@@ -133,6 +135,52 @@ impl From<DomainDescriptor> for AukiDomain {
     }
 }
 
+/// Explicit DDS tracker behavior selected when starting one peer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
+pub enum AukiDiscoveryMode {
+    DiscoverOnly,
+    DiscoverAndAdvertise,
+}
+
+impl From<AukiDiscoveryMode> for DdsTrackerMode {
+    fn from(mode: AukiDiscoveryMode) -> Self {
+        match mode {
+            AukiDiscoveryMode::DiscoverOnly => Self::DiscoverOnly,
+            AukiDiscoveryMode::DiscoverAndAdvertise => Self::DiscoverAndAdvertise,
+        }
+    }
+}
+
+/// Provider that produced one process-local discovery observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
+pub enum AukiDiscoverySource {
+    DdsTracker,
+}
+
+/// One bounded, untrusted DDS dial candidate.
+#[derive(Clone, Debug, Eq, PartialEq, uniffi::Record)]
+pub struct AukiDiscoveryCandidate {
+    pub peer_id: String,
+    pub routes: Vec<String>,
+    pub served_protocols: Vec<String>,
+    pub expires_at: String,
+    pub source: AukiDiscoverySource,
+}
+
+impl From<RustAukiDiscoveryCandidate> for AukiDiscoveryCandidate {
+    fn from(candidate: RustAukiDiscoveryCandidate) -> Self {
+        Self {
+            peer_id: candidate.peer_id().to_string(),
+            routes: candidate.routes().iter().map(ToString::to_string).collect(),
+            served_protocols: candidate.served_protocols().to_vec(),
+            expires_at: candidate.expires_at().to_rfc3339(),
+            source: match candidate.source() {
+                RustAukiDiscoverySource::DdsTracker => AukiDiscoverySource::DdsTracker,
+            },
+        }
+    }
+}
+
 /// Atomic TCP/WSS route pair confirmed for one relay reservation.
 #[derive(Clone, Debug, Eq, PartialEq, uniffi::Record)]
 pub struct AukiPeerRoutes {
@@ -148,8 +196,8 @@ pub struct AukiPeerTarget {
     pub route: String,
 }
 
-/// Bounded copyable peer description used until discovery supplies the same
-/// data. Applications exchange this card, then dial its exact advertised route.
+/// Bounded copyable peer description for manual exchange when DDS discovery is
+/// disabled. Applications exchange this card, then dial its exact advertised route.
 #[derive(Clone, Debug, Eq, PartialEq, uniffi::Record)]
 pub struct AukiPeerCard {
     pub version: u32,
@@ -427,6 +475,26 @@ impl AukiSession {
             .map_err(|error| operation_error("start Auki peer", error))?;
         Ok(Arc::new(AukiPeer::new(peer)))
     }
+
+    /// Authorize the persisted identity and start a peer with one explicit DDS
+    /// discovery behavior.
+    pub async fn start_peer_with_discovery(
+        &self,
+        domain_id: String,
+        identity: Arc<AukiPeerIdentity>,
+        mode: AukiDiscoveryMode,
+    ) -> Result<Arc<AukiPeer>, AukiSdkError> {
+        let domain_id = Uuid::parse_str(&domain_id)
+            .map_err(|error| operation_error("parse Auki Domain ID", error))?;
+        let peer = self
+            .bootstrap
+            .clone()
+            .with_dds_tracker(mode.into())
+            .start_peer(DomainSelection::new(domain_id), identity.rust_identity())
+            .await
+            .map_err(|error| operation_error("start discoverable Auki peer", error))?;
+        Ok(Arc::new(AukiPeer::new(peer)))
+    }
 }
 
 struct PeerOwner {
@@ -477,11 +545,13 @@ pub struct AukiPeer {
     lifecycle: AukiPeerLifecycle,
     status: watch::Receiver<RustAukiPeerStatus>,
     protocols: AukiPeerProtocols,
+    discovery: Option<RustAukiDiscovery>,
 }
 
 impl AukiPeer {
     fn new(peer: RustAukiPeer) -> Self {
         let context = peer.protocol_context();
+        let discovery = peer.discovery_handle().ok();
         Self {
             peer_id: peer.peer_id().to_string(),
             domain_id: peer.domain_id().to_string(),
@@ -494,6 +564,7 @@ impl AukiPeer {
             lifecycle: peer.lifecycle(),
             status: peer.subscribe_status(),
             protocols: context.protocols(),
+            discovery,
             owner: PeerOwner::new(peer),
         }
     }
@@ -537,6 +608,19 @@ impl AukiPeer {
         })
     }
 
+    /// Fetch every fresh same-Domain DDS candidate.
+    pub async fn discover(&self) -> Result<Vec<AukiDiscoveryCandidate>, AukiSdkError> {
+        self.discover_inner(None).await
+    }
+
+    /// Fetch fresh candidates advertising one exact protocol ID.
+    pub async fn discover_protocol(
+        &self,
+        protocol_id: String,
+    ) -> Result<Vec<AukiDiscoveryCandidate>, AukiSdkError> {
+        self.discover_inner(Some(protocol_id)).await
+    }
+
     /// Build one exact copyable card for the protocols the application has
     /// explicitly mounted on this peer.
     pub fn card(&self, protocols: Vec<String>) -> Result<AukiPeerCard, AukiSdkError> {
@@ -568,6 +652,24 @@ impl AukiPeer {
         wait_cleanup(self.owner.begin_shutdown())
             .await
             .map_err(|error| operation_error("shut down Auki peer", error))
+    }
+}
+
+impl AukiPeer {
+    async fn discover_inner(
+        &self,
+        protocol_id: Option<String>,
+    ) -> Result<Vec<AukiDiscoveryCandidate>, AukiSdkError> {
+        let discovery = self
+            .discovery
+            .as_ref()
+            .ok_or_else(|| operation_error("discover Auki peers", AukiDiscoveryError::Disabled))?;
+        let candidates = match protocol_id {
+            Some(protocol_id) => discovery.discover_protocol(protocol_id).await,
+            None => discovery.discover().await,
+        }
+        .map_err(|error| operation_error("discover Auki peers", error))?;
+        Ok(candidates.into_iter().map(Into::into).collect())
     }
 }
 
@@ -646,6 +748,7 @@ mod tests {
         assert_send_sync::<AukiPeerProtocols>();
         assert_send_sync::<RustAukiPeerRoutes>();
         assert_send_sync::<AukiPeerLifecycle>();
+        assert_send_sync::<RustAukiDiscovery>();
     }
 
     #[test]

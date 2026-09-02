@@ -19,9 +19,10 @@ mod facade {
     use std::cell::RefCell;
 
     use auki_sdk::{
-        AukiPeer as SdkPeer, AukiPeerBootstrap, AukiPeerConfig, AukiPeerExit, AukiPeerLifecycle,
-        AukiPeerProtocols, AuthClient, AuthEnvironment, Credentials, DomainDescriptor,
-        DomainSelection,
+        AukiDiscovery as SdkDiscovery, AukiDiscoveryCandidate as SdkDiscoveryCandidate,
+        AukiDiscoverySource, AukiPeer as SdkPeer, AukiPeerBootstrap, AukiPeerConfig, AukiPeerExit,
+        AukiPeerLifecycle, AukiPeerProtocols, AuthClient, AuthEnvironment, Credentials,
+        DdsTrackerMode, DomainDescriptor, DomainSelection,
     };
     use js_sys::{Array, Promise};
     use uuid::Uuid;
@@ -29,6 +30,25 @@ mod facade {
     use wasm_bindgen_futures::future_to_promise;
 
     use crate::protocol_support::{js_context, js_error};
+
+    /// Explicit DDS tracker behavior for a browser peer.
+    #[wasm_bindgen]
+    #[derive(Clone, Copy)]
+    pub enum AukiDiscoveryMode {
+        /// Read fresh advertisements without publishing this peer.
+        DiscoverOnly,
+        /// Read advertisements and maintain this peer's short-lived lease.
+        DiscoverAndAdvertise,
+    }
+
+    impl From<AukiDiscoveryMode> for DdsTrackerMode {
+        fn from(mode: AukiDiscoveryMode) -> Self {
+            match mode {
+                AukiDiscoveryMode::DiscoverOnly => Self::DiscoverOnly,
+                AukiDiscoveryMode::DiscoverAndAdvertise => Self::DiscoverAndAdvertise,
+            }
+        }
+    }
 
     /// Authenticated User session used to inspect Domains and start peers.
     #[wasm_bindgen]
@@ -102,6 +122,25 @@ mod facade {
                 .map_err(|error| js_context("start relay-backed browser Peer", error))?;
             Ok(AukiPeer::new(peer))
         }
+
+        /// Start a peer with one explicit DDS discovery behavior.
+        #[wasm_bindgen(js_name = startPeerWithDiscovery)]
+        pub async fn start_peer_with_discovery(
+            &self,
+            domain_id: String,
+            mode: AukiDiscoveryMode,
+        ) -> Result<AukiPeer, JsValue> {
+            let domain_id =
+                Uuid::parse_str(&domain_id).map_err(|_| js_error("Domain ID must be a UUID"))?;
+            let peer = self
+                .bootstrap
+                .clone()
+                .with_dds_tracker(mode.into())
+                .start_ephemeral_peer(DomainSelection::new(domain_id))
+                .await
+                .map_err(|error| js_context("start discoverable browser Peer", error))?;
+            Ok(AukiPeer::new(peer))
+        }
     }
 
     /// One public Domain choice returned by DDS.
@@ -147,11 +186,64 @@ mod facade {
         }
     }
 
+    /// One bounded, untrusted DDS dial candidate.
+    #[wasm_bindgen]
+    pub struct AukiDiscoveryCandidate {
+        peer_id: String,
+        routes: Vec<String>,
+        served_protocols: Vec<String>,
+        expires_at: String,
+        source: String,
+    }
+
+    impl From<SdkDiscoveryCandidate> for AukiDiscoveryCandidate {
+        fn from(candidate: SdkDiscoveryCandidate) -> Self {
+            Self {
+                peer_id: candidate.peer_id().to_string(),
+                routes: candidate.routes().iter().map(ToString::to_string).collect(),
+                served_protocols: candidate.served_protocols().to_vec(),
+                expires_at: candidate.expires_at().to_rfc3339(),
+                source: match candidate.source() {
+                    AukiDiscoverySource::DdsTracker => "dds_tracker".into(),
+                },
+            }
+        }
+    }
+
+    #[wasm_bindgen]
+    impl AukiDiscoveryCandidate {
+        #[wasm_bindgen(getter, js_name = peerId)]
+        pub fn peer_id(&self) -> String {
+            self.peer_id.clone()
+        }
+
+        #[wasm_bindgen(getter)]
+        pub fn routes(&self) -> Vec<String> {
+            self.routes.clone()
+        }
+
+        #[wasm_bindgen(getter, js_name = servedProtocols)]
+        pub fn served_protocols(&self) -> Vec<String> {
+            self.served_protocols.clone()
+        }
+
+        #[wasm_bindgen(getter, js_name = expiresAt)]
+        pub fn expires_at(&self) -> String {
+            self.expires_at.clone()
+        }
+
+        #[wasm_bindgen(getter)]
+        pub fn source(&self) -> String {
+            self.source.clone()
+        }
+    }
+
     /// One ephemeral relay-backed browser peer.
     #[wasm_bindgen]
     pub struct AukiPeer {
         inner: RefCell<Option<SdkPeer>>,
         lifecycle: AukiPeerLifecycle,
+        discovery: Option<SdkDiscovery>,
         peer_id: String,
         domain_id: String,
         wss_route: String,
@@ -160,12 +252,14 @@ mod facade {
 
     impl AukiPeer {
         fn new(peer: SdkPeer) -> Self {
+            let discovery = peer.discovery_handle().ok();
             Self {
                 lifecycle: peer.lifecycle(),
                 peer_id: peer.peer_id().to_string(),
                 domain_id: peer.domain_id().to_string(),
                 wss_route: peer.reachability().wss().to_string(),
                 tcp_route: peer.reachability().tcp().to_string(),
+                discovery,
                 inner: RefCell::new(Some(peer)),
             }
         }
@@ -202,6 +296,18 @@ mod facade {
             self.tcp_route.clone()
         }
 
+        /// Fetch every fresh same-Domain DDS candidate.
+        #[wasm_bindgen(unchecked_return_type = "AukiDiscoveryCandidate[]")]
+        pub async fn discover(&self) -> Result<Array, JsValue> {
+            self.discover_with_protocol(None).await
+        }
+
+        /// Fetch fresh candidates advertising one exact protocol ID.
+        #[wasm_bindgen(js_name = discoverProtocol, unchecked_return_type = "AukiDiscoveryCandidate[]")]
+        pub async fn discover_protocol(&self, protocol_id: String) -> Result<Array, JsValue> {
+            self.discover_with_protocol(Some(protocol_id)).await
+        }
+
         /// Resolve after explicit shutdown or reject after unexpected terminal failure.
         #[wasm_bindgen(js_name = waitStopped, unchecked_return_type = "Promise<void>")]
         pub fn wait_stopped(&self) -> Promise {
@@ -234,9 +340,33 @@ mod facade {
             }))
         }
     }
+
+    impl AukiPeer {
+        async fn discover_with_protocol(
+            &self,
+            protocol_id: Option<String>,
+        ) -> Result<Array, JsValue> {
+            let discovery = self
+                .discovery
+                .as_ref()
+                .ok_or_else(|| js_error("DDS discovery is not configured for this Auki peer"))?;
+            let candidates = match protocol_id {
+                Some(protocol_id) => discovery.discover_protocol(protocol_id).await,
+                None => discovery.discover().await,
+            }
+            .map_err(|error| js_context("discover Auki peers", error))?;
+            let values = Array::new();
+            for candidate in candidates {
+                values.push(&AukiDiscoveryCandidate::from(candidate).into());
+            }
+            Ok(values)
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use facade::{AukiDomain, AukiPeer, AukiUserSession};
+pub use facade::{
+    AukiDiscoveryCandidate, AukiDiscoveryMode, AukiDomain, AukiPeer, AukiUserSession,
+};
 #[cfg(target_arch = "wasm32")]
 pub use protocols::*;

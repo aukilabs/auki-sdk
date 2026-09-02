@@ -31,7 +31,10 @@ use auki_protocols::{
         v2::{DeclineReason, ReadFrom, StreamRequest},
     },
 };
-use auki_registry::{ClockRegistryEntry, FrameRegistryEntry, SensorBody, SensorRegistryEntry};
+use auki_registry::{
+    AxisDirection, ClockBody, ClockRegistryEntry, FrameRegistryEntry, Handedness, LengthUnit,
+    Scope, SensorBody, SensorRegistryEntry,
+};
 use auki_sdk::{
     AukiDiscovery, AukiDiscoveryCandidate, AukiDiscoverySource, AukiPeer, AuthenticatedPeer,
     Multiaddr, PeerId,
@@ -42,15 +45,17 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::contract::{
-    APP, APP_VERSION, CAMERA_CONTROL_RESOURCE_ID, CAMERA_RATE_HZ, CAMERA_RESOURCE_ID,
-    CameraMetadata, CameraRole, MAX_BLOB_BYTES, PeerCard, PeerRoutes, camera_catalog,
-    control_channel, decode_snapshot_ready, decode_snapshot_request, deterministic_jpeg,
-    encode_snapshot_ready, encode_snapshot_request, metadata, protocol_ids_for_role, reply_channel,
-    sha256_hex, stream_manifest,
+    APP, APP_VERSION, CAMERA_CLOCK_ID, CAMERA_CONTROL_RESOURCE_ID, CAMERA_FRAME_ID, CAMERA_HEIGHT,
+    CAMERA_RATE_HZ, CAMERA_RESOURCE_ID, CAMERA_WIDTH, CameraMetadata, CameraRole, MAX_BLOB_BYTES,
+    PeerCard, PeerRoutes, camera_catalog, control_channel, decode_snapshot_ready,
+    decode_snapshot_request, deterministic_jpeg, encode_snapshot_ready, encode_snapshot_request,
+    metadata, protocol_ids_for_role, reply_channel, sha256_hex, stream_manifest,
 };
 
 const MAX_STAGED_BLOBS: usize = 8;
+const MAX_PENDING_SNAPSHOTS: usize = 16;
 const MESSAGE_QUEUE_CAPACITY: usize = 16;
+const CAMERA_EVENT_QUEUE_CAPACITY: usize = 64;
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(45);
 const FRAME_PERIOD: Duration = Duration::from_millis(1_000 / CAMERA_RATE_HZ as u64);
 const FIXTURE_TIMESTAMP_NS: i64 = 1_800_000_000_000_000_000;
@@ -121,9 +126,28 @@ pub struct RemoteCamera {
 }
 
 struct PendingSnapshot {
+    registration_id: Uuid,
     peer_id: PeerId,
     route: Multiaddr,
     result: oneshot::Sender<Result<SnapshotReport, String>>,
+}
+
+struct PendingSnapshotGuard {
+    state: Arc<SharedState>,
+    request_id: String,
+    registration_id: Uuid,
+}
+
+impl Drop for PendingSnapshotGuard {
+    fn drop(&mut self) {
+        let mut snapshots = lock(&self.state.pending_snapshots);
+        if snapshots
+            .get(&self.request_id)
+            .is_some_and(|pending| pending.registration_id == self.registration_id)
+        {
+            snapshots.remove(&self.request_id);
+        }
+    }
 }
 
 struct SharedState {
@@ -136,7 +160,7 @@ struct SharedState {
     pending_snapshots: Mutex<HashMap<String, PendingSnapshot>>,
     paused: AtomicBool,
     camera_available: AtomicBool,
-    events: mpsc::UnboundedSender<CameraEvent>,
+    events: mpsc::Sender<CameraEvent>,
 }
 
 impl SharedState {
@@ -157,7 +181,9 @@ impl SharedState {
     }
 
     fn emit(&self, event: CameraEvent) {
-        let _ = self.events.send(event);
+        // Camera events are observational. Never let a slow JSONL/UI consumer
+        // apply transport backpressure or grow process memory without bound.
+        let _ = self.events.try_send(event);
     }
 
     fn stage_blob(&self, bytes: Vec<u8>) -> Result<(String, usize)> {
@@ -262,6 +288,7 @@ pub struct CameraProtocols {
     card: PeerCard,
     metadata: CameraMetadata,
     state: Arc<SharedState>,
+    remote_cache: Mutex<HashMap<(PeerId, String), RemoteCamera>>,
     clients: ProtocolClients,
     info: InfoEndpoint,
     catalog: CatalogEndpoint,
@@ -277,13 +304,13 @@ impl CameraProtocols {
         peer: &AukiPeer,
         role: CameraRole,
         display_name: impl Into<String>,
-    ) -> Result<(Self, mpsc::UnboundedReceiver<CameraEvent>)> {
+    ) -> Result<(Self, mpsc::Receiver<CameraEvent>)> {
         let local_peer_id = peer.peer_id();
-        let session_id = format!("camera-{local_peer_id}");
+        let session_id = new_session_id();
         let metadata = metadata(local_peer_id, &session_id);
         let card = peer_card(peer, role)?;
         let fixture = Arc::<[u8]>::from(deterministic_jpeg()?);
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (event_tx, event_rx) = mpsc::channel(CAMERA_EVENT_QUEUE_CAPACITY);
         let state = Arc::new(SharedState {
             role,
             domain_id: peer.domain_id(),
@@ -393,6 +420,7 @@ impl CameraProtocols {
                 card,
                 metadata,
                 state,
+                remote_cache: Mutex::new(HashMap::new()),
                 clients,
                 info,
                 catalog,
@@ -438,16 +466,15 @@ impl CameraProtocols {
         discovery: &AukiDiscovery,
         protocol: Option<&str>,
     ) -> Result<Vec<DiscoveryPeer>> {
-        let candidates = match protocol {
-            Some(protocol) => discovery.discover_protocol(protocol).await?,
-            None => discovery.discover().await?,
-        };
+        let protocol = protocol.unwrap_or(auki_protocols::stream::v2::ID);
+        let candidates = discovery.discover_protocol(protocol).await?;
         Ok(candidates.into_iter().map(discovery_peer).collect())
     }
 
     pub async fn resolve_remote(&self, target: &PeerCard) -> Result<RemoteCamera> {
         let peer_id = target.peer_id()?;
         let route = target.tcp_route()?;
+        let cache_key = remote_cache_key(peer_id, &route);
         let info = self
             .clients
             .info
@@ -459,6 +486,18 @@ impl CameraProtocols {
             info.app == APP && info.app_version == APP_VERSION,
             "target is not a compatible Camera Mesh peer"
         );
+        let cached = { lock(&self.remote_cache).get(&cache_key).cloned() };
+        if let Some(mut remote) = cached {
+            if remote.info.session_id == info.session_id
+                && remote.info.session_clock_id == info.session_clock_id
+                && remote.info.session_clock_hash == info.session_clock_hash
+            {
+                remote.info = info;
+                lock(&self.remote_cache).insert(cache_key, remote.clone());
+                return Ok(remote);
+            }
+            lock(&self.remote_cache).remove(&cache_key);
+        }
 
         let response = self
             .clients
@@ -501,8 +540,8 @@ impl CameraProtocols {
             .fetch_frame_exact(peer_id, route.clone(), &frame_ref.id, &frame_ref.hash)
             .await
             .context("fetch Camera Frame Registry entry")?;
-        validate_remote_metadata(peer_id, &sensor, &clock, &frame)?;
-        Ok(RemoteCamera {
+        validate_remote_metadata(peer_id, &info, &sensor, &clock, &frame)?;
+        let remote = RemoteCamera {
             peer_id,
             route,
             info,
@@ -510,7 +549,9 @@ impl CameraProtocols {
             clock,
             frame,
             control_channel,
-        })
+        };
+        lock(&self.remote_cache).insert(cache_key, remote.clone());
+        Ok(remote)
     }
 
     pub async fn view(&self, target: &PeerCard, frame_count: usize) -> Result<ViewReport> {
@@ -547,6 +588,10 @@ impl CameraProtocols {
                 .next()
                 .await
                 .ok_or_else(|| anyhow!("Camera Stream ended before the requested frames"))??;
+            ensure!(
+                entry.payload.dynamic_intrinsics.is_none(),
+                "Camera frame unexpectedly overrides the locked no-calibration contract"
+            );
             ensure_jpeg(&entry.payload.frame)?;
             final_hash = sha256_hex(&entry.payload.frame);
             final_bytes = entry.payload.frame.len();
@@ -588,20 +633,14 @@ impl CameraProtocols {
             &reply_channel(self.state.local_peer_id, &self.metadata),
         )?;
         let (result_tx, result_rx) = oneshot::channel();
-        ensure!(
-            lock(&self.state.pending_snapshots)
-                .insert(
-                    request_id.clone(),
-                    PendingSnapshot {
-                        peer_id: remote.peer_id,
-                        route: remote.route.clone(),
-                        result: result_tx,
-                    },
-                )
-                .is_none(),
-            "snapshot requestId is already pending"
-        );
-        if let Err(error) = send_message(
+        let _pending_guard = register_pending_snapshot(
+            &self.state,
+            request_id.clone(),
+            remote.peer_id,
+            remote.route.clone(),
+            result_tx,
+        )?;
+        send_message(
             &self.clients.message,
             remote.peer_id,
             remote.route,
@@ -609,19 +648,12 @@ impl CameraProtocols {
             "camera.request_snapshot",
             payload,
         )
-        .await
-        {
-            lock(&self.state.pending_snapshots).remove(&request_id);
-            return Err(error);
-        }
+        .await?;
         match tokio::time::timeout(SNAPSHOT_TIMEOUT, result_rx).await {
             Ok(Ok(Ok(report))) => Ok(report),
             Ok(Ok(Err(error))) => bail!(error),
             Ok(Err(_)) => bail!("snapshot reply task stopped"),
-            Err(_) => {
-                lock(&self.state.pending_snapshots).remove(&request_id);
-                bail!("snapshot reply timed out")
-            }
+            Err(_) => bail!("snapshot reply timed out"),
         }
     }
 
@@ -759,15 +791,19 @@ async fn handle_viewer_message(
         "unsupported camera reply type"
     );
     let payload = decode_snapshot_ready(event.payload())?;
-    let pending = lock(&state.pending_snapshots)
-        .remove(&payload.request_id)
-        .ok_or_else(|| anyhow!("snapshot reply has no pending request"))?;
-    if pending.peer_id != event.sender.peer_id {
-        let _ = pending
-            .result
-            .send(Err("snapshot reply came from the wrong peer".into()));
-        bail!("snapshot reply came from the wrong peer");
-    }
+    let pending = {
+        let mut snapshots = lock(&state.pending_snapshots);
+        let expected = snapshots
+            .get(&payload.request_id)
+            .ok_or_else(|| anyhow!("snapshot reply has no pending request"))?;
+        ensure!(
+            expected.peer_id == event.sender.peer_id,
+            "snapshot reply came from the wrong peer"
+        );
+        snapshots
+            .remove(&payload.request_id)
+            .expect("pending snapshot was checked above")
+    };
     let result = async {
         let receipt = blob_client
             .fetch_exact(pending.peer_id, pending.route, &payload.sha256)
@@ -899,6 +935,7 @@ fn parse_catalog(
     for row in &response.resources {
         match row {
             ResourceEntry::V2(row) if row.resource_id == CAMERA_RESOURCE_ID => {
+                ensure!(camera.is_none(), "Camera Catalog row is duplicated");
                 ensure!(
                     row.source_peer_id == peer_id.to_string(),
                     "Camera Catalog source owner mismatch"
@@ -936,6 +973,7 @@ fn parse_catalog(
             ResourceEntry::MessageChannel(channel)
                 if channel.resource_id == CAMERA_CONTROL_RESOURCE_ID =>
             {
+                ensure!(control.is_none(), "Camera control channel is duplicated");
                 ensure!(
                     channel.owner_peer_id == peer_id,
                     "Camera control channel owner mismatch"
@@ -971,6 +1009,7 @@ fn parse_catalog(
 
 fn validate_remote_metadata(
     peer_id: PeerId,
+    info: &AuthenticatedParticipantInfo,
     sensor: &SensorRegistryEntry,
     clock: &ClockRegistryEntry,
     frame: &FrameRegistryEntry,
@@ -990,16 +1029,23 @@ fn validate_remote_metadata(
         .context("invalid Camera calibration")?;
     ensure!(camera.r#type == "rgb", "Camera type is not rgb");
     ensure!(
-        camera.image_encoding == "jpeg",
-        "Camera encoding is not jpeg"
+        camera.width == CAMERA_WIDTH
+            && camera.height == CAMERA_HEIGHT
+            && camera.frame_rate_hz == CAMERA_RATE_HZ,
+        "Camera dimensions or cadence do not match the Camera Mesh contract"
     );
     ensure!(
-        camera.pixel_format == "rgb8",
-        "Camera pixel format is not rgb8"
+        camera.image_encoding == "jpeg"
+            && camera.pixel_format == "rgb8"
+            && camera.row_stride_bytes == 0
+            && camera.color_space == "srgb",
+        "Camera image bytes do not match the JPEG/rgb8/sRGB contract"
     );
     ensure!(
-        camera.width > 0 && camera.height > 0 && camera.frame_rate_hz > 0,
-        "Camera geometry/cadence is invalid"
+        camera.intrinsics_model == "none"
+            && camera.distortion_model == "none"
+            && camera.calibration.is_none(),
+        "Camera calibration does not match the locked no-calibration contract"
     );
     ensure!(
         camera.frame.peer_id == peer_id.to_string(),
@@ -1010,12 +1056,30 @@ fn validate_remote_metadata(
         "Camera frame reference mismatch"
     );
     ensure!(
-        clock.peer_id == peer_id.to_string(),
-        "Camera clock owner mismatch"
+        clock.peer_id == peer_id.to_string()
+            && clock.clock_id == CAMERA_CLOCK_ID
+            && clock.session_id == info.session_id,
+        "Camera clock identity or session mismatch"
+    );
+    let ClockBody::UtcClock(clock_meta) = &clock.body else {
+        bail!("Camera clock is not UTC")
+    };
+    ensure!(
+        clock_meta.unit == "ns"
+            && !clock_meta.monotonic
+            && clock_meta.epoch.as_deref() == Some("1970-01-01T00:00:00Z")
+            && clock_meta.scope == Scope::Global,
+        "Camera clock does not match the UTC/global nanosecond contract"
     );
     ensure!(
-        frame.peer_id == peer_id.to_string(),
-        "Camera frame owner mismatch"
+        frame.peer_id == peer_id.to_string()
+            && frame.frame_id == CAMERA_FRAME_ID
+            && frame.handedness == Handedness::Right
+            && frame.axes.x == AxisDirection::Right
+            && frame.axes.y == AxisDirection::Down
+            && frame.axes.z == AxisDirection::Forward
+            && frame.units == LengthUnit::Meters,
+        "Camera frame does not match the ROS-optical convention"
     );
     Ok(())
 }
@@ -1048,12 +1112,18 @@ fn validate_remote_manifest(
         "Stream manifest Frame Registry mismatch"
     );
     ensure!(
-        manifest.writer_mode == "live",
-        "Stream manifest writer mode mismatch"
+        manifest.writer_mode == "live" && manifest.expected_rate_hz == CAMERA_RATE_HZ,
+        "Stream manifest live cadence mismatch"
     );
     ensure!(
-        manifest.expected_rate_hz > 0,
-        "Stream manifest has no expected cadence"
+        manifest.from_frame_id.is_empty()
+            && manifest.from_frame_hash.is_empty()
+            && manifest.to_frame_id.is_empty()
+            && manifest.to_frame_hash.is_empty()
+            && manifest.map_peer_id.is_empty()
+            && manifest.map_id.is_empty()
+            && manifest.map_hash.is_empty(),
+        "Camera Stream manifest contains fields outside the locked contract"
     );
     Ok(())
 }
@@ -1064,6 +1134,49 @@ fn ensure_jpeg(bytes: &[u8]) -> Result<()> {
         "Camera frame is not a JPEG"
     );
     Ok(())
+}
+
+fn remote_cache_key(peer_id: PeerId, route: &Multiaddr) -> (PeerId, String) {
+    (peer_id, route.to_string())
+}
+
+fn new_session_id() -> String {
+    Uuid::new_v4().to_string()
+}
+
+fn register_pending_snapshot(
+    state: &Arc<SharedState>,
+    request_id: String,
+    peer_id: PeerId,
+    route: Multiaddr,
+    result: oneshot::Sender<Result<SnapshotReport, String>>,
+) -> Result<PendingSnapshotGuard> {
+    let registration_id = Uuid::new_v4();
+    {
+        let mut snapshots = lock(&state.pending_snapshots);
+        ensure!(
+            !snapshots.contains_key(&request_id),
+            "snapshot requestId is already pending"
+        );
+        ensure!(
+            snapshots.len() < MAX_PENDING_SNAPSHOTS,
+            "too many snapshot requests are awaiting replies"
+        );
+        snapshots.insert(
+            request_id.clone(),
+            PendingSnapshot {
+                registration_id,
+                peer_id,
+                route,
+                result,
+            },
+        );
+    }
+    Ok(PendingSnapshotGuard {
+        state: Arc::clone(state),
+        request_id,
+        registration_id,
+    })
 }
 
 fn peer_card(peer: &AukiPeer, role: CameraRole) -> Result<PeerCard> {
@@ -1133,8 +1246,319 @@ fn collect_close<T: std::fmt::Display>(
 mod tests {
     use super::*;
 
+    fn peer() -> PeerId {
+        "12D3KooWH3okqZcRaHwy4keYWo9eAaCDwhePYajtHsCM4Egsptan"
+            .parse()
+            .unwrap()
+    }
+
+    fn fixture_remote() -> (CameraMetadata, RemoteCamera) {
+        let peer_id = peer();
+        let metadata = metadata(peer_id, "camera-test-session");
+        let info = AuthenticatedParticipantInfo {
+            app: APP.into(),
+            app_version: APP_VERSION.into(),
+            name: "test camera".into(),
+            session_id: "camera-test-session".into(),
+            session_clock_id: metadata.clock_ref.id.clone(),
+            session_clock_hash: metadata.clock_ref.hash.clone(),
+            session_now_ns: 0,
+            peer_id,
+            app_instance: "native/publisher".into(),
+        };
+        let remote = RemoteCamera {
+            peer_id,
+            route: format!("/ip4/127.0.0.1/tcp/9000/p2p/{peer_id}")
+                .parse()
+                .unwrap(),
+            info,
+            sensor: metadata.sensor.clone(),
+            clock: metadata.clock.clone(),
+            frame: metadata.frame.clone(),
+            control_channel: control_channel(peer_id, &metadata),
+        };
+        (metadata, remote)
+    }
+
+    fn fixture_state() -> (Arc<SharedState>, mpsc::Receiver<CameraEvent>) {
+        let (events, receiver) = mpsc::channel(CAMERA_EVENT_QUEUE_CAPACITY);
+        (
+            Arc::new(SharedState {
+                role: CameraRole::Viewer,
+                domain_id: Uuid::nil(),
+                local_peer_id: peer(),
+                allowed: Mutex::new(HashSet::new()),
+                pending_approvals: Mutex::new(HashSet::new()),
+                blobs: Mutex::new(VecDeque::new()),
+                pending_snapshots: Mutex::new(HashMap::new()),
+                paused: AtomicBool::new(false),
+                camera_available: AtomicBool::new(false),
+                events,
+            }),
+            receiver,
+        )
+    }
+
+    fn fixture_route() -> Multiaddr {
+        format!("/ip4/127.0.0.1/tcp/9000/p2p/{}", peer())
+            .parse()
+            .unwrap()
+    }
+
     #[test]
     fn deterministic_frame_passes_camera_guard() {
         ensure_jpeg(&deterministic_jpeg().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn accepts_only_the_locked_remote_registry_contract() {
+        let (_, remote) = fixture_remote();
+        validate_remote_metadata(
+            remote.peer_id,
+            &remote.info,
+            &remote.sensor,
+            &remote.clock,
+            &remote.frame,
+        )
+        .unwrap();
+
+        let mut wrong_sensor = remote.sensor.clone();
+        let SensorBody::Camera(camera) = &mut wrong_sensor.body else {
+            unreachable!()
+        };
+        camera.width += 1;
+        assert!(
+            validate_remote_metadata(
+                remote.peer_id,
+                &remote.info,
+                &wrong_sensor,
+                &remote.clock,
+                &remote.frame,
+            )
+            .is_err()
+        );
+
+        let mut wrong_clock = remote.clock.clone();
+        let ClockBody::UtcClock(clock) = &mut wrong_clock.body else {
+            unreachable!()
+        };
+        clock.scope = Scope::DomainLocal;
+        assert!(
+            validate_remote_metadata(
+                remote.peer_id,
+                &remote.info,
+                &remote.sensor,
+                &wrong_clock,
+                &remote.frame,
+            )
+            .is_err()
+        );
+
+        let mut wrong_frame = remote.frame.clone();
+        wrong_frame.axes.y = AxisDirection::Up;
+        assert!(
+            validate_remote_metadata(
+                remote.peer_id,
+                &remote.info,
+                &remote.sensor,
+                &remote.clock,
+                &wrong_frame,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn accepts_only_the_locked_live_stream_manifest() {
+        let (metadata, remote) = fixture_remote();
+        let expected = stream_manifest(&metadata);
+        validate_remote_manifest(&remote, &expected).unwrap();
+
+        let mut wrong_rate = expected.clone();
+        wrong_rate.expected_rate_hz += 1;
+        assert!(validate_remote_manifest(&remote, &wrong_rate).is_err());
+
+        let mut unexpected_field = expected;
+        unexpected_field.from_frame_id = "unexpected".into();
+        assert!(validate_remote_manifest(&remote, &unexpected_field).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_camera_and_control_catalog_rows() {
+        let (metadata, _) = fixture_remote();
+        let catalog = camera_catalog(peer(), &metadata);
+        parse_catalog(peer(), &catalog).unwrap();
+
+        let mut duplicate_camera = catalog.clone();
+        duplicate_camera
+            .resources
+            .push(catalog.resources[0].clone());
+        assert!(
+            parse_catalog(peer(), &duplicate_camera)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicated")
+        );
+
+        let mut duplicate_control = catalog.clone();
+        duplicate_control
+            .resources
+            .push(catalog.resources[1].clone());
+        assert!(
+            parse_catalog(peer(), &duplicate_control)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicated")
+        );
+    }
+
+    #[test]
+    fn remote_cache_identity_includes_the_exact_route() {
+        let peer_id = peer();
+        let first: Multiaddr = format!("/ip4/127.0.0.1/tcp/9000/p2p/{peer_id}")
+            .parse()
+            .unwrap();
+        let second: Multiaddr = format!("/ip4/127.0.0.1/tcp/9001/p2p/{peer_id}")
+            .parse()
+            .unwrap();
+        assert_eq!(
+            remote_cache_key(peer_id, &first),
+            remote_cache_key(peer_id, &first)
+        );
+        assert_ne!(
+            remote_cache_key(peer_id, &first),
+            remote_cache_key(peer_id, &second)
+        );
+    }
+
+    #[test]
+    fn camera_session_ids_are_fresh_uuid_v4_values() {
+        let first = new_session_id();
+        let second = new_session_id();
+        assert_ne!(first, second);
+        assert_eq!(Uuid::parse_str(&first).unwrap().get_version_num(), 4);
+        assert_eq!(Uuid::parse_str(&second).unwrap().get_version_num(), 4);
+    }
+
+    #[test]
+    fn duplicate_snapshot_registration_preserves_the_original_waiter() {
+        let (state, _events) = fixture_state();
+        let (first_result, _first_receiver) = oneshot::channel();
+        let first = register_pending_snapshot(
+            &state,
+            "same-request".into(),
+            peer(),
+            fixture_route(),
+            first_result,
+        )
+        .unwrap();
+        let first_registration = first.registration_id;
+
+        let (duplicate_result, _duplicate_receiver) = oneshot::channel();
+        let error = register_pending_snapshot(
+            &state,
+            "same-request".into(),
+            peer(),
+            fixture_route(),
+            duplicate_result,
+        )
+        .err()
+        .expect("duplicate registration must fail");
+        assert!(error.to_string().contains("already pending"));
+        assert_eq!(
+            lock(&state.pending_snapshots)
+                .get("same-request")
+                .unwrap()
+                .registration_id,
+            first_registration
+        );
+
+        drop(first);
+        assert!(lock(&state.pending_snapshots).is_empty());
+    }
+
+    #[test]
+    fn stale_snapshot_guard_does_not_remove_a_reused_request_id() {
+        let (state, _events) = fixture_state();
+        let (first_result, _first_receiver) = oneshot::channel();
+        let first = register_pending_snapshot(
+            &state,
+            "reused-request".into(),
+            peer(),
+            fixture_route(),
+            first_result,
+        )
+        .unwrap();
+        lock(&state.pending_snapshots).remove("reused-request");
+
+        let (second_result, _second_receiver) = oneshot::channel();
+        let second = register_pending_snapshot(
+            &state,
+            "reused-request".into(),
+            peer(),
+            fixture_route(),
+            second_result,
+        )
+        .unwrap();
+        let second_registration = second.registration_id;
+        drop(first);
+        assert_eq!(
+            lock(&state.pending_snapshots)
+                .get("reused-request")
+                .unwrap()
+                .registration_id,
+            second_registration
+        );
+        drop(second);
+        assert!(lock(&state.pending_snapshots).is_empty());
+    }
+
+    #[test]
+    fn pending_snapshot_capacity_is_bounded() {
+        let (state, _events) = fixture_state();
+        let mut guards = Vec::new();
+        for index in 0..MAX_PENDING_SNAPSHOTS {
+            let (result, _receiver) = oneshot::channel();
+            guards.push(
+                register_pending_snapshot(
+                    &state,
+                    format!("request-{index}"),
+                    peer(),
+                    fixture_route(),
+                    result,
+                )
+                .unwrap(),
+            );
+        }
+        let (overflow_result, _overflow_receiver) = oneshot::channel();
+        let error = register_pending_snapshot(
+            &state,
+            "overflow".into(),
+            peer(),
+            fixture_route(),
+            overflow_result,
+        )
+        .err()
+        .expect("capacity overflow must fail");
+        assert!(error.to_string().contains("too many snapshot requests"));
+        assert_eq!(lock(&state.pending_snapshots).len(), MAX_PENDING_SNAPSHOTS);
+
+        drop(guards);
+        assert!(lock(&state.pending_snapshots).is_empty());
+    }
+
+    #[test]
+    fn camera_event_queue_drops_overflow_without_growing() {
+        let (state, mut events) = fixture_state();
+        for index in 0..(CAMERA_EVENT_QUEUE_CAPACITY + 8) {
+            state.emit(CameraEvent::RuntimeError {
+                error: format!("event-{index}"),
+            });
+        }
+        let mut received = 0;
+        while events.try_recv().is_ok() {
+            received += 1;
+        }
+        assert_eq!(received, CAMERA_EVENT_QUEUE_CAPACITY);
     }
 }

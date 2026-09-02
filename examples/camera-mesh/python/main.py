@@ -29,6 +29,7 @@ HEIGHT = 270
 RATE_HZ = 5
 MAX_STAGED_BLOBS = 8
 MAX_PENDING_SNAPSHOTS = 16
+MAX_REPLY_ROUTES = 4
 REQUEST_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 REGISTRY_HASH = re.compile(r"^[0-9a-f]{32}$")
@@ -89,8 +90,65 @@ def target_parts(target: Any) -> tuple[str, str]:
     return peer_id, choose_tcp(target.get("routes"))
 
 
+def snapshot_reply_route(target: Any, requester_peer_id: str) -> str:
+    require(isinstance(target, dict), "snapshot reply target is missing")
+    require(target.get("peerId") == requester_peer_id, "snapshot reply target is not the authenticated requester")
+    routes = target.get("routes")
+    require(isinstance(routes, list), "snapshot reply routes must be an array")
+    require(0 < len(routes) <= MAX_REPLY_ROUTES, "snapshot reply target must have 1..4 routes")
+    require(all(isinstance(route, str) and route for route in routes), "snapshot reply route is empty")
+    require(len(set(routes)) == len(routes), "snapshot reply routes must be unique")
+    suffix = f"/p2p/{requester_peer_id}"
+    require(all(route.endswith(suffix) for route in routes), "snapshot reply route does not terminate at the requester")
+    return choose_tcp(routes)
+
+
 def is_jpeg(data: bytes) -> bool:
     return len(data) > 4 and data[:2] == b"\xff\xd8" and data[-2:] == b"\xff\xd9"
+
+
+def validate_remote_entries(
+    peer_id: str,
+    info: dict[str, Any],
+    refs: dict[str, dict[str, str]],
+    entries: dict[str, dict[str, Any]],
+) -> None:
+    sensor = entries["sensor"]
+    require(sensor.get("peer_id") == peer_id and sensor.get("sensor_id") == CAMERA_RESOURCE_ID, "Sensor identity mismatch")
+    require(sensor.get("kind") == "camera" and sensor.get("type") == "rgb", "Sensor type mismatch")
+    require(sensor.get("width") == WIDTH and sensor.get("height") == HEIGHT, "Sensor dimensions mismatch")
+    require(sensor.get("frame_rate_hz") == RATE_HZ, "Sensor frame rate mismatch")
+    require(
+        sensor.get("image_encoding") == "jpeg"
+        and sensor.get("pixel_format") == "rgb8"
+        and sensor.get("row_stride_bytes") == 0
+        and sensor.get("color_space") == "srgb",
+        "Sensor image contract mismatch",
+    )
+    require(
+        sensor.get("intrinsics_model") == "none"
+        and sensor.get("distortion_model") == "none"
+        and sensor.get("calibration") is None,
+        "Sensor calibration contract mismatch",
+    )
+    require(sensor.get("frame") == refs["frame"], "Sensor frame reference mismatch")
+
+    clock = entries["clock"]
+    require(clock.get("peer_id") == peer_id and clock.get("clock_id") == CLOCK_ID, "Clock identity mismatch")
+    require(clock.get("session_id") == info.get("session_id"), "Clock and Info session IDs differ")
+    require(
+        clock.get("type") == "utc_clock"
+        and clock.get("unit") == "ns"
+        and clock.get("monotonic") is False
+        and clock.get("epoch") == "1970-01-01T00:00:00Z"
+        and clock.get("scope") == "global",
+        "Clock contract mismatch",
+    )
+
+    frame = entries["frame"]
+    require(frame.get("peer_id") == peer_id and frame.get("frame_id") == FRAME_ID, "Frame identity mismatch")
+    require(frame.get("handedness") == "right" and frame.get("units") == "meters", "Frame convention mismatch")
+    require(frame.get("axes") == {"x": "right", "y": "down", "z": "forward"}, "Frame is not ROS optical")
 
 
 async def authenticate() -> Any:
@@ -114,19 +172,20 @@ class CameraMesh:
         self.peer_id = peer.peer_id
         self.role = role
         self.node_name = os.environ.get("AUKI_NODE_NAME", f"python-camera-{role}")
-        self.session_id = f"camera-{self.peer_id}"
+        self.session_id = str(uuid.uuid4())
         self.allowed: set[str] = set()
         self.pending: set[str] = set()
         self.endpoints: list[Any] = []
         self.receiver: Any | None = None
         self.receiver_task: asyncio.Task[None] | None = None
-        self.senders: dict[tuple[str, str, str], Any] = {}
+        self.senders: dict[tuple[str, str, str, str, str], Any] = {}
         self.staged: OrderedDict[str, bytes] = OrderedDict()
         self.snapshot_waiters: dict[str, tuple[str, asyncio.Future[dict[str, Any]]]] = {}
-        self.remote_metadata: dict[str, dict[str, Any]] = {}
+        self.remote_metadata: dict[tuple[str, str], dict[str, Any]] = {}
         self.running = asyncio.Event()
         self.running.set()
         self.closing = False
+        self.close_task: asyncio.Task[None] | None = None
 
         frame_entry = {
             "peer_id": self.peer_id,
@@ -430,6 +489,17 @@ class CameraMesh:
         info = await self.info.fetch_exact(peer_id, route)
         require(info["peer_id"] == peer_id, "Info returned the wrong Peer ID")
         require(info["app"] == APP and info["app_version"] == APP_VERSION, "Info app mismatch")
+        cache_key = (peer_id, route)
+        cached = self.remote_metadata.get(cache_key)
+        if (
+            cached is not None
+            and cached["info"]["session_id"] == info["session_id"]
+            and cached["info"]["session_clock_id"] == info["session_clock_id"]
+            and cached["info"]["session_clock_hash"] == info["session_clock_hash"]
+        ):
+            cached["info"] = info
+            return cached
+        self.remote_metadata.pop(cache_key, None)
         catalog = await self.catalog.fetch_resources_exact(
             peer_id, route, ["sensor_log", "message_channel"]
         )
@@ -469,21 +539,9 @@ class CameraMesh:
             require(envelope["id"] == ref["id"], f"{kind} Registry ID mismatch")
             require(envelope["hash"] == ref["hash"], f"{kind} Registry hash mismatch")
             entries[kind] = entry
-        sensor = entries["sensor"]
-        require(sensor.get("peer_id") == peer_id and sensor.get("sensor_id") == CAMERA_RESOURCE_ID, "Sensor identity mismatch")
-        require(sensor.get("kind") == "camera" and sensor.get("type") == "rgb", "Sensor type mismatch")
-        require(sensor.get("width") == WIDTH and sensor.get("height") == HEIGHT, "Sensor dimensions mismatch")
-        require(sensor.get("image_encoding") == "jpeg" and sensor.get("row_stride_bytes") == 0, "Sensor encoding mismatch")
-        require(sensor.get("frame") == refs["frame"], "Sensor frame reference mismatch")
-        clock = entries["clock"]
-        require(clock.get("peer_id") == peer_id and clock.get("clock_id") == CLOCK_ID, "Clock identity mismatch")
-        require(clock.get("type") == "utc_clock" and clock.get("unit") == "ns" and clock.get("monotonic") is False, "Clock contract mismatch")
-        frame = entries["frame"]
-        require(frame.get("peer_id") == peer_id and frame.get("frame_id") == FRAME_ID, "Frame identity mismatch")
-        require(frame.get("handedness") == "right" and frame.get("units") == "meters", "Frame convention mismatch")
-        require(frame.get("axes") == {"x": "right", "y": "down", "z": "forward"}, "Frame is not ROS optical")
+        validate_remote_entries(peer_id, info, refs, entries)
         metadata = {"peerId": peer_id, "route": route, "info": info, "catalog": camera, "control": control, "refs": refs, "entries": entries}
-        self.remote_metadata[peer_id] = metadata
+        self.remote_metadata[cache_key] = metadata
         return metadata
 
     def validate_stream_manifest(self, manifest: dict[str, Any], metadata: dict[str, Any]) -> None:
@@ -498,19 +556,37 @@ class CameraMesh:
             "frame_hash": refs["frame"]["hash"],
             "resource_id": CAMERA_RESOURCE_ID,
             "payload": "camera_frame",
+            "from_frame_id": "",
+            "from_frame_hash": "",
+            "to_frame_id": "",
+            "to_frame_hash": "",
+            "writer_mode": "live",
+            "expected_rate_hz": RATE_HZ,
+            "map_peer_id": "",
+            "map_id": "",
+            "map_hash": "",
         }
         for key, value in expected.items():
             require(manifest.get(key) == value, f"Stream {key} does not match verified metadata")
 
     async def view(self, target: Any, frame_limit: int) -> dict[str, Any]:
-        peer_id, route = target_parts(target)
+        candidate_peer_id = target.get("peerId") if isinstance(target, dict) else None
+        target_peer_id = candidate_peer_id if isinstance(candidate_peer_id, str) else None
         checks = {"info": False, "catalog": False, "registry": False, "stream": False}
         received = 0
         last_sha: str | None = None
+        last_bytes = 0
         try:
+            require(
+                isinstance(frame_limit, int)
+                and not isinstance(frame_limit, bool)
+                and 1 <= frame_limit <= 64,
+                "frames must be an integer between 1 and 64",
+            )
+            peer_id, route = target_parts(target)
+            target_peer_id = peer_id
             metadata = await self.resolve_remote_metadata(target)
             checks.update({"info": True, "catalog": True, "registry": True})
-            require(1 <= frame_limit <= 100, "frames must be between 1 and 100")
             subscription = await self.stream.subscribe_exact(
                 peer_id,
                 route,
@@ -527,15 +603,36 @@ class CameraMesh:
                     image = bytes(auki_sdk.decode_camera_frame_image(item["entry"]["payload"]))
                     require(is_jpeg(image), "CameraFrame payload is not a JPEG")
                     received += 1
+                    last_bytes = len(image)
                     last_sha = hashlib.sha256(image).hexdigest()
             finally:
                 await subscription.cancel()
-            return {"ok": True, "targetPeerId": peer_id, "checks": checks, "frames": received, "frameSha256": last_sha}
+            return {
+                "ok": True,
+                "targetPeerId": peer_id,
+                "checks": checks,
+                "frames": received,
+                "frameSha256": last_sha,
+                "frameBytes": last_bytes,
+            }
         except Exception as error:
-            return {"ok": False, "targetPeerId": peer_id, "checks": checks, "frames": received, "error": error_text(error)}
+            return {
+                "ok": False,
+                "targetPeerId": target_peer_id,
+                "checks": checks,
+                "frames": received,
+                "error": error_text(error),
+            }
 
     async def sender_for(self, peer_id: str, route: str, channel: dict[str, Any]) -> Any:
-        key = (peer_id, route, channel["resource_id"])
+        clock = channel["clock"]
+        key = (
+            peer_id,
+            route,
+            channel["resource_id"],
+            clock["id"],
+            clock["hash"],
+        )
         sender = self.senders.get(key)
         if sender is None:
             sender = await self.message.open_exact(peer_id, route, channel)
@@ -544,12 +641,39 @@ class CameraMesh:
             self.senders[key] = sender
         return sender
 
+    async def send_message(
+        self,
+        peer_id: str,
+        route: str,
+        channel: dict[str, Any],
+        kind: str,
+        payload: bytes,
+    ) -> None:
+        clock = channel["clock"]
+        key = (
+            peer_id,
+            route,
+            channel["resource_id"],
+            clock["id"],
+            clock["hash"],
+        )
+        sender = await self.sender_for(peer_id, route, channel)
+        try:
+            await sender.send(kind, time.time_ns(), payload)
+        except BaseException:
+            if self.senders.get(key) is sender:
+                self.senders.pop(key, None)
+            try:
+                await sender.close()
+            except BaseException:
+                pass
+            raise
+
     async def send_control(self, target: Any, kind: str) -> str:
         require(self.role == "viewer", "only a viewer can send camera controls")
         peer_id, route = target_parts(target)
-        metadata = self.remote_metadata.get(peer_id) or await self.resolve_remote_metadata(target)
-        sender = await self.sender_for(peer_id, route, metadata["control"])
-        await sender.send(kind, time.time_ns(), b"")
+        metadata = await self.resolve_remote_metadata(target)
+        await self.send_message(peer_id, route, metadata["control"], kind, b"")
         return peer_id
 
     async def request_snapshot(self, target: Any, request_id: str | None) -> dict[str, Any]:
@@ -559,25 +683,31 @@ class CameraMesh:
         require(REQUEST_ID.fullmatch(request_id) is not None, "invalid requestId")
         require(request_id not in self.snapshot_waiters, "requestId is already pending")
         require(len(self.snapshot_waiters) < MAX_PENDING_SNAPSHOTS, "too many pending snapshots")
-        metadata = self.remote_metadata.get(peer_id) or await self.resolve_remote_metadata(target)
         loop = asyncio.get_running_loop()
         future: asyncio.Future[dict[str, Any]] = loop.create_future()
-        self.snapshot_waiters[request_id] = (peer_id, future)
-        routes = self.peer.routes
-        payload = json.dumps(
-            {
-                "version": 1,
-                "requestId": request_id,
-                "reply": {
-                    "target": {"peerId": self.peer_id, "routes": [routes.tcp, routes.wss]},
-                    "channel": self.reply_channel,
-                },
-            },
-            separators=(",", ":"),
-        ).encode()
+        waiting = (peer_id, future)
+        self.snapshot_waiters[request_id] = waiting
         try:
-            sender = await self.sender_for(peer_id, route, metadata["control"])
-            await sender.send("camera.request_snapshot", time.time_ns(), payload)
+            routes = self.peer.routes
+            payload = json.dumps(
+                {
+                    "version": 1,
+                    "requestId": request_id,
+                    "reply": {
+                        "target": {"peerId": self.peer_id, "routes": [routes.tcp, routes.wss]},
+                        "channel": self.reply_channel,
+                    },
+                },
+                separators=(",", ":"),
+            ).encode()
+            metadata = await self.resolve_remote_metadata(target)
+            await self.send_message(
+                peer_id,
+                route,
+                metadata["control"],
+                "camera.request_snapshot",
+                payload,
+            )
             announcement = await asyncio.wait_for(future, timeout=30)
             receipt = await self.blob.fetch_exact(peer_id, route, announcement["sha256"])
             data = bytes(receipt["bytes"])
@@ -590,7 +720,8 @@ class CameraMesh:
         except Exception as error:
             return {"ok": False, "requestId": request_id, "targetPeerId": peer_id, "error": error_text(error)}
         finally:
-            self.snapshot_waiters.pop(request_id, None)
+            if self.snapshot_waiters.get(request_id) is waiting:
+                self.snapshot_waiters.pop(request_id, None)
 
     async def drain_messages(self) -> None:
         require(self.receiver is not None, "Message receiver is not mounted")
@@ -632,8 +763,7 @@ class CameraMesh:
         reply = request.get("reply")
         require(isinstance(reply, dict), "snapshot reply address is missing")
         target = reply.get("target")
-        require(isinstance(target, dict) and target.get("peerId") == requester["peer_id"], "snapshot reply target is not the authenticated requester")
-        route = choose_tcp(target.get("routes"))
+        route = snapshot_reply_route(target, requester["peer_id"])
         channel = reply.get("channel")
         require(isinstance(channel, dict), "snapshot reply channel is missing")
         require(channel.get("variant") == "message_channel", "snapshot reply channel variant is invalid")
@@ -647,12 +777,13 @@ class CameraMesh:
         while len(self.staged) > MAX_STAGED_BLOBS:
             self.staged.popitem(last=False)
         emit({"event": "snapshot_staged", "peerId": requester["peer_id"], "requestId": request_id, "sha256": JPEG_SHA256, "size": len(JPEG)})
-        sender = await self.sender_for(requester["peer_id"], route, channel)
         response = json.dumps(
             {"version": 1, "requestId": request_id, "sha256": JPEG_SHA256, "size": len(JPEG)},
             separators=(",", ":"),
         ).encode()
-        await sender.send("camera.snapshot_ready", time.time_ns(), response)
+        await self.send_message(
+            requester["peer_id"], route, channel, "camera.snapshot_ready", response
+        )
 
     def handle_snapshot_ready(self, event: dict[str, Any]) -> None:
         sender = event["sender"]
@@ -674,10 +805,13 @@ class CameraMesh:
             future.set_result({"sha256": sha256, "size": size})
 
     async def close(self) -> None:
-        if self.closing:
-            return
-        self.closing = True
-        self.running.set()
+        if self.close_task is None:
+            self.closing = True
+            self.running.set()
+            self.close_task = asyncio.create_task(self.close_owned())
+        await asyncio.shield(self.close_task)
+
+    async def close_owned(self) -> None:
         errors: list[str] = []
         for _key, sender in list(self.senders.items())[::-1]:
             try:
@@ -728,7 +862,29 @@ async def read_commands(mesh: CameraMesh, reader: asyncio.StreamReader) -> None:
                 except Exception as error:
                     emit({"event": "approve_result", "id": command_id, "ok": False, "peerId": command.get("peerId"), "error": error_text(error)})
             elif name == "view":
-                result = await mesh.view(command["target"], int(command.get("frames", 3)))
+                target = command.get("target")
+                try:
+                    frames = command.get("frames", 3)
+                    require(
+                        isinstance(frames, int) and not isinstance(frames, bool),
+                        "frames must be an integer",
+                    )
+                    result = await mesh.view(target, frames)
+                except Exception as error:
+                    candidate_peer_id = target.get("peerId") if isinstance(target, dict) else None
+                    target_peer_id = candidate_peer_id if isinstance(candidate_peer_id, str) else None
+                    result = {
+                        "ok": False,
+                        "targetPeerId": target_peer_id,
+                        "checks": {
+                            "info": False,
+                            "catalog": False,
+                            "registry": False,
+                            "stream": False,
+                        },
+                        "frames": 0,
+                        "error": error_text(error),
+                    }
                 emit({"event": "view_result", "id": command_id, **result})
             elif name in ("pause", "resume"):
                 try:
@@ -738,10 +894,11 @@ async def read_commands(mesh: CameraMesh, reader: asyncio.StreamReader) -> None:
                     peer_id = command.get("target", {}).get("peerId")
                     emit({"event": "control_result", "id": command_id, "ok": False, "control": f"camera.{name}", "targetPeerId": peer_id, "error": error_text(error)})
             elif name == "snapshot":
+                request_id = command.get("requestId") or str(uuid.uuid4())
                 try:
-                    result = await mesh.request_snapshot(command["target"], command.get("requestId"))
+                    result = await mesh.request_snapshot(command["target"], request_id)
                 except Exception as error:
-                    result = {"ok": False, "requestId": command.get("requestId"), "targetPeerId": command.get("target", {}).get("peerId"), "error": error_text(error)}
+                    result = {"ok": False, "requestId": request_id, "targetPeerId": command.get("target", {}).get("peerId"), "error": error_text(error)}
                 emit({"event": "snapshot_result", "id": command_id, **result})
             elif name == "shutdown":
                 emit({"event": "shutdown_ack", "id": command_id})

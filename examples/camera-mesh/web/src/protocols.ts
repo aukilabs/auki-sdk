@@ -44,6 +44,7 @@ const FRAME_ID = "camera/optical";
 const MAX_STAGED_BLOBS = 8;
 const MAX_PENDING_SNAPSHOTS = 16;
 const MAX_BLOB_BYTES = 20 * 1024 * 1024;
+const SNAPSHOT_TIMEOUT_MS = 45_000;
 const EMPTY_BYTES = new Uint8Array();
 
 type Awaitable<T> = T | Promise<T>;
@@ -82,8 +83,8 @@ export interface SnapshotRequest {
   readonly event: AukiMessageEvent;
   readonly requester: AukiAuthenticatedPeer;
   readonly requestId: string;
-  /** Authenticated-requester-bound address supplied by the viewer, if any. */
-  readonly reply?: SnapshotReplyAddress;
+  /** Authenticated-requester-bound address supplied by the viewer. */
+  readonly reply: SnapshotReplyAddress;
 }
 
 export interface StagedBlob {
@@ -94,7 +95,7 @@ export interface StagedBlob {
 export interface SnapshotReady extends StagedBlob {
   readonly requester: AukiAuthenticatedPeer;
   readonly requestId: string;
-  readonly reply?: SnapshotReplyAddress;
+  readonly reply: SnapshotReplyAddress;
 }
 
 export interface SnapshotAvailable extends StagedBlob {
@@ -112,6 +113,8 @@ export interface CameraControlHandlers {
   snapshotReady?(snapshot: SnapshotReady): Awaitable<void>;
   /** Called only for a pending request bound to this authenticated publisher. */
   snapshotAvailable?(snapshot: SnapshotAvailable): Awaitable<void>;
+  /** Called when a sent snapshot request receives no announcement in time. */
+  snapshotExpired?(requestId: string): Awaitable<void>;
   ignored?(event: AukiMessageEvent, reason: string): void;
 }
 
@@ -169,6 +172,11 @@ type CameraCatalogDescription = {
   readonly frame: AukiRegistryRef;
 };
 
+type PendingSnapshot = {
+  readonly peerId: string;
+  readonly timeout?: number;
+};
+
 /** Info/Catalog/Registry/Blob/Message composition for one camera-mesh peer. */
 export class CameraProtocols {
   readonly metadata: CameraRegistryMetadata;
@@ -178,7 +186,7 @@ export class CameraProtocols {
   private readonly clients: Client[] = [];
   private readonly blobs = new Map<string, Uint8Array>();
   private readonly operations = new Set<Promise<unknown>>();
-  private readonly pendingSnapshots = new Map<string, string>();
+  private readonly pendingSnapshots = new Map<string, PendingSnapshot>();
   private readonly controlChannel: AukiMessageChannelResource;
   private readonly sessionId: string;
   private readonly publisherCatalog?: AukiCatalogResourcesResponse;
@@ -197,7 +205,7 @@ export class CameraProtocols {
     private readonly peer: AukiPeer,
     private readonly options: CameraProtocolOptions,
   ) {
-    this.sessionId = options.sessionId ?? `camera-${peer.peerId}`;
+    this.sessionId = options.sessionId ?? globalThis.crypto.randomUUID();
     this.metadata = prepareCameraMetadata(peer.peerId, this.sessionId);
     this.controlChannel = {
       variant: "message_channel",
@@ -275,6 +283,8 @@ export class CameraProtocols {
           ["sensor_log", "message_channel"],
         ),
       ]);
+      assert(info.app === APP, `Info app must be ${APP}`);
+      assert(info.appVersion === APP_VERSION, `Info app version must be ${APP_VERSION}`);
       this.emit(
         `Catalog fetched ${catalog.resources.length} row(s): ${catalog.resources
           .map((resource) => `${String(resource.variant)}:${String(resource["resource_id"])}`)
@@ -285,26 +295,29 @@ export class CameraProtocols {
       assert(info.sessionClockHash === camera.clock.hash, "Info and Catalog clock hashes differ");
       const controlChannel = parseControlChannel(catalog.resources, target.peerId, camera.clock);
       const registry = required(this.registryClient, "Registry client");
-      const [sensorEntry, clockEntry, frameEntry] = await Promise.all([
-        registry.fetchExact(
-          target,
-          "sensor",
-          camera.sensor.id,
-          camera.sensor.hash,
-        ) as Promise<AukiSensorRegistryEntry>,
-        registry.fetchExact(
-          target,
-          "clock",
-          camera.clock.id,
-          camera.clock.hash,
-        ) as Promise<AukiClockRegistryEntry>,
-        registry.fetchExact(
-          target,
-          "frame",
-          camera.frame.id,
-          camera.frame.hash,
-        ) as Promise<AukiFrameRegistryEntry>,
-      ]);
+      // Resolve these small immutable entries in order. Exact relay routes may
+      // reuse one authenticated connection, so racing three new request streams
+      // here can make one runtime close a connection another request still uses.
+      const sensorEntry = await registry.fetchExact(
+        target,
+        "sensor",
+        camera.sensor.id,
+        camera.sensor.hash,
+      ) as AukiSensorRegistryEntry;
+      const clockEntry = await registry.fetchExact(
+        target,
+        "clock",
+        camera.clock.id,
+        camera.clock.hash,
+      ) as AukiClockRegistryEntry;
+      const frameEntry = await registry.fetchExact(
+        target,
+        "frame",
+        camera.frame.id,
+        camera.frame.hash,
+      ) as AukiFrameRegistryEntry;
+      assert(clockEntry.session_id === info.sessionId,
+        "Info and Clock Registry entry use different sessions");
       const sensor = verifyRegistryEntry("sensor", camera.sensor, sensorEntry);
       const clock = verifyRegistryEntry("clock", camera.clock, clockEntry);
       const frame = verifyRegistryEntry("frame", camera.frame, frameEntry);
@@ -339,7 +352,7 @@ export class CameraProtocols {
           channel: required(this.replyChannel, "snapshot reply channel"),
         };
         validateReplyAddress(reply, this.peer.peerId);
-        this.pendingSnapshots.set(requestId, target.peerId);
+        this.pendingSnapshots.set(requestId, { peerId: target.peerId });
       }
       try {
         const sender = await required(this.messageClient, "Message client").openExact(target, channel);
@@ -347,6 +360,7 @@ export class CameraProtocols {
           assert(sender.remotePeer.peerId === target.peerId, "Message authenticated the wrong peer");
           assert(this.sameDomain(sender.remotePeer), "Message peer does not share the selected Domain");
           await sender.send(control.type, utcNowNs(), encodeControl(control, reply));
+          if (requestId !== undefined) this.armPendingSnapshot(requestId, target.peerId);
         } finally {
           try {
             await sender.close();
@@ -355,7 +369,7 @@ export class CameraProtocols {
           }
         }
       } catch (error) {
-        if (requestId !== undefined) this.pendingSnapshots.delete(requestId);
+        if (requestId !== undefined) this.removePendingSnapshot(requestId);
         throw error;
       }
     });
@@ -536,8 +550,10 @@ export class CameraProtocols {
       return;
     }
     if (event.type === "camera.pause") {
+      assert(event.payload.byteLength === 0, "pause payload must be empty");
       await this.options.controls.pause(event);
     } else if (event.type === "camera.resume") {
+      assert(event.payload.byteLength === 0, "resume payload must be empty");
       await this.options.controls.resume(event);
     } else if (event.type === "camera.request_snapshot") {
       await this.handleSnapshot(event);
@@ -556,10 +572,10 @@ export class CameraProtocols {
       return;
     }
     const snapshot = decodeSnapshotReady(event);
-    const expectedPeerId = this.pendingSnapshots.get(snapshot.requestId);
-    assert(expectedPeerId !== undefined, "snapshot reply has no pending request");
-    assert(expectedPeerId === event.sender.peerId, "snapshot reply came from the wrong peer");
-    this.pendingSnapshots.delete(snapshot.requestId);
+    const pending = this.pendingSnapshots.get(snapshot.requestId);
+    assert(pending !== undefined, "snapshot reply has no pending request");
+    assert(pending.peerId === event.sender.peerId, "snapshot reply came from the wrong peer");
+    this.removePendingSnapshot(snapshot.requestId);
     await this.options.controls.snapshotAvailable?.(snapshot);
   }
 
@@ -575,7 +591,7 @@ export class CameraProtocols {
       reply: request.reply,
       ...staged,
     };
-    if (request.reply) await this.sendSnapshotReady(request.reply, ready);
+    await this.sendSnapshotReady(request.reply, ready);
     await this.options.controls.snapshotReady?.(ready);
   }
 
@@ -703,7 +719,9 @@ export class CameraProtocols {
     for (const client of this.clients.reverse()) client.free();
     this.clients.length = 0;
     this.blobs.clear();
-    this.pendingSnapshots.clear();
+    for (const requestId of this.pendingSnapshots.keys()) {
+      this.removePendingSnapshot(requestId);
+    }
     if (errors.length) throw new Error(`Camera protocol shutdown failed: ${errors.join("; ")}`);
   }
 
@@ -713,6 +731,29 @@ export class CameraProtocols {
 
   private emit(message: string): void {
     this.options.event?.(message);
+  }
+
+  private removePendingSnapshot(requestId: string): void {
+    const pending = this.pendingSnapshots.get(requestId);
+    if (!pending) return;
+    if (pending.timeout !== undefined) globalThis.clearTimeout(pending.timeout);
+    this.pendingSnapshots.delete(requestId);
+  }
+
+  private armPendingSnapshot(requestId: string, peerId: string): void {
+    const pending = this.pendingSnapshots.get(requestId);
+    if (!pending || pending.peerId !== peerId) return;
+    const timeout = globalThis.setTimeout(() => {
+      const current = this.pendingSnapshots.get(requestId);
+      if (!current || current.peerId !== peerId) return;
+      this.pendingSnapshots.delete(requestId);
+      this.emit(`Snapshot request ${requestId} timed out`);
+      void Promise.resolve(this.options.controls.snapshotExpired?.(requestId))
+        .catch((error) => this.emit(
+          `Snapshot timeout handler failed: ${errorMessage(error)}`,
+        ));
+    }, SNAPSHOT_TIMEOUT_MS);
+    this.pendingSnapshots.set(requestId, { peerId, timeout });
   }
 }
 
@@ -848,11 +889,18 @@ function validateCameraEntries(
   assert(sensor.sensor_id === catalog.sensor.id, "camera Sensor ID mismatch");
   assert(sensor["kind"] === "camera", "camera Sensor Registry kind mismatch");
   assert(sensor["type"] === "rgb", "camera Sensor Registry type mismatch");
+  assert(sensor["width"] === CAMERA_WIDTH, `camera Sensor width must be ${CAMERA_WIDTH}`);
+  assert(sensor["height"] === CAMERA_HEIGHT, `camera Sensor height must be ${CAMERA_HEIGHT}`);
+  assert(sensor["frame_rate_hz"] === CAMERA_RATE_HZ,
+    `camera Sensor frame rate must be ${CAMERA_RATE_HZ}`);
   assert(sensor["image_encoding"] === "jpeg", "camera Sensor must describe JPEG frames");
+  assert(sensor["pixel_format"] === "rgb8", "camera Sensor pixel format must be rgb8");
   assert(sensor["row_stride_bytes"] === 0, "compressed camera Sensor must have zero row stride");
-  positiveNumber(sensor["width"], "camera Sensor width");
-  positiveNumber(sensor["height"], "camera Sensor height");
-  positiveNumber(sensor["frame_rate_hz"], "camera Sensor frame rate");
+  assert(sensor["color_space"] === "srgb", "camera Sensor color space must be sRGB");
+  assert(sensor["intrinsics_model"] === "none", "camera Sensor intrinsics must be absent");
+  assert(sensor["distortion_model"] === "none", "camera Sensor distortion must be absent");
+  assert(sensor["calibration"] === undefined || sensor["calibration"] === null,
+    "camera Sensor calibration must be absent");
   assert(sameRef(registryRef(sensor["frame"], "camera Sensor frame"), catalog.frame),
     "camera Sensor and Catalog reference different frames");
 
@@ -861,6 +909,7 @@ function validateCameraEntries(
   assert(clock["unit"] === "ns", "camera Clock must use nanoseconds");
   assert(clock["monotonic"] === false, "camera UTC Clock cannot be monotonic");
   assert(clock["epoch"] === "1970-01-01T00:00:00Z", "camera UTC Clock has an unknown epoch");
+  assert(clock["scope"] === "global", "camera Clock scope must be global");
 
   assert(frame.frame_id === catalog.frame.id, "camera Frame ID mismatch");
   assert(frame["handedness"] === "right", "camera Frame must be right-handed");
@@ -911,9 +960,7 @@ function decodeSnapshotRequest(event: AukiMessageEvent): SnapshotRequest {
   assert(payload["version"] === 1, "unsupported snapshot request version");
   const requestId = stringField(payload, "requestId", "snapshot request");
   validateRequestId(requestId);
-  const reply = payload["reply"] === undefined
-    ? undefined
-    : replyAddress(payload["reply"], event.sender.peerId);
+  const reply = replyAddress(payload["reply"], event.sender.peerId);
   return { event, requester: event.sender, requestId, reply };
 }
 
@@ -962,6 +1009,8 @@ function validateReplyAddress(reply: SnapshotReplyAddress, requesterPeerId: stri
   assert(reply.target.routes.length <= 4, "snapshot reply has too many routes");
   assert(new Set(reply.target.routes).size === reply.target.routes.length,
     "snapshot reply routes contain duplicates");
+  assert(reply.target.routes.every((route) => route.endsWith(`/p2p/${requesterPeerId}`)),
+    "snapshot reply route does not terminate at the requester");
   assert(reply.channel.owner_peer_id === requesterPeerId, "snapshot reply channel is not requester-owned");
   assert(reply.channel.clock.peer_id === requesterPeerId, "snapshot reply clock is not requester-owned");
   assert(reply.channel.resource_id === CAMERA_REPLY_RESOURCE_ID, "unexpected snapshot reply resource");

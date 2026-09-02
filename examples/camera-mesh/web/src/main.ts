@@ -148,6 +148,12 @@ async function startPeer(): Promise<void> {
           if (generation !== currentGeneration) return;
           showSnapshot(snapshot);
         },
+        snapshotExpired(requestId) {
+          if (generation !== currentGeneration) return;
+          snapshotButton.disabled = false;
+          snapshotStatus.textContent = `Snapshot ${requestId} timed out`;
+          record(`Snapshot request ${requestId} timed out without an announcement`);
+        },
         remoteEnded(reason) {
           if (generation !== currentGeneration) return;
           record(reason);

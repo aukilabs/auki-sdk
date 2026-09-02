@@ -71,6 +71,7 @@ export interface CameraMeshHooks {
   remoteFrame(frame: RemoteFrame): void;
   remoteConnected(connection: RemoteConnection): void;
   remoteSnapshot(snapshot: RemoteSnapshot): void;
+  snapshotExpired(requestId: string): void;
   remoteEnded(reason: string): void;
 }
 
@@ -95,6 +96,7 @@ export class CameraMesh {
   private activeTarget?: AukiExactTarget;
   private remoteMetadata?: RemoteCameraMetadata;
   private closing = false;
+  private closePromise?: Promise<void>;
 
   private constructor(
     private readonly peer: AukiPeer,
@@ -258,11 +260,14 @@ export class CameraMesh {
     const failures: string[] = [];
     for (const route of routes) {
       const target: AukiExactTarget = { peerId: candidate.peerId, route };
+      let subscription: AukiStreamSubscription | undefined;
+      let adopted = false;
       try {
         const metadata = await this.protocolStack().resolveRemoteMetadata(target);
-        const subscription = await this.streamClient.subscribeExact(target, "camera", request);
+        subscription = await this.streamClient.subscribeExact(target, "camera", request);
         validateStreamManifest(subscription.manifest, metadata, candidate.peerId);
         this.subscription = subscription;
+        adopted = true;
         this.activeTarget = target;
         this.remoteMetadata = metadata;
         this.viewerTask = this.consume(subscription, candidate.peerId);
@@ -274,7 +279,19 @@ export class CameraMesh {
         this.hooks.event(`Viewing ${candidate.peerId} through ${route}`);
         return;
       } catch (error) {
-        failures.push(errorMessage(error));
+        const reasons = [errorMessage(error)];
+        if (subscription) {
+          try {
+            if (adopted) {
+              if (this.subscription === subscription) await this.stopViewing();
+            } else {
+              await cancelAndFree(subscription);
+            }
+          } catch (cleanupError) {
+            reasons.push(`Stream cleanup failed: ${errorMessage(cleanupError)}`);
+          }
+        }
+        failures.push(reasons.join("; "));
       }
     }
     throw new Error(`Camera request declined or unreachable: ${failures.join("; ")}`);
@@ -325,8 +342,12 @@ export class CameraMesh {
     subscription?.free();
   }
 
-  async close(): Promise<void> {
-    if (this.closing) return;
+  close(): Promise<void> {
+    this.closePromise ??= this.closeOwned();
+    return this.closePromise;
+  }
+
+  private async closeOwned(): Promise<void> {
     this.closing = true;
     const errors: string[] = [];
     try {
@@ -376,6 +397,7 @@ export class CameraMesh {
           );
         },
         snapshotAvailable: (snapshot) => this.receiveSnapshot(snapshot),
+        snapshotExpired: (requestId) => this.hooks.snapshotExpired(requestId),
         ignored: (event, reason) => {
           this.hooks.event(`Ignored Message ${event.type} from ${event.sender.peerId}: ${reason}`);
         },
@@ -513,6 +535,17 @@ export class CameraMesh {
   }
 }
 
+async function cancelAndFree(subscription: AukiStreamSubscription): Promise<void> {
+  let cancellationError: unknown;
+  try {
+    await subscription.cancel();
+  } catch (error) {
+    cancellationError = error;
+  }
+  subscription.free();
+  if (cancellationError !== undefined) throw cancellationError;
+}
+
 function streamManifest(metadata: CameraRegistryMetadata): AukiStreamManifest {
   return {
     sensorId: metadata.sensor.id,
@@ -551,6 +584,15 @@ function validateStreamManifest(
     [manifest.clockHash, metadata.clock.hash, "Clock hash"],
     [manifest.frameId, metadata.frame.id, "Frame ID"],
     [manifest.frameHash, metadata.frame.hash, "Frame hash"],
+    [manifest.fromFrameId, "", "source Frame ID"],
+    [manifest.fromFrameHash, "", "source Frame hash"],
+    [manifest.toFrameId, "", "target Frame ID"],
+    [manifest.toFrameHash, "", "target Frame hash"],
+    [manifest.writerMode, "live", "writer mode"],
+    [manifest.expectedRateHz, CAMERA_RATE_HZ, "expected frame rate"],
+    [manifest.mapPeerId, "", "Map owner"],
+    [manifest.mapId, "", "Map ID"],
+    [manifest.mapHash, "", "Map hash"],
   ];
   for (const [actual, expected, label] of checks) {
     if (actual !== expected) throw new Error(`Stream ${label} does not match verified metadata`);

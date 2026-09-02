@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env,
     io::{self, Write},
     path::PathBuf,
@@ -52,7 +53,7 @@ enum Command {
 }
 
 fn default_frame_count() -> usize {
-    1
+    3
 }
 
 #[tokio::main]
@@ -107,7 +108,7 @@ async fn main() -> Result<()> {
 async fn command_loop(
     protocols: &CameraProtocols,
     discovery: &AukiDiscovery,
-    mut events: tokio::sync::mpsc::UnboundedReceiver<CameraEvent>,
+    mut events: tokio::sync::mpsc::Receiver<CameraEvent>,
 ) -> Result<()> {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     loop {
@@ -177,7 +178,9 @@ async fn handle_command(
                 }))?,
                 Err(error) => emit(&serde_json::json!({
                     "event":"view_result","id":id,"ok":false,
-                    "targetPeerId":target_peer_id,"checks":{},"frames":0,
+                    "targetPeerId":target_peer_id,
+                    "checks":failed_view_checks(),
+                    "frames":0,
                     "error":format!("{error:#}"),
                 }))?,
             }
@@ -204,7 +207,11 @@ async fn handle_command(
             request_id,
         } => {
             let target_peer_id = target.peer_id.clone();
-            match protocols.request_snapshot(&target, request_id).await {
+            let request_id = request_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+            match protocols
+                .request_snapshot(&target, Some(request_id.clone()))
+                .await
+            {
                 Ok(report) => emit(&serde_json::json!({
                     "event":"snapshot_result","id":id,"ok":true,
                     "requestId":report.request_id,"targetPeerId":report.target_peer_id,
@@ -212,7 +219,8 @@ async fn handle_command(
                 }))?,
                 Err(error) => emit(&serde_json::json!({
                     "event":"snapshot_result","id":id,"ok":false,
-                    "targetPeerId":target_peer_id,"error":format!("{error:#}"),
+                    "requestId":request_id,"targetPeerId":target_peer_id,
+                    "error":format!("{error:#}"),
                 }))?,
             }
         }
@@ -240,6 +248,13 @@ fn emit_control_result(
             "control":control,"targetPeerId":target_peer_id,"error":format!("{error:#}"),
         })),
     }
+}
+
+fn failed_view_checks() -> BTreeMap<&'static str, bool> {
+    ["info", "catalog", "registry", "stream"]
+        .into_iter()
+        .map(|check| (check, false))
+        .collect()
 }
 
 fn emit(value: &serde_json::Value) -> Result<()> {
@@ -301,5 +316,49 @@ fn finish<const N: usize>(operation: Result<()>, cleanup: [(&str, Result<()>); N
             "cleanup also failed: {}",
             cleanup_errors.join("; ")
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target() -> serde_json::Value {
+        serde_json::json!({
+            "version": 1,
+            "runtime": "native",
+            "domainId": "4e990513-b110-467b-84ca-09a42d786f6d",
+            "peerId": "12D3KooWH3okqZcRaHwy4keYWo9eAaCDwhePYajtHsCM4Egsptan",
+            "protocols": [],
+            "routes": {
+                "tcp": "/ip4/127.0.0.1/tcp/9000/p2p/12D3KooWH3okqZcRaHwy4keYWo9eAaCDwhePYajtHsCM4Egsptan",
+                "wss": "/dns4/relay.example.com/tcp/443/wss/p2p/12D3KooWH3okqZcRaHwy4keYWo9eAaCDwhePYajtHsCM4Egsptan"
+            }
+        })
+    }
+
+    #[test]
+    fn jsonl_defaults_match_the_cross_runtime_contract() {
+        let discover: Command =
+            serde_json::from_value(serde_json::json!({"command":"discover","id":"d"})).unwrap();
+        assert!(matches!(discover, Command::Discover { protocol: None, .. }));
+
+        let view: Command = serde_json::from_value(serde_json::json!({
+            "command":"view", "id":"v", "target":target()
+        }))
+        .unwrap();
+        assert!(matches!(view, Command::View { frames: 3, .. }));
+
+        assert_eq!(
+            failed_view_checks(),
+            [
+                ("info", false),
+                ("catalog", false),
+                ("registry", false),
+                ("stream", false),
+            ]
+            .into_iter()
+            .collect()
+        );
     }
 }

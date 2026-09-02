@@ -1505,6 +1505,55 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         withdraw.assert_calls(1);
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn publication_recovers_after_a_transient_tracker_failure() {
+        let server = MockServer::start();
+        let domain_id = Uuid::new_v4();
+        let peer_id = peer();
+        let route = direct(4001);
+        let path = format!("/api/v1/domains/{domain_id}/p2p/advertisements/self");
+        let mut unavailable = server.mock(|when, then| {
+            when.method(PUT).path(path.clone());
+            then.status(503).header("cache-control", "no-store");
+        });
+        let tracker =
+            DdsTrackerConfig::new(server.base_url(), DdsTrackerMode::DiscoverAndAdvertise).unwrap();
+        let discovery = DdsDiscovery::new(
+            &tracker,
+            domain_id,
+            peer_id,
+            RotatingAuth::new("original-token"),
+        )
+        .unwrap();
+        let publishing = tokio::spawn({
+            let discovery = discovery.clone();
+            let route = route.clone();
+            async move { publish_with_retry(&discovery, vec![route], Vec::new(), None).await }
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while unavailable.calls() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the first publication attempt must reach DDS");
+        unavailable.assert_calls(1);
+        unavailable.delete();
+        let recovered = server.mock(|when, then| {
+            when.method(PUT).path(path).json_body(json!({
+                "routes": [route.to_string()],
+                "protocols": [],
+            }));
+            then.status(200)
+                .header("cache-control", "no-store")
+                .header("content-type", "application/json")
+                .json_body(advertisement(peer_id, 4001, &[]));
+        });
+
+        publishing.await.unwrap().unwrap();
+        recovered.assert_calls(1);
+    }
+
     #[tokio::test]
     async fn paged_exact_filter_is_fresh_sorted_and_self_excluding() {
         let server = MockServer::start();

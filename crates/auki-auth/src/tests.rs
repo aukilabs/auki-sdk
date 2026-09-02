@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use crate::{
     AppCredentials, AuthClient, AuthEnvironment, AuthLimits, Credentials, DomainSelection, Error,
-    PreparedPeer, RenewedAuthority, SecretString,
+    PreparedPeer, PrincipalKind, RenewedAuthority, SecretString,
     client::{validate_challenge_at, verification_key_id},
     wire::PeerChallengeResponse,
 };
@@ -1361,6 +1361,40 @@ async fn json_extensions_are_ignored_while_known_fields_size_and_cancellation_st
         .unwrap_err();
     assert!(matches!(error, Error::Cancelled { .. }));
     delayed.finish().await;
+}
+
+#[tokio::test]
+async fn domain_access_token_skips_login_and_cannot_refresh() {
+    let domain_id = Uuid::from_u128(0xda);
+    let organization_id = Uuid::from_u128(0xaa);
+    let server = MockServer::start(vec![
+        domains_response(domain_id, organization_id),
+        MockResponse::status(401),
+    ])
+    .await;
+    let session = client_for(&server)
+        .authenticate(Credentials::domain_access_token("minted-dds-service-bearer"))
+        .await
+        .unwrap();
+    assert_eq!(session.principal_kind(), PrincipalKind::User);
+    assert_eq!(session.accessible_domains().await.unwrap().len(), 1);
+
+    let error = session.accessible_domains().await.unwrap_err();
+    assert!(matches!(
+        error,
+        Error::InvalidInput {
+            field: "domain_access_token",
+            ..
+        }
+    ));
+
+    let requests = server.finish().await;
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0].headers.get("authorization").unwrap(),
+        "Bearer minted-dds-service-bearer"
+    );
+    assert!(!format!("{:?}", Credentials::domain_access_token("secret-token")).contains("secret-token"));
 }
 
 #[test]

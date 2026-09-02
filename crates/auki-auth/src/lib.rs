@@ -57,9 +57,9 @@ pub use secret::SecretString;
 #[cfg(not(target_arch = "wasm32"))]
 pub use types::AppCredentials;
 pub use types::{
-    AuthorityRenewal, AuthorityRenewalProvider, Credentials, DomainChoice, DomainDescriptor,
-    DomainSelection, PeerAuthorityProvider, PreparedPeer, PrincipalKind, RenewedAuthority,
-    UserPassword,
+    AuthorityRenewal, AuthorityRenewalProvider, Credentials, DomainAccessToken, DomainChoice,
+    DomainDescriptor, DomainSelection, PeerAuthorityProvider, PreparedPeer, PrincipalKind,
+    RenewedAuthority, UserPassword,
 };
 
 #[cfg(test)]

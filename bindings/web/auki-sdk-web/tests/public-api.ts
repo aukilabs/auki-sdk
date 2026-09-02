@@ -62,6 +62,13 @@ declare const session: AukiUserSession;
 const browserRoute: string | undefined = peer.wssRoute;
 const nativeRoute: string | undefined = peer.tcpRoute;
 const relayBacked: boolean = peer.relayBacked;
+const tokenSession: Promise<AukiUserSession> = AukiUserSession.loginWithDomainAccessToken(
+  "https://api.example/",
+  "https://dds.example/",
+  "https://dms.example/",
+  "minted-domains-access-token",
+);
+void tokenSession;
 const defaultPeer: Promise<AukiPeer> = session.startPeer(
   "00000000-0000-0000-0000-000000000001",
 );

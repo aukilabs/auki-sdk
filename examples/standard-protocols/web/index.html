@@ -42,6 +42,12 @@
         </form>
         <form id="start" hidden>
           <label>Domain <select id="domain"></select></label>
+          <label>Discovery mode
+            <select id="discovery-mode">
+              <option value="discover_and_advertise">Discover and advertise</option>
+              <option value="discover_only">Discover only (stay private)</option>
+            </select>
+          </label>
           <button id="start-button" type="submit">Start peer</button>
         </form>
       </section>
@@ -52,7 +58,23 @@
         <div class="actions"><button id="copy" type="button" disabled>Copy card</button></div>
       </section>
 
-      <section>
+      <section id="discovery-section" hidden>
+        <strong>Discover peers</strong>
+        <p>Results are untrusted route hints until an exact protocol connection authenticates the Peer ID and Domain.</p>
+        <form id="discover">
+          <label>Protocol filter <select id="protocol-filter"><option value="">All advertised peers</option></select></label>
+          <button id="discover-button" type="submit">Discover</button>
+          <label>Candidate <select id="discovered-peer" disabled><option value="">No candidates loaded</option></select></label>
+          <pre id="discovered-details">Run discovery to load current candidates.</pre>
+          <div class="actions">
+            <button id="probe-discovered-button" type="button" disabled>Probe selected peer</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="manual-section">
+        <strong>Manual peer-card fallback</strong>
+        <p>Paste an exact card when discovery is unavailable or when testing a private peer.</p>
         <form id="probe">
           <label>Remote peer card <textarea id="remote-card" spellcheck="false" placeholder='{"version":1,"peerId":"…"}'></textarea></label>
           <div class="actions">

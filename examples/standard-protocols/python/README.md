@@ -17,5 +17,12 @@ AUKI_IDENTITY_FILE='./state/python.identity' \
 python -u main.py
 ```
 
+The example defaults to `AUKI_DISCOVERY_MODE=discover_and_advertise`. Set it
+to `discover_only` when this peer should query DDS without publishing itself.
+Send `{"id":"all","command":"discover"}` on stdin to list current
+candidates, or add an exact `protocol` field to filter them. Results are
+untrusted route hints until the selected protocol connection authenticates the
+expected Peer ID and Domain.
+
 See the parent [playground guide](../README.md) for the JSONL contract and the
-eight-edge, 48-case Native/Python/two-Browser matrix.
+12-observation discovery gate plus the eight-edge, 48-case protocol matrix.

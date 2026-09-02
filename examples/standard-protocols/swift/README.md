@@ -2,7 +2,14 @@
 
 This iOS app opts one relay-backed peer into all six standard Auki protocol
 families, serves the same fixtures as the native, Web, and Python playgrounds,
-and probes another peer through its pasted peer card.
+and probes another discovered peer or an explicitly pasted fallback card.
+
+Before startup the app explicitly chooses **discover and advertise** (the
+default) or **discover only**. Once running, it can list every current DDS
+candidate or filter by one exact mounted protocol, select a candidate, and
+probe it without exchanging cards. Discovery results remain untrusted until
+the exact protocol connection authenticates the Peer ID and Domain; card paste
+is retained as a fallback for private peers.
 
 The SwiftUI layer only handles User login, explicit Domain selection, copy and
 paste, status, and app lifecycle. `StandardPlayground` owns the small amount of
@@ -35,7 +42,8 @@ link a second protocol-specific Rust library.
 Open `AukiStandardProtocolsIOS.xcodeproj`, select an iPhone simulator, and run
 the `AukiStandardProtocolsIOS` scheme. Log in, select a Domain, start the peer,
 then paste a native, Python, Web, or second iOS peer card and select **Probe all
-six**.
+six**. Alternatively, select **Discover**, choose the peer, and select **Probe
+selected peer**.
 
 ## Offline simulator tests
 
@@ -47,9 +55,10 @@ xcodebuild \
   CODE_SIGNING_ALLOWED=NO test
 ```
 
-The tests lock peer-card parsing, fixture JSON and records, the Registry list
-hash invariant, and the scalar protobuf bytes without credentials or network
-access.
+These are offline unit tests. They lock peer-card parsing and native route
+selection, fixture JSON and records, the Registry list hash invariant, and the
+scalar protobuf bytes without credentials or network access. They do not prove
+live Swift interoperability.
 
 ## Live automation
 
@@ -62,7 +71,9 @@ scheme or `simctl launch`:
 - `AUKI_IOS_STOP_AFTER_PROBE=1` performs ordered shutdown after the probe.
 
 Credentials are never printed. Automation can wait for
-`AUKI_IOS_STANDARD_READY`, `AUKI_IOS_STANDARD_PROBE`, and
-`AUKI_IOS_STANDARD_STOPPED` in the simulator log. The first iteration is
-foreground-oriented; moving the app to the background requests ordered
-Message receiver, Stream producer, standard endpoint, and peer shutdown.
+`AUKI_IOS_STANDARD_READY` and `AUKI_IOS_STANDARD_PROBE` in the simulator log.
+`AUKI_IOS_STANDARD_STOPPED` is printed after an explicit stop, a background
+transition, or an automated probe when `AUKI_IOS_STOP_AFTER_PROBE=1` is set.
+Moving the app to the background during startup invalidates the operation and
+shuts down any provisional peer. After startup, it requests ordered Message
+receiver, Stream producer, standard endpoint, and peer shutdown.

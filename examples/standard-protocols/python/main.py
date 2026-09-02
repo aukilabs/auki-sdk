@@ -29,6 +29,7 @@ SCALAR_BYTES = b"\x09" + struct.pack("<d", STREAM_VALUE)
 REGISTRY_ID = "playground/base"
 REGISTRY_HASH = "0" * 32
 CHECK_NAMES = ("info", "catalog", "registry", "blob", "message", "stream")
+DISCOVERY_MODES = ("discover_only", "discover_and_advertise")
 
 
 def emit(event: dict[str, Any]) -> None:
@@ -85,8 +86,18 @@ class Playground:
         domain_id = os.environ["AUKI_DOMAIN_ID"]
         identity_file = Path(os.environ["AUKI_IDENTITY_FILE"])
         identity_file.parent.mkdir(parents=True, exist_ok=True)
+        discovery_mode = os.environ.get(
+            "AUKI_DISCOVERY_MODE", "discover_and_advertise"
+        )
+        if discovery_mode not in DISCOVERY_MODES:
+            raise RuntimeError(
+                "AUKI_DISCOVERY_MODE must be discover_only or "
+                f"discover_and_advertise, got {discovery_mode!r}"
+            )
         session = await authenticate()
-        peer = await session.start_peer(domain_id, identity_file)
+        peer = await session.start_peer(
+            domain_id, identity_file, discovery_mode=discovery_mode
+        )
         playground = cls(peer)
         try:
             playground.mount()
@@ -238,6 +249,23 @@ class Playground:
             "routes": {"tcp": routes.tcp, "wss": routes.wss},
         }
 
+    async def discover(self, protocol: str | None = None) -> list[dict[str, Any]]:
+        candidates = (
+            await self.peer.discover_protocol(protocol)
+            if protocol is not None
+            else await self.peer.discover()
+        )
+        return [
+            {
+                "peerId": candidate.peer_id,
+                "routes": candidate.routes,
+                "servedProtocols": candidate.served_protocols,
+                "expiresAt": candidate.expires_at,
+                "source": candidate.source,
+            }
+            for candidate in candidates
+        ]
+
     async def probe_all(self, target: dict[str, Any]) -> dict[str, Any]:
         async def run(name: str, operation: Callable[[], Awaitable[None]]) -> None:
             try:
@@ -252,6 +280,39 @@ class Playground:
         for name in CHECK_NAMES:
             await run(name, lambda name=name: getattr(self, f"probe_{name}")(target))
         return {"checks": checks, "errors": errors, "ok": not errors}
+
+    async def probe_discovered(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        required = set(self.card()["protocols"])
+        missing = sorted(required.difference(candidate["servedProtocols"]))
+        if missing:
+            reason = "candidate does not advertise every standard protocol: " + ", ".join(
+                missing
+            )
+            return {
+                "checks": {name: False for name in CHECK_NAMES},
+                "errors": {name: reason for name in CHECK_NAMES},
+                "ok": False,
+            }
+        native_routes = [
+            route
+            for route in candidate["routes"]
+            if "/tcp/" in route and "/wss/" not in route
+        ]
+        tcp = min(
+            native_routes,
+            key=lambda route: "/p2p-circuit/" not in route,
+            default=None,
+        )
+        if tcp is None:
+            reason = "candidate has no native TCP route"
+            return {
+                "checks": {name: False for name in CHECK_NAMES},
+                "errors": {name: reason for name in CHECK_NAMES},
+                "ok": False,
+            }
+        return await self.probe_all(
+            {"peerId": candidate["peerId"], "routes": {"tcp": tcp}}
+        )
 
     async def probe_info(self, target: dict[str, Any]) -> None:
         info = await self.info.fetch_exact(target["peerId"], target["routes"]["tcp"])
@@ -381,8 +442,42 @@ async def read_commands(playground: Playground, reader: asyncio.StreamReader) ->
     while line := await reader.readline():
         try:
             command = json.loads(line.decode())
-            if command["command"] == "probe_all":
+            if command["command"] == "discover":
+                protocol_id = command.get("protocol")
+                try:
+                    candidates = await playground.discover(protocol_id)
+                    emit(
+                        {
+                            "event": "discovery_result",
+                            "id": command["id"],
+                            "ok": True,
+                            "protocol": protocol_id,
+                            "candidates": candidates,
+                        }
+                    )
+                except Exception as error:
+                    emit(
+                        {
+                            "event": "discovery_result",
+                            "id": command["id"],
+                            "ok": False,
+                            "protocol": protocol_id,
+                            "candidates": [],
+                            "error": f"{type(error).__name__}: {error}",
+                        }
+                    )
+            elif command["command"] == "probe_all":
                 result = await playground.probe_all(command["target"])
+                emit(
+                    {
+                        "event": "probe_result",
+                        "id": command["id"],
+                        "targetPeerId": command["target"]["peerId"],
+                        **result,
+                    }
+                )
+            elif command["command"] == "probe_discovered":
+                result = await playground.probe_discovered(command["target"])
                 emit(
                     {
                         "event": "probe_result",

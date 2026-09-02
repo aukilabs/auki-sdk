@@ -28,6 +28,12 @@ The hosts are deliberately thin. Protocol contracts, bounds, authenticated
 streams, and relay-backed peer lifecycle stay in Rust; TypeScript, Python, and
 Swift only provide fixture data and application flow.
 
+Each host also opts in to DDS discovery. The example defaults to **discover
+and advertise**, so mounted protocol IDs and relay routes are published
+automatically. Native and Python accept
+`AUKI_DISCOVERY_MODE=discover_only|discover_and_advertise`; the browser and
+iOS apps expose the same explicit choice before startup.
+
 ## Protected four-peer matrix
 
 The matrix starts four distinct relay-backed peers and probes these directed
@@ -40,9 +46,14 @@ edges:
 | Browser A | ✓ | — | — | ✓ |
 | Browser B | — | ✓ | ✓ | — |
 
-That is eight directed edges × six protocol families = **48 checks**. Browser
-A → Browser B and Browser B → Browser A are explicit cases; they are not
-inferred from browser/native coverage.
+Before probing, every peer discovers the other three through the exact Info
+protocol filter. That proves **12 directed discovery observations**, including
+Browser A → Browser B and Browser B → Browser A. The runner also exercises an
+unfiltered lookup from every runtime.
+
+The protocol matrix is eight directed edges × six protocol families = **48
+checks**. Browser A → Browser B and Browser B → Browser A are explicit cases;
+they are not inferred from browser/native coverage.
 
 Prerequisites:
 
@@ -72,18 +83,20 @@ or `npm run smoke:dev -- --headed` to watch the browser peers. Success ends
 with:
 
 ```text
+AUKI_DISCOVERY_MATRIX_OK peers=4 observations=12
 AUKI_PROTOCOL_MATRIX_OK peers=4 edges=8 protocols=6 cases=48
 ```
 
-The success marker is emitted only after all four peers, their relay bookings,
-Chromium, and temporary state have shut down cleanly.
+The final `AUKI_PROTOCOL_MATRIX_OK` marker is emitted only after all four peers,
+their relay bookings, Chromium, and temporary state have shut down cleanly.
 
 ## Swift/iOS interoperability gate
 
 The [Swift playground](swift/README.md) uses the same seven wire IDs and six
-family checks. Its simulator gate runs all six protocols in both Swift/native
-directions and both Swift/browser directions. This remains separate from the
-four-peer protected matrix so the ordinary browser job does not require Xcode.
+family checks. Its offline simulator tests lock the portable fixtures, peer-card
+parsing, and discovery-route selection; they do not make network connections.
+Live Swift/native and Swift/browser interoperability is currently a separate
+manual check, so the protected four-peer matrix does not require Xcode.
 
 ## Try the browser node manually
 
@@ -98,18 +111,20 @@ Open the printed loopback URL in two tabs. In each tab:
 1. log in with the same User;
 2. select the same Domain;
 3. start the peer;
-4. copy the other tab's peer card; and
-5. select **Probe all six**.
+4. choose an exact protocol or **All advertised peers** and select
+   **Discover**;
+5. select the other tab's Peer ID; and
+6. select **Probe selected peer**.
 
 Each tab gets a distinct ephemeral Peer ID. Repeat in the opposite direction
-to exercise the unique browser-to-browser case both ways. A native or Python
-peer card can be pasted into the same target field.
+to exercise the unique browser-to-browser case both ways. Peer-card paste is
+kept as an explicitly labeled fallback for private peers or tracker outages.
 
 ## Native and Python control contract
 
 The native and Python nodes are long-running matrix agents. Their stdout is
-JSON Lines so the runner can exchange peer cards and commands; diagnostics go
-to stderr.
+JSON Lines so the runner can observe identity, discover candidates, and issue
+commands; diagnostics go to stderr.
 
 Ready event:
 
@@ -117,14 +132,32 @@ Ready event:
 {"event":"ready","runtime":"native","card":{"version":1,"domainId":"...","peerId":"...","protocols":[],"routes":{"tcp":"...","wss":"..."}}}
 ```
 
-Probe command and result:
+Discovery command and result:
+
+```json
+{"id":"find-info","command":"discover","protocol":"/auki/auth/1/info/1.0.0"}
+{"event":"discovery_result","id":"find-info","ok":true,"protocol":"/auki/auth/1/info/1.0.0","candidates":[{"peerId":"...","routes":["..."],"servedProtocols":["..."],"expiresAt":"...","source":"dds_tracker"}]}
+```
+
+Omit `protocol` for an unfiltered lookup.
+
+Probe a selected discovery result directly:
+
+```json
+{"id":"native-to-python","command":"probe_discovered","target":{"peerId":"...","routes":["..."],"servedProtocols":["..."],"expiresAt":"...","source":"dds_tracker"}}
+{"event":"probe_result","id":"native-to-python","ok":true,"checks":{"info":true,"catalog":true,"registry":true,"blob":true,"message":true,"stream":true},"errors":{}}
+```
+
+The protected matrix uses this form. A complete peer card remains available as
+the manual fallback:
 
 ```json
 {"id":"native-to-python","command":"probe_all","target":{"version":1,"domainId":"...","peerId":"...","protocols":[],"routes":{"tcp":"...","wss":"..."}}}
 {"event":"probe_result","id":"native-to-python","ok":true,"checks":{"info":true,"catalog":true,"registry":true,"blob":true,"message":true,"stream":true},"errors":{}}
 ```
 
-The playground exchanges explicit peer cards because relay allocation is not
-peer discovery. Native and Python dial the card's exact TCP circuit route; Web
-dials its exact WSS circuit route. Every connection still authenticates the
-expected Peer ID and selected Domain before protocol data is exposed.
+Discovery returns short-lived, untrusted candidates. Selecting one chooses a
+runtime-compatible route; Native and Python use TCP while Web uses WSS. Every
+connection still authenticates the expected Peer ID and selected Domain before
+protocol data is exposed. Relay allocation provides reachability; discovery
+only tells an application which current candidates it may choose to dial.

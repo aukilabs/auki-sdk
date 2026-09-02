@@ -3,6 +3,7 @@ import {
   AukiBlobEndpoint,
   AukiCatalogClient,
   AukiCatalogEndpoint,
+  AukiDiscoveryMode,
   AukiInfoClient,
   AukiInfoEndpoint,
   AukiMessageClient,
@@ -56,8 +57,17 @@ export interface ProbeResult {
   errors: Partial<Record<(typeof CHECK_NAMES)[number], string>>;
 }
 
+export interface DiscoveredPeer {
+  peerId: string;
+  routes: string[];
+  servedProtocols: string[];
+  expiresAt: string;
+  source: string;
+}
+
 type Endpoint = { close(): Promise<void>; free(): void };
 type Client = { free(): void };
+type RuntimeTarget = { peerId: string; route: string };
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -130,12 +140,15 @@ export class BrowserPlayground {
   ) {}
 
   static async start(
-    session: { startPeer(domainId: string): Promise<AukiPeer> },
+    session: {
+      startPeerWithDiscovery(domainId: string, mode: AukiDiscoveryMode): Promise<AukiPeer>;
+    },
     domainId: string,
     nodeName: string,
+    discoveryMode: AukiDiscoveryMode,
     onEvent: (message: string) => void = () => undefined,
   ): Promise<BrowserPlayground> {
-    const peer = await session.startPeer(domainId);
+    const peer = await session.startPeerWithDiscovery(domainId, discoveryMode);
     const playground = new BrowserPlayground(peer, nodeName, onEvent);
     try {
       playground.mount();
@@ -245,21 +258,54 @@ export class BrowserPlayground {
       runtime: "browser",
       domainId: this.peer.domainId,
       peerId: this.peer.peerId,
-      protocols: [
-        this.info.protocol,
-        this.catalog.resourceProtocol,
-        this.catalog.mapsProtocol,
-        this.registry.protocol,
-        this.blob.protocol,
-        this.message.protocol,
-        this.stream.protocol,
-      ],
+      protocols: this.requiredProtocols(),
       routes: { tcp: this.peer.tcpRoute, wss: this.peer.wssRoute },
     };
   }
 
+  async discover(protocolId?: string): Promise<DiscoveredPeer[]> {
+    const candidates = protocolId
+      ? await this.peer.discoverProtocol(protocolId)
+      : await this.peer.discover();
+    return candidates.map((candidate) => {
+      try {
+        return {
+          peerId: candidate.peerId,
+          routes: candidate.routes,
+          servedProtocols: candidate.servedProtocols,
+          expiresAt: candidate.expiresAt,
+          source: candidate.source,
+        };
+      } finally {
+        candidate.free();
+      }
+    });
+  }
+
+  canProbeDiscovered(candidate: DiscoveredPeer): boolean {
+    return this.missingProtocols(candidate).length === 0
+      && candidate.routes.some((route) => route.includes("/wss/"));
+  }
+
+  probeDiscovered(candidate: DiscoveredPeer): Promise<ProbeResult> {
+    const missing = this.missingProtocols(candidate);
+    assert(
+      missing.length === 0,
+      `discovered peer ${candidate.peerId} does not advertise: ${missing.join(", ")}`,
+    );
+    const route = candidate.routes.find(
+      (value) => value.includes("/wss/") && value.includes("/p2p-circuit/"),
+    ) ?? candidate.routes.find((value) => value.includes("/wss/"));
+    assert(route, `discovered peer ${candidate.peerId} has no browser-compatible WSS route`);
+    return this.probeTarget({ peerId: candidate.peerId, route });
+  }
+
   async probeAll(target: PeerCard): Promise<ProbeResult> {
     assert(target.domainId === this.peer.domainId, "target peer belongs to another Domain");
+    return this.probeTarget({ peerId: target.peerId, route: target.routes.wss });
+  }
+
+  private async probeTarget(target: RuntimeTarget): Promise<ProbeResult> {
     const checks = Object.fromEntries(CHECK_NAMES.map((name) => [name, false])) as ProbeResult["checks"];
     const errors: ProbeResult["errors"] = {};
     const probes: Array<[(typeof CHECK_NAMES)[number], () => Promise<void>]> = [
@@ -295,28 +341,46 @@ export class BrowserPlayground {
     }
   }
 
-  private target(card: PeerCard): AukiExactTarget {
-    return { peerId: card.peerId, route: card.routes.wss };
+  private target(target: RuntimeTarget): AukiExactTarget {
+    return { peerId: target.peerId, route: target.route };
   }
 
-  private async probeInfo(card: PeerCard): Promise<void> {
-    const info = await this.info.fetchExact(this.target(card));
-    assert(info.peerId === card.peerId, "Info returned the wrong Peer ID");
+  private requiredProtocols(): string[] {
+    return [
+      this.info.protocol,
+      this.catalog.resourceProtocol,
+      this.catalog.mapsProtocol,
+      this.registry.protocol,
+      this.blob.protocol,
+      this.message.protocol,
+      this.stream.protocol,
+    ];
+  }
+
+  private missingProtocols(candidate: DiscoveredPeer): string[] {
+    return this.requiredProtocols().filter(
+      (protocol) => !candidate.servedProtocols.includes(protocol),
+    );
+  }
+
+  private async probeInfo(target: RuntimeTarget): Promise<void> {
+    const info = await this.info.fetchExact(this.target(target));
+    assert(info.peerId === target.peerId, "Info returned the wrong Peer ID");
     assert(info.app === APP && info.appVersion === APP_VERSION, "Info fixture mismatch");
   }
 
-  private async probeCatalog(card: PeerCard): Promise<void> {
-    const resources = await this.catalog.fetchResourcesExact(this.target(card), []);
+  private async probeCatalog(target: RuntimeTarget): Promise<void> {
+    const resources = await this.catalog.fetchResourcesExact(this.target(target), []);
     assert(resources.resources.length === 1, "Catalog v3 fixture row is missing");
     const channel = resources.resources[0] as unknown as AukiMessageChannelResource;
-    assert(channel.owner_peer_id === card.peerId, "Catalog message owner mismatch");
+    assert(channel.owner_peer_id === target.peerId, "Catalog message owner mismatch");
     assert(channel.resource_id === MESSAGE_RESOURCE_ID, "Catalog message resource mismatch");
-    const maps = await this.catalog.fetchMapsExact(this.target(card));
+    const maps = await this.catalog.fetchMapsExact(this.target(target));
     assert(maps.resources.length === 0, "Catalog v4 fixture unexpectedly advertised maps");
   }
 
-  private async probeRegistry(card: PeerCard): Promise<void> {
-    const entries = await this.registry.listExact(this.target(card), "frame");
+  private async probeRegistry(target: RuntimeTarget): Promise<void> {
+    const entries = await this.registry.listExact(this.target(target), "frame");
     assert(entries.length === 1, "Registry fixture row is missing");
     assert(
       entries[0]?.id === REGISTRY_ID && /^[0-9a-f]{32}$/.test(entries[0]?.hash ?? ""),
@@ -324,18 +388,18 @@ export class BrowserPlayground {
     );
   }
 
-  private async probeBlob(card: PeerCard): Promise<void> {
-    const receipt = await this.blob.fetchExact(this.target(card), BLOB_SHA256);
-    assert(receipt.peerId === card.peerId, "Blob receipt Peer ID mismatch");
+  private async probeBlob(target: RuntimeTarget): Promise<void> {
+    const receipt = await this.blob.fetchExact(this.target(target), BLOB_SHA256);
+    assert(receipt.peerId === target.peerId, "Blob receipt Peer ID mismatch");
     assert(receipt.sha256 === BLOB_SHA256, "Blob receipt hash mismatch");
     assert(bytesEqual(receipt.bytes, BLOB_BYTES), "Blob receipt bytes mismatch");
     assert(receipt.relayed, "Blob did not use the relay circuit");
   }
 
-  private async probeMessage(card: PeerCard): Promise<void> {
-    const sender = await this.message.openExact(this.target(card), messageChannel(card.peerId));
+  private async probeMessage(target: RuntimeTarget): Promise<void> {
+    const sender = await this.message.openExact(this.target(target), messageChannel(target.peerId));
     try {
-      assert(sender.remotePeer.peerId === card.peerId, "Message Peer ID mismatch");
+      assert(sender.remotePeer.peerId === target.peerId, "Message Peer ID mismatch");
       assert(sender.relayed, "Message did not use the relay circuit");
       await sender.send(MESSAGE_TYPE, MESSAGE_TIMESTAMP_NS, MESSAGE_BYTES);
     } finally {
@@ -343,13 +407,13 @@ export class BrowserPlayground {
     }
   }
 
-  private async probeStream(card: PeerCard): Promise<void> {
+  private async probeStream(target: RuntimeTarget): Promise<void> {
     const request: AukiStreamRequest = {
-      sourcePeerId: card.peerId,
+      sourcePeerId: target.peerId,
       resourceId: STREAM_RESOURCE_ID,
       from: { kind: "latest" },
     };
-    const subscription = await this.stream.subscribeExact(this.target(card), "scalar", request);
+    const subscription = await this.stream.subscribeExact(this.target(target), "scalar", request);
     try {
       assert(subscription.payloadKind === "scalar", "Stream payload kind mismatch");
       assert(subscription.manifest.resourceId === STREAM_RESOURCE_ID, "Stream resource mismatch");

@@ -30,6 +30,71 @@ public struct StandardProbeReport: Equatable, Sendable {
   }
 }
 
+public struct StandardDiscoveredPeer: Equatable, Identifiable, Sendable {
+  public let peerID: String
+  public let routes: [String]
+  public let servedProtocols: [String]
+  public let expiresAt: String
+  public let source: String
+
+  public var id: String { peerID }
+
+  public init(
+    peerID: String,
+    routes: [String],
+    servedProtocols: [String],
+    expiresAt: String,
+    source: String
+  ) {
+    self.peerID = peerID
+    self.routes = routes
+    self.servedProtocols = servedProtocols
+    self.expiresAt = expiresAt
+    self.source = source
+  }
+}
+
+public func discoveredNativePeerTarget(
+  candidate: StandardDiscoveredPeer,
+  domainID: String,
+  requiredProtocols: [String]
+) throws -> AukiPeerTarget {
+  let missing = requiredProtocols.filter { !candidate.servedProtocols.contains($0) }
+  guard missing.isEmpty else {
+    throw StandardPlaygroundError(
+      "Discovered peer \(candidate.peerID) does not advertise: \(missing.joined(separator: ", "))"
+    )
+  }
+  let nativeRoutes = candidate.routes.filter {
+      $0.contains("/tcp/") && !$0.contains("/wss/")
+  }
+  guard
+    let tcp = nativeRoutes.first(where: { $0.contains("/p2p-circuit/") })
+      ?? nativeRoutes.first
+  else {
+    throw StandardPlaygroundError(
+      "Discovered peer \(candidate.peerID) has no native TCP route"
+    )
+  }
+  return AukiPeerTarget(domainId: domainID, peerId: candidate.peerID, route: tcp)
+}
+
+private struct StandardRuntimeTarget {
+  let domainID: String
+  let peerID: String
+  let protocols: [String]
+  let route: String
+
+  func exact(requiredProtocol: String) throws -> AukiPeerTarget {
+    guard protocols.contains(requiredProtocol) else {
+      throw StandardPlaygroundError(
+        "Target does not advertise required protocol \(requiredProtocol)"
+      )
+    }
+    return AukiPeerTarget(domainId: domainID, peerId: peerID, route: route)
+  }
+}
+
 /// Thin application orchestration over the Rust-owned standard protocol bundle.
 ///
 /// This actor owns fixture state and platform lifecycle only. Authentication,
@@ -138,60 +203,124 @@ public actor StandardPlayground {
     standard.protocols()
   }
 
+  public func discover(protocolID: String? = nil) async throws -> [StandardDiscoveredPeer] {
+    guard !closed else { throw StandardPlaygroundError("Standard playground is closed") }
+    let candidates: [AukiDiscoveryCandidate]
+    if let protocolID, !protocolID.isEmpty {
+      candidates = try await peer.discoverProtocol(protocolId: protocolID)
+    } else {
+      candidates = try await peer.discover()
+    }
+    return candidates.map { candidate in
+      StandardDiscoveredPeer(
+        peerID: candidate.peerId,
+        routes: candidate.routes,
+        servedProtocols: candidate.servedProtocols,
+        expiresAt: candidate.expiresAt,
+        source: candidate.source == .ddsTracker ? "dds_tracker" : "unknown"
+      )
+    }
+  }
+
+  public func probeAll(candidate: StandardDiscoveredPeer) async -> StandardProbeReport {
+    do {
+      let exact = try discoveredNativePeerTarget(
+        candidate: candidate,
+        domainID: domainID,
+        requiredProtocols: protocols()
+      )
+      return await probeAll(
+        target: StandardRuntimeTarget(
+          domainID: domainID,
+          peerID: candidate.peerID,
+          protocols: candidate.servedProtocols,
+          route: exact.route
+        ))
+    } catch {
+      return failedReport(targetPeerID: candidate.peerID, error: error)
+    }
+  }
+
   /// Exercise the finite snapshots and both live protocols independently.
   /// One failed family does not prevent the remaining checks from running.
   public func probeAll(cardJSON: String) async -> StandardProbeReport {
-    var checks = Dictionary(
-      uniqueKeysWithValues: StandardProtocolFamily.allCases.map { ($0, false) }
-    )
-    var errors: [StandardProtocolFamily: String] = [:]
     let card: AukiPeerCard
     do {
       card = try peerCardFromJson(json: cardJSON.trimmingCharacters(in: .whitespacesAndNewlines))
     } catch {
-      let message = error.localizedDescription
-      for family in StandardProtocolFamily.allCases { errors[family] = message }
-      return StandardProbeReport(targetPeerID: "", checks: checks, errors: errors)
+      return failedReport(targetPeerID: "", error: error)
     }
+    guard card.domainId == domainID else {
+      return failedReport(
+        targetPeerID: card.peerId,
+        error: StandardPlaygroundError("Target peer belongs to another Domain")
+      )
+    }
+    return await probeAll(
+      target: StandardRuntimeTarget(
+        domainID: card.domainId,
+        peerID: card.peerId,
+        protocols: card.protocols,
+        route: card.routes.tcp
+      ))
+  }
+
+  private func probeAll(target: StandardRuntimeTarget) async -> StandardProbeReport {
+    var checks = Dictionary(
+      uniqueKeysWithValues: StandardProtocolFamily.allCases.map { ($0, false) }
+    )
+    var errors: [StandardProtocolFamily: String] = [:]
 
     do {
-      try await probeInfo(card)
+      try await probeInfo(target)
       checks[.info] = true
     } catch {
       errors[.info] = error.localizedDescription
     }
     do {
-      try await probeCatalog(card)
+      try await probeCatalog(target)
       checks[.catalog] = true
     } catch {
       errors[.catalog] = error.localizedDescription
     }
     do {
-      try await probeRegistry(card)
+      try await probeRegistry(target)
       checks[.registry] = true
     } catch {
       errors[.registry] = error.localizedDescription
     }
     do {
-      try await probeBlob(card)
+      try await probeBlob(target)
       checks[.blob] = true
     } catch {
       errors[.blob] = error.localizedDescription
     }
     do {
-      try await probeMessage(card)
+      try await probeMessage(target)
       checks[.message] = true
     } catch {
       errors[.message] = error.localizedDescription
     }
     do {
-      try await probeStream(card)
+      try await probeStream(target)
       checks[.stream] = true
     } catch {
       errors[.stream] = error.localizedDescription
     }
 
-    return StandardProbeReport(targetPeerID: card.peerId, checks: checks, errors: errors)
+    return StandardProbeReport(targetPeerID: target.peerID, checks: checks, errors: errors)
+  }
+
+  private func failedReport(targetPeerID: String, error: Error) -> StandardProbeReport {
+    let checks = Dictionary(
+      uniqueKeysWithValues: StandardProtocolFamily.allCases.map { ($0, false) }
+    )
+    let errors = Dictionary(
+      uniqueKeysWithValues: StandardProtocolFamily.allCases.map {
+        ($0, error.localizedDescription)
+      }
+    )
+    return StandardProbeReport(targetPeerID: targetPeerID, checks: checks, errors: errors)
   }
 
   /// Ordered, replay-safe shutdown: live children, endpoint bundle, then peer.
@@ -255,15 +384,15 @@ public actor StandardPlayground {
     }
   }
 
-  private func probeInfo(_ card: AukiPeerCard) async throws {
+  private func probeInfo(_ target: StandardRuntimeTarget) async throws {
     let endpoint = standard.info()
-    let target = try nativePeerTarget(card: card, requiredProtocol: endpoint.protocol())
+    let exact = try target.exact(requiredProtocol: endpoint.protocol())
     let snapshot = try StandardFixtures.decode(
       ParticipantInfo.self,
-      from: try await endpoint.client().fetchExact(target: target)
+      from: try await endpoint.client().fetchExact(target: exact)
     )
     guard
-      snapshot.peerID == card.peerId,
+      snapshot.peerID == target.peerID,
       snapshot.app == StandardFixtures.application,
       snapshot.appVersion == StandardFixtures.applicationVersion
     else {
@@ -271,12 +400,9 @@ public actor StandardPlayground {
     }
   }
 
-  private func probeCatalog(_ card: AukiPeerCard) async throws {
+  private func probeCatalog(_ target: StandardRuntimeTarget) async throws {
     let endpoint = standard.catalog()
-    let resourcesTarget = try nativePeerTarget(
-      card: card,
-      requiredProtocol: endpoint.resourcesProtocol()
-    )
+    let resourcesTarget = try target.exact(requiredProtocol: endpoint.resourcesProtocol())
     let resources = try StandardFixtures.decode(
       CatalogResourcesSnapshot.self,
       from: try await endpoint.client().fetchResourcesExact(
@@ -284,21 +410,21 @@ public actor StandardPlayground {
         variants: [.messageChannel]
       )
     )
-    guard resources == StandardFixtures.catalogResources(peerID: card.peerId) else {
+    guard resources == StandardFixtures.catalogResources(peerID: target.peerID) else {
       throw StandardPlaygroundError("Catalog message-channel fixture is unexpected")
     }
 
-    let mapsTarget = try nativePeerTarget(card: card, requiredProtocol: endpoint.mapsProtocol())
+    let mapsTarget = try target.exact(requiredProtocol: endpoint.mapsProtocol())
     let maps = try await endpoint.client().fetchMapsExact(target: mapsTarget)
     guard try StandardFixtures.resourcesAreEmpty(json: maps) else {
       throw StandardPlaygroundError("Catalog map fixture is not empty")
     }
   }
 
-  private func probeRegistry(_ card: AukiPeerCard) async throws {
+  private func probeRegistry(_ target: StandardRuntimeTarget) async throws {
     let endpoint = standard.registry()
-    let target = try nativePeerTarget(card: card, requiredProtocol: endpoint.protocol())
-    let entries = try await endpoint.client().listExact(target: target, kind: .frame)
+    let exact = try target.exact(requiredProtocol: endpoint.protocol())
+    let entries = try await endpoint.client().listExact(target: exact, kind: .frame)
     guard
       entries.count == 1,
       entries[0].id == StandardFixtures.registryID,
@@ -308,15 +434,15 @@ public actor StandardPlayground {
     }
   }
 
-  private func probeBlob(_ card: AukiPeerCard) async throws {
+  private func probeBlob(_ target: StandardRuntimeTarget) async throws {
     let endpoint = standard.blob()
-    let target = try nativePeerTarget(card: card, requiredProtocol: endpoint.protocol())
+    let exact = try target.exact(requiredProtocol: endpoint.protocol())
     let receipt = try await endpoint.client().fetchExact(
-      target: target,
+      target: exact,
       sha256: StandardFixtures.blobSHA256
     )
     guard
-      receipt.remotePeerId == card.peerId,
+      receipt.remotePeerId == target.peerID,
       receipt.sha256 == StandardFixtures.blobSHA256,
       receipt.bytes == StandardFixtures.blobBytes,
       receipt.relayed
@@ -325,15 +451,15 @@ public actor StandardPlayground {
     }
   }
 
-  private func probeMessage(_ card: AukiPeerCard) async throws {
+  private func probeMessage(_ target: StandardRuntimeTarget) async throws {
     let endpoint = standard.message()
-    let target = try nativePeerTarget(card: card, requiredProtocol: endpoint.protocol())
+    let exact = try target.exact(requiredProtocol: endpoint.protocol())
     let sender = try await endpoint.client().openExact(
-      target: target,
-      channel: StandardFixtures.messageChannel(peerID: card.peerId)
+      target: exact,
+      channel: StandardFixtures.messageChannel(peerID: target.peerID)
     )
     do {
-      guard sender.remotePeer().peerId == card.peerId, sender.relayed() else {
+      guard sender.remotePeer().peerId == target.peerID, sender.relayed() else {
         throw StandardPlaygroundError("Message sender metadata is unexpected")
       }
       try await sender.send(
@@ -349,14 +475,14 @@ public actor StandardPlayground {
     try await sender.close()
   }
 
-  private func probeStream(_ card: AukiPeerCard) async throws {
+  private func probeStream(_ target: StandardRuntimeTarget) async throws {
     let endpoint = standard.stream()
-    let target = try nativePeerTarget(card: card, requiredProtocol: endpoint.protocol())
+    let exact = try target.exact(requiredProtocol: endpoint.protocol())
     let subscription = try await endpoint.client().subscribe(
-      target: target,
+      target: exact,
       payloadKind: .scalar,
       request: AukiStreamRequest(
-        sourcePeerId: card.peerId,
+        sourcePeerId: target.peerID,
         resourceId: StandardFixtures.streamResourceID,
         readFrom: .latest
       )

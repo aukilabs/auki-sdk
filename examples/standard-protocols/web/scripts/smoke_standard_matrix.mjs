@@ -9,12 +9,16 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const START_TIMEOUT_MS = 180_000;
+const DISCOVERY_TIMEOUT_MS = 180_000;
 const PROBE_TIMEOUT_MS = 420_000;
 const CLEANUP_TIMEOUT_MS = 120_000;
 const COMMAND_OUTPUT_LIMIT_BYTES = 32 * 1024 * 1024;
 const OUTPUT_LIMIT_BYTES = 128 * 1024;
 const TEMP_PREFIX = "auki-standard-protocol-matrix-";
+const HANDLED_RATE_LIMIT_CONSOLE_ERROR =
+  /^Failed to load resource: the server responded with a status of 429 \(\)$/;
 const PROTOCOLS = ["info", "catalog", "registry", "blob", "message", "stream"];
+const INFO_PROTOCOL_ID = "/auki/auth/1/info/1.0.0";
 const EDGES = [
   ["native-to-python", "native", "python"],
   ["python-to-native", "python", "native"],
@@ -94,19 +98,43 @@ try {
   }
   browser = await chromium.launch(launchOptions);
   const browserUrl = `http://127.0.0.1:${address.port}/`;
-  const [browserA, browserB] = await Promise.all([
-    createBrowserAgent(browser, browserUrl, "browser-a", credentials),
-    createBrowserAgent(browser, browserUrl, "browser-b", credentials),
+  const startBrowser = (label) => createBrowserAgent(
+    browser,
+    browserUrl,
+    label,
+    credentials,
+    (agent) => browserAgents.push(agent),
+  );
+  const browserStarts = await Promise.allSettled([
+    startBrowser("browser-a"),
+    startBrowser("browser-b"),
   ]);
-  browserAgents.push(browserA, browserB);
+  const browserFailure = browserStarts.find((result) => result.status === "rejected");
+  if (browserFailure) throw browserFailure.reason;
+  const [browserA, browserB] = browserStarts.map((result) => result.value);
 
   const agents = new Map([
-    ["native", { label: "native", card: nativeCard, probe: (target, id) => native.probe(target, id) }],
-    ["python", { label: "python", card: pythonCard, probe: (target, id) => python.probe(target, id) }],
+    ["native", {
+      label: "native",
+      card: nativeCard,
+      discover: (protocol, id) => native.discover(protocol, id),
+      probeDiscovered: (target, id) => native.probeDiscovered(target, id),
+      probe: (target, id) => native.probe(target, id),
+    }],
+    ["python", {
+      label: "python",
+      card: pythonCard,
+      discover: (protocol, id) => python.discover(protocol, id),
+      probeDiscovered: (target, id) => python.probeDiscovered(target, id),
+      probe: (target, id) => python.probe(target, id),
+    }],
     ["browser-a", browserA],
     ["browser-b", browserB],
   ]);
   assertPeerSet(agents, credentials.domainId);
+
+  console.log("MATRIX_PHASE phase=discover");
+  const discoveredTargets = await assertDiscoveryMatrix(agents);
 
   console.log("MATRIX_PHASE phase=probe");
   let cases = 0;
@@ -114,9 +142,11 @@ try {
     const source = agents.get(sourceLabel);
     const target = agents.get(targetLabel);
     assert(source && target);
+    const discovered = discoveredTargets.get(sourceLabel)?.get(target.card.peerId);
+    assert(discovered, `${sourceLabel} did not retain its candidate for ${targetLabel}`);
     console.log(`MATRIX_EDGE_START id=${edgeId} source=${sourceLabel} target=${targetLabel}`);
     const result = await withTimeout(
-      source.probe(target.card, edgeId),
+      source.probeDiscovered(discovered, edgeId),
       PROBE_TIMEOUT_MS,
       `probing ${edgeId}`,
     );
@@ -198,6 +228,7 @@ function agentEnvironment(environment, identityFile, nodeName) {
     AUKI_DOMAIN_ID: credentials.domainId,
     AUKI_IDENTITY_FILE: identityFile,
     AUKI_NODE_NAME: nodeName,
+    AUKI_DISCOVERY_MODE: "discover_and_advertise",
   };
 }
 
@@ -324,6 +355,20 @@ function createProcessAgent({ label, command, args, cwd, environment }) {
     child,
     ready,
     result,
+    async discover(protocol, id) {
+      const waiting = waitForAgentEvent(
+        { label, child, events, history, stdout, stderr },
+        (event) => event.event === "discovery_result" && event.id === id,
+        DISCOVERY_TIMEOUT_MS,
+        `waiting for ${label} discovery ${id}`,
+      );
+      child.stdin.write(`${JSON.stringify({ command: "discover", id, protocol })}\n`);
+      const result = await waiting;
+      if (result.ok !== true) {
+        throw new Error(`${label} discovery failed: ${result.error ?? "unknown error"}`);
+      }
+      return result.candidates;
+    },
     async probe(target, id) {
       const waiting = waitForAgentEvent(
         { label, child, events, history, stdout, stderr },
@@ -332,6 +377,16 @@ function createProcessAgent({ label, command, args, cwd, environment }) {
         `waiting for ${label} probe ${id}`,
       );
       child.stdin.write(`${JSON.stringify({ command: "probe_all", id, target })}\n`);
+      return waiting;
+    },
+    async probeDiscovered(target, id) {
+      const waiting = waitForAgentEvent(
+        { label, child, events, history, stdout, stderr },
+        (event) => event.event === "probe_result" && event.id === id,
+        PROBE_TIMEOUT_MS,
+        `waiting for ${label} discovered probe ${id}`,
+      );
+      child.stdin.write(`${JSON.stringify({ command: "probe_discovered", id, target })}\n`);
       return waiting;
     },
     stop() {
@@ -395,16 +450,54 @@ function waitForAgentEvent(agent, predicate, timeoutMs, description) {
   });
 }
 
-async function createBrowserAgent(browserInstance, url, label, input) {
+async function createBrowserAgent(browserInstance, url, label, input, register) {
   const context = await browserInstance.newContext();
-  const page = await context.newPage();
+  let page;
+  let card;
   const consoleErrors = boundedOutput();
+  const agent = {
+    label,
+    get card() {
+      return card;
+    },
+    discover(protocol) {
+      return page.evaluate((protocolId) => window.aukiE2e.discover(protocolId), protocol);
+    },
+    probeDiscovered(target) {
+      return page.evaluate((candidate) => window.aukiE2e.probeDiscovered(candidate), target);
+    },
+    async probe(target) {
+      return page.evaluate((cardInput) => window.aukiE2e.probeAll(cardInput), target);
+    },
+    async stop() {
+      try {
+        if (page && !page.isClosed()) {
+          const canStop = await page.evaluate(
+            () => typeof window.aukiE2e?.stop === "function",
+          ).catch(() => false);
+          if (canStop) await page.evaluate(() => window.aukiE2e.stop());
+        }
+        const errors = consoleErrors.toString().trim();
+        if (errors) throw new Error(`${label} console errors:\n${errors}`);
+      } finally {
+        await context.close();
+      }
+    },
+  };
+  register(agent);
+  page = await context.newPage();
   page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.append(`${message.text()}\n`);
+    if (
+      message.type() === "error"
+      && !HANDLED_RATE_LIMIT_CONSOLE_ERROR.test(message.text())
+    ) {
+      consoleErrors.append(`${message.text()}\n`);
+    }
   });
+  page.on("pageerror", (error) => consoleErrors.append(`page error: ${error.message}\n`));
   await page.goto(url, { waitUntil: "load" });
   await page.waitForFunction(() => Boolean(window.aukiE2e), undefined, { timeout: START_TIMEOUT_MS });
-  const card = await withTimeout(
+  card = await withTimeout(
     page.evaluate((credentialsInput) => window.aukiE2e.start(credentialsInput), {
       email: input.email,
       password: input.password,
@@ -414,22 +507,116 @@ async function createBrowserAgent(browserInstance, url, label, input) {
     START_TIMEOUT_MS,
     `starting ${label}`,
   );
-  return {
-    label,
-    card,
-    async probe(target) {
-      return page.evaluate((cardInput) => window.aukiE2e.probeAll(cardInput), target);
-    },
-    async stop() {
-      try {
-        await page.evaluate(() => window.aukiE2e.stop());
-        const errors = consoleErrors.toString().trim();
-        if (errors) throw new Error(`${label} console errors:\n${errors}`);
-      } finally {
-        await context.close();
+  return agent;
+}
+
+async function assertDiscoveryMatrix(agents) {
+  const deadline = Date.now() + DISCOVERY_TIMEOUT_MS;
+  let lastMissing = [];
+  let lastErrors = [];
+  let round = 0;
+  while (Date.now() < deadline) {
+    round += 1;
+    const observations = await Promise.all(
+      [...agents].map(async ([label, agent]) => {
+        try {
+          return [
+            label,
+            await agent.discover(INFO_PROTOCOL_ID, `discover-info-${round}-${label}`),
+            null,
+          ];
+        } catch (error) {
+          return [label, [], error instanceof Error ? error.message : String(error)];
+        }
+      }),
+    );
+    lastMissing = [];
+    lastErrors = [];
+    for (const [observerLabel, candidates, error] of observations) {
+      const observer = agents.get(observerLabel);
+      assert(observer, `missing discovery observer ${observerLabel}`);
+      if (error) lastErrors.push(`${observerLabel}: ${error}`);
+      const byPeer = new Map(candidates.map((candidate) => [candidate.peerId, candidate]));
+      assert(
+        !byPeer.has(observer.card.peerId),
+        `${observerLabel} discovery returned its own advertisement`,
+      );
+      for (const [targetLabel, target] of agents) {
+        if (targetLabel === observerLabel) continue;
+        const candidate = byPeer.get(target.card.peerId);
+        if (!candidate) {
+          lastMissing.push(`${observerLabel}->${targetLabel}`);
+          continue;
+        }
+        const missingProtocols = target.card.protocols.filter(
+          (protocol) => !candidate.servedProtocols.includes(protocol),
+        );
+        const hasLocalRoute = observer.card.runtime === "browser"
+          ? candidate.routes.some((route) => route.includes("/wss/"))
+          : candidate.routes.some(
+            (route) => route.includes("/tcp/") && !route.includes("/wss/"),
+          );
+        if (missingProtocols.length || !hasLocalRoute) {
+          lastMissing.push(`${observerLabel}->${targetLabel}/incomplete`);
+          continue;
+        }
+        assert(
+          candidate.servedProtocols.includes(INFO_PROTOCOL_ID),
+          `${observerLabel}->${targetLabel} discovery omitted Info protocol`,
+        );
+        assert(
+          candidate.routes.some((route) => route.endsWith(`/p2p/${target.card.peerId}`)),
+          `${observerLabel}->${targetLabel} discovery returned no route for the expected Peer ID`,
+        );
       }
-    },
-  };
+    }
+    if (!lastMissing.length) {
+      const retained = new Map(
+        observations.map(([label, candidates]) => [
+          label,
+          new Map(candidates.map((candidate) => [candidate.peerId, candidate])),
+        ]),
+      );
+      await Promise.all(
+        [...agents].map(([observerLabel, observer]) =>
+          discoverAllWithRetry(observerLabel, observer, agents),
+        ),
+      );
+      console.log("AUKI_DISCOVERY_MATRIX_OK peers=4 observations=12");
+      return retained;
+    }
+    await delay(1_000);
+  }
+  throw new Error(
+    `discovery matrix timed out; missing directed observations: ${lastMissing.join(", ")}; `
+      + `last lookup errors: ${lastErrors.join("; ") || "none"}`,
+  );
+}
+
+async function discoverAllWithRetry(observerLabel, observer, agents) {
+  const deadline = Date.now() + DISCOVERY_TIMEOUT_MS;
+  let attempt = 0;
+  let lastFailure = "no lookup completed";
+  while (Date.now() < deadline) {
+    attempt += 1;
+    try {
+      const candidates = await observer.discover(
+        undefined,
+        `discover-all-${observerLabel}-${attempt}`,
+      );
+      const peerIds = new Set(candidates.map((candidate) => candidate.peerId));
+      const missing = [...agents]
+        .filter(([targetLabel, target]) =>
+          targetLabel !== observerLabel && !peerIds.has(target.card.peerId))
+        .map(([targetLabel]) => targetLabel);
+      if (!missing.length) return;
+      lastFailure = `missing ${missing.join(", ")}`;
+    } catch (error) {
+      lastFailure = error instanceof Error ? error.message : String(error);
+    }
+    await delay(1_000);
+  }
+  throw new Error(`${observerLabel} discover-all timed out: ${lastFailure}`);
 }
 
 function assertPeerSet(agents, expectedDomainId) {

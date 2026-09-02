@@ -31,6 +31,30 @@ final class AukiStandardPlaygroundTests: XCTestCase {
     XCTAssertEqual(selected.route, decoded.routes.tcp)
   }
 
+  func testDiscoveredPeerKeepsRawRoutesUntilExactTargetSelection() throws {
+    let target = AukiPeerIdentity.generate().peerId()
+    let relay = AukiPeerIdentity.generate().peerId()
+    let direct = "/dns4/direct.example.com/tcp/4001/p2p/\(target)"
+    let tcp = "/dns4/relay.dev.aukiverse.com/tcp/443/p2p/\(relay)/p2p-circuit/p2p/\(target)"
+    let candidate = StandardDiscoveredPeer(
+      peerID: target,
+      routes: [direct, tcp],
+      servedProtocols: StandardFixtures.protocolIDs,
+      expiresAt: "2026-09-02T00:00:00Z",
+      source: "dds_tracker"
+    )
+
+    let selected = try discoveredNativePeerTarget(
+      candidate: candidate,
+      domainID: "de66fdf4-a830-4017-95dd-5741c30a6d0f",
+      requiredProtocols: StandardFixtures.protocolIDs
+    )
+
+    XCTAssertEqual(candidate.routes, [direct, tcp])
+    XCTAssertEqual(selected.peerId, target)
+    XCTAssertEqual(selected.route, tcp)
+  }
+
   func testFiniteFixtureJSONAndMessageRecords() throws {
     let peerID = AukiPeerIdentity.generate().peerId()
     let info = StandardFixtures.info(peerID: peerID, nodeName: "unit-test")

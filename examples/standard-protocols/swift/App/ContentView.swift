@@ -26,6 +26,11 @@ struct ContentView: View {
                   .tag(domain.id)
               }
             }
+            Picker("Discovery", selection: $model.discoveryChoice) {
+              ForEach(StandardDiscoveryChoice.allCases) { choice in
+                Text(choice.rawValue).tag(choice)
+              }
+            }
             Button("Start all six protocols") { Task { await model.start() } }
               .disabled(!model.canStart)
           }
@@ -39,7 +44,44 @@ struct ContentView: View {
             Button("Copy peer card") { UIPasteboard.general.string = model.localCard }
           }
 
-          Section("Probe another peer") {
+          Section("Discover peers") {
+            Text("Candidates are untrusted until an exact protocol connection authenticates their Peer ID and Domain.")
+              .font(.caption)
+            Picker("Protocol", selection: $model.selectedDiscoveryProtocol) {
+              Text("All advertised peers").tag("")
+              ForEach(model.discoveryProtocols, id: \.self) { protocolID in
+                Text(protocolID).tag(protocolID)
+              }
+            }
+            Button("Discover") { Task { await model.discoverPeers() } }
+              .disabled(!model.canDiscover)
+
+            if !model.discoveredPeers.isEmpty {
+              Picker("Candidate", selection: $model.selectedDiscoveredPeerID) {
+                ForEach(model.discoveredPeers) { candidate in
+                  Text(
+                    candidate.peerID
+                      + (model.isProbeable(candidate) ? "" : " — not probeable here")
+                  )
+                  .tag(candidate.peerID)
+                  .disabled(!model.isProbeable(candidate))
+                }
+              }
+              if let candidate = model.discoveredPeers.first(where: {
+                $0.peerID == model.selectedDiscoveredPeerID
+              }) {
+                Text("\(candidate.servedProtocols.count) protocols · expires \(candidate.expiresAt)")
+                  .font(.caption.monospaced())
+                  .textSelection(.enabled)
+              }
+              Button("Probe selected peer") { Task { await model.probeDiscovered() } }
+                .disabled(!model.canProbeDiscovered)
+            }
+          }
+
+          Section("Manual peer-card fallback") {
+            Text("Paste a card when discovery is unavailable or when testing a private peer.")
+              .font(.caption)
             TextEditor(text: $model.remoteCard)
               .font(.caption.monospaced())
               .frame(minHeight: 140)

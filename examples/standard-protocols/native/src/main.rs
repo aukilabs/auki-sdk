@@ -30,7 +30,10 @@ use auki_protocols::{
     },
 };
 use auki_registry::RegistryRef;
-use auki_sdk::{AukiPeer, AukiPeerBootstrap, Credentials, DomainSelection, Multiaddr, PeerId};
+use auki_sdk::{
+    AukiDiscovery, AukiDiscoveryCandidate, AukiDiscoverySource, AukiPeer, AukiPeerBootstrap,
+    Credentials, DdsTrackerMode, DomainSelection, Multiaddr, PeerId,
+};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -72,8 +75,37 @@ struct PeerRoutes {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 enum Command {
-    ProbeAll { id: String, target: PeerCard },
-    Shutdown { id: String },
+    Discover {
+        id: String,
+        #[serde(default)]
+        protocol: Option<String>,
+    },
+    ProbeAll {
+        id: String,
+        target: PeerCard,
+    },
+    ProbeDiscovered {
+        id: String,
+        target: DiscoveredPeer,
+    },
+    Shutdown {
+        id: String,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiscoveredPeer {
+    peer_id: String,
+    routes: Vec<String>,
+    served_protocols: Vec<String>,
+    expires_at: String,
+    source: String,
+}
+
+struct ProbeTarget {
+    peer_id: PeerId,
+    route: Multiaddr,
 }
 
 #[derive(Clone)]
@@ -95,6 +127,17 @@ struct MountedProtocols {
     message: MessageEndpoint,
     stream: StreamEndpoint,
     message_drain: tokio::task::JoinHandle<Result<()>>,
+}
+
+#[derive(Default)]
+struct PartialMountedProtocols {
+    info: Option<InfoEndpoint>,
+    catalog: Option<CatalogEndpoint>,
+    registry: Option<RegistryEndpoint>,
+    blob: Option<BlobEndpoint>,
+    message: Option<MessageEndpoint>,
+    stream: Option<StreamEndpoint>,
+    message_drain: Option<tokio::task::JoinHandle<Result<()>>>,
 }
 
 #[derive(Clone)]
@@ -156,29 +199,36 @@ async fn main() -> Result<()> {
         .parse::<Uuid>()
         .context("AUKI_DOMAIN_ID must be a UUID")?;
     let identity_file = PathBuf::from(required_env("AUKI_IDENTITY_FILE")?);
-    let bootstrap = AukiPeerBootstrap::dev(credentials_from_env()?).await?;
+    let discovery_mode = discovery_mode_from_env()?;
+    let bootstrap = AukiPeerBootstrap::dev(credentials_from_env()?)
+        .await?
+        .with_dds_tracker(discovery_mode);
     let peer = bootstrap
         .start_persistent_peer(DomainSelection::new(domain_id), identity_file)
         .await?;
 
-    let protocols = match MountedProtocols::mount(&peer) {
+    let protocols = match MountedProtocols::mount(&peer).await {
         Ok(protocols) => protocols,
         Err(error) => {
             let peer_shutdown = peer.shutdown().await.map_err(anyhow::Error::from);
             return finish(Err(error), [("Auki peer", peer_shutdown)]);
         }
     };
-    let card = peer_card(&peer)?;
-    emit(&serde_json::json!({
-        "event": "ready",
-        "runtime": "native",
-        "card": card,
-    }))?;
+    let operation = async {
+        let card = peer_card(&peer)?;
+        emit(&serde_json::json!({
+            "event": "ready",
+            "runtime": "native",
+            "card": card,
+        }))?;
 
-    let operation = tokio::select! {
-        operation = command_loop(&protocols.clients) => operation,
-        signal = tokio::signal::ctrl_c() => signal.context("wait for Ctrl-C"),
-    };
+        let discovery = peer.discovery_handle()?;
+        tokio::select! {
+            operation = command_loop(&protocols.clients, &discovery) => operation,
+            signal = tokio::signal::ctrl_c() => signal.context("wait for Ctrl-C"),
+        }
+    }
+    .await;
     let protocol_shutdown = protocols.close().await;
     let peer_shutdown = peer.shutdown().await.map_err(anyhow::Error::from);
     finish(
@@ -193,61 +243,116 @@ async fn main() -> Result<()> {
 }
 
 impl MountedProtocols {
-    fn mount(peer: &AukiPeer) -> Result<Self> {
+    async fn mount(peer: &AukiPeer) -> Result<Self> {
         let protocols = peer.protocols();
         let local_peer_id = peer.peer_id();
         let node_name = env::var("AUKI_NODE_NAME").unwrap_or_else(|_| "native-playground".into());
         let message_channel = message_channel(local_peer_id);
-
-        let info = InfoEndpoint::mount(
-            protocols.clone(),
-            move |_requester: &auki_sdk::AuthenticatedPeer| {
-                Some(AuthenticatedParticipantInfo {
-                    app: APP.into(),
-                    app_version: APP_VERSION.into(),
-                    name: node_name.clone(),
-                    session_id: "playground-session".into(),
-                    session_clock_id: MESSAGE_CLOCK_ID.into(),
-                    session_clock_hash: MESSAGE_CLOCK_HASH.into(),
-                    session_now_ns: 0,
-                    peer_id: local_peer_id,
-                    app_instance: "native".into(),
-                })
-            },
-        )?;
-        let catalog = CatalogEndpoint::mount(
-            protocols.clone(),
-            CatalogFixture {
-                message_channel: message_channel.clone(),
-            },
-        )?;
-        let registry = RegistryEndpoint::mount(
-            protocols.clone(),
-            |_requester: &auki_sdk::AuthenticatedPeer, request: &RegistryRequest| {
-                registry_response(request)
-            },
-        )?;
-        let blob_fixture = BlobFixture {
-            sha256: blob_sha256(),
-            bytes: Arc::from(BLOB_BYTES),
-        };
-        let blob = BlobEndpoint::mount(protocols.clone(), blob_fixture)?;
-        let message = MessageEndpoint::mount(protocols.clone())?;
-        let mut receiver = message.declare(message_channel, 16)?;
-        let message_drain = tokio::spawn(async move {
-            while let Some(event) = receiver.recv().await {
-                validate_message_event(&event)?;
-            }
+        let mut mounted = PartialMountedProtocols::default();
+        let mounting: Result<()> = async {
+            mounted.info = Some(InfoEndpoint::mount(
+                protocols.clone(),
+                move |_requester: &auki_sdk::AuthenticatedPeer| {
+                    Some(AuthenticatedParticipantInfo {
+                        app: APP.into(),
+                        app_version: APP_VERSION.into(),
+                        name: node_name.clone(),
+                        session_id: "playground-session".into(),
+                        session_clock_id: MESSAGE_CLOCK_ID.into(),
+                        session_clock_hash: MESSAGE_CLOCK_HASH.into(),
+                        session_now_ns: 0,
+                        peer_id: local_peer_id,
+                        app_instance: "native".into(),
+                    })
+                },
+            )?);
+            mounted.catalog = Some(CatalogEndpoint::mount(
+                protocols.clone(),
+                CatalogFixture {
+                    message_channel: message_channel.clone(),
+                },
+            )?);
+            mounted.registry = Some(RegistryEndpoint::mount(
+                protocols.clone(),
+                |_requester: &auki_sdk::AuthenticatedPeer, request: &RegistryRequest| {
+                    registry_response(request)
+                },
+            )?);
+            mounted.blob = Some(BlobEndpoint::mount(
+                protocols.clone(),
+                BlobFixture {
+                    sha256: blob_sha256(),
+                    bytes: Arc::from(BLOB_BYTES),
+                },
+            )?);
+            mounted.message = Some(MessageEndpoint::mount(protocols.clone())?);
+            let mut receiver = mounted
+                .message
+                .as_ref()
+                .expect("Message endpoint was just mounted")
+                .declare(message_channel, 16)?;
+            mounted.message_drain = Some(tokio::spawn(async move {
+                while let Some(event) = receiver.recv().await {
+                    validate_message_event(&event)?;
+                }
+                Ok(())
+            }));
+            mounted.stream = Some(StreamEndpoint::mount(
+                protocols,
+                move |_requester: &auki_sdk::AuthenticatedPeer, request| {
+                    stream_dispatch(local_peer_id, request)
+                },
+            )?);
             Ok(())
-        });
-        let stream = StreamEndpoint::mount(
-            protocols,
-            move |_requester: &auki_sdk::AuthenticatedPeer, request| {
-                stream_dispatch(local_peer_id, request)
-            },
-        )?;
+        }
+        .await;
 
-        Ok(Self {
+        if let Err(error) = mounting {
+            return match mounted.close().await {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(error.context(format!(
+                    "ordered mount rollback also failed: {cleanup_error:#}"
+                ))),
+            };
+        }
+        Ok(mounted.complete())
+    }
+
+    async fn close(self) -> Result<()> {
+        let Self {
+            clients: _,
+            info,
+            catalog,
+            registry,
+            blob,
+            message,
+            stream,
+            message_drain,
+        } = self;
+        PartialMountedProtocols {
+            info: Some(info),
+            catalog: Some(catalog),
+            registry: Some(registry),
+            blob: Some(blob),
+            message: Some(message),
+            stream: Some(stream),
+            message_drain: Some(message_drain),
+        }
+        .close()
+        .await
+    }
+}
+
+impl PartialMountedProtocols {
+    fn complete(mut self) -> MountedProtocols {
+        let info = self.info.take().expect("Info endpoint is mounted");
+        let catalog = self.catalog.take().expect("Catalog endpoint is mounted");
+        let registry = self.registry.take().expect("Registry endpoint is mounted");
+        let blob = self.blob.take().expect("Blob endpoint is mounted");
+        let message = self.message.take().expect("Message endpoint is mounted");
+        let stream = self.stream.take().expect("Stream endpoint is mounted");
+        let message_drain = self.message_drain.take().expect("Message drain is running");
+        MountedProtocols {
             clients: ProtocolClients {
                 info: info.client(),
                 catalog: catalog.client(),
@@ -263,22 +368,36 @@ impl MountedProtocols {
             message,
             stream,
             message_drain,
-        })
+        }
     }
 
-    async fn close(self) -> Result<()> {
+    async fn close(mut self) -> Result<()> {
         let mut errors = Vec::new();
-        collect_close(&mut errors, "Stream", self.stream.close().await);
-        collect_close(&mut errors, "Message", self.message.close().await);
-        match self.message_drain.await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => errors.push(format!("Message receiver: {error:#}")),
-            Err(error) => errors.push(format!("Message receiver task: {error}")),
+        if let Some(stream) = self.stream.take() {
+            collect_close(&mut errors, "Stream", stream.close().await);
         }
-        collect_close(&mut errors, "Blob", self.blob.close().await);
-        collect_close(&mut errors, "Registry", self.registry.close().await);
-        collect_close(&mut errors, "Catalog", self.catalog.close().await);
-        collect_close(&mut errors, "Info", self.info.close().await);
+        if let Some(message) = self.message.take() {
+            collect_close(&mut errors, "Message", message.close().await);
+        }
+        if let Some(message_drain) = self.message_drain.take() {
+            match message_drain.await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => errors.push(format!("Message receiver: {error:#}")),
+                Err(error) => errors.push(format!("Message receiver task: {error}")),
+            }
+        }
+        if let Some(blob) = self.blob.take() {
+            collect_close(&mut errors, "Blob", blob.close().await);
+        }
+        if let Some(registry) = self.registry.take() {
+            collect_close(&mut errors, "Registry", registry.close().await);
+        }
+        if let Some(catalog) = self.catalog.take() {
+            collect_close(&mut errors, "Catalog", catalog.close().await);
+        }
+        if let Some(info) = self.info.take() {
+            collect_close(&mut errors, "Info", info.close().await);
+        }
         if errors.is_empty() {
             Ok(())
         } else {
@@ -287,7 +406,7 @@ impl MountedProtocols {
     }
 }
 
-async fn command_loop(clients: &ProtocolClients) -> Result<()> {
+async fn command_loop(clients: &ProtocolClients, discovery: &AukiDiscovery) -> Result<()> {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Some(line) = lines.next_line().await.context("read JSONL command")? {
         let command = match serde_json::from_str::<Command>(&line) {
@@ -301,8 +420,26 @@ async fn command_loop(clients: &ProtocolClients) -> Result<()> {
             }
         };
         match command {
+            Command::Discover { id, protocol } => {
+                emit_discovery_result(
+                    &id,
+                    protocol.as_deref(),
+                    discover(discovery, protocol.as_deref()).await,
+                )?;
+            }
             Command::ProbeAll { id, target } => {
-                emit_probe_result(&id, &target, probe_all(clients, &target).await)?;
+                let results = match manual_target(&target) {
+                    Ok(target) => probe_all(clients, target).await,
+                    Err(error) => failed_checks(format!("{error:#}")),
+                };
+                emit_probe_result(&id, &target.peer_id, results)?;
+            }
+            Command::ProbeDiscovered { id, target } => {
+                let results = match discovered_target(&target) {
+                    Ok(target) => probe_all(clients, target).await,
+                    Err(error) => failed_checks(format!("{error:#}")),
+                };
+                emit_probe_result(&id, &target.peer_id, results)?;
             }
             Command::Shutdown { id } => {
                 emit(&serde_json::json!({"event": "shutdown_ack", "id": id}))?;
@@ -313,18 +450,58 @@ async fn command_loop(clients: &ProtocolClients) -> Result<()> {
     Ok(())
 }
 
+async fn discover(
+    discovery: &AukiDiscovery,
+    protocol: Option<&str>,
+) -> Result<Vec<DiscoveredPeer>> {
+    let candidates = match protocol {
+        Some(protocol) => discovery.discover_protocol(protocol).await?,
+        None => discovery.discover().await?,
+    };
+    Ok(candidates.into_iter().map(discovered_peer).collect())
+}
+
+fn discovered_peer(candidate: AukiDiscoveryCandidate) -> DiscoveredPeer {
+    DiscoveredPeer {
+        peer_id: candidate.peer_id().to_string(),
+        routes: candidate.routes().iter().map(ToString::to_string).collect(),
+        served_protocols: candidate.served_protocols().to_vec(),
+        expires_at: candidate.expires_at().to_rfc3339(),
+        source: match candidate.source() {
+            AukiDiscoverySource::DdsTracker => "dds_tracker".into(),
+        },
+    }
+}
+
+fn emit_discovery_result(
+    id: &str,
+    protocol: Option<&str>,
+    result: Result<Vec<DiscoveredPeer>>,
+) -> Result<()> {
+    match result {
+        Ok(candidates) => emit(&serde_json::json!({
+            "event": "discovery_result",
+            "id": id,
+            "ok": true,
+            "protocol": protocol,
+            "candidates": candidates,
+        })),
+        Err(error) => emit(&serde_json::json!({
+            "event": "discovery_result",
+            "id": id,
+            "ok": false,
+            "protocol": protocol,
+            "candidates": [],
+            "error": format!("{error:#}"),
+        })),
+    }
+}
+
 async fn probe_all(
     clients: &ProtocolClients,
-    target: &PeerCard,
+    target: ProbeTarget,
 ) -> BTreeMap<&'static str, Result<()>> {
-    let peer_id = target.peer_id.parse::<PeerId>();
-    let route = target.routes.tcp.parse::<Multiaddr>();
-    let (peer_id, route) = match (peer_id, route) {
-        (Ok(peer_id), Ok(route)) => (peer_id, route),
-        (Err(error), _) => return failed_checks(format!("invalid target Peer ID: {error}")),
-        (_, Err(error)) => return failed_checks(format!("invalid target TCP route: {error}")),
-    };
-
+    let ProbeTarget { peer_id, route } = target;
     let mut checks = BTreeMap::new();
     checks.insert(
         "info",
@@ -351,6 +528,49 @@ async fn probe_all(
         probe_stream(&clients.stream, peer_id, route).await,
     );
     checks
+}
+
+fn manual_target(target: &PeerCard) -> Result<ProbeTarget> {
+    Ok(ProbeTarget {
+        peer_id: target
+            .peer_id
+            .parse::<PeerId>()
+            .context("invalid target Peer ID")?,
+        route: target
+            .routes
+            .tcp
+            .parse::<Multiaddr>()
+            .context("invalid target TCP route")?,
+    })
+}
+
+fn discovered_target(target: &DiscoveredPeer) -> Result<ProbeTarget> {
+    let missing = protocol_ids()
+        .into_iter()
+        .filter(|protocol| !target.served_protocols.contains(protocol))
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        bail!(
+            "discovered peer {} does not advertise every standard protocol: {}",
+            target.peer_id,
+            missing.join(", ")
+        );
+    }
+    let route = target
+        .routes
+        .iter()
+        .filter(|route| route.contains("/tcp/") && !route.contains("/wss/"))
+        .min_by_key(|route| !route.contains("/p2p-circuit/"))
+        .ok_or_else(|| anyhow!("discovered peer {} has no native TCP route", target.peer_id))?;
+    Ok(ProbeTarget {
+        peer_id: target
+            .peer_id
+            .parse::<PeerId>()
+            .context("invalid discovered Peer ID")?,
+        route: route
+            .parse::<Multiaddr>()
+            .context("invalid discovered TCP route")?,
+    })
 }
 
 async fn probe_info(client: &InfoClient, peer_id: PeerId, route: Multiaddr) -> Result<()> {
@@ -567,7 +787,7 @@ fn emit(value: &serde_json::Value) -> Result<()> {
 
 fn emit_probe_result(
     id: &str,
-    target: &PeerCard,
+    target_peer_id: &str,
     results: BTreeMap<&'static str, Result<()>>,
 ) -> Result<()> {
     let checks = results
@@ -581,7 +801,7 @@ fn emit_probe_result(
     emit(&serde_json::json!({
         "event": "probe_result",
         "id": id,
-        "targetPeerId": target.peer_id,
+        "targetPeerId": target_peer_id,
         "ok": errors.is_empty(),
         "checks": checks,
         "errors": errors,
@@ -631,6 +851,18 @@ fn credentials_from_env() -> Result<Credentials> {
             bail!("set AUKI_EMAIL/AUKI_PASSWORD or AUKI_APP_ACCESS_KEY/AUKI_APP_SECRET")
         }
         (Some(_), Some(_)) => bail!("configure either User or App credentials, not both"),
+    }
+}
+
+fn discovery_mode_from_env() -> Result<DdsTrackerMode> {
+    match env::var("AUKI_DISCOVERY_MODE") {
+        Ok(value) if value == "discover_only" => Ok(DdsTrackerMode::DiscoverOnly),
+        Ok(value) if value == "discover_and_advertise" => Ok(DdsTrackerMode::DiscoverAndAdvertise),
+        Ok(value) => bail!(
+            "AUKI_DISCOVERY_MODE must be discover_only or discover_and_advertise, got {value:?}"
+        ),
+        Err(env::VarError::NotPresent) => Ok(DdsTrackerMode::DiscoverAndAdvertise),
+        Err(error) => Err(error).context("read AUKI_DISCOVERY_MODE"),
     }
 }
 

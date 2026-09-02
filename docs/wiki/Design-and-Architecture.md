@@ -15,7 +15,6 @@ The repository keeps maintained documentation close to the code:
 
 - [`docs/p2p/`](https://github.com/aukilabs/auki-sdk/tree/develop/docs/p2p) — authenticated peer and protocol development
 - [`dataproducts.md`](https://github.com/aukilabs/auki-sdk/blob/develop/dataproducts.md) — Resource Catalog and data-lifecycle reference
-- [`docs/control-api.md`](https://github.com/aukilabs/auki-sdk/blob/develop/docs/control-api.md) — HTTP control API for SDK-session daemons
 
 Git history, tagged releases, and linked issues retain superseded design plans.
 

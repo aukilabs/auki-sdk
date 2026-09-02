@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "PyO3 bindings for `auki-session` — transport-neutral in-process Python surface for opening sessions, registering sensors and clocks, writing/listing sensor and pose logs. Source-of-truth API; the HTTP Control API (frozen at v0.0.23) and forthcoming libp2p control protocols both wrap this surface."
+description = "PyO3 bindings for `auki-session` — transport-neutral in-process Python surface for opening sessions, registering sensors and clocks, writing/listing sensor and pose logs."
 
 [lib]
 # `cdylib` makes the crate build as a Python native extension.

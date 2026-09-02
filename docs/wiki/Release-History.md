@@ -71,7 +71,7 @@ this tag.
 **Released:** 2026-06-25 · [`git show v0.0.59`](https://github.com/aukilabs/auki-sdk/releases/tag/v0.0.59)
 
 - **[#296](https://github.com/aukilabs/auki-sdk/pull/296) (#295)** Manager tiebreaker: Discovery-arbitrated promotion, step-down, and rejoin — closes races where two peers could each believe they're Manager.
-- **[#294](https://github.com/aukilabs/auki-sdk/pull/294) (#293)** Identity confirmed libp2p-only: the HTTP `/api/info` control-API path for `ParticipantInfo` is removed. `ParticipantInfo` is now gated by cluster membership over `/auki/info/0.0.1` exclusively.
+- **[#294](https://github.com/aukilabs/auki-sdk/pull/294) (#293)** Identity confirmed libp2p-only: the legacy HTTP `/api/info` path for `ParticipantInfo` is removed. `ParticipantInfo` is now gated by cluster membership over `/auki/info/0.0.1` exclusively.
 - **[#305](https://github.com/aukilabs/auki-sdk/pull/305) (#304)** Heartbeat write stalls instrumented for field diagnosis — logging only, no behavior change.
 - **[#300](https://github.com/aukilabs/auki-sdk/pull/300)** `.understand-anything` knowledge-graph + dashboard added for GitHub Pages (repo-internal tooling, not an SDK surface).
 
@@ -81,13 +81,13 @@ this tag.
 
 ---
 
-## v0.0.58 — Peer/Session/Domain doc sweep + control-api Manager fields
+## v0.0.58 — Peer/Session/Domain doc sweep + legacy Manager fields
 
 **Released:** 2026-06-10 · [`git show v0.0.58`](https://github.com/aukilabs/auki-sdk/releases/tag/v0.0.58)
 
-- **[#292](https://github.com/aukilabs/auki-sdk/pull/292) (#288)** Repo-wide doc sweep for the #274/#282 Peer/Session/Domain split — READMEs, the app-builder skill, and `docs/control-api.md` updated to the current shape.
+- **[#292](https://github.com/aukilabs/auki-sdk/pull/292) (#288)** Repo-wide doc sweep for the #274/#282 Peer/Session/Domain split.
 - **[#284](https://github.com/aukilabs/auki-sdk/pull/284)** Session clock unified: `ClusterManager` reads time through the shared SDK clock primitive; `examples/diagnostic-app` becomes a proper peer instead of hand-rolling its own clock.
-- Control API's `/api/info` gains `is_manager` + `manager_peer_id` fields. (Superseded in v0.0.59, which removes the HTTP `/api/info` identity path entirely — those two fields did not survive.)
+- The legacy `/api/info` response gains `is_manager` + `manager_peer_id` fields. (Superseded in v0.0.59, which removes the HTTP identity path entirely — those two fields did not survive.)
 
 **Who's affected:** Contributors reading docs/examples for the current Peer/Session/Domain shape.
 

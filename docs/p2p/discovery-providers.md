@@ -65,9 +65,7 @@ block multicast. Ordinary browser pages cannot directly participate in mDNS.
 
 mDNS supplies peer and route candidates, not exact Auki protocol metadata.
 Only retain routes supported by the Auki runtime, then authenticate the peer
-normally. The `_auki._tcp.local` service described by the
-[control API](../control-api.md) finds a local HTTP daemon; it is separate from
-libp2p peer discovery.
+normally.
 
 ## Rendezvous
 

@@ -2008,7 +2008,7 @@ async fn disappeared_booking_is_terminal() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn protected_renewal_runs_before_adjacent_status_poll() {
+async fn protected_renewal_reschedules_the_adjacent_status_poll() {
     let booking_id = Uuid::new_v4();
     let snapshot = queued_snapshot(booking_id);
     let api = Arc::new(ScriptedApi::default());
@@ -2031,6 +2031,23 @@ async fn protected_renewal_runs_before_adjacent_status_poll() {
     assert!(api.calls().is_empty());
 
     tokio::time::advance(Duration::from_millis(500)).await;
+    for _ in 0..16 {
+        if !api.calls().is_empty() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(matches!(
+        api.calls().as_slice(),
+        [ApiCall::Renew(observed_booking_id)]
+            if *observed_booking_id == booking_id
+    ));
+
+    tokio::time::advance(Duration::from_secs(4)).await;
+    tokio::task::yield_now().await;
+    assert!(matches!(api.calls().as_slice(), [ApiCall::Renew(_)]));
+
+    tokio::time::advance(Duration::from_secs(1)).await;
     for _ in 0..16 {
         if api.calls().len() >= 2 {
             break;
@@ -2058,4 +2075,48 @@ async fn protected_renewal_runs_before_adjacent_status_poll() {
     task.await
         .expect("actor did not panic")
         .expect("actor run completed");
+}
+
+#[tokio::test]
+async fn status_polling_is_fast_until_every_requested_slot_is_ready() {
+    let booking_id = Uuid::new_v4();
+    let api = Arc::new(ScriptedApi::default());
+    let backend = Arc::new(PendingStartBackend::new());
+    let routes = Arc::new(RecordingRoutes::default());
+    let config = coordinator_config("poll-cadence");
+    let queued = queued_snapshot(booking_id);
+    let (actor, _commands) = actor_harness(
+        api.clone(),
+        backend.clone(),
+        routes.clone(),
+        config.clone(),
+        queued,
+    );
+    assert_eq!(
+        actor.status_poll_delay(),
+        RELAY_STARTUP_STATUS_POLL_INTERVAL
+    );
+
+    let mut custom_fast = config.clone();
+    custom_fast.status_poll_interval = Duration::from_secs(1);
+    let (actor, _commands) = actor_harness(
+        api.clone(),
+        backend.clone(),
+        routes.clone(),
+        custom_fast,
+        queued_snapshot(booking_id),
+    );
+    assert_eq!(actor.status_poll_delay(), Duration::from_secs(1));
+
+    let ready = ready_snapshot(
+        booking_id,
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        PeerId::random(),
+    );
+    let (actor, _commands) = actor_harness(api, backend, routes, config, ready);
+    let stable_delay = actor.status_poll_delay();
+    assert!(stable_delay >= Duration::from_secs(48));
+    assert!(stable_delay <= Duration::from_secs(72));
 }

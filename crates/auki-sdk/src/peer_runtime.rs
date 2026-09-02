@@ -38,7 +38,7 @@ use crate::{
             RelayCoordinatorShutdownOutcome,
         },
     },
-    runtime_policy::booking_mode,
+    runtime_policy::{RELAY_STARTUP_STATUS_POLL_INTERVAL, booking_mode},
     status::{AukiPeerExit, AukiPeerFailure, AukiPeerStatus},
 };
 
@@ -678,9 +678,11 @@ impl AukiPeer {
                     {
                         Ok(coordinator) => break coordinator,
                         Err(error) => {
-                            let Some(retry_after) =
-                                error.startup_retry_after(relay_config.status_poll_interval)
-                            else {
+                            let Some(retry_after) = error.startup_retry_after(
+                                relay_config
+                                    .status_poll_interval
+                                    .min(RELAY_STARTUP_STATUS_POLL_INTERVAL),
+                            ) else {
                                 authority.shutdown().await;
                                 node.shutdown_now().await;
                                 return Err(AukiPeerStartError::Relay(

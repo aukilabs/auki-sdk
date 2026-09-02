@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use crate::{AukiRelayConfig, AukiRelayMode};
 
 pub(crate) const RELAY_AUTHORITY_SAFETY_MARGIN: Duration = Duration::from_secs(20);
+pub(crate) const RELAY_STARTUP_STATUS_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RejectedAuthorityRevision {
@@ -109,6 +110,20 @@ pub(crate) fn cap_relay_renewal_delay(
             .saturating_sub(RELAY_AUTHORITY_SAFETY_MARGIN)
             .saturating_sub(http_timeout),
     )
+}
+
+pub(crate) fn cap_relay_status_poll_delay(
+    desired: Duration,
+    usable_until: DateTime<Utc>,
+    now: DateTime<Utc>,
+    http_timeout: Duration,
+) -> Duration {
+    let deadline_delay = usable_until
+        .signed_duration_since(now)
+        .to_std()
+        .unwrap_or_default()
+        .saturating_sub(http_timeout);
+    desired.min(deadline_delay).max(Duration::from_millis(1))
 }
 
 #[cfg(test)]
@@ -212,6 +227,38 @@ mod tests {
                 Duration::from_secs(10),
             ),
             Duration::from_secs(10)
+        );
+    }
+
+    #[test]
+    fn relay_status_poll_respects_desired_cadence_and_live_deadline() {
+        let now = Utc::now();
+        assert_eq!(
+            cap_relay_status_poll_delay(
+                Duration::from_secs(30),
+                now + chrono::Duration::seconds(60),
+                now,
+                Duration::from_secs(10),
+            ),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            cap_relay_status_poll_delay(
+                Duration::from_secs(30),
+                now + chrono::Duration::seconds(25),
+                now,
+                Duration::from_secs(10),
+            ),
+            Duration::from_secs(15)
+        );
+        assert_eq!(
+            cap_relay_status_poll_delay(
+                Duration::from_secs(30),
+                now + chrono::Duration::seconds(5),
+                now,
+                Duration::from_secs(10),
+            ),
+            Duration::from_millis(1)
         );
     }
 }

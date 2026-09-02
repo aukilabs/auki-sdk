@@ -34,8 +34,9 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::runtime_policy::{
-    ActiveBookingValidation, RelayBookingExpectation, cap_relay_renewal_delay,
-    relay_authorized_until, validate_active_booking,
+    ActiveBookingValidation, RELAY_STARTUP_STATUS_POLL_INTERVAL, RelayBookingExpectation,
+    cap_relay_renewal_delay, cap_relay_status_poll_delay, relay_authorized_until,
+    validate_active_booking,
 };
 
 use super::{
@@ -993,6 +994,7 @@ impl CoordinatorActor {
             Ok(snapshot) => {
                 self.apply_snapshot(snapshot).await?;
                 self.schedule_renewal();
+                self.schedule_status_poll(false);
             }
             Err(error) => {
                 warn!(error = %error, "relay booking authority renewal failed");
@@ -1036,7 +1038,6 @@ impl CoordinatorActor {
         validate_booking_matches(&snapshot, &self.config)?;
         self.snapshot = snapshot;
         self.apply_current_snapshot().await?;
-        self.next_poll = Instant::now();
         Ok(())
     }
 
@@ -1522,7 +1523,7 @@ impl CoordinatorActor {
                         .await?;
                 }
                 self.apply_snapshot(snapshot).await?;
-                self.next_poll = Instant::now() + self.config.status_poll_interval;
+                self.schedule_status_poll(false);
             }
             Err(error) => {
                 warn!(error = %error, slot_id = %fence.slot_id, "reservation-failure report failed");
@@ -1831,19 +1832,23 @@ impl CoordinatorActor {
     }
 
     fn status_poll_delay(&self) -> Duration {
-        let configured = status_poll_jitter(self.config.status_poll_interval);
+        let desired = if booking_needs_fast_status_poll(&self.snapshot) {
+            self.config
+                .status_poll_interval
+                .min(RELAY_STARTUP_STATUS_POLL_INTERVAL)
+        } else {
+            status_poll_jitter(self.config.status_poll_interval)
+        };
         let now = chrono::Utc::now();
-        let deadline_delay = self
-            .slots
+        self.slots
             .values()
             .filter(|slot| !matches!(slot.state, LocalSlotState::ReportingFailure(_)))
             .map(|slot| slot.authorized_until)
             .min()
-            .and_then(|deadline| deadline.signed_duration_since(now).to_std().ok())
-            .map(|remaining| remaining.saturating_sub(self.config.http_timeout));
-        deadline_delay
-            .map(|delay| configured.min(delay).max(Duration::from_millis(1)))
-            .unwrap_or(configured)
+            .map(|deadline| {
+                cap_relay_status_poll_delay(desired, deadline, now, self.config.http_timeout)
+            })
+            .unwrap_or(desired)
     }
 
     fn reset_expiry_timer(&mut self) {
@@ -2296,6 +2301,14 @@ fn status_poll_jitter(interval: Duration) -> Duration {
     let minimum_ms = interval_ms.saturating_mul(80) / 100;
     let maximum_ms = interval_ms.saturating_mul(120) / 100;
     Duration::from_millis(rand::thread_rng().gen_range(minimum_ms..=maximum_ms))
+}
+
+fn booking_needs_fast_status_poll(snapshot: &RelayBookingSnapshot) -> bool {
+    snapshot.slots.len() != usize::from(snapshot.relay_count)
+        || snapshot
+            .slots
+            .iter()
+            .any(|slot| slot.state != RelaySlotState::Ready)
 }
 
 fn validate_booking_matches(

@@ -12,9 +12,9 @@ use auki_p2p::{
     RelayCircuitRoutes, RelayReservationError,
 };
 use auki_relay_booking::{
-    CreateRelayBookingRequest, RelayAuthorizationError, RelayAuthorizationProvider,
-    RelayAuthorizationSnapshot, RelayBookingApi, RelayBookingClient, RelayBookingClientError,
-    RelayErrorCode, RelayIdempotencyKey,
+    CreateRelayBookingRequest, RELAY_HTTP_REQUEST_TIMEOUT, RelayAuthorizationError,
+    RelayAuthorizationProvider, RelayAuthorizationSnapshot, RelayBookingApi, RelayBookingClient,
+    RelayBookingClientError, RelayErrorCode, RelayIdempotencyKey,
 };
 use chrono::{DateTime, Utc};
 use futures::{
@@ -45,8 +45,8 @@ use crate::{
     },
     protocol_contract::AukiProtocolError,
     runtime_policy::{
-        RejectedAuthorityRevision, booking_mode, next_authority_revision,
-        rejected_authority_revision,
+        RELAY_STARTUP_STATUS_POLL_INTERVAL, RejectedAuthorityRevision, booking_mode,
+        cap_relay_status_poll_delay, next_authority_revision, rejected_authority_revision,
     },
     status::{AukiPeerExit, AukiPeerFailure},
 };
@@ -483,7 +483,12 @@ async fn acquire_ready_relay(
         if let Some(ready) = ready {
             return Ok(ready);
         }
-        Delay::new(policy.status_poll_interval).await;
+        Delay::new(
+            policy
+                .status_poll_interval
+                .min(RELAY_STARTUP_STATUS_POLL_INTERVAL),
+        )
+        .await;
     }
 }
 
@@ -945,7 +950,11 @@ async fn supervise_relay(
 ) -> SupervisionEnd {
     let now = Utc::now();
     let mut next_renew = now + chrono_duration(booking_renewal_delay_at(&pinned, now));
-    let mut next_poll = now + chrono_duration(policy.status_poll_interval);
+    let mut next_poll = relay_status_poll_at(
+        policy.status_poll_interval,
+        relay_usable_until(&pinned),
+        now,
+    );
     loop {
         let iteration = relay_iteration(
             client,
@@ -1010,7 +1019,11 @@ async fn relay_iteration(
                 let now = Utc::now();
                 ensure_relay_usable(pinned, now)?;
                 *next_renew = now + chrono_duration(booking_renewal_delay_at(pinned, now));
-                *next_poll = now + chrono_duration(policy.status_poll_interval);
+                *next_poll = relay_status_poll_at(
+                    policy.status_poll_interval,
+                    relay_usable_until(pinned),
+                    now,
+                );
             }
             Err(error) if error.is_retryable() => {
                 let retry = error.retry_after().unwrap_or(RELAY_RETRY);
@@ -1034,7 +1047,11 @@ async fn relay_iteration(
                 let now = Utc::now();
                 ensure_relay_usable(pinned, now)?;
                 *next_renew = pull_booking_renewal_forward(*next_renew, pinned, now);
-                *next_poll = now + chrono_duration(policy.status_poll_interval);
+                *next_poll = relay_status_poll_at(
+                    policy.status_poll_interval,
+                    relay_usable_until(pinned),
+                    now,
+                );
             }
             Ok(None) => return Err(SupervisorError::BookingDisappeared),
             Err(error) if error.is_retryable() => {
@@ -1065,6 +1082,19 @@ fn ensure_relay_usable(ready: &ReadyRelay, now: DateTime<Utc>) -> Result<(), Sup
         return Err(SupervisorError::RelayAuthorityEnded);
     }
     Ok(())
+}
+
+fn relay_status_poll_at(
+    desired: Duration,
+    usable_until: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> DateTime<Utc> {
+    now + chrono_duration(cap_relay_status_poll_delay(
+        desired,
+        usable_until,
+        now,
+        RELAY_HTTP_REQUEST_TIMEOUT,
+    ))
 }
 
 async fn finish_supervision(
@@ -1272,6 +1302,28 @@ mod tests {
                 .await
                 .unwrap_err(),
             AukiDiscoveryError::Authentication
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn relay_status_poll_is_capped_before_the_usable_deadline() {
+        let now = DateTime::from_timestamp(1_800_000_000, 0).expect("fixed timestamp is valid");
+
+        assert_eq!(
+            relay_status_poll_at(
+                Duration::from_secs(30),
+                now + chrono::Duration::seconds(100),
+                now,
+            ),
+            now + chrono::Duration::seconds(30)
+        );
+        assert_eq!(
+            relay_status_poll_at(
+                Duration::from_secs(30),
+                now + chrono::Duration::seconds(25),
+                now,
+            ),
+            now + chrono::Duration::seconds(15)
         );
     }
 }

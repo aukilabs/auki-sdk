@@ -62,7 +62,11 @@ pub struct AukiRelayConfig {
     pub relay_count: u8,
     /// Requested booking duration, in whole seconds from 300 through 86,400.
     pub requested_duration: Duration,
-    /// DMS booking-status poll interval, from one through 60 seconds.
+    /// Desired steady-state DMS booking-status poll interval, from one through
+    /// 60 seconds.
+    ///
+    /// The SDK polls faster while a relay is being assigned or recovered and
+    /// may poll sooner when an authorization deadline requires it.
     pub status_poll_interval: Duration,
 }
 
@@ -72,7 +76,7 @@ impl Default for AukiRelayConfig {
             mode: AukiRelayMode::Public,
             relay_count: 1,
             requested_duration: MAX_RELAY_DURATION,
-            status_poll_interval: Duration::from_secs(5),
+            status_poll_interval: Duration::from_secs(30),
         }
     }
 }
@@ -702,6 +706,10 @@ mod tests {
         let config = AukiPeerConfig::dev();
         assert!(config.relay_required());
         assert_eq!(config.relay(), Some(AukiRelayConfig::default()));
+        assert_eq!(
+            config.relay().unwrap().status_poll_interval,
+            Duration::from_secs(30)
+        );
         assert_eq!(config.dms_base_url(), DEV_DMS_BASE_URL);
         assert!(config.dds_tracker().is_none());
         #[cfg(not(target_arch = "wasm32"))]

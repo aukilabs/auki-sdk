@@ -1,8 +1,9 @@
 # Auki Camera Mesh
 
-This example turns the portable Auki peer and protocol facades into one small,
-inspectable camera application. The Web runtime lands first; deterministic Rust
-and Python publishers and the Swift/iOS viewer follow the same protocol shapes.
+This example turns the portable Auki peer and all six standard protocol facades
+into one inspectable camera application. The Web runtime is the first complete
+publisher and viewer; deterministic Rust and Python peers and the Swift/iOS
+viewer follow the same protocol shapes in later phases.
 
 ## Run the Web demo
 

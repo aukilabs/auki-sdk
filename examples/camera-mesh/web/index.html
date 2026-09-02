@@ -37,10 +37,10 @@
           radial-gradient(circle at 8% 0%, rgb(94 224 181 / 9%), transparent 29rem),
           radial-gradient(circle at 94% 8%, rgb(114 183 255 / 7%), transparent 26rem);
       }
-      button, input, select { font: inherit; }
+      button, input, select, textarea { font: inherit; }
       button, select, summary { cursor: pointer; }
-      button:disabled, input:disabled, select:disabled { cursor: not-allowed; opacity: .46; }
-      button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible {
+      button:disabled, input:disabled, select:disabled, textarea:disabled { cursor: not-allowed; opacity: .46; }
+      button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
         outline: 3px solid rgb(94 224 181 / 35%);
         outline-offset: 2px;
       }
@@ -134,7 +134,7 @@
       .auth-forms { display: grid; align-content: center; padding: clamp(1.5rem, 4vw, 2.5rem); }
       form, .form { display: grid; gap: .85rem; }
       label { display: grid; gap: .32rem; color: #cbd6dc; font-size: .76rem; font-weight: 680; }
-      input, select {
+      input, select, textarea {
         width: 100%;
         min-height: 2.65rem;
         border: 1px solid var(--line-hi);
@@ -146,6 +146,9 @@
       }
       input:hover, select:hover { border-color: #52616e; }
       input::placeholder { color: #5d6a75; }
+      textarea { min-height: 7rem; resize: vertical; }
+      textarea:hover { border-color: #52616e; }
+      textarea::placeholder { color: #5d6a75; }
       button {
         min-height: 2.45rem;
         border: 1px solid var(--accent);
@@ -193,6 +196,10 @@
       #pending-list button { min-height: 2rem; padding: .3rem .55rem; }
       #candidate-details, #local-card { overflow-wrap: anywhere; white-space: pre-wrap; }
       #candidate-details { min-height: 6.5rem; max-height: 12rem; overflow: auto; margin: .85rem 0; border: 1px solid var(--line); border-radius: 10px; padding: .7rem .75rem; background-color: var(--soft); color: var(--muted); }
+      .manual-target { margin-top: .9rem; border-top: 1px solid var(--line); }
+      .manual-target > summary { padding: .85rem 0; color: var(--muted); font-size: .75rem; }
+      .manual-target[open] > summary { border-bottom: 0; }
+      .manual-target .form { padding-bottom: .1rem; }
       #metrics { position: absolute; z-index: 2; right: .65rem; bottom: .65rem; max-width: calc(100% - 1.3rem); margin: 0; border: 1px solid rgb(255 255 255 / 9%); border-radius: 7px; padding: .32rem .5rem; background-color: rgb(5 9 12 / 80%); color: #b8c4cc; font: .62rem ui-monospace, monospace; backdrop-filter: blur(8px); }
       .hint { margin: .7rem 0 0; color: var(--faint); font-size: .7rem; }
 
@@ -210,7 +217,11 @@
       #timeline { border-left: 1px solid var(--line); padding-left: .75rem; }
       #events { min-height: 4rem; max-height: 10rem; }
       #events:empty::before { color: var(--faint); content: "Events will appear as the peer connects."; }
+      #inspector-details { max-height: 20rem; overflow: auto; margin: 0; color: #9fc7b3; white-space: pre-wrap; overflow-wrap: anywhere; }
       .events-heading { margin-top: 1.1rem; }
+      .snapshot-result { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: .75rem; align-items: center; margin-top: .8rem; }
+      #snapshot-image { width: 7rem; aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: 8px; object-fit: cover; }
+      #snapshot-status { margin: 0; font-size: .73rem; overflow-wrap: anywhere; }
 
       @media (max-width: 940px) {
         main { width: min(100% - 1rem, 760px); }
@@ -341,11 +352,36 @@
                   <button id="disconnect-button" class="secondary" type="button" disabled>Disconnect</button>
                 </div>
                 <p class="hint">The first request asks the publisher for approval. Allow this Peer ID there, then retry.</p>
+                <details class="manual-target">
+                  <summary>Use a copied peer card instead</summary>
+                  <div class="form">
+                    <label>Publisher peer card
+                      <textarea id="manual-card" spellcheck="false" placeholder='Paste the publisher’s sanitized JSON peer card'></textarea>
+                    </label>
+                    <div class="actions">
+                      <button id="add-card-button" class="secondary" type="button">Use peer card</button>
+                    </div>
+                    <p class="hint">The card must name this Domain, advertise Camera Stream, and include an exact WSS route.</p>
+                  </div>
+                </details>
               </div>
               <div class="media">
                 <img id="remote-frame" alt="Live frame from the selected remote camera" decoding="async" hidden />
                 <p class="media-empty" id="remote-empty">Not connected</p>
                 <p id="metrics" aria-live="polite">Stream idle</p>
+              </div>
+              <div class="subsection">
+                <h3>Approved controls</h3>
+                <p>Message controls are applied only after the publisher checks your authenticated Peer ID.</p>
+                <div class="actions">
+                  <button id="pause-button" class="secondary" type="button" disabled>Pause</button>
+                  <button id="resume-button" class="secondary" type="button" disabled>Resume</button>
+                  <button id="snapshot-button" type="button" disabled>Verified snapshot</button>
+                </div>
+                <div class="snapshot-result">
+                  <img id="snapshot-image" alt="Verified camera snapshot" hidden />
+                  <p id="snapshot-status">No snapshot requested.</p>
+                </div>
               </div>
             </section>
           </div>
@@ -360,6 +396,8 @@
                 </div>
                 <h3>Timeline</h3>
                 <pre id="timeline" aria-live="polite"></pre>
+                <h3 class="events-heading">Decoded state</h3>
+                <pre id="inspector-details">Protocol metadata appears after a camera is approved.</pre>
                 <h3 class="events-heading">Recent events</h3>
                 <pre id="events" aria-live="polite"></pre>
               </div>

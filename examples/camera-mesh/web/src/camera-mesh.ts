@@ -13,10 +13,15 @@ import {
   type AukiStreamRequest,
 } from "../pkg-web/auki_sdk_web.js";
 import { CameraCapture, type CaptureMode } from "./capture.js";
-
-const CAMERA_RESOURCE_ID = "camera/main";
-const CAMERA_RATE_HZ = 5;
-const PLACEHOLDER_HASH = "0".repeat(32);
+import {
+  CAMERA_RATE_HZ,
+  CAMERA_RESOURCE_ID,
+  CameraProtocols,
+  type CameraRegistryMetadata,
+  type RemoteCameraMetadata,
+  type SnapshotAvailable,
+  type VerifiedBlob,
+} from "./protocols.js";
 
 export type CameraRole = "publisher" | "viewer";
 
@@ -47,10 +52,25 @@ export interface RemoteFrame {
   readonly bytes: number;
 }
 
+export interface RemoteConnection {
+  readonly target: AukiExactTarget;
+  readonly metadata: RemoteCameraMetadata;
+  readonly streamManifest: AukiStreamManifest;
+}
+
+export interface RemoteSnapshot {
+  readonly requestId: string;
+  readonly sha256: string;
+  readonly jpeg: Uint8Array;
+  readonly relayed: boolean;
+}
+
 export interface CameraMeshHooks {
   event(message: string): void;
   pendingChanged(peerIds: readonly string[]): void;
   remoteFrame(frame: RemoteFrame): void;
+  remoteConnected(connection: RemoteConnection): void;
+  remoteSnapshot(snapshot: RemoteSnapshot): void;
   remoteEnded(reason: string): void;
 }
 
@@ -67,10 +87,13 @@ export class CameraMesh {
   private readonly allowed = new Set<string>();
   private readonly denied = new Set<string>();
   private readonly pending = new Set<string>();
+  private protocols?: CameraProtocols;
   private streamEndpoint?: AukiStreamEndpoint;
   private capture?: CameraCapture;
   private subscription?: AukiStreamSubscription;
   private viewerTask?: Promise<void>;
+  private activeTarget?: AukiExactTarget;
+  private remoteMetadata?: RemoteCameraMetadata;
   private closing = false;
 
   private constructor(
@@ -99,7 +122,14 @@ export class CameraMesh {
       ? AukiDiscoveryMode.DiscoverAndAdvertise
       : AukiDiscoveryMode.DiscoverOnly;
     const peer = await session.startPeerWithDiscovery(domainId, mode);
-    return new CameraMesh(peer, role, displayName, hooks);
+    const mesh = new CameraMesh(peer, role, displayName, hooks);
+    try {
+      await mesh.mountProtocols();
+      return mesh;
+    } catch (error) {
+      await mesh.close().catch(() => undefined);
+      throw error;
+    }
   }
 
   get name(): string {
@@ -116,7 +146,10 @@ export class CameraMesh {
       runtime: "browser",
       domainId: this.domainId,
       peerId: this.peerId,
-      protocols: this.isPublishing ? [this.streamProtocol] : [],
+      protocols: [
+        ...(this.protocols?.servedProtocols ?? []),
+        ...(this.isPublishing ? [this.streamProtocol] : []),
+      ],
       routes: {
         tcp: this.peer.tcpRoute,
         wss: this.peer.wssRoute,
@@ -143,6 +176,7 @@ export class CameraMesh {
       );
       this.capture = capture;
       this.streamEndpoint = endpoint;
+      this.protocolStack().setCameraAvailable(true);
       this.hooks.event(`Publishing ${CAMERA_RESOURCE_ID} at ${CAMERA_RATE_HZ} fps`);
     } catch (error) {
       capture.stop();
@@ -155,23 +189,26 @@ export class CameraMesh {
     const endpoint = this.streamEndpoint;
     this.capture = undefined;
     this.streamEndpoint = undefined;
-    capture?.stop();
-    if (endpoint) {
-      try {
-        await endpoint.close();
-      } finally {
-        endpoint.free();
-      }
-    }
     this.pending.clear();
     this.allowed.clear();
     this.denied.clear();
     this.emitPending();
+    try {
+      if (endpoint) this.protocolStack().setCameraAvailable(false);
+      capture?.stop();
+      if (endpoint) {
+        await endpoint.close();
+      }
+    } finally {
+      capture?.stop();
+      endpoint?.free();
+    }
     if (capture || endpoint) this.hooks.event("Camera publication stopped");
   }
 
   approve(peerId: string): void {
     this.assertOpen();
+    if (this.role !== "publisher") throw new Error("only a publisher approves camera viewers");
     this.pending.delete(peerId);
     this.denied.delete(peerId);
     this.allowed.add(peerId);
@@ -181,6 +218,7 @@ export class CameraMesh {
 
   deny(peerId: string): void {
     this.assertOpen();
+    if (this.role !== "publisher") throw new Error("only a publisher denies camera viewers");
     this.pending.delete(peerId);
     this.allowed.delete(peerId);
     this.denied.add(peerId);
@@ -221,9 +259,18 @@ export class CameraMesh {
     for (const route of routes) {
       const target: AukiExactTarget = { peerId: candidate.peerId, route };
       try {
+        const metadata = await this.protocolStack().resolveRemoteMetadata(target);
         const subscription = await this.streamClient.subscribeExact(target, "camera", request);
+        validateStreamManifest(subscription.manifest, metadata, candidate.peerId);
         this.subscription = subscription;
+        this.activeTarget = target;
+        this.remoteMetadata = metadata;
         this.viewerTask = this.consume(subscription, candidate.peerId);
+        this.hooks.remoteConnected({
+          target: { ...target },
+          metadata,
+          streamManifest: subscription.manifest,
+        });
         this.hooks.event(`Viewing ${candidate.peerId} through ${route}`);
         return;
       } catch (error) {
@@ -233,11 +280,40 @@ export class CameraMesh {
     throw new Error(`Camera request declined or unreachable: ${failures.join("; ")}`);
   }
 
+  async pauseRemote(): Promise<void> {
+    const { target, metadata } = this.remoteControlContext();
+    await this.protocolStack().sendControl(target, metadata.controlChannel, {
+      type: "camera.pause",
+    });
+    this.hooks.event(`Message camera.pause acknowledged by ${target.peerId}`);
+  }
+
+  async resumeRemote(): Promise<void> {
+    const { target, metadata } = this.remoteControlContext();
+    await this.protocolStack().sendControl(target, metadata.controlChannel, {
+      type: "camera.resume",
+    });
+    this.hooks.event(`Message camera.resume acknowledged by ${target.peerId}`);
+  }
+
+  async requestSnapshot(): Promise<string> {
+    const { target, metadata } = this.remoteControlContext();
+    const requestId = globalThis.crypto.randomUUID();
+    await this.protocolStack().sendControl(target, metadata.controlChannel, {
+      type: "camera.request_snapshot",
+      requestId,
+    });
+    this.hooks.event(`Message snapshot request ${requestId} acknowledged`);
+    return requestId;
+  }
+
   async stopViewing(): Promise<void> {
     const subscription = this.subscription;
     const task = this.viewerTask;
     this.subscription = undefined;
     this.viewerTask = undefined;
+    this.activeTarget = undefined;
+    this.remoteMetadata = undefined;
     if (subscription) {
       try {
         await subscription.cancel();
@@ -263,6 +339,14 @@ export class CameraMesh {
     } catch (error) {
       errors.push(`publisher: ${errorMessage(error)}`);
     }
+    if (this.protocols) {
+      try {
+        await this.protocols.close();
+      } catch (error) {
+        errors.push(`protocols: ${errorMessage(error)}`);
+      }
+      this.protocols = undefined;
+    }
     this.streamClient.free();
     try {
       await this.peer.shutdown();
@@ -272,6 +356,77 @@ export class CameraMesh {
       this.peer.free();
     }
     if (errors.length) throw new Error(`Camera Mesh shutdown failed: ${errors.join("; ")}`);
+  }
+
+  private async mountProtocols(): Promise<void> {
+    this.protocols = await CameraProtocols.mount(this.peer, {
+      role: this.role,
+      displayName: this.displayName,
+      access: {
+        isAllowed: (requester) => this.allowed.has(requester.peerId),
+        requestApproval: (requester) => this.requestApproval(requester.peerId),
+      },
+      controls: {
+        pause: () => this.capture?.pause(),
+        resume: () => this.capture?.resume(),
+        requestSnapshot: () => this.capture?.latestJpeg(),
+        snapshotReady: (snapshot) => {
+          this.hooks.event(
+            `Blob ${snapshot.sha256} staged for ${snapshot.requester.peerId}`,
+          );
+        },
+        snapshotAvailable: (snapshot) => this.receiveSnapshot(snapshot),
+        ignored: (event, reason) => {
+          this.hooks.event(`Ignored Message ${event.type} from ${event.sender.peerId}: ${reason}`);
+        },
+      },
+      event: (message) => this.hooks.event(message),
+    });
+  }
+
+  private async receiveSnapshot(snapshot: SnapshotAvailable): Promise<void> {
+    const target = this.activeTarget;
+    if (!target || target.peerId !== snapshot.publisher.peerId) {
+      throw new Error("snapshot publisher is not the active camera peer");
+    }
+    const blob: VerifiedBlob = await this.protocolStack().fetchVerifiedBlob(
+      target,
+      snapshot.sha256,
+    );
+    if (blob.bytes.byteLength !== snapshot.size) {
+      throw new Error("verified Blob size differs from its Message announcement");
+    }
+    this.hooks.remoteSnapshot({
+      requestId: snapshot.requestId,
+      sha256: blob.sha256,
+      jpeg: blob.bytes,
+      relayed: blob.relayed,
+    });
+    this.hooks.event(`Blob snapshot ${blob.sha256} fetched and SHA-256 verified`);
+  }
+
+  private requestApproval(peerId: string): void {
+    if (this.role !== "publisher" || this.allowed.has(peerId) || this.denied.has(peerId)) return;
+    const firstRequest = !this.pending.has(peerId);
+    this.pending.add(peerId);
+    this.emitPending();
+    if (firstRequest) this.hooks.event(`Camera access pending for ${peerId}`);
+  }
+
+  private remoteControlContext(): {
+    target: AukiExactTarget;
+    metadata: RemoteCameraMetadata;
+  } {
+    this.assertOpen();
+    if (this.role !== "viewer") throw new Error("only a viewer sends camera controls");
+    if (!this.activeTarget || !this.remoteMetadata) throw new Error("no camera is connected");
+    return { target: this.activeTarget, metadata: this.remoteMetadata };
+  }
+
+  private protocolStack(): CameraProtocols {
+    const protocols = this.protocols;
+    if (!protocols) throw new Error("camera protocols are unavailable");
+    return protocols;
   }
 
   private dispatchStream(
@@ -290,10 +445,7 @@ export class CameraMesh {
       return { kind: "decline", reason: { kind: "other", detail: "wrong_domain" } };
     }
     if (!this.allowed.has(requester.peerId)) {
-      if (!this.denied.has(requester.peerId)) {
-        this.pending.add(requester.peerId);
-        this.emitPending();
-      }
+      this.requestApproval(requester.peerId);
       return {
         kind: "decline",
         reason: {
@@ -305,7 +457,7 @@ export class CameraMesh {
     return {
       kind: "accept",
       payloadKind: "camera",
-      manifest: streamManifest(this.peerId),
+      manifest: streamManifest(this.protocolStack().metadata),
       source: capture.source(),
     };
   }
@@ -313,13 +465,17 @@ export class CameraMesh {
   private async consume(subscription: AukiStreamSubscription, peerId: string): Promise<void> {
     let received = 0;
     let bytes = 0;
+    let terminalReason: string | undefined;
     try {
       while (this.subscription === subscription) {
         const next = await subscription.next();
-        if (!next) return;
+        if (!next) {
+          terminalReason = `Camera ${peerId} closed the Stream`;
+          break;
+        }
         if (next.kind === "end") {
-          this.hooks.remoteEnded(`Camera ${peerId} ended: ${next.reason.kind}`);
-          return;
+          terminalReason = `Camera ${peerId} ended: ${next.reason.kind}`;
+          break;
         }
         const jpeg = decodeCameraFrameImage(next.entry.payload);
         received += 1;
@@ -334,7 +490,16 @@ export class CameraMesh {
       }
     } catch (error) {
       if (this.subscription === subscription && !this.closing) {
-        this.hooks.remoteEnded(`Camera ${peerId} failed: ${errorMessage(error)}`);
+        terminalReason = `Camera ${peerId} failed: ${errorMessage(error)}`;
+      }
+    } finally {
+      if (this.subscription === subscription) {
+        this.subscription = undefined;
+        this.viewerTask = undefined;
+        this.activeTarget = undefined;
+        this.remoteMetadata = undefined;
+        subscription.free();
+        this.hooks.remoteEnded(terminalReason ?? `Camera ${peerId} Stream stopped`);
       }
     }
   }
@@ -348,15 +513,15 @@ export class CameraMesh {
   }
 }
 
-function streamManifest(peerId: string): AukiStreamManifest {
+function streamManifest(metadata: CameraRegistryMetadata): AukiStreamManifest {
   return {
-    sensorId: CAMERA_RESOURCE_ID,
-    sensorHash: PLACEHOLDER_HASH,
-    clockPeerId: peerId,
-    clockId: "session/wall-clock",
-    clockHash: PLACEHOLDER_HASH,
-    frameId: "camera/optical",
-    frameHash: PLACEHOLDER_HASH,
+    sensorId: metadata.sensor.id,
+    sensorHash: metadata.sensor.hash,
+    clockPeerId: metadata.clock.ref.peer_id,
+    clockId: metadata.clock.id,
+    clockHash: metadata.clock.hash,
+    frameId: metadata.frame.id,
+    frameHash: metadata.frame.hash,
     resourceId: CAMERA_RESOURCE_ID,
     payload: "camera_frame",
     fromFrameId: "",
@@ -369,6 +534,27 @@ function streamManifest(peerId: string): AukiStreamManifest {
     mapId: "",
     mapHash: "",
   };
+}
+
+function validateStreamManifest(
+  manifest: AukiStreamManifest,
+  metadata: RemoteCameraMetadata,
+  peerId: string,
+): void {
+  const checks: ReadonlyArray<[unknown, unknown, string]> = [
+    [manifest.resourceId, CAMERA_RESOURCE_ID, "resource ID"],
+    [manifest.payload, "camera_frame", "payload"],
+    [manifest.sensorId, metadata.sensor.id, "Sensor ID"],
+    [manifest.sensorHash, metadata.sensor.hash, "Sensor hash"],
+    [manifest.clockPeerId, peerId, "Clock owner"],
+    [manifest.clockId, metadata.clock.id, "Clock ID"],
+    [manifest.clockHash, metadata.clock.hash, "Clock hash"],
+    [manifest.frameId, metadata.frame.id, "Frame ID"],
+    [manifest.frameHash, metadata.frame.hash, "Frame hash"],
+  ];
+  for (const [actual, expected, label] of checks) {
+    if (actual !== expected) throw new Error(`Stream ${label} does not match verified metadata`);
+  }
 }
 
 function browserRoutes(routes: readonly string[]): string[] {

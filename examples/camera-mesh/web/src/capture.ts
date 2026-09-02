@@ -76,6 +76,7 @@ export class CameraCapture {
   private readonly video = document.createElement("video");
   private media?: MediaStream;
   private running = false;
+  private paused = false;
   private syntheticFrame = 0;
 
   constructor(
@@ -92,17 +93,24 @@ export class CameraCapture {
   async start(mode: CaptureMode): Promise<void> {
     if (this.running) throw new Error("camera capture is already running");
     if (mode === "webcam") {
-      this.media = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          width: { ideal: WIDTH },
-          height: { ideal: HEIGHT },
-          frameRate: { ideal: FRAME_RATE, max: FRAME_RATE },
-        },
-      });
-      this.video.srcObject = this.media;
-      await this.video.play();
-      this.onEvent("Webcam permission granted");
+      try {
+        this.media = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            width: { ideal: WIDTH },
+            height: { ideal: HEIGHT },
+            frameRate: { ideal: FRAME_RATE, max: FRAME_RATE },
+          },
+        });
+        this.video.srcObject = this.media;
+        await this.video.play();
+        this.onEvent("Webcam permission granted");
+      } catch (error) {
+        for (const track of this.media?.getTracks() ?? []) track.stop();
+        this.media = undefined;
+        this.video.srcObject = null;
+        throw error;
+      }
     } else {
       this.onEvent("Synthetic camera ready");
     }
@@ -116,6 +124,18 @@ export class CameraCapture {
 
   latestJpeg(): Uint8Array | undefined {
     return this.frames.latest()?.jpeg.slice();
+  }
+
+  pause(): void {
+    if (!this.running || this.paused) return;
+    this.paused = true;
+    this.onEvent("Camera paused by an approved viewer");
+  }
+
+  resume(): void {
+    if (!this.running || !this.paused) return;
+    this.paused = false;
+    this.onEvent("Camera resumed by an approved viewer");
   }
 
   stop(): void {
@@ -134,15 +154,17 @@ export class CameraCapture {
     while (this.running) {
       const started = performance.now();
       try {
-        this.draw(mode);
-        const jpeg = await canvasJpeg(this.canvas, JPEG_QUALITY);
-        if (jpeg.byteLength > MAX_JPEG_BYTES) {
-          throw new Error(
-            `JPEG frame is ${jpeg.byteLength} bytes; maximum is ${MAX_JPEG_BYTES}`,
-          );
+        if (!this.paused) {
+          this.draw(mode);
+          const jpeg = await canvasJpeg(this.canvas, JPEG_QUALITY);
+          if (jpeg.byteLength > MAX_JPEG_BYTES) {
+            throw new Error(
+              `JPEG frame is ${jpeg.byteLength} bytes; maximum is ${MAX_JPEG_BYTES}`,
+            );
+          }
+          const timestampNs = BigInt(Date.now()) * 1_000_000n;
+          this.frames.publish(timestampNs, jpeg, this.encodeFrame(jpeg));
         }
-        const timestampNs = BigInt(Date.now()) * 1_000_000n;
-        this.frames.publish(timestampNs, jpeg, this.encodeFrame(jpeg));
       } catch (error) {
         this.onEvent(`Capture frame failed: ${errorMessage(error)}`);
       }

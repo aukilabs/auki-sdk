@@ -16,9 +16,12 @@ final class EchoModel: ObservableObject {
     @Published var email = ""
     @Published var password = ""
     @Published var selectedDomainID = ""
+    @Published var advertisePeer = true
+    @Published var selectedDiscoveredPeerID = ""
     @Published var remoteCard = ""
     @Published var message = "hello from Swift"
     @Published private(set) var domains: [AukiDomain] = []
+    @Published private(set) var discoveredPeers: [AukiDiscoveryCandidate] = []
     @Published private(set) var localCard = ""
     @Published private(set) var log = ""
     @Published private(set) var phase: Phase = .signedOut
@@ -42,6 +45,12 @@ final class EchoModel: ObservableObject {
     var canSend: Bool {
         phase == .running && !remoteCard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !message.isEmpty
+    }
+
+    var canRefreshDiscovery: Bool { phase == .running }
+
+    var canSendDiscovered: Bool {
+        phase == .running && !selectedDiscoveredPeerID.isEmpty && !message.isEmpty
     }
 
     @discardableResult
@@ -79,9 +88,10 @@ final class EchoModel: ObservableObject {
             let peerIdentity = identity ?? AukiPeerIdentity.generate()
             identity = peerIdentity
             write("Starting ephemeral Peer ID \(peerIdentity.peerId())…")
-            let runningPeer = try await session.startPeer(
+            let runningPeer = try await session.startPeerWithDiscovery(
                 domainId: selectedDomainID,
-                identity: peerIdentity
+                identity: peerIdentity,
+                mode: advertisePeer ? .discoverAndAdvertise : .discoverOnly
             )
             startedPeer = runningPeer
             let mounted = try await AukiEcho.mount(peer: runningPeer)
@@ -102,6 +112,70 @@ final class EchoModel: ObservableObject {
             write(error)
             return false
         }
+    }
+
+    @discardableResult
+    func refreshDiscovery() async -> Bool {
+        guard canRefreshDiscovery, let runningPeer = peer, let mounted = echo else { return false }
+        do {
+            let candidates = try await runningPeer.discoverProtocol(
+                protocolId: mounted.protocol()
+            )
+            guard let currentPeer = peer, currentPeer === runningPeer, phase == .running else {
+                return false
+            }
+            discoveredPeers = candidates
+            if !candidates.contains(where: { $0.peerId == selectedDiscoveredPeerID }) {
+                selectedDiscoveredPeerID = candidates.first?.peerId ?? ""
+            }
+            write("Discovered \(candidates.count) Echo peer(s); candidates remain untrusted until exact dial.")
+            return true
+        } catch {
+            write(error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func sendDiscovered() async -> Bool {
+        guard
+            canSendDiscovered,
+            let runningPeer = peer,
+            let mounted = echo,
+            let candidate = discoveredPeers.first(where: {
+                $0.peerId == selectedDiscoveredPeerID
+            })
+        else { return false }
+
+        let routes = nativeDiscoveryRoutes(candidate.routes)
+        guard !routes.isEmpty else {
+            write("Discovered peer has no native-compatible route")
+            return false
+        }
+        var failures: [String] = []
+        for route in routes {
+            do {
+                let receipt = try await mounted.sendExact(
+                    target: AukiPeerTarget(
+                        domainId: runningPeer.domainId(),
+                        peerId: candidate.peerId,
+                        route: route
+                    ),
+                    payload: Data(message.utf8)
+                )
+                let payload = String(decoding: receipt.payload, as: UTF8.self)
+                write("Sent to discovered peer \(receipt.remotePeerId): \(payload)")
+                print(
+                    "AUKI_IOS_ECHO_SENT peer=\(receipt.remotePeerId) "
+                        + "relayed=\(receipt.relayed) payload=\(payload)"
+                )
+                return true
+            } catch {
+                failures.append("\(route): \(error.localizedDescription)")
+            }
+        }
+        write("Every discovered route failed: \(failures.joined(separator: "; "))")
+        return false
     }
 
     @discardableResult
@@ -141,6 +215,8 @@ final class EchoModel: ObservableObject {
 
         session = nil
         domains = []
+        discoveredPeers = []
+        selectedDiscoveredPeerID = ""
         selectedDomainID = ""
         localCard = ""
         phase = .signedOut
@@ -195,6 +271,16 @@ final class EchoModel: ObservableObject {
                 }
             }
         }
+    }
+
+    private func nativeDiscoveryRoutes(_ routes: [String]) -> [String] {
+        routes
+            .filter { !$0.contains("/wss") }
+            .sorted { left, right in
+                let leftRelay = left.contains("/p2p-circuit/")
+                let rightRelay = right.contains("/p2p-circuit/")
+                return leftRelay == rightRelay ? left < right : leftRelay
+            }
     }
 
     private func write(_ value: some StringProtocol) {

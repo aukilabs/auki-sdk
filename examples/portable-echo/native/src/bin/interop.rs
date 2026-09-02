@@ -1,9 +1,16 @@
-use std::{env, path::PathBuf};
+use std::{env, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use auki_portable_echo::{EchoEndpoint, EchoEventReceiver, EchoServeEvent, PROTOCOL_ID};
-use auki_sdk::{AukiPeer, AukiPeerBootstrap, Credentials, DomainSelection, Multiaddr, PeerId};
+use auki_sdk::{
+    AukiDiscoveryCandidate, AukiPeer, AukiPeerBootstrap, Credentials, DdsTrackerMode,
+    DomainSelection, Multiaddr, PeerId,
+};
+use tokio::time::Instant;
 use uuid::Uuid;
+
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(120);
+const DISCOVERY_RETRY: Duration = Duration::from_millis(500);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -11,7 +18,9 @@ async fn main() -> Result<()> {
         .parse::<Uuid>()
         .context("AUKI_DOMAIN_ID must be a UUID")?;
     let state_dir = PathBuf::from(required_env("AUKI_STATE_DIR")?);
-    let bootstrap = AukiPeerBootstrap::dev(credentials_from_env()?).await?;
+    let bootstrap = AukiPeerBootstrap::dev(credentials_from_env()?)
+        .await?
+        .with_dds_tracker(discovery_mode_from_env()?);
 
     let remote_peer = remote_peer_from_env()?;
     let peer = bootstrap
@@ -49,37 +58,22 @@ async fn run_started_peer(
     echo_events: &EchoEventReceiver,
     remote_peer: Option<&RemotePeer>,
 ) -> Result<()> {
-    let context = peer.protocol_context();
-
     println!("READY");
     println!("PEER_ID={}", peer.peer_id());
-    let mut public_peer_card = None;
-    for published in context.routes().snapshot()?.relay_routes {
-        println!("RELAY_ROUTE={}", published.routes.tcp());
-        println!("RELAY_WSS_ROUTE={}", published.routes.wss());
-        public_peer_card.get_or_insert_with(|| {
-            serde_json::json!({
-                "version": 1,
-                "domainId": peer.domain_id().to_string(),
-                "peerId": peer.peer_id().to_string(),
-                "protocols": [PROTOCOL_ID],
-                "routes": {
-                    "wss": published.routes.wss().to_string(),
-                    "tcp": published.routes.tcp().to_string(),
-                },
-            })
-        });
-    }
-    if let Some(card) = public_peer_card {
-        println!("PEER_CARD={card}");
-    }
 
     if let Some(remote) = remote_peer {
         let message = env::var("AUKI_ECHO_MESSAGE")
             .unwrap_or_else(|_| "hello from the shared Rust protocol".to_owned());
-        let receipt = echo
-            .send_exact(remote.peer_id, remote.route.clone(), message.into_bytes())
-            .await?;
+        let receipt = match remote {
+            RemotePeer::Discovered(peer_id) => {
+                send_discovered(peer, echo, *peer_id, message.into_bytes()).await?
+            }
+            RemotePeer::Manual { peer_id, route } => {
+                println!("MANUAL_EXACT_TARGET peer={peer_id}");
+                echo.send_exact(*peer_id, route.clone(), message.into_bytes())
+                    .await?
+            }
+        };
         println!(
             "ECHO_OK remote_peer={} relayed={} bytes={}",
             receipt.remote_peer_id,
@@ -152,24 +146,121 @@ fn credentials_from_env() -> Result<Credentials> {
     }
 }
 
-struct RemotePeer {
-    peer_id: PeerId,
-    route: Multiaddr,
+enum RemotePeer {
+    Discovered(PeerId),
+    Manual { peer_id: PeerId, route: Multiaddr },
 }
 
 fn remote_peer_from_env() -> Result<Option<RemotePeer>> {
-    match optional_pair("AUKI_REMOTE_PEER_ID", "AUKI_REMOTE_ROUTE")? {
-        Some((peer_id, route)) => {
+    match (
+        env::var("AUKI_REMOTE_PEER_ID"),
+        env::var("AUKI_REMOTE_ROUTE"),
+    ) {
+        (Ok(peer_id), Ok(route)) => {
             let peer_id = peer_id
                 .parse::<PeerId>()
                 .context("invalid remote Peer ID")?;
             let route = route
                 .parse::<Multiaddr>()
                 .context("invalid remote relay route")?;
-            Ok(Some(RemotePeer { peer_id, route }))
+            Ok(Some(RemotePeer::Manual { peer_id, route }))
         }
-        None => Ok(None),
+        (Ok(peer_id), Err(env::VarError::NotPresent)) => Ok(Some(RemotePeer::Discovered(
+            peer_id
+                .parse::<PeerId>()
+                .context("invalid discovered remote Peer ID")?,
+        ))),
+        (Err(env::VarError::NotPresent), Err(env::VarError::NotPresent)) => Ok(None),
+        (Err(env::VarError::NotPresent), Ok(_)) => {
+            bail!("AUKI_REMOTE_ROUTE requires AUKI_REMOTE_PEER_ID")
+        }
+        (Err(error), _) => Err(error).context("read AUKI_REMOTE_PEER_ID"),
+        (_, Err(error)) => Err(error).context("read AUKI_REMOTE_ROUTE"),
     }
+}
+
+fn discovery_mode_from_env() -> Result<DdsTrackerMode> {
+    match env::var("AUKI_DISCOVERY_MODE") {
+        Ok(mode) if mode == "discover_only" => Ok(DdsTrackerMode::DiscoverOnly),
+        Ok(mode) if mode == "discover_and_advertise" => Ok(DdsTrackerMode::DiscoverAndAdvertise),
+        Ok(other) => bail!(
+            "AUKI_DISCOVERY_MODE must be discover_only or discover_and_advertise, got {other:?}"
+        ),
+        Err(env::VarError::NotPresent) => Ok(DdsTrackerMode::DiscoverAndAdvertise),
+        Err(error) => Err(error).context("read AUKI_DISCOVERY_MODE"),
+    }
+}
+
+async fn send_discovered(
+    peer: &AukiPeer,
+    echo: &EchoEndpoint,
+    expected_peer: PeerId,
+    payload: Vec<u8>,
+) -> Result<auki_portable_echo::EchoSendReceipt> {
+    let candidate = wait_for_candidate(peer, expected_peer).await?;
+    let routes = preferred_native_routes(candidate.routes());
+    if routes.is_empty() {
+        bail!("Echo peer {expected_peer} advertised no native-compatible route");
+    }
+    println!(
+        "DISCOVERY_SELECTED peer={} routes={} expires={}",
+        candidate.peer_id(),
+        routes.len(),
+        candidate.expires_at()
+    );
+
+    let mut failures = Vec::new();
+    for route in routes {
+        match echo
+            .send_exact(expected_peer, route.clone(), payload.clone())
+            .await
+        {
+            Ok(receipt) => return Ok(receipt),
+            Err(error) => failures.push(format!("{route}: {error}")),
+        }
+    }
+    bail!(
+        "every discovered route for Echo peer {expected_peer} failed: {}",
+        failures.join("; ")
+    )
+}
+
+async fn wait_for_candidate(
+    peer: &AukiPeer,
+    expected_peer: PeerId,
+) -> Result<AukiDiscoveryCandidate> {
+    let deadline = Instant::now() + DISCOVERY_TIMEOUT;
+    let mut last_error = None;
+    loop {
+        match peer.discover_protocol(PROTOCOL_ID).await {
+            Ok(candidates) => {
+                if let Some(candidate) = candidates
+                    .into_iter()
+                    .find(|candidate| candidate.peer_id() == expected_peer)
+                {
+                    return Ok(candidate);
+                }
+            }
+            Err(error) => last_error = Some(error.to_string()),
+        }
+        if Instant::now() >= deadline {
+            let detail = last_error
+                .map(|error| format!("; last DDS error: {error}"))
+                .unwrap_or_default();
+            bail!("Echo peer {expected_peer} was not discovered before timeout{detail}");
+        }
+        tokio::time::sleep(DISCOVERY_RETRY).await;
+    }
+}
+
+fn preferred_native_routes(routes: &[Multiaddr]) -> Vec<Multiaddr> {
+    let mut routes = routes
+        .iter()
+        .filter(|route| !route.to_string().contains("/wss"))
+        .cloned()
+        .collect::<Vec<_>>();
+    routes.sort_by_key(|route| !route.to_string().contains("/p2p-circuit/"));
+    routes
 }
 
 fn optional_pair(first: &'static str, second: &'static str) -> Result<Option<(String, String)>> {

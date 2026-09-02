@@ -47,6 +47,9 @@ either Python/native direction.
 The [Swift/iOS README](swift/README.md) builds the umbrella XCFramework and
 runs the same endpoint bidirectionally against native Rust in a simulator.
 
-Peer discovery and automatic route publication remain outside this example.
-The apps exchange an expected Peer ID and exact confirmed route explicitly;
-the SDK authenticates both peers before echo bytes flow.
+Each host enables DDS discovery at the application boundary. The portable
+protocol crate remains discovery-agnostic: a host refreshes candidates for the
+exact Echo protocol, a developer selects one, and the existing exact-route
+operation authenticates the expected Peer ID and Domain before bytes flow.
+`DiscoverAndAdvertise` is the example default; every host also exposes
+`DiscoverOnly`, and manual exact targets remain an explicit fallback.

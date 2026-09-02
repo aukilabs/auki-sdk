@@ -105,7 +105,6 @@ try {
   native = runNativeClient({
     binary: nativeBinary,
     browserPeerId: firstPeer.peerId,
-    browserRoute: firstPeer.tcpRoute,
     environment: childEnvironment,
     stateDir: nativeStateDir,
     message: nativeMessage,
@@ -120,33 +119,13 @@ try {
   assertNativeEchoOutput(nativeOutput, firstPeer.peerId, nativeMessage.length);
 
   const nativePeerId = extractRequiredLine(nativeOutput, "PEER_ID");
-  const nativeTcpRoute = extractRequiredLine(nativeOutput, "RELAY_ROUTE");
-  const nativeWssRoute = extractRequiredLine(nativeOutput, "RELAY_WSS_ROUTE");
-  const nativePeerCard = JSON.parse(extractRequiredLine(nativeOutput, "PEER_CARD"));
-  assert.equal(nativePeerCard.version, 1);
-  assert.equal(nativePeerCard.domainId, credentials.domainId);
-  assert.equal(nativePeerCard.peerId, nativePeerId);
-  assert.deepEqual(nativePeerCard.protocols, [firstPeer.protocol]);
-  assert.deepEqual(nativePeerCard.routes, {
-    tcp: nativeTcpRoute,
-    wss: nativeWssRoute,
-  });
-  assert(nativeWssRoute.includes("/wss/"));
-  assert(
-    nativeWssRoute.endsWith(`/p2p-circuit/p2p/${nativePeerId}`),
-    "the native WSS route does not target its Peer ID",
-  );
   await waitForLog(
     firstPage,
     `received from ${nativePeerId}: ${nativeMessage}`,
     "observing the native-to-browser echo",
   );
 
-  await sendBrowserEcho(
-    firstPage,
-    { peerId: nativePeerCard.peerId, wssRoute: nativePeerCard.routes.wss },
-    browserToNativeMessage,
-  );
+  await sendDiscoveredBrowserEcho(firstPage, nativePeerId, browserToNativeMessage);
   await waitForChildOutput(
     native,
     new RegExp(
@@ -182,7 +161,7 @@ try {
   secondPeerStarted = false;
 
   console.log(
-    `PORTABLE_ECHO_MATRIX_OK browser_a=${firstPeer.peerId} browser_b=${secondPeer.peerId} native=${nativePeerId} directions=browser-a-to-browser-b,browser-b-to-browser-a,native-to-browser-a,browser-a-to-native`,
+    `PORTABLE_ECHO_MATRIX_OK browser_a=${firstPeer.peerId} browser_b=${secondPeer.peerId} native=${nativePeerId} exchange=dds-discovery directions=browser-a-to-browser-b,browser-b-to-browser-a,native-to-browser-a,browser-a-to-native`,
   );
 } catch (error) {
   throw redactError(error, credentials);
@@ -246,6 +225,7 @@ async function startBrowserPeer(page, input) {
     { timeout: START_TIMEOUT_MS },
   );
   await page.selectOption("#domain", input.domainId);
+  await page.selectOption("#discovery-mode", "discover_and_advertise");
   await page.click("#start-button");
   await page.waitForFunction(
     () => Boolean(document.querySelector("#local")?.dataset.peerId),
@@ -286,21 +266,56 @@ async function proveBrowserEcho(senderPage, sender, receiverPage, receiver, mess
       `received from ${sender.peerId}: ${message}`,
       `observing ${sender.peerId} at ${receiver.peerId}`,
     ),
-    sendBrowserEcho(senderPage, receiver, message),
+    sendDiscoveredBrowserEcho(senderPage, receiver.peerId, message),
   ]);
 }
 
-async function sendBrowserEcho(page, target, message) {
-  await page.fill("#remote-peer", target.peerId);
-  await page.fill("#remote-route", target.wssRoute);
+async function sendDiscoveredBrowserEcho(page, targetPeerId, message) {
+  await selectDiscoveredPeer(page, targetPeerId);
   await page.fill("#message", message);
   const sent = waitForLog(
     page,
-    `sent to ${target.peerId}: ${message}`,
-    `sending an echo to ${target.peerId}`,
+    `sent to ${targetPeerId}: ${message}`,
+    `sending an echo to discovered peer ${targetPeerId}`,
   );
   await page.click("#send-button");
   await sent;
+}
+
+async function selectDiscoveredPeer(page, targetPeerId) {
+  const deadline = Date.now() + ECHO_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await page.waitForFunction(
+      () => !document.querySelector("#refresh-button")?.disabled,
+      undefined,
+      { timeout: ECHO_TIMEOUT_MS },
+    );
+    await page.click("#refresh-button");
+    await page.waitForFunction(
+      () => !document.querySelector("#refresh-button")?.disabled,
+      undefined,
+      { timeout: ECHO_TIMEOUT_MS },
+    );
+    const found = await page.$eval(
+      "#candidates",
+      (select, expected) => Array.from(select.options).some((option) => option.value === expected),
+      targetPeerId,
+    );
+    if (found) {
+      await page.selectOption("#candidates", targetPeerId);
+      await page.click("#use-candidate-button");
+      const exactTarget = await page.$eval("#send", () => ({
+        peerId: document.querySelector("#remote-peer")?.value,
+        route: document.querySelector("#remote-route")?.value,
+      }));
+      assert.equal(exactTarget.peerId, targetPeerId);
+      assert(exactTarget.route.includes("/wss/"));
+      assert(exactTarget.route.endsWith(`/p2p-circuit/p2p/${targetPeerId}`));
+      return;
+    }
+    await delay(500);
+  }
+  throw new Error(`browser did not discover Echo peer ${targetPeerId}`);
 }
 
 function waitForLog(page, line, description) {
@@ -441,27 +456,28 @@ async function buildNativeBinary(environment) {
 function runNativeClient({
   binary,
   browserPeerId,
-  browserRoute,
   environment,
   stateDir,
   message,
 }) {
+  const nativeEnvironment = {
+    ...environment,
+    AUKI_EMAIL: credentials.email,
+    AUKI_PASSWORD: credentials.password,
+    AUKI_DOMAIN_ID: credentials.domainId,
+    AUKI_DISCOVERY_MODE: "discover_and_advertise",
+    AUKI_ECHO_MESSAGE: message,
+    AUKI_KEEP_RUNNING: "1",
+    AUKI_REMOTE_PEER_ID: browserPeerId,
+    AUKI_STATE_DIR: stateDir,
+  };
+  delete nativeEnvironment.AUKI_REMOTE_ROUTE;
   const child = spawn(
     binary,
     [],
     {
       cwd: workspaceRoot,
-      env: {
-        ...environment,
-        AUKI_EMAIL: credentials.email,
-        AUKI_PASSWORD: credentials.password,
-        AUKI_DOMAIN_ID: credentials.domainId,
-        AUKI_ECHO_MESSAGE: message,
-        AUKI_KEEP_RUNNING: "1",
-        AUKI_REMOTE_PEER_ID: browserPeerId,
-        AUKI_REMOTE_ROUTE: browserRoute,
-        AUKI_STATE_DIR: stateDir,
-      },
+      env: nativeEnvironment,
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -523,6 +539,11 @@ function boundedOutput() {
 }
 
 function assertNativeEchoOutput(output, browserPeerId, expectedBytes) {
+  assert.match(
+    output,
+    new RegExp(`^DISCOVERY_SELECTED peer=${browserPeerId} routes=\\d+ expires=`, "m"),
+  );
+  assert.doesNotMatch(output, /^MANUAL_EXACT_TARGET /m);
   const echo = output.match(/^ECHO_OK remote_peer=(\S+) relayed=(\S+) bytes=(\d+)$/m);
   assert(echo, `native peer did not report ECHO_OK\n${output}`);
   assert.equal(echo[1], browserPeerId);

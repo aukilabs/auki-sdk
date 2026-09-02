@@ -243,6 +243,7 @@ mod tests {
             for name in [
                 "AukiSession",
                 "AukiDomain",
+                "AukiDiscoveryCandidate",
                 "AukiPeer",
                 "AukiEcho",
                 "EchoReceipt",

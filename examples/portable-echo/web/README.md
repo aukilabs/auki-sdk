@@ -6,17 +6,19 @@ bindings with the small `AukiEcho` binding; it does not reimplement the echo
 wire format in TypeScript.
 
 The page logs in a User, fetches their accessible Domains, starts an ephemeral
-relay-backed browser peer in the selected Domain, and exchanges echo messages
-using a remote Peer ID and exact WSS route. Rust/Wasm owns authentication, DDS
+relay-backed browser peer in the selected Domain, and refreshes peers
+advertising the exact Echo protocol. A developer selects one untrusted
+candidate before the existing exact WSS operation authenticates it. Rust/Wasm owns authentication, DDS
 authority, relay booking, libp2p, authenticated streams, protocol framing,
 deadlines, and cleanup. JavaScript only owns the form and lifecycle wiring.
 
 Browser identity is intentionally ephemeral in `0.1`: every start creates a new
 Peer ID and one atomic TCP/WSS relay-route pair. The page does not persist
 credentials or peer state.
-This deliberately small echo UI uses manual peer cards. Applications may
-instead enable the same Rust-owned optional
-[DDS discovery](../../../docs/p2p/discovery.md).
+The app defaults to `DiscoverAndAdvertise`; choose **Discover only** before
+startup to find peers while remaining hidden. Manual Peer ID and route fields
+remain a clearly labeled fallback. See
+[DDS discovery](../../../docs/p2p/discovery.md) for the trust boundary.
 
 Start with
 [Build with an existing protocol](../../../docs/p2p/getting-started.md).
@@ -53,9 +55,9 @@ npm run dev
 Open the printed root URL in two tabs. In each tab:
 
 1. Log in with the same or different User credentials.
-2. Select an accessible Domain and start the peer.
-3. Copy the other tab's Peer ID and complete WSS route into the remote fields.
-4. Enter a message and send it.
+2. Select an accessible Domain, choose a discovery policy, and start the peer.
+3. Refresh Echo peers and select the other tab's Peer ID.
+4. Use the selected peer, enter a message, and send it.
 
 Both peers must select the same Domain. The page always prints the same relay
 slot's TCP route so the native or Python example can reach the browser. Use
@@ -79,8 +81,9 @@ alternate UI. It starts two browser peers and one native peer, then proves:
 - native to browser A;
 - browser A to the same native peer.
 
-It checks exact payloads, authenticated Peer IDs, TCP/WSS relay reachability,
-and ordered shutdown. Install Chromium once if needed:
+It polls DDS for exact Echo advertisements and never gives one runtime another
+runtime's route. It checks exact payloads, authenticated Peer IDs, TCP/WSS
+relay reachability, and ordered shutdown. Install Chromium once if needed:
 
 ```sh
 npx playwright install chromium

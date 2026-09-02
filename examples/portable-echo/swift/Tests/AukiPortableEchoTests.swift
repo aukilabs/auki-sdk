@@ -58,4 +58,23 @@ final class AukiPortableEchoTests: XCTestCase {
             try nativePeerTarget(card: card, requiredProtocol: "/example/echo/1.0.0")
         )
     }
+
+    func testPortableUmbrellaExposesDiscoveryCandidates() {
+        let peer = AukiPeerIdentity.generate().peerId()
+        let relay = AukiPeerIdentity.generate().peerId()
+        let candidate = AukiDiscoveryCandidate(
+            peerId: peer,
+            routes: [
+                "/dns4/relay.dev.aukiverse.com/tcp/443/p2p/\(relay)/p2p-circuit/p2p/\(peer)",
+                "/dns4/relay.dev.aukiverse.com/tcp/4443/wss/p2p/\(relay)/p2p-circuit/p2p/\(peer)",
+            ],
+            servedProtocols: [AukiPortableEchoModule.protocolId],
+            expiresAt: "2026-09-02T00:00:00Z",
+            source: .ddsTracker
+        )
+
+        XCTAssertEqual(candidate.peerId, peer)
+        XCTAssertEqual(candidate.servedProtocols, ["/example/echo/1.0.0"])
+        XCTAssertEqual(candidate.routes.count, 2)
+    }
 }

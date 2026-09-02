@@ -1,8 +1,11 @@
 use std::env;
 
 use anyhow::{Context, Result, bail};
-use auki_portable_echo::EchoEndpoint;
-use auki_sdk::{AukiPeer, AukiPeerBootstrap, Credentials, DomainSelection};
+use auki_portable_echo::{EchoEndpoint, PROTOCOL_ID};
+use auki_sdk::{
+    AukiDiscoveryCandidate, AukiPeer, AukiPeerBootstrap, Credentials, DdsTrackerMode,
+    DomainSelection, Multiaddr, PeerId,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -10,7 +13,8 @@ async fn main() -> Result<()> {
         env::var("AUKI_EMAIL")?,
         env::var("AUKI_PASSWORD")?,
     ))
-    .await?;
+    .await?
+    .with_dds_tracker(discovery_mode_from_env()?);
     let peer = bootstrap
         .start_persistent_peer(
             DomainSelection::new(env::var("AUKI_DOMAIN_ID")?.parse()?),
@@ -39,25 +43,33 @@ async fn run(peer: &AukiPeer) -> Result<()> {
         println!("peer: {}", peer.peer_id());
         println!("route: {}", relay.routes.tcp());
 
-        let mut arguments = env::args().skip(1);
-        if let Some(remote_peer) = arguments.next() {
-            let remote_route = arguments.next().context("REMOTE_ROUTE is required")?;
-            let receipt = echo
-                .send_exact(
-                    remote_peer.parse()?,
-                    remote_route.parse()?,
-                    "hello from Auki",
-                )
-                .await?;
-            println!("echo: {}", String::from_utf8_lossy(&receipt.payload));
-        } else {
-            println!("serving; press Ctrl-C to stop");
-            let mut statuses = peer.subscribe_status();
-            tokio::select! {
-                result = tokio::signal::ctrl_c() => result?,
-                terminal = statuses.wait_for(|status| status.is_terminal()) => {
-                    let status = *terminal.context("wait for terminal Auki peer status")?;
-                    bail!("Auki peer stopped unexpectedly: {status:?}");
+        match target_from_args()? {
+            Some(EchoTarget::Discovered(remote_peer)) => {
+                let receipt = send_discovered(peer, &echo, remote_peer, "hello from Auki").await?;
+                println!("echo: {}", String::from_utf8_lossy(&receipt.payload));
+            }
+            Some(EchoTarget::Manual { peer_id, route }) => {
+                println!("using manual exact target fallback");
+                let receipt = echo
+                    .send_exact(peer_id, route, "hello from Auki")
+                    .await?;
+                println!("echo: {}", String::from_utf8_lossy(&receipt.payload));
+            }
+            None => {
+                match peer.discover_protocol(PROTOCOL_ID).await {
+                    Ok(candidates) => print_candidates(&candidates),
+                    Err(error) => eprintln!("refresh Echo discovery failed: {error}"),
+                }
+                println!(
+                    "serving; use --discover <PEER_ID> from another terminal or press Ctrl-C to stop"
+                );
+                let mut statuses = peer.subscribe_status();
+                tokio::select! {
+                    result = tokio::signal::ctrl_c() => result?,
+                    terminal = statuses.wait_for(|status| status.is_terminal()) => {
+                        let status = *terminal.context("wait for terminal Auki peer status")?;
+                        bail!("Auki peer stopped unexpectedly: {status:?}");
+                    }
                 }
             }
         }
@@ -69,4 +81,117 @@ async fn run(peer: &AukiPeer) -> Result<()> {
     operation?;
     cleanup?;
     Ok(())
+}
+
+enum EchoTarget {
+    Discovered(PeerId),
+    Manual { peer_id: PeerId, route: Multiaddr },
+}
+
+fn target_from_args() -> Result<Option<EchoTarget>> {
+    let arguments = env::args().skip(1).collect::<Vec<_>>();
+    match arguments.as_slice() {
+        [] => Ok(None),
+        [flag, peer_id] if flag == "--discover" => Ok(Some(EchoTarget::Discovered(
+            peer_id.parse().context("invalid discovered Peer ID")?,
+        ))),
+        [peer_id, route] => Ok(Some(EchoTarget::Manual {
+            peer_id: peer_id.parse().context("invalid manual Peer ID")?,
+            route: route.parse().context("invalid manual exact route")?,
+        })),
+        _ => bail!("usage: auki-portable-echo-native [--discover PEER_ID | PEER_ID EXACT_ROUTE]"),
+    }
+}
+
+fn discovery_mode_from_env() -> Result<DdsTrackerMode> {
+    match env::var("AUKI_DISCOVERY_MODE") {
+        Ok(mode) if mode == "discover_only" => Ok(DdsTrackerMode::DiscoverOnly),
+        Ok(mode) if mode == "discover_and_advertise" => Ok(DdsTrackerMode::DiscoverAndAdvertise),
+        Ok(other) => bail!(
+            "AUKI_DISCOVERY_MODE must be discover_only or discover_and_advertise, got {other:?}"
+        ),
+        Err(env::VarError::NotPresent) => Ok(DdsTrackerMode::DiscoverAndAdvertise),
+        Err(error) => Err(error).context("read AUKI_DISCOVERY_MODE"),
+    }
+}
+
+fn print_candidates(candidates: &[AukiDiscoveryCandidate]) {
+    println!("discovered Echo peers (untrusted until exact dial):");
+    if candidates.is_empty() {
+        println!("  none");
+    }
+    for candidate in candidates {
+        println!(
+            "  {} expires={} routes={}",
+            candidate.peer_id(),
+            candidate.expires_at(),
+            candidate.routes().len()
+        );
+    }
+}
+
+async fn send_discovered(
+    peer: &AukiPeer,
+    echo: &EchoEndpoint,
+    expected_peer: PeerId,
+    payload: impl AsRef<[u8]>,
+) -> Result<auki_portable_echo::EchoSendReceipt> {
+    let candidates = peer.discover_protocol(PROTOCOL_ID).await?;
+    print_candidates(&candidates);
+    let candidate = candidates
+        .iter()
+        .find(|candidate| candidate.peer_id() == expected_peer)
+        .with_context(|| format!("Echo peer {expected_peer} was not discovered"))?;
+    let routes = preferred_native_routes(candidate.routes());
+    if routes.is_empty() {
+        bail!("Echo peer {expected_peer} advertised no native-compatible route");
+    }
+
+    let mut failures = Vec::new();
+    for route in routes {
+        match echo
+            .send_exact(expected_peer, route.clone(), payload.as_ref())
+            .await
+        {
+            Ok(receipt) => return Ok(receipt),
+            Err(error) => failures.push(format!("{route}: {error}")),
+        }
+    }
+    bail!(
+        "every discovered route for Echo peer {expected_peer} failed: {}",
+        failures.join("; ")
+    )
+}
+
+fn preferred_native_routes(routes: &[Multiaddr]) -> Vec<Multiaddr> {
+    let mut routes = routes
+        .iter()
+        .filter(|route| !route.to_string().contains("/wss"))
+        .cloned()
+        .collect::<Vec<_>>();
+    routes.sort_by_key(|route| !route.to_string().contains("/p2p-circuit/"));
+    routes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_discovery_prefers_circuit_routes_and_ignores_wss() {
+        let direct = "/dns4/direct.example.com/tcp/4001/p2p/12D3KooWJ5Xw8jCxxbVZXcaUpf7h8fWgpcnH9tGgNfZQ1nSJXUL3"
+            .parse::<Multiaddr>()
+            .unwrap();
+        let relay = "/dns4/relay.example.com/tcp/443/p2p/12D3KooWKe31227N64kxokD3Z913sP4i7B1a9ProcvyJt95QTrqM/p2p-circuit/p2p/12D3KooWJ5Xw8jCxxbVZXcaUpf7h8fWgpcnH9tGgNfZQ1nSJXUL3"
+            .parse::<Multiaddr>()
+            .unwrap();
+        let wss = "/dns4/relay.example.com/tcp/4443/wss/p2p/12D3KooWKe31227N64kxokD3Z913sP4i7B1a9ProcvyJt95QTrqM/p2p-circuit/p2p/12D3KooWJ5Xw8jCxxbVZXcaUpf7h8fWgpcnH9tGgNfZQ1nSJXUL3"
+            .parse::<Multiaddr>()
+            .unwrap();
+
+        assert_eq!(
+            preferred_native_routes(&[direct.clone(), wss, relay.clone()]),
+            vec![relay, direct]
+        );
+    }
 }

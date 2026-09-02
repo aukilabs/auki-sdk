@@ -25,7 +25,7 @@ pytest
 `maturin develop` installs the local native extension into the active virtual
 environment. Re-run it after changing Rust code.
 
-## Run two Python peers
+## Run two discoverable Python peers
 
 Both peers need User access to the same dev Domain and separate identity files.
 The identity file is created on first use and preserves the Peer ID between
@@ -41,18 +41,19 @@ export AUKI_IDENTITY_FILE='/tmp/auki-python-echo-a/peer.identity'
 python main.py
 ```
 
-The application reads one atomic route snapshot, then prints its Peer ID and
-the required TCP/WSS route pair from one relay-provider slot and reservation:
+The application reads one atomic route snapshot, prints its Peer ID and routes,
+refreshes exact Echo advertisements, then serves:
 
 ```text
 peer: 12D3KooW...
 route: /dns4/relay.dev.aukiverse.com/tcp/443/p2p/.../p2p-circuit/p2p/12D3KooW...
 wss route: /dns4/relay.dev.aukiverse.com/tcp/4443/wss/p2p/.../p2p-circuit/p2p/12D3KooW...
-serving; press Ctrl-C to stop
+discovered Echo peers (untrusted until exact dial):
+serving; use --discover PEER_ID from another terminal or press Ctrl-C to stop
 ```
 
-In terminal B, use another identity file and pass A's complete Peer ID and TCP
-route:
+In terminal B, use another identity file and select A by its discovered Peer
+ID. No route is pasted:
 
 ```sh
 export AUKI_EMAIL='you@example.com'
@@ -60,18 +61,23 @@ export AUKI_PASSWORD='...'
 export AUKI_DOMAIN_ID='00000000-0000-0000-0000-000000000000'
 export AUKI_IDENTITY_FILE='/tmp/auki-python-echo-b/peer.identity'
 python main.py \
-  '<PEER_ID from terminal A>' \
-  '<complete TCP route from terminal A>'
+    --discover '<PEER_ID printed by terminal A>'
 ```
 
-Terminal B sends `hello from Auki`, prints the echoed response, closes the echo
+Terminal B refreshes the exact Echo protocol in DDS, selects A's advertised
+native route, sends `hello from Auki`, closes the echo
 endpoint, and shuts down its peer. Stop terminal A with Ctrl-C. It performs the
 same ordered cleanup: protocol endpoint first, then the peer and relay booking.
+
+The example defaults to `discover_and_advertise`. Set
+`AUKI_DISCOVERY_MODE=discover_only` to discover while remaining hidden. The
+positional `PEER_ID EXACT_ROUTE` form remains a clearly labeled manual fallback
+for debugging.
 
 The example deliberately shows User login only. Trusted native applications
 can use `await AukiSession.login_app_dev(access_key, secret)` instead. Never put
 an App secret in browser code or another distributed client.
 
-Peer discovery and route publication remain outside this example. The two
-applications exchange an expected Peer ID and an exact route explicitly; the
-SDK authenticates both peers before any echo payload flows.
+Discovery stays in this small Python host rather than the portable protocol
+crate. Candidates remain untrusted hints: the Rust exact-route operation still
+authenticates the selected Peer ID and Domain before any Echo payload flows.

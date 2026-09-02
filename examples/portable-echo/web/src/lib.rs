@@ -9,7 +9,9 @@ use auki_portable_echo::{
     EchoClient, EchoEndpoint, EchoEventReceiver, EchoServeEvent, PROTOCOL_ID,
 };
 use auki_sdk::{Multiaddr, PeerId};
-pub use auki_sdk_web::{AukiDomain, AukiPeer, AukiUserSession};
+pub use auki_sdk_web::{
+    AukiDiscoveryCandidate, AukiDiscoveryMode, AukiDomain, AukiPeer, AukiUserSession,
+};
 use js_sys::{Error as JsError, Promise};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;

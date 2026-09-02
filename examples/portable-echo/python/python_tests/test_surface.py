@@ -7,6 +7,10 @@ def test_one_module_exposes_the_peer_and_echo_facades() -> None:
     assert auki_portable_echo.AukiSession.__name__ == "AukiSession"
     assert auki_portable_echo.AukiDomain.__name__ == "AukiDomain"
     assert auki_portable_echo.AukiPeerRoutes.__name__ == "AukiPeerRoutes"
+    assert (
+        auki_portable_echo.AukiDiscoveryCandidate.__name__
+        == "AukiDiscoveryCandidate"
+    )
     assert auki_portable_echo.AukiPeer.__name__ == "AukiPeer"
     assert auki_portable_echo.AukiEcho.__name__ == "AukiEcho"
     assert auki_portable_echo.EchoReceipt.__name__ == "EchoReceipt"
@@ -28,6 +32,8 @@ def test_peer_surface_exposes_routes_and_ordered_lifecycle() -> None:
         "peer_id",
         "domain_id",
         "routes",
+        "discover",
+        "discover_protocol",
         "wait_stopped",
         "shutdown",
     ):

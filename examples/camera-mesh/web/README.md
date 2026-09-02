@@ -1,63 +1,78 @@
 # Auki Camera Mesh — Web
 
-Camera Mesh is a complete browser-to-browser application built on the portable
-Auki peer and protocol facades. One tab publishes a bounded JPEG camera feed;
-another discovers it, asks for access, and connects through an authenticated
-WSS relay route.
+The Web app is the visual Camera Mesh publisher and viewer. One browser tab can
+publish a bounded JPEG feed; another can discover it, request access, and view
+it over an authenticated WSS relay route.
 
-The polished interface is intentional: unlike the minimal SDK teaching
-examples, Camera Mesh shows how the six standard protocols compose in a real
-application.
+It composes all six standard protocol families: Info, Catalog, Registry,
+Stream, Message, and Blob. Open the Protocol Inspector to see the authenticated
+metadata, stream activity, controls, and snapshot verification.
 
-- **Info** identifies the remote camera participant.
-- **Catalog** advertises the live camera and its control channel.
-- **Registry** verifies the Sensor, Clock, and Frame definitions.
-- **Stream** carries bounded, independently decodable JPEG frames.
-- **Message** carries pause, resume, and snapshot coordination.
-- **Blob** transfers the snapshot and verifies its SHA-256 hash.
+## Run the app
 
-## Run it
+Use Node.js `^20.19.0` or `>=22.12.0`, then run from the SDK root:
 
-```bash
+```sh
+cd examples/camera-mesh/web
 npm ci
 npm run dev
 ```
 
-Open the printed loopback URL in two tabs. Sign both into the same Domain, start
-one as **Publisher** and the other as **Viewer**, then:
+Open the printed loopback URL in two tabs, then:
 
-1. start the publisher with the synthetic source or grant webcam permission;
-2. discover cameras from the viewer and request the selected feed;
-3. approve the pending Viewer Peer ID in the publisher tab;
-4. retry the viewer connection; and
-5. try pause, resume, and a verified snapshot.
+1. sign both tabs into the same Domain;
+2. start one peer as **Publisher** and the other as **Viewer**;
+3. publish the synthetic source or grant webcam permission;
+4. discover the publisher and try to connect;
+5. approve the pending Viewer Peer ID in the publisher tab; and
+6. reconnect, then try pause, resume, and snapshot.
 
 If DDS discovery is unavailable, copy the publisher's sanitized peer card and
-paste it into **Use a copied peer card instead** in the viewer tab.
+paste it into **Use a copied peer card instead**. Stop both peers and swap their
+roles to prove the reverse browser-to-browser direction.
 
-The Protocol Inspector shows the verified metadata and chronological protocol
-operations without exposing credentials. Stop both peers and swap the tab roles
-to prove that either browser can publish.
+Browser identities and publisher approvals are intentionally ephemeral. The
+default feed is 480×270 at 5 fps. Only the newest encoded frame is retained, so
+a slow consumer does not create an ever-growing latency queue.
 
-## Deterministic smoke test
+## Browser-to-browser smoke
 
-With the development server running, the smoke test performs the complete flow
-in both directions:
+Keep the development server running, then run in another terminal:
 
-```bash
-AUKI_EMAIL=... \
-AUKI_PASSWORD=... \
-AUKI_DOMAIN_ID=... \
+```sh
+AUKI_EMAIL='developer@example.com' \
+AUKI_PASSWORD='...' \
+AUKI_DOMAIN_ID='00000000-0000-0000-0000-000000000000' \
 npm run smoke -- http://127.0.0.1:5173/
 ```
 
-`AUKI_DOMAIN_ID` is optional; the test uses the first accessible Domain when it
-is omitted. The forward run uses DDS plus the synthetic camera. The reverse run
-uses a copied peer card plus Chromium's fake webcam device. Together they cover
-explicit approval, all six protocol families, ordered shutdown, and role
-reversal without requiring physical camera hardware in CI.
+`AUKI_DOMAIN_ID` is optional for this test; without it, the first accessible
+Domain is selected. The test runs both directions. One direction discovers the
+publisher through DDS with the synthetic source; the other uses a copied peer
+card and Chromium's fake webcam device.
 
-Browser identities and the publisher allow-list are deliberately ephemeral.
-The initial stream is fixed at 480×270, 5 fps, and JPEG quality 0.65. Capture
-retains only the newest encoded frame, so a slow consumer cannot create an
-ever-growing latency queue.
+## Rust, Python, and Web matrix
+
+The cross-runtime runner builds the Web app and native Rust peer, creates a
+temporary Python environment, and starts a publisher and viewer in all three
+runtimes:
+
+```sh
+AUKI_EMAIL='developer@example.com' \
+AUKI_PASSWORD='...' \
+AUKI_DOMAIN_ID='00000000-0000-0000-0000-000000000000' \
+npm run smoke:matrix
+```
+
+This gate requires `AUKI_DOMAIN_ID`, Rust with the WebAssembly target,
+`wasm-pack`, Python, `maturin` (or `uv`), and Playwright Chromium. Add
+`-- --headed` to watch the two browser peers, or `-- --list` to print the six
+directed edges without starting them.
+
+The matrix intentionally uses exact peer cards rather than DDS discovery. It
+isolates protocol interoperability across Web↔Rust, Web↔Python, and
+Rust↔Python; the browser smoke separately covers the unique browser↔browser
+path and the discovery flow.
+
+See the [Camera Mesh guide](../README.md) for the shared JSONL contract and the
+complete Phase 2 gate.

@@ -14,8 +14,11 @@ source .venv-camera-mesh/bin/activate
 maturin develop --locked --manifest-path bindings/python/auki-sdk-py/Cargo.toml
 ```
 
-If `maturin` is not installed directly, use `uvx maturin develop ...` with the
-same arguments.
+If `maturin` is not installed directly:
+
+```sh
+uvx maturin develop --locked --manifest-path bindings/python/auki-sdk-py/Cargo.toml
+```
 
 Configure either User credentials:
 

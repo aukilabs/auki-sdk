@@ -43,11 +43,48 @@ const MAX_CONTROL_JSON_BYTES: usize = 64 * 1024;
 const MAX_CONTROL_STRING_BYTES: usize = 8 * 1024;
 const MAX_REMOTE_ERROR_BYTES: usize = 1024;
 const MAX_ALLOWED_REQUESTERS: usize = 64;
+const CAMERA_FRAME_CODEC_OVERHEAD_BYTES: usize = 1_024;
 
 fn binding_error(message: impl Into<String>) -> AukiSdkError {
     AukiSdkError::Operation {
         message: message.into(),
     }
+}
+
+/// Encode opaque camera image bytes with the canonical Auki protobuf type.
+///
+/// Static camera metadata belongs in the Sensor Registry entry referenced by
+/// the Stream manifest; this convenience codec deliberately omits per-frame
+/// dynamic intrinsics.
+#[uniffi::export]
+pub fn encode_camera_frame_image(frame: Vec<u8>) -> Result<Vec<u8>, AukiSdkError> {
+    let maximum = MAX_FRAME_BYTES as usize - CAMERA_FRAME_CODEC_OVERHEAD_BYTES;
+    if frame.len() > maximum {
+        return Err(binding_error(format!(
+            "encode CameraFrame image: image is {} bytes; maximum is {maximum}",
+            frame.len()
+        )));
+    }
+    Ok(CameraFrame {
+        dynamic_intrinsics: None,
+        frame,
+    }
+    .encode_to_vec())
+}
+
+/// Decode canonical Auki camera-frame protobuf bytes into their opaque image
+/// payload.
+#[uniffi::export]
+pub fn decode_camera_frame_image(payload: Vec<u8>) -> Result<Vec<u8>, AukiSdkError> {
+    if payload.len() > MAX_FRAME_BYTES as usize {
+        return Err(binding_error(format!(
+            "decode CameraFrame image: payload is {} bytes; maximum is {MAX_FRAME_BYTES}",
+            payload.len()
+        )));
+    }
+    CameraFrame::decode(payload.as_slice())
+        .map(|frame| frame.frame)
+        .map_err(|error| operation_error("decode CameraFrame", error))
 }
 
 /// Closed protobuf family supported by Stream v2.
@@ -1649,6 +1686,39 @@ mod tests {
             AukiStreamPayloadKind::Camera
                 .validate_payload(b"not protobuf")
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn camera_image_codec_matches_the_locked_protobuf_shape() {
+        let jpeg = vec![0xff, 0xd8, 0xff, 0xd9];
+        let encoded = encode_camera_frame_image(jpeg.clone()).unwrap();
+        assert_eq!(encoded, [0x12, 0x04, 0xff, 0xd8, 0xff, 0xd9]);
+        assert_eq!(decode_camera_frame_image(encoded).unwrap(), jpeg);
+
+        let error = decode_camera_frame_image(vec![0xff]).unwrap_err();
+        assert!(error.to_string().starts_with("decode CameraFrame:"));
+    }
+
+    #[test]
+    fn camera_image_codec_enforces_the_stream_frame_bound() {
+        let maximum = MAX_FRAME_BYTES as usize - CAMERA_FRAME_CODEC_OVERHEAD_BYTES;
+        let error = encode_camera_frame_image(vec![0_u8; maximum + 1]).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "encode CameraFrame image: image is {} bytes; maximum is {maximum}",
+                maximum + 1
+            )
+        );
+
+        let oversized = MAX_FRAME_BYTES as usize + 1;
+        let error = decode_camera_frame_image(vec![0_u8; oversized]).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "decode CameraFrame image: payload is {oversized} bytes; maximum is {MAX_FRAME_BYTES}"
+            )
         );
     }
 

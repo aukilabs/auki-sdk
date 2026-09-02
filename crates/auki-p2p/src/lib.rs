@@ -21,6 +21,7 @@ mod browser_authority;
 mod browser_route;
 #[cfg(target_arch = "wasm32")]
 mod browser_transport;
+mod candidate_route;
 mod error;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod identity;
@@ -62,6 +63,10 @@ pub use browser_authority::BrowserAuthority;
 pub use browser_transport::{
     ApplicationProtocolServer, BrowserAuthenticatedRouteStream,
     BrowserIncomingAuthenticatedStreams, BrowserNode, BrowserNodeExit, BrowserRelayRoute,
+};
+pub use candidate_route::{
+    canonicalize_candidate_route, CandidateRouteError, CandidateRouteKind, CandidateRouteResult,
+    CanonicalCandidateRoute, CANDIDATE_ROUTE_MAX_BYTES,
 };
 pub use error::{Error, Result};
 pub use identity::{Identity, PeerIdentityProof};

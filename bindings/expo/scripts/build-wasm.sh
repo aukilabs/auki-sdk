@@ -19,10 +19,16 @@ rustup target list --installed | grep -q '^wasm32-unknown-unknown$' || {
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
+# getrandom 0.3 on wasm32-unknown-unknown may need:
+#   export RUSTFLAGS="${RUSTFLAGS:-} --cfg getrandom_backend=\"wasm_js\""
+# (left off for now — file for Matt if noise/getrandom panics under release)
+
+# Temporary: --dev like standard-protocols/web. --release + wasm-opt hung under
+# Metro after DMS Ready (no dial / no WSS). Report upstream; switch back when fixed.
 wasm-pack build "$WEB_CRATE" \
   --target web \
   --out-dir "$OUT" \
-  --release \
+  --dev \
   --features finite-protocols,message,stream \
   --locked
 

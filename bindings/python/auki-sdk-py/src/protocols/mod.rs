@@ -51,6 +51,10 @@ mod tests {
             let module = PyModule::new_bound(py, "auki_sdk").unwrap();
             register(&module).unwrap();
             for name in [
+                "prepare_catalog_resources",
+                "prepare_registry_entry",
+                "encode_camera_frame_image",
+                "decode_camera_frame_image",
                 "AukiInfoClient",
                 "AukiInfoEndpoint",
                 "AukiCatalogClient",

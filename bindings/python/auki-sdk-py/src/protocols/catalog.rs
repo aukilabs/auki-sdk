@@ -44,6 +44,21 @@ fn resources_request(variants: Option<Vec<String>>) -> PyResult<v3::ResourcesReq
     Ok(request)
 }
 
+/// Validate and normalize one Catalog v3 provider snapshot in Rust.
+///
+/// Preparing static snapshots when an application mounts its endpoint turns
+/// schema mistakes into local startup errors instead of an empty, fail-closed
+/// response observed only by a remote peer.
+#[pyfunction]
+fn prepare_catalog_resources(py: Python<'_>, response: Py<PyAny>) -> PyResult<PyObject> {
+    let response: v3::ResourcesResponse =
+        parse_python(py, response.bind(py), "Catalog resources snapshot")?;
+    response.validate().map_err(|error| {
+        PyValueError::new_err(format!("invalid Catalog resources snapshot: {error}"))
+    })?;
+    to_python(py, &response)
+}
+
 /// Outbound Catalog v3/v4 client backed by the portable Rust protocols.
 #[pyclass(name = "AukiCatalogClient", frozen)]
 #[derive(Clone)]
@@ -349,6 +364,7 @@ impl PyAukiCatalogEndpoint {
 }
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(prepare_catalog_resources, module)?)?;
     module.add_class::<PyAukiCatalogClient>()?;
     module.add_class::<PyAukiCatalogEndpoint>()?;
     Ok(())
@@ -375,6 +391,55 @@ mod tests {
         assert!(resources_request(None).unwrap().variants.is_empty());
         assert!(resources_request(Some(vec!["SensorLog".into()])).is_err());
         assert!(resources_request(Some(vec!["sensor_log".into(), "sensor_log".into()])).is_err());
+    }
+
+    #[test]
+    fn prepared_catalog_snapshots_are_validated_and_normalized() {
+        Python::with_gil(|py| {
+            let json = py.import_bound("json").unwrap();
+            let owner = Identity::generate().peer_id().to_string();
+            let snapshot = json
+                .call_method1(
+                    "loads",
+                    (format!(
+                        r#"{{
+                            "resources": [{{
+                                "variant": "message_channel",
+                                "owner_peer_id": "{owner}",
+                                "resource_id": "camera/replies",
+                                "clock": {{
+                                    "peer_id": "{owner}",
+                                    "id": "camera/utc",
+                                    "hash": "{}"
+                                }}
+                            }}]
+                        }}"#,
+                        "a".repeat(32)
+                    ),),
+                )
+                .unwrap()
+                .unbind();
+
+            let prepared = prepare_catalog_resources(py, snapshot).unwrap();
+            assert_eq!(
+                prepared
+                    .bind(py)
+                    .get_item("resources")
+                    .unwrap()
+                    .len()
+                    .unwrap(),
+                1
+            );
+
+            let invalid = json
+                .call_method1(
+                    "loads",
+                    (r#"{"resources":[{"variant":"message_channel","owner_peer_id":"bad","resource_id":""}]}"#,),
+                )
+                .unwrap()
+                .unbind();
+            assert!(prepare_catalog_resources(py, invalid).is_err());
+        });
     }
 
     #[test]

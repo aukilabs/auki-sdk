@@ -2,7 +2,11 @@
 
 use auki_protocols::registry::{
     RegistryClient, RegistryEndpoint, RegistryProvider,
-    v3::{ID, RegistryKind, RegistryRequest, RegistryResponse},
+    v3::{ID, RegistryEntryEnvelope, RegistryKind, RegistryRequest, RegistryResponse},
+};
+use auki_registry::{
+    ClockRegistryEntry, DetectorRegistryEntry, DeviceModelRegistryEntry, FrameRegistryEntry,
+    MapRegistryEntry, SensorBody, SensorRegistryEntry,
 };
 use auki_sdk_rs::{Multiaddr, PeerId};
 use parking_lot::Mutex;
@@ -12,6 +16,7 @@ use pyo3::{
     pyclass::{PyTraverseError, PyVisit},
     types::{PyAny, PyModule},
 };
+use serde::de::DeserializeOwned;
 
 use crate::{
     PyAukiPeer,
@@ -36,6 +41,205 @@ fn parse_registry_kind(kind: &str) -> PyResult<RegistryKind> {
         _ => Err(PyValueError::new_err(format!(
             "Registry kind must be one of {REGISTRY_KIND_NAMES}; got {kind:?}"
         ))),
+    }
+}
+
+/// Validate and content-address one typed Registry entry in Rust.
+///
+/// The returned envelope derives its Registry ID, canonical JSON, and
+/// XXH3-128 hash from the decoded entry. Python supplies no parallel envelope
+/// metadata that could disagree with those typed fields.
+#[pyfunction]
+fn prepare_registry_entry(py: Python<'_>, kind: String, entry: Py<PyAny>) -> PyResult<PyObject> {
+    let entry = entry.bind(py);
+    let envelope = match parse_registry_kind(&kind)? {
+        RegistryKind::Sensor => prepare_typed_registry_entry::<SensorRegistryEntry>(py, entry),
+        RegistryKind::Clock => prepare_typed_registry_entry::<ClockRegistryEntry>(py, entry),
+        RegistryKind::Frame => prepare_typed_registry_entry::<FrameRegistryEntry>(py, entry),
+        RegistryKind::Detector => prepare_typed_registry_entry::<DetectorRegistryEntry>(py, entry),
+        RegistryKind::Map => prepare_typed_registry_entry::<MapRegistryEntry>(py, entry),
+        RegistryKind::DeviceModel => {
+            prepare_typed_registry_entry::<DeviceModelRegistryEntry>(py, entry)
+        }
+    }?;
+    to_python(py, &envelope)
+}
+
+trait PreparedRegistryEntry: DeserializeOwned {
+    const KIND: RegistryKind;
+
+    fn owner_peer_id(&self) -> &str;
+    fn registry_id(&self) -> &str;
+    fn canonical_bytes(&self) -> Vec<u8>;
+    fn hash(&self) -> String;
+
+    fn validate_entry(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+fn prepare_typed_registry_entry<T>(
+    py: Python<'_>,
+    entry: &Bound<'_, PyAny>,
+) -> PyResult<RegistryEntryEnvelope>
+where
+    T: PreparedRegistryEntry,
+{
+    let entry: T = parse_python(py, entry, "Registry entry")
+        .map_err(|error| PyValueError::new_err(format!("invalid {} entry: {error}", T::KIND)))?;
+    entry
+        .owner_peer_id()
+        .parse::<PeerId>()
+        .map_err(|error| PyValueError::new_err(format!("invalid {} peer_id: {error}", T::KIND)))?;
+    auki_registry::validate_registry_id(entry.registry_id())
+        .map_err(|error| PyValueError::new_err(format!("invalid {} id: {error}", T::KIND)))?;
+    entry
+        .validate_entry()
+        .map_err(|error| PyValueError::new_err(format!("invalid {} entry: {error}", T::KIND)))?;
+
+    let canonical_json = String::from_utf8(entry.canonical_bytes()).map_err(|error| {
+        PyValueError::new_err(format!("invalid {} canonical JSON: {error}", T::KIND))
+    })?;
+    Ok(RegistryEntryEnvelope {
+        kind: T::KIND,
+        id: entry.registry_id().to_owned(),
+        hash: entry.hash(),
+        canonical_json,
+    })
+}
+
+impl PreparedRegistryEntry for SensorRegistryEntry {
+    const KIND: RegistryKind = RegistryKind::Sensor;
+
+    fn owner_peer_id(&self) -> &str {
+        &self.peer_id
+    }
+
+    fn registry_id(&self) -> &str {
+        &self.sensor_id
+    }
+
+    fn canonical_bytes(&self) -> Vec<u8> {
+        self.canonical_bytes()
+    }
+
+    fn hash(&self) -> String {
+        self.hash()
+    }
+
+    fn validate_entry(&self) -> Result<(), String> {
+        match &self.body {
+            SensorBody::Camera(camera) => camera
+                .validate_image_layout()
+                .and_then(|()| camera.validate_calibration()),
+            SensorBody::Scalar(scalar) => scalar.validate(),
+            _ => Ok(()),
+        }
+        .map_err(|error| error.to_string())
+    }
+}
+
+macro_rules! prepared_registry_entry {
+    ($entry:ty, $kind:expr, $owner:ident, $id:ident) => {
+        impl PreparedRegistryEntry for $entry {
+            const KIND: RegistryKind = $kind;
+
+            fn owner_peer_id(&self) -> &str {
+                &self.$owner
+            }
+
+            fn registry_id(&self) -> &str {
+                &self.$id
+            }
+
+            fn canonical_bytes(&self) -> Vec<u8> {
+                self.canonical_bytes()
+            }
+
+            fn hash(&self) -> String {
+                self.hash()
+            }
+        }
+    };
+}
+
+prepared_registry_entry!(ClockRegistryEntry, RegistryKind::Clock, peer_id, clock_id);
+prepared_registry_entry!(
+    DetectorRegistryEntry,
+    RegistryKind::Detector,
+    peer_id,
+    detector_id
+);
+
+impl PreparedRegistryEntry for FrameRegistryEntry {
+    const KIND: RegistryKind = RegistryKind::Frame;
+
+    fn owner_peer_id(&self) -> &str {
+        &self.peer_id
+    }
+
+    fn registry_id(&self) -> &str {
+        &self.frame_id
+    }
+
+    fn canonical_bytes(&self) -> Vec<u8> {
+        self.canonical_bytes()
+    }
+
+    fn hash(&self) -> String {
+        self.hash()
+    }
+
+    fn validate_entry(&self) -> Result<(), String> {
+        self.validate().map_err(|error| error.to_string())
+    }
+}
+
+impl PreparedRegistryEntry for MapRegistryEntry {
+    const KIND: RegistryKind = RegistryKind::Map;
+
+    fn owner_peer_id(&self) -> &str {
+        &self.peer_id
+    }
+
+    fn registry_id(&self) -> &str {
+        &self.map_id
+    }
+
+    fn canonical_bytes(&self) -> Vec<u8> {
+        self.canonical_bytes()
+    }
+
+    fn hash(&self) -> String {
+        self.hash()
+    }
+
+    fn validate_entry(&self) -> Result<(), String> {
+        self.validate().map_err(|error| error.to_string())
+    }
+}
+
+impl PreparedRegistryEntry for DeviceModelRegistryEntry {
+    const KIND: RegistryKind = RegistryKind::DeviceModel;
+
+    fn owner_peer_id(&self) -> &str {
+        &self.peer_id
+    }
+
+    fn registry_id(&self) -> &str {
+        &self.device_model_id
+    }
+
+    fn canonical_bytes(&self) -> Vec<u8> {
+        self.canonical_bytes()
+    }
+
+    fn hash(&self) -> String {
+        self.hash()
+    }
+
+    fn validate_entry(&self) -> Result<(), String> {
+        self.validate().map_err(|error| error.to_string())
     }
 }
 
@@ -360,6 +564,7 @@ impl PyAukiRegistryEndpoint {
 }
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(prepare_registry_entry, module)?)?;
     module.add_class::<PyAukiRegistryClient>()?;
     module.add_class::<PyAukiRegistryEndpoint>()?;
     Ok(())
@@ -367,6 +572,7 @@ pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 
 #[cfg(test)]
 mod tests {
+    use auki_registry::{Camera, RegistryRef};
     use auki_sdk_rs::Identity;
 
     use super::super::support::{requester, require_callable};
@@ -382,6 +588,55 @@ mod tests {
         for invalid in ["Sensor", "deviceModel", "device-model", "unknown"] {
             assert!(parse_registry_kind(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn prepared_registry_entry_uses_rust_validation_and_canonical_hashing() {
+        Python::with_gil(|py| {
+            let peer_id = Identity::generate().peer_id().to_string();
+            let sensor = SensorRegistryEntry {
+                peer_id: peer_id.clone(),
+                sensor_id: "camera/front".into(),
+                body: SensorBody::Camera(Camera {
+                    r#type: "rgb".into(),
+                    width: 320,
+                    height: 240,
+                    frame_rate_hz: 5,
+                    image_encoding: "jpeg".into(),
+                    pixel_format: "rgb8".into(),
+                    row_stride_bytes: 0,
+                    color_space: "srgb".into(),
+                    intrinsics_model: "none".into(),
+                    distortion_model: "none".into(),
+                    calibration: None,
+                    frame: RegistryRef {
+                        peer_id,
+                        id: "camera/front/optical".into(),
+                        hash: "a".repeat(32),
+                    },
+                }),
+            };
+
+            let prepared =
+                prepare_registry_entry(py, "sensor".into(), to_python(py, &sensor).unwrap())
+                    .unwrap();
+            let envelope: RegistryEntryEnvelope =
+                parse_python(py, prepared.bind(py), "prepared Registry entry").unwrap();
+            assert_eq!(envelope.kind, RegistryKind::Sensor);
+            assert_eq!(envelope.id, sensor.sensor_id);
+            assert_eq!(envelope.hash, sensor.hash());
+            assert_eq!(envelope.canonical_json.as_bytes(), sensor.canonical_bytes());
+
+            let mut invalid = sensor;
+            let SensorBody::Camera(camera) = &mut invalid.body else {
+                unreachable!()
+            };
+            camera.width = 0;
+            assert!(
+                prepare_registry_entry(py, "sensor".into(), to_python(py, &invalid).unwrap(),)
+                    .is_err()
+            );
+        });
     }
 
     #[test]

@@ -13,7 +13,10 @@ use auki_protocols::stream::{
     SourceStream, StreamClient, StreamDispatch, StreamEndpoint, StreamEndpointError, StreamEntry,
     StreamError, StreamItem, StreamPayload, StreamProvider, StreamSubscription,
     SubscriptionEntries,
-    v2::{DeclineReason, EndReason, ID, ReadFrom, StreamManifest, StreamRequest, end_reason},
+    v2::{
+        DeclineReason, EndReason, ID, MAX_FRAME_BYTES, ReadFrom, StreamManifest, StreamRequest,
+        end_reason,
+    },
 };
 use futures::StreamExt;
 use parking_lot::{Mutex, RwLock};
@@ -44,6 +47,47 @@ use super::support::{
 const PAYLOAD_KIND_NAMES: &str =
     "camera, point_cloud, joint_encoders, audio, scalar, pose, detection, or map";
 const PYTHON_SOURCE_CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
+const CAMERA_FRAME_CODEC_OVERHEAD_BYTES: usize = 1_024;
+
+/// Encode opaque camera image bytes with the canonical Auki protobuf type.
+///
+/// Static camera metadata belongs in the Sensor Registry entry referenced by
+/// the Stream manifest; this convenience codec deliberately omits per-frame
+/// dynamic intrinsics.
+#[pyfunction]
+fn encode_camera_frame_image<'py>(py: Python<'py>, frame: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
+    let maximum = MAX_FRAME_BYTES as usize - CAMERA_FRAME_CODEC_OVERHEAD_BYTES;
+    if frame.len() > maximum {
+        return Err(PyValueError::new_err(format!(
+            "encode CameraFrame image: image is {} bytes; maximum is {maximum}",
+            frame.len()
+        )));
+    }
+    let encoded = CameraFrame {
+        dynamic_intrinsics: None,
+        frame: frame.to_vec(),
+    }
+    .encode_to_vec();
+    Ok(PyBytes::new_bound(py, &encoded))
+}
+
+/// Decode canonical Auki camera-frame protobuf bytes into their opaque image
+/// payload.
+#[pyfunction]
+fn decode_camera_frame_image<'py>(
+    py: Python<'py>,
+    payload: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
+    if payload.len() > MAX_FRAME_BYTES as usize {
+        return Err(PyValueError::new_err(format!(
+            "decode CameraFrame image: payload is {} bytes; maximum is {MAX_FRAME_BYTES}",
+            payload.len()
+        )));
+    }
+    let frame = CameraFrame::decode(payload)
+        .map_err(|error| PyValueError::new_err(format!("decode CameraFrame: {error}")))?;
+    Ok(PyBytes::new_bound(py, &frame.frame))
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StreamPayloadKind {
@@ -1434,6 +1478,8 @@ fn end_to_python(py: Python<'_>, reason: EndReason) -> PyResult<PyObject> {
 }
 
 pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(encode_camera_frame_image, module)?)?;
+    module.add_function(wrap_pyfunction!(decode_camera_frame_image, module)?)?;
     module.add_class::<PyAukiStreamClient>()?;
     module.add_class::<PyAukiStreamEndpoint>()?;
     module.add_class::<PyAukiStreamSubscription>()?;
@@ -1514,6 +1560,27 @@ mod tests {
             );
         }
         assert!(StreamPayloadKind::parse("pointcloud").is_err());
+    }
+
+    #[test]
+    fn camera_image_codec_matches_the_locked_protobuf_shape() {
+        Python::with_gil(|py| {
+            let jpeg = [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46];
+            let encoded = encode_camera_frame_image(py, &jpeg).unwrap();
+            assert_eq!(
+                encoded.as_bytes(),
+                [
+                    0x12, 0x0a, 0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46,
+                ]
+            );
+            assert_eq!(
+                decode_camera_frame_image(py, encoded.as_bytes())
+                    .unwrap()
+                    .as_bytes(),
+                jpeg
+            );
+            assert!(decode_camera_frame_image(py, b"not protobuf").is_err());
+        });
     }
 
     #[test]

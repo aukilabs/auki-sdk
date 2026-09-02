@@ -31,6 +31,7 @@ catalog = [
 ]
 registry = [
   "dep:auki-protocols",
+  "dep:auki-registry",
   "dep:serde",
   "dep:serde_json",
   "auki-protocols/registry-endpoint",

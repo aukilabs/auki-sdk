@@ -58,6 +58,25 @@ Embedders can disable default features, enable only the needed families, and
 call `register_facade`, `register_protocols`, or `register_sdk` from their
 same-module PyO3 extension.
 
+### Rust-backed preparation helpers
+
+Applications can prepare static protocol data before mounting an endpoint:
+
+```python
+catalog = auki_sdk.prepare_catalog_resources({"resources": resources})
+sensor = auki_sdk.prepare_registry_entry("sensor", sensor_entry)
+
+camera_frame = auki_sdk.encode_camera_frame_image(jpeg_bytes)
+jpeg_bytes = auki_sdk.decode_camera_frame_image(camera_frame)
+```
+
+`prepare_catalog_resources` validates and normalizes a Catalog v3 snapshot.
+`prepare_registry_entry` accepts `sensor`, `clock`, `frame`, `detector`, `map`,
+or `device_model`, validates the typed record, and returns its derived
+`kind`, `id`, canonical JSON, and XXH3-128 hash. The camera helpers encode and
+decode the canonical `CameraFrame` protobuf used by Sensor Logs and Stream v2;
+their inputs and outputs are Python `bytes`.
+
 ## Provider and lifecycle contract
 
 - Provider callbacks receive verified requester metadata, never credentials or

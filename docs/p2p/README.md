@@ -105,10 +105,12 @@ to serve that exact protocol.
 
 The [standard protocol playground](../../examples/standard-protocols/README.md)
 is the credentialed interoperability proof for this table. It starts Native,
-Python, Browser A, and Browser B peers and exercises all six families across
-eight directed edges: 48 checks in total, including both browser-to-browser
-directions. The portable echo remains the small custom-protocol authoring
-reference and also supports call + serve on all three hosts.
+Python, Browser A, and Browser B peers, proves all 12 directed DDS discovery
+observations, then exercises all six families through the retained candidates
+across eight directed edges: 48 checks in total, including both
+browser-to-browser directions. The portable echo remains the small
+custom-protocol authoring reference and supports call + serve on all four
+hosts.
 
 Catalog v2 is wire-only because v3 embeds its locked log-row shape. Registry
 support begins at v3. Portable endpoints do not host or negotiate an older

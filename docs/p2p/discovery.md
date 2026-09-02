@@ -156,3 +156,12 @@ mDNS, Rendezvous, and Kademlia remain future options.
 See [Choose a discovery provider](discovery-providers.md) for how DDS differs
 from mDNS, Rendezvous, and Kademlia and how to prototype another source without
 weakening the authentication boundary.
+
+## Try it
+
+- [Portable Echo](../../examples/portable-echo/README.md) is the smallest
+  advertise, discover, select, and exact-call example.
+- [Standard protocol playground](../../examples/standard-protocols/README.md)
+  mounts all six SDK protocol families and probes DDS-discovered peers across
+  native Rust, Python, and two browser tabs. Its Swift app exposes the same
+  discovery flow for simulator and device testing.

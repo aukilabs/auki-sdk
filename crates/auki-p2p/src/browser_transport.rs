@@ -316,6 +316,7 @@ pub struct BrowserNode {
     targeted_streams: TargetedStreamControl,
     commands: Sender<Command>,
     stopped: Shared<oneshot::Receiver<BrowserNodeExit>>,
+    source_admissions: source_admission::AdmissionCache,
     _local_only: Rc<()>,
 }
 
@@ -354,6 +355,7 @@ impl BrowserNode {
             targeted_streams,
             commands,
             stopped: stopped_receiver.shared(),
+            source_admissions: source_admission::AdmissionCache::default(),
             _local_only: Rc::new(()),
         })
     }
@@ -472,39 +474,76 @@ impl BrowserNode {
         expected_peer_id: PeerId,
         route: Multiaddr,
     ) -> Result<BrowserRelayRoute> {
+        self.connect_relayed_inner(expected_peer_id, route, false)
+            .await
+    }
+
+    async fn connect_relayed_reusing_admission(
+        &self,
+        expected_peer_id: PeerId,
+        route: Multiaddr,
+    ) -> Result<BrowserRelayRoute> {
+        self.connect_relayed_inner(expected_peer_id, route, true)
+            .await
+    }
+
+    async fn connect_relayed_inner(
+        &self,
+        expected_peer_id: PeerId,
+        route: Multiaddr,
+        reuse_admission: bool,
+    ) -> Result<BrowserRelayRoute> {
         // The expected terminal Peer ID is checked before source admission so
         // a mismatched route never receives this peer's DDS credential.
         let parsed = parse_browser_relay_route_for_peer(&route, expected_peer_id)?;
-        let tokens = self.authority.tokens();
-        let verifier = self.authority.verifier();
-        let authorization = source_admission::prepare_authorization(
-            self.peer_id,
-            parsed.target_peer_id,
-            self.domain_id(),
-            &tokens,
-            &verifier,
-        )
-        .await?;
+        let domain_id = self.domain_id();
         let relay_connection = self
             .select_relay_connection(parsed.relay_peer_id, parsed.direct_relay_address)
             .await?;
-        let mut stream = self
-            .targeted_streams
-            .open_stream(
+        let admission = if reuse_admission {
+            self.authorize_relay_source_reusing(
                 parsed.relay_peer_id,
                 relay_connection,
-                source_admission::PROTOCOL,
+                parsed.target_peer_id,
+                domain_id,
             )
-            .await?;
-        let admission_expires_at =
-            source_admission::authorize_prepared(&mut stream, authorization, Utc::now).await?;
-        let connection_id = self
+            .await?
+        } else {
+            source_admission::CachedAdmission::uncached(
+                self.authorize_relay_source(
+                    parsed.relay_peer_id,
+                    relay_connection,
+                    parsed.target_peer_id,
+                    domain_id,
+                )
+                .await?,
+            )
+        };
+        let first_connection = self
             .dial_circuit(
                 parsed.target_peer_id,
-                parsed.circuit_dial_address,
+                parsed.circuit_dial_address.clone(),
                 parsed.relay_peer_id,
             )
-            .await?;
+            .await;
+        let connection_id = match first_connection {
+            Ok(connection_id) => connection_id,
+            Err(error) => {
+                if reuse_admission {
+                    self.source_admissions
+                        .invalidate(
+                            parsed.relay_peer_id,
+                            relay_connection,
+                            parsed.target_peer_id,
+                            domain_id,
+                            &admission,
+                        )
+                        .await;
+                }
+                return Err(error);
+            }
+        };
+        let admission_expires_at = admission.expires_at;
         Ok(BrowserRelayRoute {
             node_instance_id: self.node_instance_id,
             relay_peer_id: parsed.relay_peer_id,
@@ -554,7 +593,9 @@ impl BrowserNode {
         route: Multiaddr,
         protocol: ApplicationProtocol,
     ) -> Result<BrowserAuthenticatedRouteStream> {
-        let route = self.connect_relayed(expected_peer_id, route).await?;
+        let route = self
+            .connect_relayed_reusing_admission(expected_peer_id, route)
+            .await?;
         let mut pending = BrowserAuthenticatedRouteStream::pending(route, self.route_control());
         match self.open_relayed(pending.route(), protocol).await {
             Ok(stream) => {
@@ -602,6 +643,74 @@ impl BrowserNode {
         })
         .await?;
         receiver.await.map_err(|_| Error::SwarmStopped)?
+    }
+
+    async fn authorize_relay_source(
+        &self,
+        relay_peer_id: PeerId,
+        relay_connection: ConnectionId,
+        target_peer_id: PeerId,
+        domain_id: Uuid,
+    ) -> Result<DateTime<Utc>> {
+        let authorization = source_admission::prepare_authorization(
+            self.peer_id,
+            target_peer_id,
+            domain_id,
+            &self.authority.tokens(),
+            &self.authority.verifier(),
+        )
+        .await?;
+        self.authorize_relay_source_prepared(relay_peer_id, relay_connection, authorization)
+            .await
+    }
+
+    async fn authorize_relay_source_reusing(
+        &self,
+        relay_peer_id: PeerId,
+        relay_connection: ConnectionId,
+        target_peer_id: PeerId,
+        domain_id: Uuid,
+    ) -> Result<source_admission::CachedAdmission> {
+        // Validate the current browser credential before every circuit. The
+        // cache contains only the relay's shorter proof window, never tokens.
+        let authorization = source_admission::prepare_authorization(
+            self.peer_id,
+            target_peer_id,
+            domain_id,
+            &self.authority.tokens(),
+            &self.authority.verifier(),
+        )
+        .await?;
+        let issued_at = authorization.issued_at();
+        self.source_admissions
+            .authorize(
+                relay_peer_id,
+                relay_connection,
+                target_peer_id,
+                domain_id,
+                issued_at,
+                || {
+                    self.authorize_relay_source_prepared(
+                        relay_peer_id,
+                        relay_connection,
+                        authorization,
+                    )
+                },
+            )
+            .await
+    }
+
+    async fn authorize_relay_source_prepared(
+        &self,
+        relay_peer_id: PeerId,
+        relay_connection: ConnectionId,
+        authorization: source_admission::PreparedAuthorization,
+    ) -> Result<DateTime<Utc>> {
+        let mut stream = self
+            .targeted_streams
+            .open_stream(relay_peer_id, relay_connection, source_admission::PROTOCOL)
+            .await?;
+        source_admission::authorize_prepared(&mut stream, authorization, Utc::now).await
     }
 
     async fn dial_circuit(

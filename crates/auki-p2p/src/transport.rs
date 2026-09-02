@@ -164,6 +164,7 @@ pub struct Node {
     direct_listeners: watch::Receiver<DirectListenState>,
     relay_events: broadcast::Sender<RelayTransportEvent>,
     observations: NodeObservations,
+    source_admissions: Arc<source_admission::AdmissionCache>,
     task: Arc<NodeTaskOwnership>,
 }
 
@@ -296,6 +297,7 @@ impl Node {
             direct_listeners: listen_receiver,
             relay_events,
             observations,
+            source_admissions: Arc::new(source_admission::AdmissionCache::default()),
             task,
         })
     }
@@ -569,6 +571,23 @@ impl Node {
         route: Multiaddr,
         requirements: &SessionRequirements,
     ) -> P2PResult<RelayRouteHandle> {
+        self.connect_relayed_inner(route, requirements, false).await
+    }
+
+    pub(crate) async fn connect_relayed_reusing_admission(
+        &self,
+        route: Multiaddr,
+        requirements: &SessionRequirements,
+    ) -> P2PResult<RelayRouteHandle> {
+        self.connect_relayed_inner(route, requirements, true).await
+    }
+
+    async fn connect_relayed_inner(
+        &self,
+        route: Multiaddr,
+        requirements: &SessionRequirements,
+        reuse_admission: bool,
+    ) -> P2PResult<RelayRouteHandle> {
         let parsed = parse_relay_route(&route)?;
         let expected = requirements
             .expected_remote_peer_id()
@@ -583,31 +602,53 @@ impl Node {
         let relay_connection = self
             .select_relay_connection(parsed.relay_peer_id, parsed.direct_relay_address)
             .await?;
-        let admission_result = self
-            .authorize_relay_source(
+        let domain_id = requirements.domain_id();
+        let admission = if reuse_admission {
+            self.authorize_relay_source_reusing(
                 parsed.relay_peer_id,
                 relay_connection,
                 parsed.target_peer_id,
-                requirements.domain_id(),
+                domain_id,
             )
-            .await;
-        let admission_expires_at = match admission_result {
-            Ok(admission_expires_at) => admission_expires_at,
-            Err(error) => return Err(error),
+            .await?
+        } else {
+            source_admission::CachedAdmission::uncached(
+                self.authorize_relay_source(
+                    parsed.relay_peer_id,
+                    relay_connection,
+                    parsed.target_peer_id,
+                    domain_id,
+                )
+                .await?,
+            )
         };
 
         let circuit_address = normalize_remote_address(route.clone(), parsed.target_peer_id, true)?;
-        let connection_id = match self
+        let first_connection = self
             .connect_exact(
                 parsed.target_peer_id,
-                vec![circuit_address],
+                vec![circuit_address.clone()],
                 Some(parsed.relay_peer_id),
             )
-            .await
-        {
+            .await;
+        let connection_id = match first_connection {
             Ok(connection_id) => connection_id,
-            Err(error) => return Err(error),
+            Err(error) => {
+                if reuse_admission {
+                    self.source_admissions
+                        .invalidate(
+                            parsed.relay_peer_id,
+                            relay_connection,
+                            parsed.target_peer_id,
+                            domain_id,
+                            &admission,
+                        )
+                        .await;
+                }
+                return Err(error);
+            }
         };
+        let admission_expires_at = admission.expires_at;
         Ok(RelayRouteHandle {
             node_instance_id: self.node_instance_id,
             relay_peer_id: parsed.relay_peer_id,
@@ -772,6 +813,53 @@ impl Node {
             &self.verifier,
         )
         .await?;
+        self.authorize_relay_source_prepared(relay_peer_id, relay_connection, authorization)
+            .await
+    }
+
+    async fn authorize_relay_source_reusing(
+        &self,
+        relay_peer_id: PeerId,
+        relay_connection: ConnectionId,
+        target_peer_id: PeerId,
+        domain_id: Uuid,
+    ) -> P2PResult<source_admission::CachedAdmission> {
+        // Validate the currently installed credential on every connection
+        // attempt. Only the relay's already-proven, shorter authority window
+        // is reused.
+        let authorization = source_admission::prepare_authorization(
+            self.peer_id(),
+            target_peer_id,
+            domain_id,
+            &self.tokens,
+            &self.verifier,
+        )
+        .await?;
+        let issued_at = authorization.issued_at();
+        self.source_admissions
+            .authorize(
+                relay_peer_id,
+                relay_connection,
+                target_peer_id,
+                domain_id,
+                issued_at,
+                || {
+                    self.authorize_relay_source_prepared(
+                        relay_peer_id,
+                        relay_connection,
+                        authorization,
+                    )
+                },
+            )
+            .await
+    }
+
+    async fn authorize_relay_source_prepared(
+        &self,
+        relay_peer_id: PeerId,
+        relay_connection: ConnectionId,
+        authorization: source_admission::PreparedAuthorization,
+    ) -> P2PResult<chrono::DateTime<Utc>> {
         let mut stream = self
             .targeted_control
             .open_stream(relay_peer_id, relay_connection, source_admission::PROTOCOL)

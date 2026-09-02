@@ -208,7 +208,9 @@ impl Node {
                 .await
                 .map(AuthenticatedRouteStream::direct),
             ExactRoute::Circuit(route) => {
-                let relay = self.connect_relayed(route, &requirements).await?;
+                let relay = self
+                    .connect_relayed_reusing_admission(route, &requirements)
+                    .await?;
                 let mut guard = RelayRouteGuard::new(self.clone(), relay);
                 match self
                     .open_relayed(guard.route(), protocol, requirements)

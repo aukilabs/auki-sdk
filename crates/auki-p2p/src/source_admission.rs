@@ -1,19 +1,22 @@
-use std::{fmt, time::Duration};
+use std::{collections::HashMap, fmt, sync::Arc, time::Duration};
 
 use chrono::{DateTime, Utc};
 use futures::{
     future::{select, Either},
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    lock::Mutex as AsyncMutex,
     pin_mut, Future,
 };
 use futures_timer::Delay;
-use libp2p::{PeerId, StreamProtocol};
+use libp2p::{swarm::ConnectionId, PeerId, StreamProtocol};
+use parking_lot::Mutex;
 use serde::{
     de::{self, MapAccess, Visitor},
     ser::SerializeStruct,
     Deserialize, Deserializer, Serialize, Serializer,
 };
 use uuid::Uuid;
+use web_time::Instant;
 
 use crate::{
     token::{ensure_token_peer, DdsTokenVerifier, SignedP2pCredential, TokenStore},
@@ -25,6 +28,168 @@ pub(crate) const REQUEST_MAX_BYTES: usize = 64 * 1024;
 pub(crate) const RESPONSE_MAX_BYTES: usize = 4 * 1024;
 pub(crate) const TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const MAX_ACCEPTED_TTL: Duration = Duration::from_secs(30);
+const REUSE_SAFETY_MARGIN: chrono::TimeDelta = chrono::TimeDelta::seconds(1);
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct CacheKey {
+    relay_peer_id: PeerId,
+    relay_connection: ConnectionId,
+    target_peer_id: PeerId,
+    domain_id: Uuid,
+    credential_issued_at: u64,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CachedAdmission {
+    pub(crate) expires_at: DateTime<Utc>,
+    lease_id: u64,
+    credential_issued_at: u64,
+}
+
+impl CachedAdmission {
+    pub(crate) fn uncached(expires_at: DateTime<Utc>) -> Self {
+        Self {
+            expires_at,
+            lease_id: 0,
+            credential_issued_at: 0,
+        }
+    }
+}
+
+/// Single-flight cache matching the relay's short-lived source admission key.
+///
+/// One admitted source may open multiple circuits until `accepted_until`.
+/// Serializing cache misses prevents a composed protocol flow from repeating
+/// the same JWT verification for every application substream.
+#[derive(Default)]
+pub(crate) struct AdmissionCache {
+    entries: Mutex<HashMap<CacheKey, Arc<AdmissionEntry>>>,
+    next_lease_id: Mutex<u64>,
+}
+
+#[derive(Default)]
+struct AdmissionEntry {
+    gate: AsyncMutex<()>,
+    cached: Mutex<Option<AdmissionLease>>,
+}
+
+#[derive(Clone, Copy)]
+struct AdmissionLease {
+    expires_at: DateTime<Utc>,
+    reuse_until: Instant,
+    lease_id: u64,
+}
+
+impl AdmissionCache {
+    pub(crate) async fn authorize<F, Fut>(
+        &self,
+        relay_peer_id: PeerId,
+        relay_connection: ConnectionId,
+        target_peer_id: PeerId,
+        domain_id: Uuid,
+        credential_issued_at: u64,
+        authorize: F,
+    ) -> Result<CachedAdmission>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<DateTime<Utc>>>,
+    {
+        let key = CacheKey {
+            relay_peer_id,
+            relay_connection,
+            target_peer_id,
+            domain_id,
+            credential_issued_at,
+        };
+        let wall_now = Utc::now();
+        let monotonic_now = Instant::now();
+        let entry = {
+            let mut entries = self.entries.lock();
+            entries.retain(|_, entry| {
+                Arc::strong_count(entry) > 1
+                    || entry
+                        .cached
+                        .lock()
+                        .is_some_and(|lease| lease.reusable(wall_now, monotonic_now))
+            });
+            Arc::clone(entries.entry(key).or_default())
+        };
+        let _gate = entry.gate.lock().await;
+        if let Some(lease) = *entry.cached.lock() {
+            if lease.reusable(Utc::now(), Instant::now()) {
+                return Ok(CachedAdmission {
+                    expires_at: lease.expires_at,
+                    lease_id: lease.lease_id,
+                    credential_issued_at,
+                });
+            }
+        }
+
+        *entry.cached.lock() = None;
+        let expires_at = authorize().await?;
+        let lease_id = {
+            let mut next_lease_id = self.next_lease_id.lock();
+            *next_lease_id = next_lease_id.wrapping_add(1).max(1);
+            *next_lease_id
+        };
+        if let Some(reuse_until) = reuse_deadline(expires_at, Utc::now(), Instant::now()) {
+            *entry.cached.lock() = Some(AdmissionLease {
+                expires_at,
+                reuse_until,
+                lease_id,
+            });
+        }
+        Ok(CachedAdmission {
+            expires_at,
+            lease_id,
+            credential_issued_at,
+        })
+    }
+
+    pub(crate) async fn invalidate(
+        &self,
+        relay_peer_id: PeerId,
+        relay_connection: ConnectionId,
+        target_peer_id: PeerId,
+        domain_id: Uuid,
+        admission: &CachedAdmission,
+    ) {
+        let key = CacheKey {
+            relay_peer_id,
+            relay_connection,
+            target_peer_id,
+            domain_id,
+            credential_issued_at: admission.credential_issued_at,
+        };
+        let entry = self.entries.lock().get(&key).cloned();
+        if let Some(entry) = entry {
+            let _gate = entry.gate.lock().await;
+            let mut cached = entry.cached.lock();
+            if cached
+                .as_ref()
+                .is_some_and(|lease| lease.lease_id == admission.lease_id)
+            {
+                *cached = None;
+            }
+        }
+    }
+}
+
+impl AdmissionLease {
+    fn reusable(&self, wall_now: DateTime<Utc>, monotonic_now: Instant) -> bool {
+        self.expires_at > wall_now + REUSE_SAFETY_MARGIN && monotonic_now < self.reuse_until
+    }
+}
+
+fn reuse_deadline(
+    expires_at: DateTime<Utc>,
+    wall_now: DateTime<Utc>,
+    monotonic_now: Instant,
+) -> Option<Instant> {
+    let remaining = expires_at.signed_duration_since(wall_now).to_std().ok()?;
+    let reusable_for = remaining.checked_sub(REUSE_SAFETY_MARGIN.to_std().ok()?)?;
+    Some(monotonic_now + reusable_for)
+}
 
 pub(crate) struct Request<'a> {
     pub(crate) domain_id: Uuid,
@@ -172,6 +337,13 @@ pub(crate) struct PreparedAuthorization {
     target_peer_id: PeerId,
     token: SignedP2pCredential,
     token_expiration: DateTime<Utc>,
+    issued_at: u64,
+}
+
+impl PreparedAuthorization {
+    pub(crate) fn issued_at(&self) -> u64 {
+        self.issued_at
+    }
 }
 
 pub(crate) async fn prepare_authorization(
@@ -202,6 +374,7 @@ pub(crate) async fn prepare_authorization(
         target_peer_id,
         token,
         token_expiration,
+        issued_at: claims.iat,
     })
 }
 
@@ -298,10 +471,17 @@ mod tests {
     use std::{
         io,
         pin::Pin,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
         task::{Context, Poll},
     };
 
-    use futures::io::{AsyncRead, AsyncWrite, Cursor};
+    use futures::{
+        future::join,
+        io::{AsyncRead, AsyncWrite, Cursor},
+    };
 
     use super::*;
 
@@ -309,6 +489,152 @@ mod tests {
     const DOMAIN_ID: &str = "11111111-2222-3333-4444-555555555555";
     const TOKEN: &str = "header.payload.signature";
     const REQUEST_JSON: &str = "{\"version\":1,\"domain_id\":\"11111111-2222-3333-4444-555555555555\",\"target_peer_id\":\"12D3KooWBMyph6PCuP6GUJkwFdR7bLUPZ3exLvgEPpR93J52GaJg\",\"p2p_access_token\":\"header.payload.signature\"}";
+
+    #[tokio::test]
+    async fn admission_cache_single_flights_and_isolates_authority_keys() {
+        let cache = AdmissionCache::default();
+        let relay = PEER_ID.parse().unwrap();
+        let target = PeerId::random();
+        let domain = Uuid::parse_str(DOMAIN_ID).unwrap();
+        let connection = ConnectionId::new_unchecked(7);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let expires_at = Utc::now() + chrono::TimeDelta::seconds(20);
+
+        let authorize = || {
+            let calls = Arc::clone(&calls);
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Delay::new(Duration::from_millis(20)).await;
+                Ok(expires_at)
+            }
+        };
+        let (first, second) = join(
+            cache.authorize(relay, connection, target, domain, 10, authorize),
+            cache.authorize(relay, connection, target, domain, 10, authorize),
+        )
+        .await;
+        let first = first.unwrap();
+        second.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        cache
+            .authorize(relay, connection, PeerId::random(), domain, 10, authorize)
+            .await
+            .unwrap();
+        cache
+            .authorize(
+                relay,
+                ConnectionId::new_unchecked(8),
+                target,
+                domain,
+                10,
+                authorize,
+            )
+            .await
+            .unwrap();
+        cache
+            .authorize(relay, connection, target, domain, 11, authorize)
+            .await
+            .unwrap();
+        cache
+            .authorize(relay, connection, target, Uuid::new_v4(), 10, authorize)
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 5);
+
+        cache
+            .invalidate(relay, connection, target, domain, &first)
+            .await;
+        let replacement = cache
+            .authorize(relay, connection, target, domain, 10, authorize)
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 6);
+
+        cache
+            .invalidate(relay, connection, target, domain, &first)
+            .await;
+        cache
+            .authorize(relay, connection, target, domain, 10, authorize)
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 6);
+        assert_ne!(first.lease_id, replacement.lease_id);
+    }
+
+    #[tokio::test]
+    async fn admission_cache_does_not_reuse_a_near_expiry_grant() {
+        let cache = AdmissionCache::default();
+        let relay = PEER_ID.parse().unwrap();
+        let target = PeerId::random();
+        let domain = Uuid::parse_str(DOMAIN_ID).unwrap();
+        let connection = ConnectionId::new_unchecked(10);
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        for _ in 0..2 {
+            cache
+                .authorize(relay, connection, target, domain, 13, || {
+                    let calls = Arc::clone(&calls);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Ok(Utc::now() + chrono::TimeDelta::milliseconds(500))
+                    }
+                })
+                .await
+                .unwrap();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn admission_cache_does_not_serialize_different_keys_or_cache_failures() {
+        let cache = AdmissionCache::default();
+        let relay = PEER_ID.parse().unwrap();
+        let domain = Uuid::parse_str(DOMAIN_ID).unwrap();
+        let connection = ConnectionId::new_unchecked(9);
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let expires_at = Utc::now() + chrono::TimeDelta::seconds(20);
+        let authorize = || {
+            let in_flight = Arc::clone(&in_flight);
+            let maximum = Arc::clone(&maximum);
+            async move {
+                let active = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                maximum.fetch_max(active, Ordering::SeqCst);
+                Delay::new(Duration::from_millis(20)).await;
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                Ok(expires_at)
+            }
+        };
+        let (left, right) = join(
+            cache.authorize(relay, connection, PeerId::random(), domain, 12, authorize),
+            cache.authorize(relay, connection, PeerId::random(), domain, 12, authorize),
+        )
+        .await;
+        left.unwrap();
+        right.unwrap();
+        assert_eq!(maximum.load(Ordering::SeqCst), 2);
+
+        let failed_target = PeerId::random();
+        assert!(cache
+            .authorize(relay, connection, failed_target, domain, 12, || async {
+                Err(Error::RelayAdmissionDenied)
+            })
+            .await
+            .is_err());
+        let attempts = Arc::new(AtomicUsize::new(0));
+        cache
+            .authorize(relay, connection, failed_target, domain, 12, || {
+                let attempts = Arc::clone(&attempts);
+                async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    Ok(expires_at)
+                }
+            })
+            .await
+            .unwrap();
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
 
     #[test]
     fn request_frame_vector_is_stable_and_redacted() {

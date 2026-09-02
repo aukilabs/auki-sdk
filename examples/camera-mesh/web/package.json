@@ -11,7 +11,8 @@
     "check": "npm run build:wasm && tsc --noEmit",
     "build": "npm run build:wasm && tsc --noEmit && vite build",
     "dev": "npm run build:wasm && vite --host 127.0.0.1",
-    "smoke": "node scripts/smoke_browser_camera.mjs"
+    "smoke": "node scripts/smoke_browser_camera.mjs",
+    "smoke:matrix": "node scripts/smoke_camera_matrix.mjs"
   },
   "devDependencies": {
     "playwright": "1.62.1",

@@ -152,3 +152,7 @@ P2P bearer and must therefore be controlled and trusted by the application.
 The DDS tracker is the only Discovery v0 provider. It is an HTTP tracker, not
 the libp2p Rendezvous protocol. Its bootstrap seed is the configured DDS URL;
 mDNS, Rendezvous, and Kademlia remain future options.
+
+See [Choose a discovery provider](discovery-providers.md) for how DDS differs
+from mDNS, Rendezvous, and Kademlia and how to prototype another source without
+weakening the authentication boundary.

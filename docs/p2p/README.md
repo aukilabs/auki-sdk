@@ -8,6 +8,7 @@ shutdown while leaving product policy explicit.
 - [Run an existing protocol](getting-started.md)
 - [Author a portable protocol](authoring-protocols.md)
 - [Discover peers by mounted protocol](discovery.md)
+- [Choose or prototype a discovery provider](discovery-providers.md)
 - [Exercise all six standard protocols](../../examples/standard-protocols/README.md)
 - [Try the Web echo app](../../examples/portable-echo/web/README.md)
 - [Try the Python echo app](../../examples/portable-echo/python/README.md)

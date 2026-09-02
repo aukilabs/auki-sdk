@@ -115,6 +115,20 @@ pub(crate) fn operation_error(
     }
 }
 
+fn operation_error_chain(context: &'static str, error: impl std::error::Error) -> AukiSdkError {
+    let mut message = format!("{context}: {error}");
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let cause = cause.to_string();
+        if !message.ends_with(&cause) {
+            message.push_str(": ");
+            message.push_str(&cause);
+        }
+        source = source.and_then(std::error::Error::source);
+    }
+    AukiSdkError::Operation { message }
+}
+
 /// One accessible Auki Domain. Selection is always explicit.
 #[derive(Clone, Debug, Eq, PartialEq, uniffi::Record)]
 pub struct AukiDomain {
@@ -472,7 +486,7 @@ impl AukiSession {
             .bootstrap
             .start_peer(DomainSelection::new(domain_id), identity.rust_identity())
             .await
-            .map_err(|error| operation_error("start Auki peer", error))?;
+            .map_err(|error| operation_error_chain("start Auki peer", error))?;
         Ok(Arc::new(AukiPeer::new(peer)))
     }
 
@@ -492,7 +506,7 @@ impl AukiSession {
             .with_dds_tracker(mode.into())
             .start_peer(DomainSelection::new(domain_id), identity.rust_identity())
             .await
-            .map_err(|error| operation_error("start discoverable Auki peer", error))?;
+            .map_err(|error| operation_error_chain("start discoverable Auki peer", error))?;
         Ok(Arc::new(AukiPeer::new(peer)))
     }
 }
@@ -681,6 +695,17 @@ mod tests {
 
     use super::*;
 
+    #[derive(Debug, thiserror::Error)]
+    #[error("outer failure: {source}")]
+    struct NestedTestError {
+        #[source]
+        source: LeafTestError,
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("leaf failure")]
+    struct LeafTestError;
+
     fn assert_send_sync<T: Send + Sync>() {}
 
     fn peer_card() -> AukiPeerCard {
@@ -708,6 +733,18 @@ mod tests {
         let encoded = identity.encoded().unwrap();
         let restored = AukiPeerIdentity::from_encoded(encoded).unwrap();
         assert_eq!(restored.peer_id(), identity.peer_id());
+    }
+
+    #[test]
+    fn startup_errors_retain_their_native_source_chain_once() {
+        let error = operation_error_chain(
+            "start peer",
+            NestedTestError {
+                source: LeafTestError,
+            },
+        );
+
+        assert_eq!(error.to_string(), "start peer: outer failure: leaf failure");
     }
 
     #[test]

@@ -136,7 +136,14 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
 
   async discover(peerHandle: string): Promise<AukiDiscoveryCandidateInfo[]> {
     const candidates = await this.peer(peerHandle).discover();
-    return candidates.map(mapCandidate);
+    // wasm-bindgen objects must be freed (standard-protocols does this per candidate).
+    try {
+      return candidates.map(mapCandidate);
+    } finally {
+      for (const candidate of candidates) {
+        candidate.free();
+      }
+    }
   }
 
   async discoverProtocol(
@@ -144,7 +151,13 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     protocolId: string,
   ): Promise<AukiDiscoveryCandidateInfo[]> {
     const candidates = await this.peer(peerHandle).discoverProtocol(protocolId);
-    return candidates.map(mapCandidate);
+    try {
+      return candidates.map(mapCandidate);
+    } finally {
+      for (const candidate of candidates) {
+        candidate.free();
+      }
+    }
   }
 
   async infoFetchExact(
@@ -155,7 +168,10 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     const info = await new sdk.AukiInfoClient(this.peer(peerHandle)).fetchExact(
       target,
     );
-    return JSON.stringify(info);
+    // AukiParticipantInfo.sessionNowNs is bigint — JSON.stringify rejects it.
+    return JSON.stringify(info, (_key, value) =>
+      typeof value === "bigint" ? value.toString() : value,
+    );
   }
 
   async catalogFetchResourcesExact(

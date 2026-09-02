@@ -972,10 +972,15 @@ async fn maintain_browser_advertisement(
             return discovery.client.withdraw(discovery.domain_id).await;
         }
 
+        // Drop the watch borrow before yielding to the HTTP publication. On
+        // single-threaded Wasm, retaining Tokio's read guard across `.await`
+        // would deadlock the next mounted-protocol update trying to acquire
+        // the same watch value's write lock.
+        let current_protocols = protocols.borrow().protocol_ids.clone();
         if let Err(error) = publish_with_retry(
             &discovery,
             routes.clone(),
-            protocols.borrow().protocol_ids.clone(),
+            current_protocols,
             Some(&cancellation),
         )
         .await
@@ -1002,10 +1007,14 @@ async fn start_and_maintain_browser_advertisement(
         return Err(error);
     }
 
+    // Do not retain a watch read guard across the publication request. The
+    // caller may mount its first protocol as soon as this startup barrier
+    // resolves, which must be able to update the retained snapshot.
+    let initial_protocols = protocols.borrow().protocol_ids.clone();
     let initial = publish_with_retry(
         &discovery,
         routes.clone(),
-        protocols.borrow().protocol_ids.clone(),
+        initial_protocols,
         Some(&cancellation),
     )
     .await;

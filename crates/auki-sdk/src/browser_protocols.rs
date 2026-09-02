@@ -14,7 +14,10 @@ use futures::{FutureExt, pin_mut};
 use futures_timer::Delay;
 use tokio_util::sync::CancellationToken;
 
-use crate::protocol_contract::{AukiProtocolError, AukiProtocolSpec, AukiProtocolStream};
+use crate::{
+    protocol_contract::{AukiProtocolError, AukiProtocolSpec, AukiProtocolStream},
+    served_protocols::{ServedProtocolSnapshot, ServedProtocolSnapshots},
+};
 
 const PROTOCOL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -32,6 +35,7 @@ impl AukiPeerProtocols {
                 lifecycle: ProtocolLifecycle::new(),
                 registrations: RefCell::new(HashMap::new()),
                 next_generation: Cell::new(1),
+                served_protocols: ServedProtocolSnapshots::new(),
             }),
         }
     }
@@ -91,11 +95,24 @@ impl AukiPeerProtocols {
             server: RefCell::new(Some(server)),
         });
         registrations.insert(spec.protocol_id, Rc::clone(&entry));
+        self.inner
+            .served_protocols
+            .replace(registrations.keys().cloned());
         Ok(AukiProtocolRegistration {
             runtime: Rc::downgrade(&self.inner),
             entry,
             closed: false,
         })
+    }
+
+    #[allow(
+        dead_code,
+        reason = "consumed by the DDS publisher in discovery integration"
+    )]
+    pub(crate) fn subscribe_served_protocols(
+        &self,
+    ) -> tokio::sync::watch::Receiver<ServedProtocolSnapshot> {
+        self.inner.served_protocols.subscribe()
     }
 
     /// Open the selected protocol through one exact advertised WSS circuit.
@@ -125,13 +142,15 @@ impl AukiPeerProtocols {
 
     pub(crate) async fn shutdown_all(&self) -> Result<(), AukiProtocolError> {
         self.begin_shutdown();
-        let servers = self
-            .inner
-            .registrations
-            .borrow_mut()
-            .drain()
-            .filter_map(|(_, entry)| entry.server.borrow_mut().take())
-            .collect::<Vec<_>>();
+        let servers = {
+            let mut registrations = self.inner.registrations.borrow_mut();
+            let servers = registrations
+                .drain()
+                .filter_map(|(_, entry)| entry.server.borrow_mut().take())
+                .collect::<Vec<_>>();
+            self.inner.served_protocols.replace(std::iter::empty());
+            servers
+        };
         shutdown_servers(servers).await
     }
 
@@ -141,13 +160,15 @@ impl AukiPeerProtocols {
 
     pub(crate) fn abort_all(&self) {
         self.begin_shutdown();
-        let servers = self
-            .inner
-            .registrations
-            .borrow_mut()
-            .drain()
-            .filter_map(|(_, entry)| entry.server.borrow_mut().take())
-            .collect::<Vec<_>>();
+        let servers = {
+            let mut registrations = self.inner.registrations.borrow_mut();
+            let servers = registrations
+                .drain()
+                .filter_map(|(_, entry)| entry.server.borrow_mut().take())
+                .collect::<Vec<_>>();
+            self.inner.served_protocols.replace(std::iter::empty());
+            servers
+        };
         drop(servers);
     }
 }
@@ -222,6 +243,7 @@ struct ProtocolRuntime {
     lifecycle: ProtocolLifecycle,
     registrations: RefCell<HashMap<String, Rc<ProtocolEntry>>>,
     next_generation: Cell<u64>,
+    served_protocols: ServedProtocolSnapshots,
 }
 
 struct ProtocolEntry {
@@ -256,6 +278,9 @@ impl AukiProtocolRegistration {
                 .is_some_and(|entry| entry.generation == self.entry.generation)
             {
                 registrations.remove(&self.entry.protocol_id);
+                runtime
+                    .served_protocols
+                    .replace(registrations.keys().cloned());
             }
         }
         self.entry.server.borrow_mut().take()
@@ -313,5 +338,52 @@ mod tests {
 
         assert!(!lifecycle.is_running());
         assert!(lifecycle.token().is_cancelled());
+    }
+
+    #[wasm_bindgen_test]
+    fn served_snapshots_are_sorted_revisioned_and_retained_for_browser_consumers() {
+        let snapshots = ServedProtocolSnapshots::new();
+        let mut current = snapshots.subscribe();
+        assert_eq!(*current.borrow(), ServedProtocolSnapshot::default());
+
+        snapshots.replace([
+            "/example/zulu/1.0.0".to_owned(),
+            "/example/alpha/1.0.0".to_owned(),
+        ]);
+        assert!(current.has_changed().unwrap());
+        let observed = current.borrow_and_update();
+        assert_eq!(observed.revision, 1);
+        assert_eq!(
+            observed.protocol_ids,
+            ["/example/alpha/1.0.0", "/example/zulu/1.0.0"]
+        );
+        drop(observed);
+
+        snapshots.replace([
+            "/example/alpha/1.0.0".to_owned(),
+            "/example/alpha/1.0.0".to_owned(),
+            "/example/zulu/1.0.0".to_owned(),
+        ]);
+        assert!(!current.has_changed().unwrap());
+
+        snapshots.replace(["/example/alpha/1.0.0".to_owned()]);
+        assert!(current.has_changed().unwrap());
+        let observed = current.borrow_and_update();
+        assert_eq!(observed.revision, 2);
+        assert_eq!(observed.protocol_ids, ["/example/alpha/1.0.0"]);
+        drop(observed);
+
+        snapshots.replace([
+            "/example/zulu/1.0.0".to_owned(),
+            "/example/alpha/1.0.0".to_owned(),
+        ]);
+        assert!(current.has_changed().unwrap());
+        assert_eq!(current.borrow_and_update().revision, 3);
+
+        snapshots.replace(std::iter::empty());
+        assert!(current.has_changed().unwrap());
+        let observed = current.borrow_and_update();
+        assert_eq!(observed.revision, 4);
+        assert!(observed.protocol_ids.is_empty());
     }
 }

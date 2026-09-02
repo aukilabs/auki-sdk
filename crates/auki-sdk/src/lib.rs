@@ -8,6 +8,7 @@ mod bootstrap;
 mod config;
 mod protocol_contract;
 mod runtime_policy;
+mod served_protocols;
 mod status;
 
 #[cfg(not(target_arch = "wasm32"))]

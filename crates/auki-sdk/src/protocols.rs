@@ -21,6 +21,7 @@ use crate::{
     protocol_contract::{
         AukiProtocolError, AukiProtocolRouteAttempt, AukiProtocolSpec, AukiProtocolStream,
     },
+    served_protocols::{ServedProtocolSnapshot, ServedProtocolSnapshots},
 };
 
 const PROTOCOL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -45,6 +46,7 @@ impl AukiPeerProtocols {
                 lifecycle,
                 registrations: Mutex::new(HashMap::new()),
                 next_generation: AtomicU64::new(1),
+                served_protocols: ServedProtocolSnapshots::new(),
             }),
         }
     }
@@ -108,11 +110,24 @@ impl AukiPeerProtocols {
             server: Mutex::new(Some(server)),
         });
         registrations.insert(spec.protocol_id, Arc::clone(&entry));
+        self.inner
+            .served_protocols
+            .replace(registrations.keys().cloned());
         Ok(AukiProtocolRegistration {
             runtime: Arc::downgrade(&self.inner),
             entry,
             closed: false,
         })
+    }
+
+    #[allow(
+        dead_code,
+        reason = "consumed by the DDS publisher in discovery integration"
+    )]
+    pub(crate) fn subscribe_served_protocols(
+        &self,
+    ) -> tokio::sync::watch::Receiver<ServedProtocolSnapshot> {
+        self.inner.served_protocols.subscribe()
     }
 
     /// Open the selected protocol using the configured routes for one peer.
@@ -213,25 +228,29 @@ impl AukiPeerProtocols {
 
     pub(crate) async fn shutdown_all(&self) -> Result<(), AukiProtocolError> {
         self.inner.lifecycle.fence();
-        let servers = self
-            .inner
-            .registrations
-            .lock()
-            .drain()
-            .filter_map(|(_, entry)| entry.server.lock().take())
-            .collect::<Vec<_>>();
+        let servers = {
+            let mut registrations = self.inner.registrations.lock();
+            let servers = registrations
+                .drain()
+                .filter_map(|(_, entry)| entry.server.lock().take())
+                .collect::<Vec<_>>();
+            self.inner.served_protocols.replace(std::iter::empty());
+            servers
+        };
         shutdown_servers(servers).await
     }
 
     pub(crate) fn abort_all(&self) {
         self.inner.lifecycle.fence();
-        let servers = self
-            .inner
-            .registrations
-            .lock()
-            .drain()
-            .filter_map(|(_, entry)| entry.server.lock().take())
-            .collect::<Vec<_>>();
+        let servers = {
+            let mut registrations = self.inner.registrations.lock();
+            let servers = registrations
+                .drain()
+                .filter_map(|(_, entry)| entry.server.lock().take())
+                .collect::<Vec<_>>();
+            self.inner.served_protocols.replace(std::iter::empty());
+            servers
+        };
         drop(servers);
     }
 }
@@ -270,6 +289,7 @@ struct ProtocolRuntime {
     lifecycle: ContextLifecycle,
     registrations: Mutex<HashMap<String, Arc<ProtocolEntry>>>,
     next_generation: AtomicU64,
+    served_protocols: ServedProtocolSnapshots,
 }
 
 struct ProtocolEntry {
@@ -304,6 +324,9 @@ impl AukiProtocolRegistration {
                 .is_some_and(|entry| entry.generation == self.entry.generation)
             {
                 registrations.remove(&self.entry.protocol_id);
+                runtime
+                    .served_protocols
+                    .replace(registrations.keys().cloned());
             }
         }
         self.entry.server.lock().take()
@@ -345,7 +368,14 @@ mod tests {
         atomic::{AtomicBool, Ordering},
     };
 
+    use auki_p2p::DdsTokenVerifier;
+
     use super::*;
+
+    const TEST_DDS_PUBLIC_KEY: &[u8] = b"-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
+8FKYQ5HDiJO0jg7CsFL0yIlK9dTW1wSZmwUX4REXM7LiuD1YWuXoNH1aqA==
+-----END PUBLIC KEY-----";
 
     struct DropProbe(Arc<AtomicBool>);
 
@@ -372,5 +402,99 @@ mod tests {
                 .is_none()
         );
         assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    fn protocol_spec(protocol_id: &str) -> AukiProtocolSpec {
+        AukiProtocolSpec::new(protocol_id, 1, 32).unwrap()
+    }
+
+    fn test_protocols() -> (AukiPeerProtocols, Node) {
+        let identity = auki_p2p::Identity::generate();
+        let verifier = DdsTokenVerifier::from_es256_pem(TEST_DDS_PUBLIC_KEY).unwrap();
+        let node = Node::start(identity, verifier, std::iter::empty::<Multiaddr>()).unwrap();
+        let protocols = AukiPeerProtocols::new(
+            node.clone(),
+            uuid::Uuid::new_v4(),
+            std::iter::empty(),
+            ContextLifecycle::new(),
+        );
+        (protocols, node)
+    }
+
+    fn assert_snapshot(
+        snapshots: &mut tokio::sync::watch::Receiver<ServedProtocolSnapshot>,
+        revision: u64,
+        protocol_ids: &[&str],
+    ) {
+        assert!(snapshots.has_changed().unwrap());
+        let current = snapshots.borrow_and_update();
+        assert_eq!(current.revision, revision);
+        assert_eq!(
+            current.protocol_ids,
+            protocol_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn served_snapshot_tracks_mount_drop_close_remount_and_shutdown() {
+        const ALPHA: &str = "/example/alpha/1.0.0";
+        const ZULU: &str = "/example/zulu/1.0.0";
+
+        let (protocols, node) = test_protocols();
+        let mut snapshot = protocols.subscribe_served_protocols();
+        assert_eq!(*snapshot.borrow(), ServedProtocolSnapshot::default());
+
+        let zulu = protocols
+            .register(protocol_spec(ZULU), |_stream| async {})
+            .unwrap();
+        assert_snapshot(&mut snapshot, 1, &[ZULU]);
+
+        let alpha = protocols
+            .register(protocol_spec(ALPHA), |_stream| async {})
+            .unwrap();
+        assert_snapshot(&mut snapshot, 2, &[ALPHA, ZULU]);
+
+        assert!(matches!(
+            protocols.register(protocol_spec(ALPHA), |_stream| async {}),
+            Err(AukiProtocolError::DuplicateProtocol(protocol)) if protocol == ALPHA
+        ));
+        assert!(!snapshot.has_changed().unwrap());
+
+        drop(zulu);
+        assert_snapshot(&mut snapshot, 3, &[ALPHA]);
+
+        alpha.close().await.unwrap();
+        assert_snapshot(&mut snapshot, 4, &[]);
+
+        let remounted = protocols
+            .register(protocol_spec(ALPHA), |_stream| async {})
+            .unwrap();
+        assert_snapshot(&mut snapshot, 5, &[ALPHA]);
+
+        protocols.shutdown_all().await.unwrap();
+        assert_snapshot(&mut snapshot, 6, &[]);
+
+        remounted.close().await.unwrap();
+        assert!(!snapshot.has_changed().unwrap());
+        node.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn served_snapshot_is_cleared_by_abort() {
+        let (protocols, node) = test_protocols();
+        let mut snapshot = protocols.subscribe_served_protocols();
+        let registration = protocols
+            .register(protocol_spec("/example/abort/1.0.0"), |_stream| async {})
+            .unwrap();
+        assert_snapshot(&mut snapshot, 1, &["/example/abort/1.0.0"]);
+
+        protocols.abort_all();
+        assert_snapshot(&mut snapshot, 2, &[]);
+        drop(registration);
+        assert!(!snapshot.has_changed().unwrap());
+        node.shutdown().await.unwrap();
     }
 }

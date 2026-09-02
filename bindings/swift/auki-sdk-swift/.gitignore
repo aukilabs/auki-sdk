@@ -1,3 +1,4 @@
 target-xcframework/
 Sources/AukiSDK/Generated/
 .build/
+.swiftpm/

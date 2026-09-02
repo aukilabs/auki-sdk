@@ -3,8 +3,12 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import time
 
 from auki_portable_echo import AukiEcho, AukiSession
+
+DISCOVERY_TIMEOUT_SECONDS = 120.0
+DISCOVERY_RETRY_SECONDS = 0.5
 
 
 async def main() -> None:
@@ -78,19 +82,13 @@ def print_candidates(candidates: list[object]) -> None:
 
 
 def preferred_native_routes(routes: list[str]) -> list[str]:
-    compatible = [route for route in routes if "/wss" not in route]
+    compatible = [route for route in routes if "wss" not in route.split("/")]
     return sorted(compatible, key=lambda route: "/p2p-circuit/" not in route)
 
 
 async def send_discovered(echo: AukiEcho, peer: object, peer_id: str):
-    candidates = await peer.discover_protocol(echo.protocol)
-    print_candidates(candidates)
-    candidate = next(
-        (candidate for candidate in candidates if candidate.peer_id == peer_id),
-        None,
-    )
-    if candidate is None:
-        raise RuntimeError(f"Echo peer {peer_id} was not discovered")
+    candidate = await wait_for_candidate(echo, peer, peer_id)
+    print_candidates([candidate])
     routes = preferred_native_routes(candidate.routes)
     if not routes:
         raise RuntimeError(
@@ -106,6 +104,28 @@ async def send_discovered(echo: AukiEcho, peer: object, peer_id: str):
         f"every discovered route for Echo peer {peer_id} failed: "
         + "; ".join(failures)
     )
+
+
+async def wait_for_candidate(echo: AukiEcho, peer: object, peer_id: str):
+    deadline = time.monotonic() + DISCOVERY_TIMEOUT_SECONDS
+    last_error: Exception | None = None
+    while True:
+        try:
+            candidates = await peer.discover_protocol(echo.protocol)
+            candidate = next(
+                (candidate for candidate in candidates if candidate.peer_id == peer_id),
+                None,
+            )
+            if candidate is not None:
+                return candidate
+        except Exception as error:
+            last_error = error
+        if time.monotonic() >= deadline:
+            detail = f"; last DDS error: {last_error}" if last_error else ""
+            raise RuntimeError(
+                f"Echo peer {peer_id} was not discovered before timeout{detail}"
+            )
+        await asyncio.sleep(DISCOVERY_RETRY_SECONDS)
 
 
 if __name__ == "__main__":

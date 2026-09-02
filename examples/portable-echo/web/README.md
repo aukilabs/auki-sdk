@@ -8,7 +8,8 @@ wire format in TypeScript.
 The page logs in a User, fetches their accessible Domains, starts an ephemeral
 relay-backed browser peer in the selected Domain, and refreshes peers
 advertising the exact Echo protocol. A developer selects one untrusted
-candidate before the existing exact WSS operation authenticates it. Rust/Wasm owns authentication, DDS
+candidate before the existing exact WSS operation tries its compatible routes
+and authenticates it. Rust/Wasm owns authentication, DDS
 authority, relay booking, libp2p, authenticated streams, protocol framing,
 deadlines, and cleanup. JavaScript only owns the form and lifecycle wiring.
 

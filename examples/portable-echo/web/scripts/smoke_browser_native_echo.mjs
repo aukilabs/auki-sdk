@@ -62,14 +62,8 @@ try {
   ]);
 
   browserStartups = [
-    startBrowserPeer(firstPage, credentials).then((peer) => {
-      firstPeerStarted = true;
-      return peer;
-    }),
-    startBrowserPeer(secondPage, credentials).then((peer) => {
-      secondPeerStarted = true;
-      return peer;
-    }),
+    startBrowserPeer(firstPage, credentials, () => { firstPeerStarted = true; }),
+    startBrowserPeer(secondPage, credentials, () => { secondPeerStarted = true; }),
   ];
   const startupResults = await withTimeout(
     Promise.allSettled(browserStartups),
@@ -213,7 +207,7 @@ function requiredCredentials() {
   };
 }
 
-async function startBrowserPeer(page, input) {
+async function startBrowserPeer(page, input, peerStarted) {
   await page.fill("#email", input.email);
   await page.fill("#password", input.password);
   await page.click("#login-button");
@@ -232,6 +226,7 @@ async function startBrowserPeer(page, input) {
     undefined,
     { timeout: START_TIMEOUT_MS },
   );
+  peerStarted();
   return page.$eval("#local", (local) => ({
     peerId: local.dataset.peerId,
     domainId: local.dataset.domainId,
@@ -624,8 +619,13 @@ async function terminateChild(child) {
     return;
   }
   let closed = once(child, "close").catch(() => {});
-  child.kill("SIGTERM");
+  child.kill("SIGINT");
   await Promise.race([closed, delay(2_000)]);
+  if (child.exitCode === null && child.signalCode === null) {
+    closed = once(child, "close").catch(() => {});
+    child.kill("SIGTERM");
+    await Promise.race([closed, delay(2_000)]);
+  }
   if (child.exitCode === null && child.signalCode === null) {
     closed = once(child, "close").catch(() => {});
     child.kill("SIGKILL");

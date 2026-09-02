@@ -30,9 +30,12 @@ final class EchoModel: ObservableObject {
     private var session: AukiSession?
     private var peer: AukiPeer?
     private var echo: AukiEcho?
+    private var provisionalPeer: AukiPeer?
+    private var provisionalEcho: AukiEcho?
     private var receiveTask: Task<Void, Never>?
     private var automationStarted = false
     private var stopAfterReceive = false
+    private var generation = 0
 
     var canLogin: Bool {
         phase == .signedOut && !email.isEmpty && !password.isEmpty
@@ -82,8 +85,11 @@ final class EchoModel: ObservableObject {
     @discardableResult
     func start() async -> Bool {
         guard canStart, let session else { return false }
+        generation += 1
+        let operationGeneration = generation
         phase = .starting
         var startedPeer: AukiPeer?
+        var startedEcho: AukiEcho?
         do {
             let peerIdentity = identity ?? AukiPeerIdentity.generate()
             identity = peerIdentity
@@ -94,10 +100,24 @@ final class EchoModel: ObservableObject {
                 mode: advertisePeer ? .discoverAndAdvertise : .discoverOnly
             )
             startedPeer = runningPeer
+            guard generation == operationGeneration, phase == .starting else {
+                try? await runningPeer.shutdown()
+                return false
+            }
+            provisionalPeer = runningPeer
             let mounted = try await AukiEcho.mount(peer: runningPeer)
+            startedEcho = mounted
+            provisionalEcho = mounted
+            guard generation == operationGeneration, phase == .starting else {
+                try? await mounted.close()
+                try? await runningPeer.shutdown()
+                return false
+            }
             let card = try peerCardToJson(card: mounted.card())
 
             self.session = nil
+            provisionalEcho = nil
+            provisionalPeer = nil
             peer = runningPeer
             echo = mounted
             localCard = card
@@ -107,7 +127,11 @@ final class EchoModel: ObservableObject {
             print("AUKI_IOS_READY PEER_CARD=\(card)")
             return true
         } catch {
+            provisionalEcho = nil
+            provisionalPeer = nil
+            if let startedEcho { try? await startedEcho.close() }
             if let startedPeer { try? await startedPeer.shutdown() }
+            guard generation == operationGeneration else { return false }
             phase = .authenticated
             write(error)
             return false
@@ -201,16 +225,25 @@ final class EchoModel: ObservableObject {
     }
 
     func stop(reason: String = "Peer stopped") async {
-        guard phase == .running, let runningPeer = peer, let mounted = echo else { return }
+        guard phase == .starting || phase == .running else { return }
         phase = .stopping
+        generation += 1
+        let runningPeer = peer ?? provisionalPeer
+        let mounted = echo ?? provisionalEcho
         let pendingReceive = receiveTask
         peer = nil
         echo = nil
+        provisionalPeer = nil
+        provisionalEcho = nil
         receiveTask = nil
 
         var failures: [String] = []
-        do { try await mounted.close() } catch { failures.append(error.localizedDescription) }
-        do { try await runningPeer.shutdown() } catch { failures.append(error.localizedDescription) }
+        if let mounted {
+            do { try await mounted.close() } catch { failures.append(error.localizedDescription) }
+        }
+        if let runningPeer {
+            do { try await runningPeer.shutdown() } catch { failures.append(error.localizedDescription) }
+        }
         await pendingReceive?.value
 
         session = nil
@@ -275,7 +308,7 @@ final class EchoModel: ObservableObject {
 
     private func nativeDiscoveryRoutes(_ routes: [String]) -> [String] {
         routes
-            .filter { !$0.contains("/wss") }
+            .filter { !$0.split(separator: "/").contains("wss") }
             .sorted { left, right in
                 let leftRelay = left.contains("/p2p-circuit/")
                 let rightRelay = right.contains("/p2p-circuit/")

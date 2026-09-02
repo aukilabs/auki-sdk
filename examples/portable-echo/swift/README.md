@@ -38,8 +38,9 @@ start the peer, refresh Echo peers, and select one to send. The default is
 Whole peer-card paste remains a clearly labeled manual fallback.
 
 The first iteration is foreground-oriented. Moving the app to the background
-requests ordered echo and peer shutdown, but reliable long-running background
-networking is outside this example's scope.
+during startup invalidates the operation and shuts down any provisional peer;
+after startup it requests ordered Echo and peer shutdown. Reliable long-running
+background networking is outside this example's scope.
 
 ## Simulator checks
 

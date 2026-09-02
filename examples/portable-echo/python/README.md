@@ -64,10 +64,11 @@ python main.py \
     --discover '<PEER_ID printed by terminal A>'
 ```
 
-Terminal B refreshes the exact Echo protocol in DDS, selects A's advertised
-native route, sends `hello from Auki`, closes the echo
-endpoint, and shuts down its peer. Stop terminal A with Ctrl-C. It performs the
-same ordered cleanup: protocol endpoint first, then the peer and relay booking.
+Terminal B polls the exact Echo protocol in DDS until A's mounted endpoint is
+visible, tries A's advertised native routes, sends `hello from Auki`, closes the
+echo endpoint, and shuts down its peer. Stop terminal A with Ctrl-C. It performs
+the same ordered cleanup: protocol endpoint first, then the peer and relay
+booking.
 
 The example defaults to `discover_and_advertise`. Set
 `AUKI_DISCOVERY_MODE=discover_only` to discover while remaining hidden. The

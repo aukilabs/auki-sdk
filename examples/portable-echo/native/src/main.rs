@@ -1,4 +1,7 @@
-use std::env;
+use std::{
+    env,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result, bail};
 use auki_portable_echo::{EchoEndpoint, PROTOCOL_ID};
@@ -6,6 +9,9 @@ use auki_sdk::{
     AukiDiscoveryCandidate, AukiPeer, AukiPeerBootstrap, Credentials, DdsTrackerMode,
     DomainSelection, Multiaddr, PeerId,
 };
+
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(120);
+const DISCOVERY_RETRY: Duration = Duration::from_millis(500);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -136,12 +142,8 @@ async fn send_discovered(
     expected_peer: PeerId,
     payload: impl AsRef<[u8]>,
 ) -> Result<auki_portable_echo::EchoSendReceipt> {
-    let candidates = peer.discover_protocol(PROTOCOL_ID).await?;
-    print_candidates(&candidates);
-    let candidate = candidates
-        .iter()
-        .find(|candidate| candidate.peer_id() == expected_peer)
-        .with_context(|| format!("Echo peer {expected_peer} was not discovered"))?;
+    let candidate = wait_for_candidate(peer, expected_peer).await?;
+    print_candidates(std::slice::from_ref(&candidate));
     let routes = preferred_native_routes(candidate.routes());
     if routes.is_empty() {
         bail!("Echo peer {expected_peer} advertised no native-compatible route");
@@ -163,14 +165,49 @@ async fn send_discovered(
     )
 }
 
+async fn wait_for_candidate(
+    peer: &AukiPeer,
+    expected_peer: PeerId,
+) -> Result<AukiDiscoveryCandidate> {
+    let deadline = Instant::now() + DISCOVERY_TIMEOUT;
+    let mut last_error = None;
+    loop {
+        match peer.discover_protocol(PROTOCOL_ID).await {
+            Ok(candidates) => {
+                if let Some(candidate) = candidates
+                    .into_iter()
+                    .find(|candidate| candidate.peer_id() == expected_peer)
+                {
+                    return Ok(candidate);
+                }
+            }
+            Err(error) => last_error = Some(error.to_string()),
+        }
+        if Instant::now() >= deadline {
+            let detail = last_error
+                .map(|error| format!("; last DDS error: {error}"))
+                .unwrap_or_default();
+            bail!("Echo peer {expected_peer} was not discovered before timeout{detail}");
+        }
+        tokio::time::sleep(DISCOVERY_RETRY).await;
+    }
+}
+
 fn preferred_native_routes(routes: &[Multiaddr]) -> Vec<Multiaddr> {
     let mut routes = routes
         .iter()
-        .filter(|route| !route.to_string().contains("/wss"))
+        .filter(|route| !has_wss_protocol(route))
         .cloned()
         .collect::<Vec<_>>();
     routes.sort_by_key(|route| !route.to_string().contains("/p2p-circuit/"));
     routes
+}
+
+fn has_wss_protocol(route: &Multiaddr) -> bool {
+    route
+        .to_string()
+        .split('/')
+        .any(|component| component == "wss")
 }
 
 #[cfg(test)]
@@ -179,7 +216,7 @@ mod tests {
 
     #[test]
     fn native_discovery_prefers_circuit_routes_and_ignores_wss() {
-        let direct = "/dns4/direct.example.com/tcp/4001/p2p/12D3KooWJ5Xw8jCxxbVZXcaUpf7h8fWgpcnH9tGgNfZQ1nSJXUL3"
+        let direct = "/dns4/wss-node.example.com/tcp/4001/p2p/12D3KooWJ5Xw8jCxxbVZXcaUpf7h8fWgpcnH9tGgNfZQ1nSJXUL3"
             .parse::<Multiaddr>()
             .unwrap();
         let relay = "/dns4/relay.example.com/tcp/443/p2p/12D3KooWKe31227N64kxokD3Z913sP4i7B1a9ProcvyJt95QTrqM/p2p-circuit/p2p/12D3KooWJ5Xw8jCxxbVZXcaUpf7h8fWgpcnH9tGgNfZQ1nSJXUL3"

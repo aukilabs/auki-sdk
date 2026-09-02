@@ -54,10 +54,10 @@ cargo run --locked -p auki-portable-echo-native -- \
   --discover '<PEER_ID printed by terminal A>'
 ```
 
-Terminal B refreshes the exact `/example/echo/1.0.0` advertisements, tries the
-selected peer's native-compatible routes, sends `hello from Auki`, closes its
-protocol endpoint, and shuts down its peer. Stop terminal A with Ctrl-C; it
-performs the same ordered cleanup.
+Terminal B polls the exact `/example/echo/1.0.0` advertisements until A's
+mounted endpoint is visible, tries its native-compatible routes, sends `hello
+from Auki`, closes its protocol endpoint, and shuts down its peer. Stop terminal
+A with Ctrl-C; it performs the same ordered cleanup.
 
 `DiscoverAndAdvertise` is the default. Set
 `AUKI_DISCOVERY_MODE=discover_only` before startup when this peer should find

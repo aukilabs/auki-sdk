@@ -256,7 +256,12 @@ async fn wait_for_candidate(
 fn preferred_native_routes(routes: &[Multiaddr]) -> Vec<Multiaddr> {
     let mut routes = routes
         .iter()
-        .filter(|route| !route.to_string().contains("/wss"))
+        .filter(|route| {
+            !route
+                .to_string()
+                .split('/')
+                .any(|component| component == "wss")
+        })
         .cloned()
         .collect::<Vec<_>>();
     routes.sort_by_key(|route| !route.to_string().contains("/p2p-circuit/"));

@@ -24,6 +24,7 @@ let echo: AukiEcho | undefined;
 let receiving: Promise<void> | undefined;
 let sending: Promise<void> | undefined;
 let refreshing: Promise<void> | undefined;
+let discoveredRoutes = new Map<string, string[]>();
 
 await init();
 get<HTMLButtonElement>("login-button").disabled = false;
@@ -121,9 +122,11 @@ async function refreshDiscovery(): Promise<void> {
   try {
     const discovered = await running.discoverProtocol(mounted.protocol);
     const options: HTMLOptionElement[] = [];
+    const nextDiscoveredRoutes = new Map<string, string[]>();
     for (const candidate of discovered) {
       try {
-        const route = preferredBrowserRoute(candidate.routes);
+        const routes = preferredBrowserRoutes(candidate.routes);
+        const route = routes[0];
         const option = document.createElement("option");
         option.value = candidate.peerId;
         option.textContent = `${candidate.peerId} — expires ${candidate.expiresAt}`;
@@ -131,9 +134,11 @@ async function refreshDiscovery(): Promise<void> {
         option.dataset.source = candidate.source;
         option.disabled = !route;
         options.push(option);
+        if (routes.length) nextDiscoveredRoutes.set(candidate.peerId, routes);
       } finally { candidate.free(); }
     }
     if (peer !== running) return;
+    discoveredRoutes = nextDiscoveredRoutes;
     if (options.length) {
       candidates.replaceChildren(...options);
       candidates.disabled = false;
@@ -154,9 +159,14 @@ async function refreshDiscovery(): Promise<void> {
   }
 }
 
-function preferredBrowserRoute(routes: string[]): string | undefined {
-  return routes.find((route) => route.includes("/wss/") && route.includes("/p2p-circuit/"))
-    ?? routes.find((route) => route.includes("/wss/"));
+function preferredBrowserRoutes(routes: string[]): string[] {
+  return routes
+    .filter((route) => route.split("/").includes("wss"))
+    .sort((left, right) => {
+      const leftRelay = left.includes("/p2p-circuit/");
+      const rightRelay = right.includes("/p2p-circuit/");
+      return leftRelay === rightRelay ? left.localeCompare(right) : leftRelay ? -1 : 1;
+    });
 }
 
 function selectedCandidate(): HTMLOptionElement | undefined {
@@ -179,12 +189,25 @@ async function sendEcho(): Promise<void> {
   if (!mounted) return;
   sendButton.disabled = stopButton.disabled = true;
   try {
-    const receipt = await mounted.sendExact(
-      input("remote-peer").value.trim(), input("remote-route").value.trim(),
-      new TextEncoder().encode(input("message").value),
-    );
-    try { write(`sent to ${receipt.remotePeerId}: ${new TextDecoder().decode(receipt.payload)}`); }
-    finally { receipt.free(); }
+    const peerId = input("remote-peer").value.trim();
+    const route = input("remote-route").value.trim();
+    const advertised = discoveredRoutes.get(peerId);
+    const routes = advertised?.[0] === route ? advertised : [route];
+    const failures: string[] = [];
+    for (const candidateRoute of routes) {
+      try {
+        const receipt = await mounted.sendExact(
+          peerId, candidateRoute, new TextEncoder().encode(input("message").value),
+        );
+        try {
+          write(`sent to ${receipt.remotePeerId}: ${new TextDecoder().decode(receipt.payload)}`);
+        } finally { receipt.free(); }
+        return;
+      } catch (error) {
+        failures.push(`${candidateRoute}: ${String(error)}`);
+      }
+    }
+    throw new Error(`every candidate route failed: ${failures.join("; ")}`);
   } catch (error) {
     write(error);
   } finally {
@@ -225,6 +248,7 @@ async function stopPeer(): Promise<void> {
   refreshButton.disabled = useCandidateButton.disabled = true;
   candidates.disabled = true;
   candidates.replaceChildren(new Option("No discovered peers", ""));
+  discoveredRoutes = new Map();
   input("remote-peer").value = input("remote-route").value = "";
   input("email").disabled = input("password").disabled = false;
   get<HTMLButtonElement>("login-button").disabled = false;

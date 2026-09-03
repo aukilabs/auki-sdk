@@ -90,9 +90,10 @@ public actor CameraViewer {
   private let streamClient: AukiStreamClient
 
   private var receiverTask: Task<Void, Never>?
-  private var streamTask: Task<Void, Never>?
-  private var subscription: AukiStreamSubscription?
-  private var activeCamera: ActiveCamera?
+  private var streamTasks: [CameraViewerConnectionID: Task<Void, Never>] = [:]
+  private var subscriptions: [CameraViewerConnectionID: AukiStreamSubscription] = [:]
+  private var activeCameras: [CameraViewerConnectionID: ActiveCamera] = [:]
+  private var connectionIDsByPeerID: [String: CameraViewerConnectionID] = [:]
   private var pendingSnapshots: [String: PendingSnapshot] = [:]
   private var connectionGeneration: UInt64 = 0
   private var closed = false
@@ -234,18 +235,20 @@ public actor CameraViewer {
       .map(CameraMeshCandidate.init)
   }
 
-  public func connect(candidate: CameraMeshCandidate) async throws {
+  @discardableResult
+  public func connect(candidate: CameraMeshCandidate) async throws -> CameraViewerConnectionID {
     let target = try nativeCameraTarget(candidate: candidate, domainID: domainID)
-    try await connect(target: target)
+    return try await connect(target: target)
   }
 
-  public func connect(cardJSON: String) async throws {
+  @discardableResult
+  public func connect(cardJSON: String) async throws -> CameraViewerConnectionID {
     let target = try nativeCameraTarget(cardJSON: cardJSON, domainID: domainID)
-    try await connect(target: target)
+    return try await connect(target: target)
   }
 
-  public func pause() async throws {
-    let remote = try active()
+  public func pause(connectionID: CameraViewerConnectionID) async throws {
+    let remote = try active(connectionID)
     try await sendControl(type: "camera.pause", payload: Data(), remote: remote)
     try ensureCurrent(remote, operation: "pause camera")
     emit(
@@ -255,8 +258,8 @@ public actor CameraViewer {
       ))
   }
 
-  public func resume() async throws {
-    let remote = try active()
+  public func resume(connectionID: CameraViewerConnectionID) async throws {
+    let remote = try active(connectionID)
     try await sendControl(type: "camera.resume", payload: Data(), remote: remote)
     try ensureCurrent(remote, operation: "resume camera")
     emit(
@@ -267,12 +270,12 @@ public actor CameraViewer {
   }
 
   @discardableResult
-  public func requestSnapshot() async throws -> String {
+  public func requestSnapshot(connectionID: CameraViewerConnectionID) async throws -> String {
     try ensureOpen("request snapshot")
     guard pendingSnapshots.count < CameraMeshContract.maximumPendingSnapshots else {
       throw CameraViewerError("Too many snapshot requests are pending")
     }
-    let remote = try active()
+    let remote = try active(connectionID)
     let requestID = UUID().uuidString.lowercased()
     let routes = try peer.routes()
     let payload = try makeSnapshotRequest(
@@ -309,8 +312,11 @@ public actor CameraViewer {
     }
   }
 
-  public func disconnect(reason: String = "Camera disconnected") async {
-    await disconnectActive(reason: reason, emitEvent: true)
+  public func disconnect(
+    connectionID: CameraViewerConnectionID,
+    reason: String = "Camera disconnected"
+  ) async {
+    await disconnectConnection(connectionID, reason: reason, emitEvent: true)
   }
 
   /// Replay-safe ordered cleanup: Stream, Message receiver/endpoints, then peer.
@@ -319,7 +325,10 @@ public actor CameraViewer {
     closed = true
     var failures: [String] = []
 
-    await disconnectActive(reason: "Viewer stopped", emitEvent: false)
+    let connectionIDs = Array(connectionIDsByPeerID.values)
+    for connectionID in connectionIDs {
+      await disconnectConnection(connectionID, reason: "Viewer stopped", emitEvent: false)
+    }
 
     let receiving = receiverTask
     receiverTask = nil
@@ -340,74 +349,80 @@ public actor CameraViewer {
     }
   }
 
-  private func connect(target: AukiPeerTarget) async throws {
+  private func connect(target: AukiPeerTarget) async throws -> CameraViewerConnectionID {
     try ensureOpen("connect camera")
-    await disconnectActive(reason: "Switching camera", emitEvent: false)
+    guard connectionIDsByPeerID[target.peerId] == nil else {
+      throw CameraViewerError("Camera \(target.peerId) is already connected or connecting")
+    }
+    guard connectionIDsByPeerID.count < CameraMeshContract.maximumViewerConnections else {
+      throw CameraViewerError(
+        "Camera viewer supports at most \(CameraMeshContract.maximumViewerConnections) connections"
+      )
+    }
     connectionGeneration &+= 1
     let connectionID = CameraViewerConnectionID(generation: connectionGeneration)
+    connectionIDsByPeerID[target.peerId] = connectionID
     emit(
       .status(
         connectionID: connectionID,
         message: "Authenticating camera \(target.peerId)…"
       ))
 
-    let infoJSON = try await info.client().fetchExact(target: target)
-    let catalogJSON = try await catalog.client().fetchResourcesExact(
-      target: target,
-      variants: [.sensorLog, .messageChannel]
-    )
-    let catalogMetadata = try parseCameraCatalog(
-      infoJSON: infoJSON,
-      catalogJSON: catalogJSON,
-      expectedPeerID: target.peerId
-    )
-    let registryClient = registry.client()
-    let sensorJSON = try await registryClient.fetchExact(
-      target: target,
-      kind: .sensor,
-      id: catalogMetadata.sensorRef.id,
-      hash: catalogMetadata.sensorRef.hash
-    )
-    let clockJSON = try await registryClient.fetchExact(
-      target: target,
-      kind: .clock,
-      id: catalogMetadata.clockRef.id,
-      hash: catalogMetadata.clockRef.hash
-    )
-    let frameJSON = try await registryClient.fetchExact(
-      target: target,
-      kind: .frame,
-      id: catalogMetadata.frameRef.id,
-      hash: catalogMetadata.frameRef.hash
-    )
-    let metadata = try resolveCameraMetadata(
-      catalog: catalogMetadata,
-      sensorJSON: sensorJSON,
-      clockJSON: clockJSON,
-      frameJSON: frameJSON
-    )
-    let opened = try await streamClient.subscribe(
-      target: target,
-      payloadKind: .camera,
-      request: AukiStreamRequest(
-        sourcePeerId: target.peerId,
-        resourceId: CameraMeshContract.cameraResourceID,
-        readFrom: .latest
-      )
-    )
-
+    var opened: AukiStreamSubscription?
     do {
-      try validateStreamManifest(opened.manifest(), metadata: metadata)
-      guard !closed, connectionGeneration == connectionID.generation else {
-        try await opened.cancel()
-        throw CameraViewerError("Camera connection was cancelled")
-      }
-      activeCamera = ActiveCamera(
+      let infoJSON = try await info.client().fetchExact(target: target)
+      let catalogJSON = try await catalog.client().fetchResourcesExact(
+        target: target,
+        variants: [.sensorLog, .messageChannel]
+      )
+      let catalogMetadata = try parseCameraCatalog(
+        infoJSON: infoJSON,
+        catalogJSON: catalogJSON,
+        expectedPeerID: target.peerId
+      )
+      let registryClient = registry.client()
+      let sensorJSON = try await registryClient.fetchExact(
+        target: target,
+        kind: .sensor,
+        id: catalogMetadata.sensorRef.id,
+        hash: catalogMetadata.sensorRef.hash
+      )
+      let clockJSON = try await registryClient.fetchExact(
+        target: target,
+        kind: .clock,
+        id: catalogMetadata.clockRef.id,
+        hash: catalogMetadata.clockRef.hash
+      )
+      let frameJSON = try await registryClient.fetchExact(
+        target: target,
+        kind: .frame,
+        id: catalogMetadata.frameRef.id,
+        hash: catalogMetadata.frameRef.hash
+      )
+      let metadata = try resolveCameraMetadata(
+        catalog: catalogMetadata,
+        sensorJSON: sensorJSON,
+        clockJSON: clockJSON,
+        frameJSON: frameJSON
+      )
+      let subscription = try await streamClient.subscribe(
+        target: target,
+        payloadKind: .camera,
+        request: AukiStreamRequest(
+          sourcePeerId: target.peerId,
+          resourceId: CameraMeshContract.cameraResourceID,
+          readFrom: .latest
+        )
+      )
+      opened = subscription
+      try validateStreamManifest(subscription.manifest(), metadata: metadata)
+      try ensureReserved(connectionID, peerID: target.peerId, operation: "connect camera")
+      activeCameras[connectionID] = ActiveCamera(
         connectionID: connectionID,
         target: target,
         metadata: metadata
       )
-      subscription = opened
+      subscriptions[connectionID] = subscription
       let info = metadata.info
       emit(
         .connected(
@@ -417,9 +432,11 @@ public actor CameraViewer {
             name: info.name,
             runtime: info.appInstance
           )))
-      startStreamWorker(opened, connectionID: connectionID)
+      startStreamWorker(subscription, connectionID: connectionID)
+      return connectionID
     } catch {
-      try? await opened.cancel()
+      if let opened { try? await opened.cancel() }
+      releaseReservation(connectionID, peerID: target.peerId)
       throw error
     }
   }
@@ -487,7 +504,7 @@ public actor CameraViewer {
     _ opened: AukiStreamSubscription,
     connectionID: CameraViewerConnectionID
   ) {
-    streamTask = Task { [weak self] in
+    streamTasks[connectionID] = Task { [weak self] in
       do {
         while !Task.isCancelled {
           guard let next = try await opened.next() else {
@@ -535,7 +552,7 @@ public actor CameraViewer {
     _ frame: CameraViewerFrame,
     connectionID: CameraViewerConnectionID
   ) {
-    guard isCurrent(connectionID), subscription != nil else { return }
+    guard isCurrent(connectionID), subscriptions[connectionID] != nil else { return }
     emit(.frame(connectionID: connectionID, frame: frame))
   }
 
@@ -548,9 +565,14 @@ public actor CameraViewer {
     guard isCurrent(connectionID) else { return }
     try? await opened.cancel()
     guard isCurrent(connectionID) else { return }
-    streamTask = nil
-    subscription = nil
-    activeCamera = nil
+    streamTasks.removeValue(forKey: connectionID)
+    subscriptions.removeValue(forKey: connectionID)
+    let remote = activeCameras.removeValue(forKey: connectionID)
+    if let peerID = remote?.target.peerId,
+      connectionIDsByPeerID[peerID] == connectionID
+    {
+      connectionIDsByPeerID.removeValue(forKey: peerID)
+    }
     cancelPendingSnapshots(connectionID: connectionID)
     if failed {
       emit(.failed(connectionID: connectionID, message: reason))
@@ -698,36 +720,52 @@ public actor CameraViewer {
     }
   }
 
-  private func disconnectActive(reason: String, emitEvent: Bool) async {
-    connectionGeneration &+= 1
-    let invalidatedGeneration = connectionGeneration
-    let disconnectedConnectionID = activeCamera?.connectionID
-    let reading = streamTask
-    let opened = subscription
-    streamTask = nil
-    subscription = nil
-    activeCamera = nil
-    for pending in pendingSnapshots.values {
-      pending.timeout?.cancel()
+  private func disconnectConnection(
+    _ connectionID: CameraViewerConnectionID,
+    reason: String,
+    emitEvent: Bool
+  ) async {
+    let remote = activeCameras.removeValue(forKey: connectionID)
+    if let peerID = remote?.target.peerId,
+      connectionIDsByPeerID[peerID] == connectionID
+    {
+      connectionIDsByPeerID.removeValue(forKey: peerID)
+    } else if let peerID = connectionIDsByPeerID.first(where: { $0.value == connectionID })?.key {
+      connectionIDsByPeerID.removeValue(forKey: peerID)
     }
-    pendingSnapshots.removeAll()
+    let reading = streamTasks.removeValue(forKey: connectionID)
+    let opened = subscriptions.removeValue(forKey: connectionID)
+    cancelPendingSnapshots(connectionID: connectionID)
     reading?.cancel()
     if let opened { try? await opened.cancel() }
     await reading?.value
-    guard
-      emitEvent,
-      !closed,
-      connectionGeneration == invalidatedGeneration,
-      let disconnectedConnectionID
-    else { return }
-    emit(.disconnected(connectionID: disconnectedConnectionID, reason: reason))
+    guard emitEvent, !closed, remote != nil else { return }
+    emit(.disconnected(connectionID: connectionID, reason: reason))
   }
 
-  private func active() throws -> ActiveCamera {
-    guard let activeCamera else {
-      throw CameraViewerError("No camera is connected")
+  private func active(_ connectionID: CameraViewerConnectionID) throws -> ActiveCamera {
+    guard let activeCamera = activeCameras[connectionID] else {
+      throw CameraViewerError("Camera connection is not active")
     }
     return activeCamera
+  }
+
+  private func ensureReserved(
+    _ connectionID: CameraViewerConnectionID,
+    peerID: String,
+    operation: String
+  ) throws {
+    guard !closed, connectionIDsByPeerID[peerID] == connectionID else {
+      throw CameraViewerError("Cannot \(operation): camera connection changed")
+    }
+  }
+
+  private func releaseReservation(
+    _ connectionID: CameraViewerConnectionID,
+    peerID: String
+  ) {
+    guard connectionIDsByPeerID[peerID] == connectionID else { return }
+    connectionIDsByPeerID.removeValue(forKey: peerID)
   }
 
   private func ensureCurrent(
@@ -757,9 +795,7 @@ public actor CameraViewer {
   ) -> Bool {
     guard
       !closed,
-      connectionGeneration == connectionID.generation,
-      let activeCamera,
-      activeCamera.connectionID == connectionID
+      let activeCamera = activeCameras[connectionID]
     else { return false }
     return peerID == nil || activeCamera.target.peerId == peerID
   }

@@ -7,6 +7,10 @@ final class CameraContractTests: XCTestCase {
   private let clockHash = "22222222222222222222222222222222"
   private let frameHash = "33333333333333333333333333333333"
 
+  func testViewerWallCapacityIsExplicit() {
+    XCTAssertEqual(CameraMeshContract.maximumViewerConnections, 16)
+  }
+
   func testDiscoveryChoosesCircuitTCPAndRejectsIncompletePublisher() throws {
     let peerID = AukiPeerIdentity.generate().peerId()
     let relayID = AukiPeerIdentity.generate().peerId()

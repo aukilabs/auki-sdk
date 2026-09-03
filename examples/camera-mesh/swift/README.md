@@ -1,11 +1,13 @@
 # Swift/iOS Camera Mesh
 
-This foreground-only SwiftUI app can either publish the iPhone camera or view
-another Camera Mesh publisher.
+This foreground-only SwiftUI app can either publish the iPhone camera or run a
+16-camera CCTV wall.
 
 - Rust owns authentication, relay booking, DDS discovery, exact-peer approval,
   all six standard protocols, hashes, and ordered shutdown.
 - Swift owns the UI, app lifecycle, and AVFoundation camera capture.
+- One Swift viewer peer owns independent authenticated connections to every
+  camera on the wall; each feed can fail, retry, pause, or snapshot separately.
 - The publisher retains only the newest 480×270 JPEG and serves at 5 fps.
 
 The identity is process-scoped: relaunching the app creates a new Peer ID.
@@ -90,14 +92,20 @@ xcrun devicectl device process launch \
 
 ## Use the viewer
 
-Log in, choose the publisher's Domain, select **Viewer**, and start. The viewer
-uses DDS discovery without advertising itself; a complete peer card is the
-fallback.
+Log in, choose the publishers' Domain, select **Viewer**, and start. The viewer
+uses DDS discovery without advertising itself; complete peer cards remain the
+fallback. Open **Add camera** to add publishers individually or concurrently
+with **Add all**. The wall is capped at 16 cameras.
 
-The first connection should return `approval_required`. Compare the complete
-Peer ID shown by the app with the publisher's pending request, approve that
-exact ID, then retry. Verify advancing JPEGs, pause, resume, and a snapshot with
-a SHA-256 hash. The [Web](../web/README.md) and
+On iPhone the wall uses two columns. Select **1** or tap a camera to focus a
+single feed, then use the arrow controls to move through the wall. Wider Apple
+devices expose one through four columns. Each tile's menu owns pause/resume,
+verified snapshot, retry, focus, and removal for that camera only.
+
+An unapproved connection returns `approval_required`. Compare the complete
+viewer Peer ID shown by the app with the publisher's pending request, approve
+that exact ID, then retry its tile. Verify advancing JPEGs, pause, resume, and a
+snapshot with a SHA-256 hash. The [Web](../web/README.md) and
 [native](../native/README.md) guides provide publishers.
 
 ## Use the publisher

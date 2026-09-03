@@ -11,6 +11,7 @@ public enum CameraMeshContract {
   public static let width = 480
   public static let height = 270
   public static let rateHz = 5
+  public static let maximumViewerConnections = 16
   public static let maximumPendingSnapshots = 16
   public static let maximumBlobBytes = 20 * 1024 * 1024
   public static let snapshotTimeoutSeconds = 45

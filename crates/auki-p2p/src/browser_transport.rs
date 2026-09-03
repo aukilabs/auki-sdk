@@ -45,7 +45,9 @@ use crate::{
         ObservedRelayLimits, RelayCancellation, RelayProvider, RelayReservationEvent,
         RelayReservationHandle, RelayReservationNode, RelayReservationSnapshot,
     },
-    relay_client, source_admission,
+    relay_client,
+    relay_dial_gate::{RelayCircuitDialGate, RelayCircuitDialPermit},
+    source_admission,
     targeted_stream::{TargetedStreamBehaviour, TargetedStreamControl},
     ApplicationProtocol, ApplicationProtocolSpec, AuthenticatedApplicationStream,
     AuthenticatedStream, Error, Identity, PeerAuthorityUpdate, Result,
@@ -317,6 +319,7 @@ pub struct BrowserNode {
     commands: Sender<Command>,
     stopped: Shared<oneshot::Receiver<BrowserNodeExit>>,
     source_admissions: source_admission::AdmissionCache,
+    relay_circuit_dials: RelayCircuitDialGate,
     _local_only: Rc<()>,
 }
 
@@ -356,6 +359,7 @@ impl BrowserNode {
             commands,
             stopped: stopped_receiver.shared(),
             source_admissions: source_admission::AdmissionCache::default(),
+            relay_circuit_dials: RelayCircuitDialGate::new(),
             _local_only: Rc::new(()),
         })
     }
@@ -719,11 +723,13 @@ impl BrowserNode {
         address: Multiaddr,
         relay_peer_id: PeerId,
     ) -> Result<ConnectionId> {
+        let permit = self.relay_circuit_dials.acquire().await;
         let (response, receiver) = oneshot::channel();
         self.send(Command::DialCircuit {
             peer_id,
             address,
             relay_peer_id,
+            permit,
             response,
         })
         .await?;
@@ -849,6 +855,7 @@ enum Command {
         peer_id: PeerId,
         address: Multiaddr,
         relay_peer_id: PeerId,
+        permit: RelayCircuitDialPermit,
         response: oneshot::Sender<Result<ConnectionId>>,
     },
     CloseConnection {
@@ -893,6 +900,7 @@ enum PendingDial {
     Circuit {
         peer_id: PeerId,
         relay_peer_id: PeerId,
+        _permit: RelayCircuitDialPermit,
         response: oneshot::Sender<Result<ConnectionId>>,
     },
 }
@@ -923,8 +931,9 @@ impl BrowserRuntime {
                 peer_id,
                 address,
                 relay_peer_id,
+                permit,
                 response,
-            } => self.dial_circuit(swarm, peer_id, address, relay_peer_id, response),
+            } => self.dial_circuit(swarm, peer_id, address, relay_peer_id, permit, response),
             Command::CloseConnection {
                 connection_id,
                 response,
@@ -1217,6 +1226,7 @@ impl BrowserRuntime {
         peer_id: PeerId,
         address: Multiaddr,
         relay_peer_id: PeerId,
+        permit: RelayCircuitDialPermit,
         response: oneshot::Sender<Result<ConnectionId>>,
     ) {
         if response.is_canceled() {
@@ -1241,6 +1251,7 @@ impl BrowserRuntime {
                     PendingDial::Circuit {
                         peer_id,
                         relay_peer_id,
+                        _permit: permit,
                         response,
                     },
                 );

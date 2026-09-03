@@ -35,6 +35,7 @@ mod observation;
 mod relay;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod relay_client;
+mod relay_dial_gate;
 #[cfg(not(target_arch = "wasm32"))]
 mod routing;
 #[cfg(not(target_arch = "wasm32"))]

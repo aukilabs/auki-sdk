@@ -36,7 +36,9 @@ use crate::{
         RelayConfirmationRejection, RelayProvider, RelayReservationEvent, RelayReservationHandle,
         RelayReservationNode, RelayReservationSnapshot,
     },
-    relay_client, source_admission,
+    relay_client,
+    relay_dial_gate::{RelayCircuitDialGate, RelayCircuitDialPermit},
+    source_admission,
     targeted_stream::{TargetedStreamBehaviour, TargetedStreamControl},
     token::{
         ensure_token_peer, unix_time_now, DdsTokenVerifier, DdsVerificationKeys, P2PAccessClaims,
@@ -165,6 +167,7 @@ pub struct Node {
     relay_events: broadcast::Sender<RelayTransportEvent>,
     observations: NodeObservations,
     source_admissions: Arc<source_admission::AdmissionCache>,
+    relay_circuit_dials: RelayCircuitDialGate,
     task: Arc<NodeTaskOwnership>,
 }
 
@@ -298,6 +301,7 @@ impl Node {
             relay_events,
             observations,
             source_admissions: Arc::new(source_admission::AdmissionCache::default()),
+            relay_circuit_dials: RelayCircuitDialGate::new(),
             task,
         })
     }
@@ -756,12 +760,17 @@ impl Node {
         addresses: Vec<Multiaddr>,
         circuit_relay_peer_id: Option<PeerId>,
     ) -> P2PResult<ConnectionId> {
+        let circuit_permit = match circuit_relay_peer_id {
+            Some(_) => Some(self.relay_circuit_dials.acquire().await),
+            None => None,
+        };
         let (response, receiver) = oneshot::channel();
         self.command_sender
             .send(Command::Connect {
                 peer_id,
                 addresses,
                 circuit_relay_peer_id,
+                circuit_permit,
                 response,
             })
             .await
@@ -885,6 +894,7 @@ enum Command {
         peer_id: PeerId,
         addresses: Vec<Multiaddr>,
         circuit_relay_peer_id: Option<PeerId>,
+        circuit_permit: Option<RelayCircuitDialPermit>,
         response: oneshot::Sender<P2PResult<ConnectionId>>,
     },
     SelectRelayConnection {
@@ -1430,6 +1440,7 @@ struct PendingDial {
     completion: DialCompletion,
     requested_direct_address: Option<Multiaddr>,
     circuit_relay_peer_id: Option<PeerId>,
+    _circuit_permit: Option<RelayCircuitDialPermit>,
 }
 
 fn classify_dial_error(error: DialError) -> Error {
@@ -1805,6 +1816,7 @@ async fn run_swarm(
                         peer_id,
                         addresses,
                         circuit_relay_peer_id,
+                        circuit_permit,
                         response,
                     } => {
                         let direct = addresses.iter().all(|address| {
@@ -1873,6 +1885,7 @@ async fn run_swarm(
                                         completion: DialCompletion::Exact,
                                         requested_direct_address,
                                         circuit_relay_peer_id,
+                                        _circuit_permit: circuit_permit,
                                     },
                                 );
                             }
@@ -1922,6 +1935,7 @@ async fn run_swarm(
                                         },
                                         requested_direct_address: Some(address),
                                         circuit_relay_peer_id: None,
+                                        _circuit_permit: None,
                                     },
                                 );
                             }

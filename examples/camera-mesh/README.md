@@ -5,13 +5,14 @@ protocol families. It is the interoperability example to use after the smaller
 [`portable-echo`](../portable-echo/README.md) and
 [`standard-protocols`](../standard-protocols/README.md) playgrounds.
 
-Phase 2 supports three runtimes:
+Camera Mesh now supports four runtimes; the Swift/iOS runtime is a viewer only:
 
 | Runtime | Publisher | Viewer | Source |
 | --- | --- | --- | --- |
 | Web | Yes | Yes | synthetic image or webcam |
 | Native Rust | Yes | Yes | checked-in deterministic JPEG |
 | Python | Yes | Yes | the same deterministic JPEG |
+| Swift/iOS | No | Yes | foreground JPEG viewer |
 
 The Rust and Python programs have a JSON Lines control surface so people and
 test runners can drive the same application flow without a UI. The browser has
@@ -39,6 +40,7 @@ protocol connection opens.
 - [Web app](web/README.md): the visual publisher and viewer
 - [Native Rust peer](native/README.md): deterministic publisher or viewer
 - [Python peer](python/README.md): deterministic publisher or viewer
+- [Swift/iOS viewer](swift/README.md): physical-device foreground viewer
 
 Publishers default to DDS `discover_and_advertise`; viewers default to
 `discover_only`. Headless Rust and Python peers can override either default
@@ -125,4 +127,15 @@ six peers and their temporary state. The separate browser smoke proves
 browser-to-browser publishing in both directions, using DDS discovery once and
 a copied peer card once.
 
-Swift/iOS Camera Mesh support is Phase 3 and is not part of this gate yet.
+## Phase 3 Swift/iOS gate
+
+The [Swift/iOS viewer](swift/README.md) is implemented and its offline contract
+tests and unsigned generic iOS arm64 build pass. It uses an ephemeral identity,
+explicit Domain selection, DDS Stream discovery with peer-card fallback,
+publisher approval and retry, JPEG rendering, pause/resume, verified snapshots,
+and ordered foreground lifecycle cleanup.
+
+Phase 3 is not yet fully accepted by the automated Phase 2 matrix. Its remaining
+manual gate is a signed physical iPhone consuming both the Web publisher and
+the deterministic native Rust publisher. The Swift guide contains the exact
+build, install, approval, and QA sequence. iOS publishing remains out of scope.

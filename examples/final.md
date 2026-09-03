@@ -47,16 +47,27 @@ the viewer.
 The executable commands and environment are documented in the
 [Camera Mesh guide](camera-mesh/README.md).
 
-## Next: Phase 3 — Swift/iOS viewer
+### Phase 3 — Swift/iOS viewer
 
-Build a small foreground iOS viewer on the same contract. It should select a
-discovered peer or pasted peer card, authenticate it, resolve camera metadata,
-display JPEG frames, send pause/resume, fetch a verified snapshot, and clean up
-subscriptions, endpoints, relay booking, discovery publication, and the peer in
-order.
+- The foreground SwiftUI viewer logs in a User, explicitly selects a Domain,
+  and starts an ephemeral discover-only peer.
+- It selects DDS Stream publishers or a pasted peer card, authenticates the
+  exact Peer ID and Domain, and supports approval-and-retry.
+- It resolves and validates camera metadata, displays bounded JPEG frames and
+  sequence counts, sends pause/resume, and fetches a SHA-256-verified snapshot.
+- Backgrounding or selecting Stop performs generation-fenced, ordered Stream,
+  endpoint, and peer cleanup.
+- Offline contract/app tests and an unsigned generic iOS arm64 build pass.
+
+The implementation and phone commands are documented in the
+[Swift/iOS Camera Mesh guide](camera-mesh/swift/README.md).
+
+## Remaining Phase 3 acceptance
 
 The acceptance gate is a physical iOS device consuming at least one Web and one
-deterministic native publisher. iOS publishing is a later phase.
+deterministic native publisher. That signed device QA remains manual and must
+still be recorded; it is not implied by simulator tests or the unsigned arm64
+build. iOS publishing is a later phase.
 
 ## Deliberate boundaries
 

@@ -61,12 +61,12 @@ is deliberately a stress target, not a performance promise. Camera Mesh rejects
 JPEG frames larger than 1 MiB.
 
 The application retains only the newest captured frame before each transport
-write. On the viewer, one JPEG is decoded at a time and the previous completed
-frame stays visible until its replacement is ready; superseded pending frames
-are dropped instead of flashing an empty image. The Stream itself remains
-reliable and ordered, so sustained capture, network, or rendering pressure can
-still reduce throughput or increase frame age; the diagnostics separate those
-stages.
+write. On the viewer, one JPEG is decoded at a time into a persistent canvas;
+the previous completed frame stays visible until its replacement is ready.
+Superseded pending frames are dropped instead of flashing an empty image. The
+Stream itself remains reliable and ordered, so sustained capture, network, or
+rendering pressure can still reduce throughput or increase frame age; the
+diagnostics separate those stages.
 
 The Diagnostics drawer exposes:
 

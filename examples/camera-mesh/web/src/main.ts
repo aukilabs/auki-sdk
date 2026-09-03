@@ -32,7 +32,9 @@ interface CameraTileState {
   operation: number;
   connection?: RemoteConnection;
   latestJpeg?: Uint8Array;
+  readonly frameSurface: HTMLCanvasElement;
   frameUrl?: string;
+  hasRenderedFrame: boolean;
   frameRevision: number;
   renderedRevision: number;
   displayGeneration: number;
@@ -213,7 +215,7 @@ document.addEventListener("click", (event) => {
 });
 
 window.addEventListener("beforeunload", () => {
-  clearAllCameraUrls();
+  clearAllCameraSurfaces();
   clearSnapshotUrl();
   void mesh?.close();
   session?.free();
@@ -520,6 +522,8 @@ async function addCamera(candidate: CameraCandidate): Promise<void> {
       bytes: 0,
       frameSamples: [],
       displaySamples: [],
+      frameSurface: document.createElement("canvas"),
+      hasRenderedFrame: false,
       frameRevision: 0,
       renderedRevision: 0,
       displayGeneration: 0,
@@ -607,7 +611,7 @@ async function removeCamera(peerId: string): Promise<void> {
   state.operation += 1;
   cameras.delete(peerId);
   cameraOrder = cameraOrder.filter((candidate) => candidate !== peerId);
-  clearCameraUrl(state);
+  clearCameraSurface(state);
   if (selectedPeerId === peerId) selectedPeerId = cameraOrder[0];
   if (actionPeerId === peerId) actionPeerId = undefined;
   renderWall();
@@ -725,7 +729,7 @@ function renderWall(): void {
     : [...cameraOrder];
   const visible = new Set(visiblePeerIds);
   for (const [peerId, state] of cameras) {
-    if (!visible.has(peerId)) clearCameraUrl(state);
+    if (!visible.has(peerId)) clearCameraSurface(state);
   }
 
   cameraGrid.dataset.columnCount = String(renderedColumns);
@@ -773,17 +777,12 @@ function renderCameraTile(state: CameraTileState): HTMLElement {
   tile.tabIndex = 0;
   tile.setAttribute("aria-label", `${state.name}, ${statusLabel(state)}`);
 
-  const image = document.createElement("img");
-  image.className = "camera-feed";
-  image.dataset.role = "remote-frame";
-  image.alt = `Live feed from ${state.name}`;
-  image.decoding = "async";
-  if (state.frameUrl) {
-    image.src = state.frameUrl;
-  } else {
-    image.hidden = true;
-  }
-  if (state.status !== "live") image.classList.add("dimmed");
+  const surface = state.frameSurface;
+  surface.className = "camera-feed";
+  surface.dataset.role = "remote-frame";
+  surface.setAttribute("aria-label", `Live feed from ${state.name}`);
+  surface.hidden = !state.hasRenderedFrame;
+  surface.classList.toggle("dimmed", state.status !== "live");
 
   const shade = document.createElement("div");
   shade.className = "tile-shade";
@@ -805,7 +804,7 @@ function renderCameraTile(state: CameraTileState): HTMLElement {
 
   const center = document.createElement("div");
   center.className = "tile-center";
-  if (state.status !== "live" || !state.frameUrl) {
+  if (state.status !== "live" || !state.hasRenderedFrame) {
     const message = document.createElement("div");
     message.className = "tile-message";
     if (state.status === "connecting") {
@@ -861,7 +860,7 @@ function renderCameraTile(state: CameraTileState): HTMLElement {
     );
   }
   bottom.append(frameDetails, actions);
-  tile.append(image, shade, top, center, bottom);
+  tile.append(surface, shade, top, center, bottom);
   return tile;
 }
 
@@ -1004,11 +1003,10 @@ function updateCameraElement(state: CameraTileState): void {
   tile.dataset.status = state.status;
   tile.dataset.frameCount = String(state.received);
   setTileDiagnosticAttributes(tile, state);
-  const image = tile.querySelector<HTMLImageElement>("[data-role='remote-frame']");
-  if (image && state.frameUrl && image.src !== state.frameUrl) {
-    image.src = state.frameUrl;
-    image.hidden = false;
-    image.classList.toggle("dimmed", state.status !== "live");
+  const surface = tile.querySelector<HTMLCanvasElement>("[data-role='remote-frame']");
+  if (surface) {
+    surface.hidden = !state.hasRenderedFrame;
+    surface.classList.toggle("dimmed", state.status !== "live");
   }
   const time = tile.querySelector<HTMLElement>("[data-role='frame-time']");
   if (time && state.timestampNs) time.textContent = formatFrameTime(state.timestampNs);
@@ -1290,7 +1288,7 @@ function scheduleFrameDisplay(state: CameraTileState): void {
     || state.frozen
     || !state.latestJpeg
     || state.timestampNs === undefined
-    || (state.frameUrl !== undefined && state.renderedRevision >= state.frameRevision)
+    || (state.hasRenderedFrame && state.renderedRevision >= state.frameRevision)
     || !cameraElement(state.candidate.peerId)
   ) return;
   state.renderingFrame = true;
@@ -1307,10 +1305,12 @@ async function decodeAndDisplayLatest(state: CameraTileState): Promise<void> {
     return;
   }
 
-  const frameUrl = URL.createObjectURL(new Blob([jpeg.slice().buffer], { type: "image/jpeg" }));
-  let adopted = false;
+  const blob = new Blob([jpeg.slice().buffer], { type: "image/jpeg" });
+  let bitmap: ImageBitmap | undefined;
+  let frameUrl: string | undefined;
+  let adoptedUrl = false;
   try {
-    await preloadImage(frameUrl);
+    bitmap = await createImageBitmap(blob);
     const tile = cameraElement(state.candidate.peerId);
     if (
       cameras.get(state.candidate.peerId) !== state
@@ -1319,18 +1319,32 @@ async function decodeAndDisplayLatest(state: CameraTileState): Promise<void> {
       || !tile
     ) return;
 
-    const image = tile.querySelector<HTMLImageElement>("[data-role='remote-frame']");
-    if (!image) return;
+    const surface = state.frameSurface;
+    if (!tile.contains(surface)) return;
+    if (surface.width !== bitmap.width || surface.height !== bitmap.height) {
+      surface.width = bitmap.width;
+      surface.height = bitmap.height;
+    }
+    const context = surface.getContext("2d", { alpha: false });
+    if (!context) throw new Error("browser could not create the camera canvas");
+    context.drawImage(bitmap, 0, 0, surface.width, surface.height);
+
+    // Keep the compressed frame available for interoperability smoke hashing.
+    // The visible feed is the persistent canvas and never consumes this URL.
+    frameUrl = URL.createObjectURL(blob);
     const previous = state.frameUrl;
     state.frameUrl = frameUrl;
+    surface.dataset.frameUrl = frameUrl;
+    surface.dataset.renderedRevision = String(revision);
+    state.hasRenderedFrame = true;
     state.renderedRevision = revision;
     state.displayedFrameAgeMs = Date.now() - Number(timestampNs / 1_000_000n);
-    adopted = true;
+    adoptedUrl = true;
     tile.dataset.status = state.status;
     tile.dataset.frameCount = String(state.received);
-    image.src = frameUrl;
-    image.hidden = false;
-    image.classList.toggle("dimmed", state.status !== "live");
+    surface.hidden = false;
+    surface.classList.toggle("dimmed", state.status !== "live");
+    tile.querySelector<HTMLElement>(".tile-center")?.replaceChildren();
     recordFrameDisplay(state);
 
     const time = tile.querySelector<HTMLElement>("[data-role='frame-time']");
@@ -1349,20 +1363,11 @@ async function decodeAndDisplayLatest(state: CameraTileState): Promise<void> {
     state.renderedRevision = Math.max(state.renderedRevision, revision);
     record(`Frame decode failed for ${shortPeer(state.candidate.peerId)}: ${errorMessage(error)}`);
   } finally {
-    if (!adopted) URL.revokeObjectURL(frameUrl);
+    bitmap?.close();
+    if (frameUrl && !adoptedUrl) URL.revokeObjectURL(frameUrl);
     state.renderingFrame = false;
     if (state.renderedRevision < state.frameRevision) scheduleFrameDisplay(state);
   }
-}
-
-async function preloadImage(frameUrl: string): Promise<void> {
-  const image = new Image();
-  image.decoding = "async";
-  await new Promise<void>((resolve, reject) => {
-    image.onload = () => resolve();
-    image.onerror = () => reject(new Error("browser could not decode the JPEG frame"));
-    image.src = frameUrl;
-  });
 }
 
 function revokeAfterPaint(frameUrl: string): void {
@@ -1388,14 +1393,20 @@ function sampleRate(samples: readonly number[]): number | undefined {
   return (samples.length - 1) / Math.max(0.001, (last - first) / 1_000);
 }
 
-function clearCameraUrl(state: CameraTileState): void {
+function clearCameraSurface(state: CameraTileState): void {
   state.displayGeneration += 1;
   if (state.frameUrl) URL.revokeObjectURL(state.frameUrl);
   state.frameUrl = undefined;
+  state.hasRenderedFrame = false;
+  delete state.frameSurface.dataset.frameUrl;
+  delete state.frameSurface.dataset.renderedRevision;
+  state.frameSurface.hidden = true;
+  state.frameSurface.width = 1;
+  state.frameSurface.height = 1;
 }
 
-function clearAllCameraUrls(): void {
-  for (const state of cameras.values()) clearCameraUrl(state);
+function clearAllCameraSurfaces(): void {
+  for (const state of cameras.values()) clearCameraSurface(state);
 }
 
 function clearSnapshotUrl(): void {
@@ -1426,7 +1437,7 @@ async function stopPeer(): Promise<void> {
   } catch (error) {
     report(error);
   } finally {
-    clearAllCameraUrls();
+    clearAllCameraSurfaces();
     clearSnapshotUrl();
     localCard.textContent = stopped ? "Peer stopped" : "Peer shutdown failed — see events";
     peerStatusDot.className = stopped ? "status-dot" : "status-dot error";

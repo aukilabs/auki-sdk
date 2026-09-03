@@ -240,27 +240,44 @@ export class CameraCapture {
     }
 
     this.syntheticFrame += 1;
-    const hue = (this.syntheticFrame * 4) % 360;
     const gradient = context.createLinearGradient(0, 0, this.width, this.height);
-    gradient.addColorStop(0, `hsl(${hue} 75% 48%)`);
-    gradient.addColorStop(1, `hsl(${(hue + 90) % 360} 72% 18%)`);
+    gradient.addColorStop(0, "#123b32");
+    gradient.addColorStop(1, "#061015");
     context.fillStyle = gradient;
     context.fillRect(0, 0, this.width, this.height);
-    context.fillStyle = "rgba(255,255,255,.94)";
     const scale = this.width / 480;
+    context.strokeStyle = "rgba(89,227,173,.12)";
+    context.lineWidth = Math.max(1, scale);
+    for (let column = 1; column < 8; column += 1) {
+      const x = this.width * column / 8;
+      context.beginPath();
+      context.moveTo(x, 0);
+      context.lineTo(x, this.height);
+      context.stroke();
+    }
+    for (let row = 1; row < 5; row += 1) {
+      const y = this.height * row / 5;
+      context.beginPath();
+      context.moveTo(0, y);
+      context.lineTo(this.width, y);
+      context.stroke();
+    }
+    context.fillStyle = "rgba(255,255,255,.94)";
     context.font = `700 ${30 * scale}px ui-sans-serif, system-ui`;
     context.fillText("Auki Camera Mesh", 28 * scale, 58 * scale);
     context.font = `500 ${18 * scale}px ui-monospace, monospace`;
     context.fillText(new Date().toISOString(), 28 * scale, 96 * scale);
     context.fillText(`frame ${this.syntheticFrame}`, 28 * scale, 128 * scale);
+    const phase = performance.now() / 1_000;
+    const markerX = (240 + Math.sin(phase * 1.7) * 160) * scale;
+    const markerY = (190 + Math.cos(phase * 1.2) * 40) * scale;
+    context.fillStyle = "rgba(89,227,173,.22)";
     context.beginPath();
-    context.arc(
-      400 * scale,
-      190 * scale,
-      (28 + Math.sin(this.syntheticFrame / 3) * 10) * scale,
-      0,
-      Math.PI * 2,
-    );
+    context.arc(markerX, markerY, 30 * scale, 0, Math.PI * 2);
+    context.fill();
+    context.fillStyle = "#59e3ad";
+    context.beginPath();
+    context.arc(markerX, markerY, 12 * scale, 0, Math.PI * 2);
     context.fill();
   }
 

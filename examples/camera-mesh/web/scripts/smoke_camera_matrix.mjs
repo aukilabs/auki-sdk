@@ -654,7 +654,10 @@ async function createBrowserPeer(browserInstance, url, label, role, input) {
           async () =>
             await receivedFrames(page, target.peerId) >= frames
             && await tile.locator("[data-role='remote-frame']")
-              .evaluate((image) => image.naturalWidth > 0),
+              .evaluate((surface) => !surface.hidden
+                && surface.width > 1
+                && surface.height > 1
+                && Number(surface.dataset.renderedRevision) > 0),
           OPERATION_TIMEOUT_MS,
           `${label} to decode ${frames} camera frames`,
         );
@@ -844,8 +847,10 @@ function browserInspectorChecks(inspector, targetPeerId) {
 }
 
 async function browserImageSha256(page, selector) {
-  return page.locator(selector).evaluate(async (image) => {
-    const bytes = await (await fetch(image.src)).arrayBuffer();
+  return page.locator(selector).evaluate(async (surface) => {
+    const frameUrl = surface.dataset.frameUrl;
+    if (!frameUrl) throw new Error("camera canvas has no retained source frame");
+    const bytes = await (await fetch(frameUrl)).arrayBuffer();
     const digest = await crypto.subtle.digest("SHA-256", bytes);
     return [...new Uint8Array(digest)]
       .map((byte) => byte.toString(16).padStart(2, "0"))

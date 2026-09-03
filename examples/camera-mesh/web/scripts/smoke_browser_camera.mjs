@@ -364,11 +364,25 @@ async function assertStreamDiagnostics(page, peerId) {
 async function assertStableFrameSurface(page, peerId) {
   const blankSamples = await cameraTile(page, peerId)
     .locator("[data-role='remote-frame']")
-    .evaluate(async (image) => {
+    .evaluate(async (surface) => {
       let blanks = 0;
       for (let sample = 0; sample < 90; sample += 1) {
         await new Promise((resolve) => requestAnimationFrame(resolve));
-        if (image.hidden || image.naturalWidth === 0 || image.naturalHeight === 0) blanks += 1;
+        const context = surface.getContext("2d");
+        const center = context?.getImageData(
+          Math.floor(surface.width / 2),
+          Math.floor(surface.height / 2),
+          1,
+          1,
+        ).data;
+        if (
+          surface.hidden
+          || surface.width <= 1
+          || surface.height <= 1
+          || !center
+          || center[3] === 0
+          || center[0] + center[1] + center[2] === 0
+        ) blanks += 1;
       }
       return blanks;
     });
@@ -484,7 +498,10 @@ async function waitForFrames(page, peerId, count) {
     async () => {
       const tile = cameraTile(page, peerId);
       const loaded = await tile.locator("[data-role='remote-frame']").evaluate(
-        (image) => !image.hidden && image.naturalWidth > 0,
+        (surface) => !surface.hidden
+          && surface.width > 1
+          && surface.height > 1
+          && Number(surface.dataset.renderedRevision) > 0,
       );
       return loaded && await receivedFrames(page, peerId) >= count;
     },

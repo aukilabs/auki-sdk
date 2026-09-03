@@ -362,6 +362,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-component-protocol"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "auki-components",
+ "auki-p2p",
+ "auki-sdk",
+ "chrono",
+ "futures",
+ "futures-timer",
+ "jsonwebtoken 10.4.0",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "auki-components"
+version = "0.1.0"
+dependencies = [
+ "auki-hash",
+ "auki-jcs",
+ "crossbeam-channel",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "auki-datatypes"
 version = "0.0.0"
 dependencies = [
@@ -663,6 +693,7 @@ dependencies = [
 name = "auki-qr-detector"
 version = "0.0.0"
 dependencies = [
+ "auki-components",
  "auki-datatypes",
  "auki-logs",
  "auki-registry",

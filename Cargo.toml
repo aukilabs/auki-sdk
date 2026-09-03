@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/auki-component-protocol",
+    "crates/auki-components",
     "crates/auki-hash",
     "crates/auki-geometry",
     "crates/auki-maps",

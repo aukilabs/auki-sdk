@@ -62,12 +62,21 @@ The executable commands and environment are documented in the
 The implementation and phone commands are documented in the
 [Swift/iOS Camera Mesh guide](camera-mesh/swift/README.md).
 
-## Remaining Phase 3 acceptance
+## Phase 4 — Swift/iOS publisher
 
-The acceptance gate is a physical iOS device consuming at least one Web and one
-deterministic native publisher. That signed device QA remains manual and must
-still be recorded; it is not implied by simulator tests or the unsigned arm64
-build. iOS publishing is a later phase.
+- The same SwiftUI app can publish its foreground iPhone camera or view another
+  Camera Mesh publisher.
+- AVFoundation owns camera permission and produces a bounded 480×270 JPEG feed
+  at 5 fps; it contains no SDK or protocol policy.
+- Rust owns exact-viewer approval, Catalog and Registry metadata, Stream
+  delivery, Message controls, Blob snapshots, and ordered shutdown.
+- Publishing uses DDS `discover_and_advertise`; viewing remains
+  `discover_only`.
+
+The acceptance gate is a physical iPhone publisher consumed by both a Web and
+a deterministic native viewer. Each direction must prove pre-approval
+rejection, live frames, pause/resume, a SHA-256-verified snapshot, and clean
+foreground shutdown.
 
 ## Deliberate boundaries
 

@@ -7,7 +7,15 @@ import {
   type RemoteFrame,
   type RemoteSnapshot,
 } from "./camera-mesh.js";
-import type { CaptureMode } from "./capture.js";
+import type { CaptureDiagnostics, CaptureMode } from "./capture.js";
+import {
+  cameraProfileLabel,
+  cameraStreamProfile,
+  DEFAULT_CAMERA_PROFILE,
+  type CameraRateTier,
+  type CameraResolutionTier,
+  type CameraStreamProfile,
+} from "./profile.js";
 
 type CameraStatus = "connecting" | "awaiting" | "live" | "ended" | "error";
 
@@ -25,9 +33,14 @@ interface CameraTileState {
   connection?: RemoteConnection;
   latestJpeg?: Uint8Array;
   frameUrl?: string;
+  frameRevision: number;
+  renderedRevision: number;
+  displayGeneration: number;
+  renderingFrame: boolean;
   received: number;
   bytes: number;
   frameSamples: FrameDeliverySample[];
+  displaySamples: number[];
   displayedFrameAgeMs?: number;
   streamStartedAtMs?: number;
   timestampNs?: bigint;
@@ -39,7 +52,7 @@ interface CameraTileState {
 
 const MAX_CAMERAS = 16;
 const DIAGNOSTIC_WINDOW_MS = 5_000;
-const MAX_DIAGNOSTIC_SAMPLES = 120;
+const MAX_DIAGNOSTIC_SAMPLES = 512;
 const COLUMN_STORAGE_KEY = "auki-camera-mesh-columns";
 const mobileLayout = matchMedia("(max-width: 720px)");
 
@@ -61,6 +74,9 @@ const loginButton = button("login-button");
 const peerConfig = get<HTMLElement>("peer-config");
 const domain = get<HTMLSelectElement>("domain");
 const role = get<HTMLSelectElement>("role");
+const profileConfig = get<HTMLFieldSetElement>("profile-config");
+const cameraResolution = get<HTMLSelectElement>("camera-resolution");
+const cameraRate = get<HTMLSelectElement>("camera-rate");
 const displayName = input("display-name");
 const runtimeSection = get<HTMLElement>("runtime-section");
 const viewerPanel = get<HTMLElement>("viewer-panel");
@@ -76,6 +92,7 @@ const aggregateMetrics = get<HTMLElement>("metrics");
 const pendingList = get<HTMLElement>("pending-list");
 const publisherTitle = get<HTMLElement>("publisher-title");
 const publisherBadge = get<HTMLElement>("publisher-badge");
+const cameraSpec = get<HTMLElement>("camera-spec");
 const previewEmpty = get<HTMLElement>("preview-empty");
 const addDialog = dialog("add-camera-dialog");
 const diagnosticsDialog = dialog("diagnostics-dialog");
@@ -87,6 +104,10 @@ const addAllCamerasButton = button("add-all-cameras-button");
 const manualCard = get<HTMLTextAreaElement>("manual-card");
 const addCameraError = get<HTMLElement>("add-camera-error");
 const diagnosticFps = get<HTMLOutputElement>("diagnostic-fps");
+const diagnosticProfile = get<HTMLOutputElement>("diagnostic-profile");
+const diagnosticCaptureFps = get<HTMLOutputElement>("diagnostic-capture-fps");
+const diagnosticCaptureDetail = get<HTMLElement>("diagnostic-capture-detail");
+const diagnosticDisplayFps = get<HTMLOutputElement>("diagnostic-display-fps");
 const diagnosticBandwidth = get<HTMLOutputElement>("diagnostic-bandwidth");
 const diagnosticFrameSize = get<HTMLElement>("diagnostic-frame-size");
 const diagnosticFrameAge = get<HTMLOutputElement>("diagnostic-frame-age");
@@ -113,6 +134,7 @@ let generation = 0;
 let snapshotObjectUrl: string | undefined;
 let toastTimer: number | undefined;
 let addingAllCameras = false;
+let publisherDiagnostics: CaptureDiagnostics | undefined;
 const timelineRows: string[] = [];
 const eventRows: string[] = [];
 
@@ -125,6 +147,7 @@ loginForm.addEventListener("submit", (event) => {
   event.preventDefault();
   void login();
 });
+role.addEventListener("change", renderProfileConfig);
 button("start-peer-button").addEventListener("click", () => void startPeer());
 button("copy-card-button").addEventListener("click", () => void copyCard());
 button("open-diagnostics-button").addEventListener("click", () => openDiagnostics());
@@ -219,6 +242,7 @@ async function login(): Promise<void> {
     authenticated = undefined;
     loginForm.hidden = true;
     peerConfig.hidden = false;
+    renderProfileConfig();
     record("Authenticated. Choose a Domain and camera mode.");
   } catch (error) {
     loginButton.disabled = false;
@@ -238,6 +262,9 @@ async function startPeer(): Promise<void> {
   clearInlineError(authError);
   const currentGeneration = ++generation;
   try {
+    const profile = role.value === "publisher"
+      ? selectedCameraProfile()
+      : DEFAULT_CAMERA_PROFILE;
     const started = await CameraMesh.start(
       authenticated,
       domain.value,
@@ -245,6 +272,12 @@ async function startPeer(): Promise<void> {
       displayName.value.trim() || defaultName(),
       {
         event: record,
+        captureDiagnostics(diagnostics) {
+          if (generation !== currentGeneration) return;
+          publisherDiagnostics = diagnostics;
+          updateAggregateMetrics();
+          renderDiagnostics();
+        },
         pendingChanged(peerIds) {
           if (generation !== currentGeneration) return;
           pendingPeerIds = peerIds;
@@ -290,6 +323,7 @@ async function startPeer(): Promise<void> {
           }
         },
       },
+      profile,
     );
     if (generation !== currentGeneration) {
       await started.close();
@@ -307,12 +341,14 @@ async function startPeer(): Promise<void> {
     peerStatusDot.className = "status-dot live";
     domainName.textContent = selectedDomainName();
     peerIdLabel.textContent = started.peerId;
+    cameraSpec.textContent = cameraProfileLabel(started.profile);
     button("copy-card-button").disabled = false;
     record(`${capitalized(started.role)} peer ${shortPeer(started.peerId)} is ready`);
     if (started.role === "viewer") {
       renderWall();
     } else {
       wallStatus.textContent = "Camera offline";
+      updateAggregateMetrics();
     }
   } catch (error) {
     startButton.disabled = false;
@@ -326,6 +362,7 @@ async function publish(): Promise<void> {
   if (!running) return;
   const publishButton = button("publish-button");
   publishButton.disabled = true;
+  publisherDiagnostics = undefined;
   try {
     const source = get<HTMLSelectElement>("capture-source").value as CaptureMode;
     await running.startPublishing(source, get<HTMLCanvasElement>("preview"));
@@ -349,6 +386,7 @@ async function stopPublishing(): Promise<void> {
   button("stop-publish-button").disabled = true;
   try {
     await running.stopPublishing();
+    publisherDiagnostics = undefined;
     button("publish-button").disabled = false;
     previewEmpty.hidden = false;
     publisherBadge.textContent = "OFFLINE";
@@ -481,6 +519,11 @@ async function addCamera(candidate: CameraCandidate): Promise<void> {
       received: 0,
       bytes: 0,
       frameSamples: [],
+      displaySamples: [],
+      frameRevision: 0,
+      renderedRevision: 0,
+      displayGeneration: 0,
+      renderingFrame: false,
       frozen: false,
       sourcePaused: false,
       snapshotPending: false,
@@ -543,7 +586,6 @@ async function handleTileAction(action: string, peerId: string): Promise<void> {
     await removeCamera(peerId);
   } else if (action === "freeze") {
     state.frozen = !state.frozen;
-    if (!state.frozen) replaceFrameUrl(state);
     renderWall();
   } else if (action === "snapshot") {
     await requestSnapshot(peerId);
@@ -696,6 +738,10 @@ function renderWall(): void {
     children.push(renderEmptyTile());
   }
   cameraGrid.replaceChildren(...children);
+  for (const peerId of visiblePeerIds) {
+    const state = cameras.get(peerId);
+    if (state) scheduleFrameDisplay(state);
+  }
 
   for (const control of document.querySelectorAll<HTMLButtonElement>("[data-column-count]")) {
     control.setAttribute(
@@ -716,7 +762,6 @@ function renderWall(): void {
 }
 
 function renderCameraTile(state: CameraTileState): HTMLElement {
-  ensureFrameUrl(state);
   const peerId = state.candidate.peerId;
   const tile = document.createElement("article");
   tile.className = "camera-tile";
@@ -734,7 +779,7 @@ function renderCameraTile(state: CameraTileState): HTMLElement {
   image.alt = `Live feed from ${state.name}`;
   image.decoding = "async";
   if (state.frameUrl) {
-    displayFrame(image, state);
+    image.src = state.frameUrl;
   } else {
     image.hidden = true;
   }
@@ -893,17 +938,21 @@ function openCameraActions(peerId: string): void {
 function showRemoteFrame(frame: RemoteFrame): void {
   const state = cameras.get(frame.peerId);
   if (!state) return;
+  const becameLive = state.status !== "live";
   state.streamStartedAtMs ??= Date.now();
   state.latestJpeg = frame.jpeg.slice();
+  state.frameRevision += 1;
   state.received = frame.received;
   state.bytes = frame.bytes;
   state.timestampNs = frame.timestampNs;
   recordFrameDelivery(state, frame.jpeg.byteLength);
   state.status = "live";
   state.message = "";
-  if (!state.frozen && cameraElement(frame.peerId)) replaceFrameUrl(state);
-  updateCameraElement(state);
-  if (selectedPeerId === frame.peerId) updateAggregateMetrics();
+  scheduleFrameDisplay(state);
+  // Keep the receive loop mechanical. DOM/diagnostic work happens when the
+  // browser finishes decoding a frame, not for frames the newest-only renderer
+  // will intentionally skip.
+  if (becameLive) updateCameraElement(state);
 }
 
 function showRemoteConnection(connection: RemoteConnection): void {
@@ -917,7 +966,7 @@ function showRemoteConnection(connection: RemoteConnection): void {
   renderWall();
   renderDiagnostics();
   record(
-    `Info identified ${connection.metadata.info.name}; Catalog and 3 Registry entries verified`,
+    `Info identified ${connection.metadata.info.name}; ${cameraProfileLabel(connection.metadata.profile)} Catalog and 3 Registry entries verified`,
   );
 }
 
@@ -956,8 +1005,8 @@ function updateCameraElement(state: CameraTileState): void {
   tile.dataset.frameCount = String(state.received);
   setTileDiagnosticAttributes(tile, state);
   const image = tile.querySelector<HTMLImageElement>("[data-role='remote-frame']");
-  if (image && state.frameUrl) {
-    displayFrame(image, state);
+  if (image && state.frameUrl && image.src !== state.frameUrl) {
+    image.src = state.frameUrl;
     image.hidden = false;
     image.classList.toggle("dimmed", state.status !== "live");
   }
@@ -1050,6 +1099,7 @@ function renderDiagnostics(): void {
       domainId: running.domainId,
       role: running.role,
       publishing: running.isPublishing,
+      profile: running.profile,
     });
   } else {
     inspectorDetails.textContent = "Select a connected camera to inspect it.";
@@ -1097,19 +1147,28 @@ function updateWallStatus(): void {
 }
 
 function updateAggregateMetrics(): void {
+  const running = mesh;
+  if (running?.role === "publisher") {
+    const diagnostics = publisherDiagnostics;
+    aggregateMetrics.textContent = diagnostics
+      ? `${cameraProfileLabel(running.profile)} · capture ${formatRate(diagnostics.encodedFps)} · ${formatBandwidth(diagnostics.kibPerSecond)} · encode p95 ${formatDuration(diagnostics.encodeP95Ms)} · ${diagnostics.missedDeadlines} missed`
+      : `${cameraProfileLabel(running.profile)} · waiting for capture`;
+    return;
+  }
   const state = selectedPeerId ? cameras.get(selectedPeerId) : undefined;
   if (!state || state.received === 0) {
     aggregateMetrics.textContent = "Stream idle";
     return;
   }
   const diagnostics = streamDiagnostics(state);
-  aggregateMetrics.textContent = `${state.received} received · ${formatRate(diagnostics.fps)} · ${formatBandwidth(diagnostics.kibPerSecond)} · ${formatFrameSize(diagnostics.averageFrameKib)} · ${formatFrameAge(diagnostics.frameAgeMs)}`;
+  aggregateMetrics.textContent = `${state.received} received · receive ${formatRate(diagnostics.fps)} · display ${formatRate(diagnostics.displayFps)} · ${formatBandwidth(diagnostics.kibPerSecond)} · ${formatFrameSize(diagnostics.averageFrameKib)} · ${formatFrameAge(diagnostics.frameAgeMs)}`;
 }
 
 function resetStreamDiagnostics(state: CameraTileState): void {
   state.received = 0;
   state.bytes = 0;
   state.frameSamples = [];
+  state.displaySamples = [];
   state.displayedFrameAgeMs = undefined;
   state.streamStartedAtMs = undefined;
 }
@@ -1131,16 +1190,18 @@ function recordFrameDelivery(state: CameraTileState, bytes: number): void {
 
 function streamDiagnostics(state: CameraTileState): {
   fps?: number;
+  displayFps?: number;
   kibPerSecond?: number;
   averageFrameKib?: number;
   frameAgeMs?: number;
 } {
   const samples = state.frameSamples;
-  if (samples.length === 0) return { frameAgeMs: state.displayedFrameAgeMs };
+  const displayFps = sampleRate(state.displaySamples);
+  if (samples.length === 0) return { displayFps, frameAgeMs: state.displayedFrameAgeMs };
   const totalBytes = samples.reduce((total, sample) => total + sample.bytes, 0);
   const averageFrameKib = totalBytes / samples.length / 1_024;
   if (samples.length === 1) {
-    return { averageFrameKib, frameAgeMs: state.displayedFrameAgeMs };
+    return { displayFps, averageFrameKib, frameAgeMs: state.displayedFrameAgeMs };
   }
   const first = samples[0]!;
   const last = samples[samples.length - 1]!;
@@ -1148,6 +1209,7 @@ function streamDiagnostics(state: CameraTileState): {
   const deliveredBytes = totalBytes - first.bytes;
   return {
     fps: (samples.length - 1) / elapsedSeconds,
+    displayFps,
     kibPerSecond: deliveredBytes / elapsedSeconds / 1_024,
     averageFrameKib,
     frameAgeMs: state.displayedFrameAgeMs,
@@ -1162,7 +1224,8 @@ function setTileDiagnostics(element: HTMLElement, state: CameraTileState): void 
   }
   const diagnostics = streamDiagnostics(state);
   element.textContent = [
-    formatRate(diagnostics.fps),
+    `receive ${formatRate(diagnostics.fps)}`,
+    `display ${formatRate(diagnostics.displayFps)}`,
     formatBandwidth(diagnostics.kibPerSecond),
     formatFrameAge(diagnostics.frameAgeMs),
   ].join(" · ");
@@ -1172,6 +1235,7 @@ function setTileDiagnostics(element: HTMLElement, state: CameraTileState): void 
 function setTileDiagnosticAttributes(tile: HTMLElement, state: CameraTileState): void {
   const diagnostics = streamDiagnostics(state);
   setFiniteDataset(tile, "streamFps", diagnostics.fps);
+  setFiniteDataset(tile, "displayFps", diagnostics.displayFps);
   setFiniteDataset(tile, "kibPerSecond", diagnostics.kibPerSecond);
   setFiniteDataset(tile, "averageFrameKib", diagnostics.averageFrameKib);
   setFiniteDataset(tile, "frameAgeMs", diagnostics.frameAgeMs);
@@ -1179,7 +1243,7 @@ function setTileDiagnosticAttributes(tile: HTMLElement, state: CameraTileState):
 
 function setFiniteDataset(
   element: HTMLElement,
-  name: "streamFps" | "kibPerSecond" | "averageFrameKib" | "frameAgeMs",
+  name: "streamFps" | "displayFps" | "kibPerSecond" | "averageFrameKib" | "frameAgeMs",
   value: number | undefined,
 ): void {
   if (value === undefined || !Number.isFinite(value)) {
@@ -1190,54 +1254,142 @@ function setFiniteDataset(
 }
 
 function updateLiveDiagnostics(state: CameraTileState | undefined): void {
+  const running = mesh;
+  const profile = state?.connection?.metadata.profile
+    ?? (running?.role === "publisher" ? running.profile : undefined);
+  diagnosticProfile.textContent = profile ? cameraProfileLabel(profile) : "—";
+  diagnosticCaptureFps.textContent = publisherDiagnostics
+    ? formatRate(publisherDiagnostics.encodedFps)
+    : "—";
+  diagnosticCaptureDetail.textContent = publisherDiagnostics
+    ? `target ${publisherDiagnostics.targetFps}${publisherDiagnostics.inputFps ? ` · input ${publisherDiagnostics.inputFps}` : ""} · encode p50/p95 ${formatDuration(publisherDiagnostics.encodeP50Ms)} / ${formatDuration(publisherDiagnostics.encodeP95Ms)} · ${publisherDiagnostics.missedDeadlines} missed`
+    : "publisher only";
   if (!state || state.received === 0) {
     diagnosticFps.textContent = "—";
-    diagnosticBandwidth.textContent = "—";
-    diagnosticFrameSize.textContent = "Waiting for frames";
+    diagnosticDisplayFps.textContent = "—";
+    diagnosticBandwidth.textContent = publisherDiagnostics
+      ? formatBandwidth(publisherDiagnostics.kibPerSecond)
+      : "—";
+    diagnosticFrameSize.textContent = publisherDiagnostics
+      ? formatFrameSize(publisherDiagnostics.averageFrameKib)
+      : "Waiting for frames";
     diagnosticFrameAge.textContent = "—";
     return;
   }
   const diagnostics = streamDiagnostics(state);
   diagnosticFps.textContent = formatRate(diagnostics.fps);
+  diagnosticDisplayFps.textContent = formatRate(diagnostics.displayFps);
   diagnosticBandwidth.textContent = formatBandwidth(diagnostics.kibPerSecond);
   diagnosticFrameSize.textContent = formatFrameSize(diagnostics.averageFrameKib);
   diagnosticFrameAge.textContent = formatFrameAge(diagnostics.frameAgeMs);
 }
 
-function ensureFrameUrl(state: CameraTileState): void {
-  if (!state.frameUrl && state.latestJpeg) replaceFrameUrl(state);
+function scheduleFrameDisplay(state: CameraTileState): void {
+  if (
+    state.renderingFrame
+    || state.frozen
+    || !state.latestJpeg
+    || state.timestampNs === undefined
+    || (state.frameUrl !== undefined && state.renderedRevision >= state.frameRevision)
+    || !cameraElement(state.candidate.peerId)
+  ) return;
+  state.renderingFrame = true;
+  void decodeAndDisplayLatest(state);
 }
 
-function displayFrame(image: HTMLImageElement, state: CameraTileState): void {
-  const frameUrl = state.frameUrl;
+async function decodeAndDisplayLatest(state: CameraTileState): Promise<void> {
+  const revision = state.frameRevision;
+  const generation = state.displayGeneration;
+  const jpeg = state.latestJpeg;
   const timestampNs = state.timestampNs;
-  if (!frameUrl || timestampNs === undefined) return;
-  image.onload = () => {
-    if (state.frameUrl !== frameUrl || state.timestampNs !== timestampNs) return;
-    state.displayedFrameAgeMs = Date.now() - Number(timestampNs / 1_000_000n);
+  if (!jpeg || timestampNs === undefined) {
+    state.renderingFrame = false;
+    return;
+  }
+
+  const frameUrl = URL.createObjectURL(new Blob([jpeg.slice().buffer], { type: "image/jpeg" }));
+  let adopted = false;
+  try {
+    await preloadImage(frameUrl);
     const tile = cameraElement(state.candidate.peerId);
-    if (tile) {
-      const metrics = tile.querySelector<HTMLElement>("[data-role='stream-diagnostics']");
-      if (metrics) setTileDiagnostics(metrics, state);
-      setTileDiagnosticAttributes(tile, state);
-    }
+    if (
+      cameras.get(state.candidate.peerId) !== state
+      || state.displayGeneration !== generation
+      || state.frozen
+      || !tile
+    ) return;
+
+    const image = tile.querySelector<HTMLImageElement>("[data-role='remote-frame']");
+    if (!image) return;
+    const previous = state.frameUrl;
+    state.frameUrl = frameUrl;
+    state.renderedRevision = revision;
+    state.displayedFrameAgeMs = Date.now() - Number(timestampNs / 1_000_000n);
+    adopted = true;
+    tile.dataset.status = state.status;
+    tile.dataset.frameCount = String(state.received);
+    image.src = frameUrl;
+    image.hidden = false;
+    image.classList.toggle("dimmed", state.status !== "live");
+    recordFrameDisplay(state);
+
+    const time = tile.querySelector<HTMLElement>("[data-role='frame-time']");
+    if (time) time.textContent = formatFrameTime(timestampNs);
+    const metrics = tile.querySelector<HTMLElement>("[data-role='stream-diagnostics']");
+    if (metrics) setTileDiagnostics(metrics, state);
+    const status = tile.querySelector<HTMLElement>(".feed-status");
+    if (status) status.textContent = statusLabel(state);
+    setTileDiagnosticAttributes(tile, state);
     if (selectedPeerId === state.candidate.peerId) {
       updateAggregateMetrics();
       updateLiveDiagnostics(state);
     }
-  };
-  image.src = frameUrl;
+    if (previous) revokeAfterPaint(previous);
+  } catch (error) {
+    state.renderedRevision = Math.max(state.renderedRevision, revision);
+    record(`Frame decode failed for ${shortPeer(state.candidate.peerId)}: ${errorMessage(error)}`);
+  } finally {
+    if (!adopted) URL.revokeObjectURL(frameUrl);
+    state.renderingFrame = false;
+    if (state.renderedRevision < state.frameRevision) scheduleFrameDisplay(state);
+  }
 }
 
-function replaceFrameUrl(state: CameraTileState): void {
-  const jpeg = state.latestJpeg;
-  if (!jpeg) return;
-  const previous = state.frameUrl;
-  state.frameUrl = URL.createObjectURL(new Blob([jpeg.slice().buffer], { type: "image/jpeg" }));
-  if (previous) URL.revokeObjectURL(previous);
+async function preloadImage(frameUrl: string): Promise<void> {
+  const image = new Image();
+  image.decoding = "async";
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error("browser could not decode the JPEG frame"));
+    image.src = frameUrl;
+  });
+}
+
+function revokeAfterPaint(frameUrl: string): void {
+  requestAnimationFrame(() => requestAnimationFrame(() => URL.revokeObjectURL(frameUrl)));
+}
+
+function recordFrameDisplay(state: CameraTileState): void {
+  const displayedAt = performance.now();
+  state.displaySamples.push(displayedAt);
+  const cutoff = displayedAt - DIAGNOSTIC_WINDOW_MS;
+  while (state.displaySamples.length > 2 && state.displaySamples[1]! < cutoff) {
+    state.displaySamples.shift();
+  }
+  if (state.displaySamples.length > MAX_DIAGNOSTIC_SAMPLES) {
+    state.displaySamples.splice(0, state.displaySamples.length - MAX_DIAGNOSTIC_SAMPLES);
+  }
+}
+
+function sampleRate(samples: readonly number[]): number | undefined {
+  if (samples.length < 2) return undefined;
+  const first = samples[0]!;
+  const last = samples[samples.length - 1]!;
+  return (samples.length - 1) / Math.max(0.001, (last - first) / 1_000);
 }
 
 function clearCameraUrl(state: CameraTileState): void {
+  state.displayGeneration += 1;
   if (state.frameUrl) URL.revokeObjectURL(state.frameUrl);
   state.frameUrl = undefined;
 }
@@ -1263,6 +1415,7 @@ async function stopPeer(): Promise<void> {
   const running = mesh;
   if (!running) return;
   mesh = undefined;
+  publisherDiagnostics = undefined;
   generation += 1;
   button("stop-peer-button").disabled = true;
   let stopped = false;
@@ -1468,6 +1621,10 @@ function formatFrameAge(value: number | undefined): string {
   return `${rounded >= 0 ? rounded : `−${Math.abs(rounded)}`} ms age`;
 }
 
+function formatDuration(value: number | undefined): string {
+  return value === undefined ? "—" : `${value.toFixed(1)} ms`;
+}
+
 function formatStreamAge(milliseconds: number): string {
   const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
   if (seconds < 60) return `${seconds}s`;
@@ -1492,6 +1649,26 @@ function requiredString(value: unknown, label: string): string {
 
 function defaultName(): string {
   return role.value === "publisher" ? "Browser camera" : "Camera wall";
+}
+
+function renderProfileConfig(): void {
+  profileConfig.hidden = role.value !== "publisher";
+}
+
+function selectedCameraProfile(): CameraStreamProfile {
+  const resolution = cameraResolution.value;
+  const rate = cameraRate.value;
+  if (!isResolutionTier(resolution)) throw new Error("Camera resolution preset is invalid");
+  if (!isRateTier(rate)) throw new Error("Camera frame-rate preset is invalid");
+  return cameraStreamProfile(resolution, rate);
+}
+
+function isResolutionTier(value: string): value is CameraResolutionTier {
+  return value === "low" || value === "medium" || value === "high";
+}
+
+function isRateTier(value: string): value is CameraRateTier {
+  return value === "low" || value === "medium" || value === "high";
 }
 
 function capitalized(value: string): string {

@@ -55,6 +55,26 @@
                 <option value="publisher">Share this camera</option>
               </select>
             </label>
+            <fieldset class="profile-config" id="profile-config" hidden>
+              <legend>Published stream</legend>
+              <div class="profile-fields">
+                <label>Resolution
+                  <select id="camera-resolution" name="camera-resolution">
+                    <option value="low">Low · 480 × 270</option>
+                    <option value="medium">Medium · 960 × 540</option>
+                    <option value="high">High · 1920 × 1080</option>
+                  </select>
+                </label>
+                <label>Frame rate
+                  <select id="camera-rate" name="camera-rate">
+                    <option value="low">Low · 5 fps</option>
+                    <option value="medium">Medium · 25 fps</option>
+                    <option value="high">High · 50 fps</option>
+                  </select>
+                </label>
+              </div>
+              <small>The profile is fixed until this peer stops.</small>
+            </fieldset>
             <details class="advanced-field">
               <summary>Advanced</summary>
               <label>Display name
@@ -121,7 +141,7 @@
                 <p class="eyebrow">Local camera</p>
                 <h2 id="publisher-title">Ready to publish</h2>
               </div>
-              <span class="camera-spec">480 × 270 · 5 fps</span>
+              <span class="camera-spec" id="camera-spec">480 × 270 · 5 fps</span>
             </div>
             <div class="publisher-preview">
               <canvas id="preview" width="480" height="270" aria-label="Local camera preview">
@@ -220,9 +240,24 @@
             <h3 id="live-stream-diagnostics-title">Live stream</h3>
             <div class="stream-diagnostic-grid">
               <article>
-                <span>Delivery</span>
+                <span>Profile</span>
+                <output id="diagnostic-profile">—</output>
+                <small>verified wire contract</small>
+              </article>
+              <article>
+                <span>Capture</span>
+                <output id="diagnostic-capture-fps">—</output>
+                <small id="diagnostic-capture-detail">publisher only</small>
+              </article>
+              <article>
+                <span>Receive</span>
                 <output id="diagnostic-fps">—</output>
                 <small>rolling 5 seconds</small>
+              </article>
+              <article>
+                <span>Display</span>
+                <output id="diagnostic-display-fps">—</output>
+                <small>decoded image paints</small>
               </article>
               <article>
                 <span>Bandwidth</span>

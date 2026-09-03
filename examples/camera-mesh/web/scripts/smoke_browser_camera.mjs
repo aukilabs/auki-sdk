@@ -5,6 +5,8 @@ const email = process.env.AUKI_EMAIL;
 const password = process.env.AUKI_PASSWORD;
 const requestedDomain = process.env.AUKI_DOMAIN_ID;
 const cameraCount = Number(process.env.AUKI_CAMERA_WALL_COUNT ?? "2");
+const testResolution = process.env.AUKI_CAMERA_TEST_RESOLUTION ?? "low";
+const testRate = process.env.AUKI_CAMERA_TEST_RATE ?? "low";
 const timeout = 60_000;
 const colocatedAdmissionBatch = 8;
 const relayAdmissionWindowMs = 11_000;
@@ -14,6 +16,12 @@ if (!email || !password) {
 }
 if (!Number.isInteger(cameraCount) || cameraCount < 2 || cameraCount > 16) {
   throw new Error("AUKI_CAMERA_WALL_COUNT must be an integer from 2 through 16");
+}
+if (!["low", "medium", "high"].includes(testResolution)) {
+  throw new Error("AUKI_CAMERA_TEST_RESOLUTION must be low, medium, or high");
+}
+if (!["low", "medium", "high"].includes(testRate)) {
+  throw new Error("AUKI_CAMERA_TEST_RATE must be low, medium, or high");
 }
 
 const browser = await chromium.launch({
@@ -79,6 +87,19 @@ try {
   await Promise.all(cards.map((card) => assertStreamDiagnostics(viewer, card.peerId)));
   await assertInspector(viewer, cardA.peerId, "Smoke Camera 1 publisher");
   await assertInspector(viewer, cardB.peerId, "Smoke Camera 2 publisher");
+  await assertProfile(viewer, cardA.peerId, testResolution, testRate);
+  const stressMetrics = await cameraTile(viewer, cardA.peerId).evaluate((tile) => ({
+    receiveFps: Number(tile.dataset.streamFps),
+    displayFps: Number(tile.dataset.displayFps),
+    kibPerSecond: Number(tile.dataset.kibPerSecond),
+    averageFrameKib: Number(tile.dataset.averageFrameKib),
+    frameAgeMs: Number(tile.dataset.frameAgeMs),
+  }));
+  process.stdout.write(
+    `Camera 1 publisher: ${await elementText(publishers[0], "#metrics")}\n`
+      + `Camera 1 viewer: ${JSON.stringify(stressMetrics)}\n`,
+  );
+  await assertStableFrameSurface(viewer, cardA.peerId);
 
   await cameraMenuAction(viewer, cardA.peerId, "source-pause");
   await waitForText(publishers[0], "#events", "Camera paused by an approved viewer", timeout);
@@ -157,7 +178,7 @@ try {
   if (consoleErrors.length) throw new Error(`browser console errors: ${consoleErrors.join("; ")}`);
 
   process.stdout.write(
-    `camera wall smoke passed: one browser viewer kept ${cameraCount} concurrent camera streams independent in Domain ${viewerDomain}\n`,
+    `camera wall smoke passed: one browser viewer kept ${cameraCount} concurrent camera streams independent; Camera 1 used ${testResolution}/${testRate} in Domain ${viewerDomain}\n`,
   );
 } catch (error) {
   await Promise.allSettled(peers.map(([name, page]) =>
@@ -199,6 +220,10 @@ async function loginAndStart(page, peerRole, label) {
   }
   await page.locator("#domain").selectOption(selectedDomain);
   await page.locator("#role").selectOption(peerRole);
+  if (peerRole === "publisher" && label === "Camera 1") {
+    await page.locator("#camera-resolution").selectOption(testResolution);
+    await page.locator("#camera-rate").selectOption(testRate);
+  }
   await page.locator(".advanced-field > summary").click();
   await page.locator("#display-name").fill(`Smoke ${label} ${peerRole}`);
   await startPeerWithRetry(page, peerRole);
@@ -289,15 +314,39 @@ async function assertInspector(page, peerId, expectedName) {
   }
 }
 
+async function assertProfile(page, peerId, resolution, rate) {
+  await cameraTile(page, peerId).click({ position: { x: 10, y: 10 } });
+  const expectedDimensions = {
+    low: [480, 270],
+    medium: [960, 540],
+    high: [1920, 1080],
+  }[resolution];
+  const expectedRate = { low: 5, medium: 25, high: 50 }[rate];
+  const details = JSON.parse(await elementText(page, "#inspector-details"));
+  const sensor = details.registry?.sensor?.canonical;
+  if (
+    sensor?.width !== expectedDimensions?.[0]
+    || sensor?.height !== expectedDimensions?.[1]
+    || sensor?.frame_rate_hz !== expectedRate
+    || details.stream?.manifest?.expectedRateHz !== expectedRate
+  ) {
+    throw new Error(
+      `verified camera profile is inconsistent: ${JSON.stringify({ sensor, stream: details.stream })}`,
+    );
+  }
+}
+
 async function assertStreamDiagnostics(page, peerId) {
   await waitFor(async () => {
     const values = await cameraTile(page, peerId).evaluate((tile) => ({
       fps: Number(tile.dataset.streamFps),
+      displayFps: Number(tile.dataset.displayFps),
       bandwidth: Number(tile.dataset.kibPerSecond),
       frameSize: Number(tile.dataset.averageFrameKib),
       frameAge: Number(tile.dataset.frameAgeMs),
     }));
     return values.fps > 0
+      && values.displayFps > 0
       && values.bandwidth > 0
       && values.frameSize > 0
       && Number.isFinite(values.frameAge)
@@ -309,6 +358,22 @@ async function assertStreamDiagnostics(page, peerId) {
     .textContent();
   if (!summary?.includes("fps") || !summary.includes("KiB/s") || !summary.includes("ms age")) {
     throw new Error(`camera ${peerId} does not render all three diagnostics: ${summary}`);
+  }
+}
+
+async function assertStableFrameSurface(page, peerId) {
+  const blankSamples = await cameraTile(page, peerId)
+    .locator("[data-role='remote-frame']")
+    .evaluate(async (image) => {
+      let blanks = 0;
+      for (let sample = 0; sample < 90; sample += 1) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        if (image.hidden || image.naturalWidth === 0 || image.naturalHeight === 0) blanks += 1;
+      }
+      return blanks;
+    });
+  if (blankSamples > 0) {
+    throw new Error(`camera ${peerId} exposed ${blankSamples} blank rendered frame sample(s)`);
   }
 }
 
@@ -348,7 +413,13 @@ async function assertResponsiveViewer(page, peerId, nextPeerId) {
   if (!drawer || drawer.x < -1 || drawer.x + drawer.width > 391 || drawer.height > 845) {
     throw new Error(`mobile diagnostics drawer exceeds the viewport: ${JSON.stringify(drawer)}`);
   }
-  for (const selector of ["#diagnostic-fps", "#diagnostic-bandwidth", "#diagnostic-frame-age"]) {
+  for (const selector of [
+    "#diagnostic-profile",
+    "#diagnostic-fps",
+    "#diagnostic-display-fps",
+    "#diagnostic-bandwidth",
+    "#diagnostic-frame-age",
+  ]) {
     const value = await elementText(page, selector);
     if (!value || value === "—") throw new Error(`${selector} did not expose a live value`);
   }

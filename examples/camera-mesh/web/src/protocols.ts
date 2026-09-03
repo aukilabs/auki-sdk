@@ -29,13 +29,14 @@ import {
   type AukiRegistryRef,
   type AukiSensorRegistryEntry,
 } from "../pkg-web/auki_sdk_web.js";
+import {
+  type CameraStreamProfile,
+  verifiedCameraProfile,
+} from "./profile.js";
 
 export const CAMERA_RESOURCE_ID = "camera/main";
 export const CAMERA_CONTROL_RESOURCE_ID = "camera/control";
 export const CAMERA_REPLY_RESOURCE_ID = "camera/replies";
-export const CAMERA_WIDTH = 480;
-export const CAMERA_HEIGHT = 270;
-export const CAMERA_RATE_HZ = 5;
 
 const APP = "auki-camera-mesh";
 const APP_VERSION = "0.1.0";
@@ -121,6 +122,7 @@ export interface CameraControlHandlers {
 export interface CameraProtocolOptions {
   readonly role: CameraProtocolRole;
   readonly displayName: string;
+  readonly profile: CameraStreamProfile;
   readonly access: AccessPolicy;
   readonly controls: CameraControlHandlers;
   readonly sessionId?: string;
@@ -137,6 +139,7 @@ export interface VerifiedRegistryEntry<T extends AukiRegistryEntry> {
 }
 
 export interface CameraRegistryMetadata {
+  readonly profile: CameraStreamProfile;
   readonly sensor: VerifiedRegistryEntry<AukiSensorRegistryEntry>;
   readonly clock: VerifiedRegistryEntry<AukiClockRegistryEntry>;
   readonly frame: VerifiedRegistryEntry<AukiFrameRegistryEntry>;
@@ -206,7 +209,7 @@ export class CameraProtocols {
     private readonly options: CameraProtocolOptions,
   ) {
     this.sessionId = options.sessionId ?? globalThis.crypto.randomUUID();
-    this.metadata = prepareCameraMetadata(peer.peerId, this.sessionId);
+    this.metadata = prepareCameraMetadata(peer.peerId, this.sessionId, options.profile);
     this.controlChannel = {
       variant: "message_channel",
       owner_peer_id: peer.peerId,
@@ -321,8 +324,8 @@ export class CameraProtocols {
       const sensor = verifyRegistryEntry("sensor", camera.sensor, sensorEntry);
       const clock = verifyRegistryEntry("clock", camera.clock, clockEntry);
       const frame = verifyRegistryEntry("frame", camera.frame, frameEntry);
-      validateCameraEntries(sensor.entry, clock.entry, frame.entry, camera);
-      return { info, catalog: camera.row, controlChannel, sensor, clock, frame };
+      const profile = validateCameraEntries(sensor.entry, clock.entry, frame.entry, camera);
+      return { info, catalog: camera.row, controlChannel, profile, sensor, clock, frame };
     });
   }
 
@@ -480,7 +483,10 @@ export class CameraProtocols {
       writer_peer_id: this.peer.peerId,
       resource_id: CAMERA_RESOURCE_ID,
       state: "live",
-      head: { kind: "rolling", retention_ns: 1_000_000_000n / BigInt(CAMERA_RATE_HZ) },
+      head: {
+        kind: "rolling",
+        retention_ns: 1_000_000_000n / BigInt(this.metadata.profile.rateHz),
+      },
       available: { bytes: 0n, entries: 0n, duration_ns: 0n },
       sensor: {
         kind: "camera",
@@ -757,7 +763,11 @@ export class CameraProtocols {
   }
 }
 
-function prepareCameraMetadata(peerId: string, sessionId: string): CameraRegistryMetadata {
+function prepareCameraMetadata(
+  peerId: string,
+  sessionId: string,
+  profile: CameraStreamProfile,
+): CameraRegistryMetadata {
   const frameEntry: AukiFrameRegistryEntry = {
     peer_id: peerId,
     frame_id: FRAME_ID,
@@ -790,9 +800,9 @@ function prepareCameraMetadata(peerId: string, sessionId: string): CameraRegistr
     sensor_id: CAMERA_RESOURCE_ID,
     kind: "camera",
     type: "rgb",
-    width: CAMERA_WIDTH,
-    height: CAMERA_HEIGHT,
-    frame_rate_hz: CAMERA_RATE_HZ,
+    width: profile.width,
+    height: profile.height,
+    frame_rate_hz: profile.rateHz,
     image_encoding: "jpeg",
     pixel_format: "rgb8",
     row_stride_bytes: 0,
@@ -806,7 +816,7 @@ function prepareCameraMetadata(peerId: string, sessionId: string): CameraRegistr
     envelopeRef(peerId, prepareRegistryEntry("sensor", sensorEntry)),
     sensorEntry,
   );
-  return { sensor, clock, frame };
+  return { profile, sensor, clock, frame };
 }
 
 function verifyRegistryEntry<T extends AukiRegistryEntry>(
@@ -885,14 +895,15 @@ function validateCameraEntries(
   clock: AukiClockRegistryEntry,
   frame: AukiFrameRegistryEntry,
   catalog: CameraCatalogDescription,
-): void {
+): CameraStreamProfile {
   assert(sensor.sensor_id === catalog.sensor.id, "camera Sensor ID mismatch");
   assert(sensor["kind"] === "camera", "camera Sensor Registry kind mismatch");
   assert(sensor["type"] === "rgb", "camera Sensor Registry type mismatch");
-  assert(sensor["width"] === CAMERA_WIDTH, `camera Sensor width must be ${CAMERA_WIDTH}`);
-  assert(sensor["height"] === CAMERA_HEIGHT, `camera Sensor height must be ${CAMERA_HEIGHT}`);
-  assert(sensor["frame_rate_hz"] === CAMERA_RATE_HZ,
-    `camera Sensor frame rate must be ${CAMERA_RATE_HZ}`);
+  const profile = verifiedCameraProfile(
+    positiveNumber(sensor["width"], "camera Sensor width"),
+    positiveNumber(sensor["height"], "camera Sensor height"),
+    positiveNumber(sensor["frame_rate_hz"], "camera Sensor frame rate"),
+  );
   assert(sensor["image_encoding"] === "jpeg", "camera Sensor must describe JPEG frames");
   assert(sensor["pixel_format"] === "rgb8", "camera Sensor pixel format must be rgb8");
   assert(sensor["row_stride_bytes"] === 0, "compressed camera Sensor must have zero row stride");
@@ -919,6 +930,7 @@ function validateCameraEntries(
     axes["x"] === "right" && axes["y"] === "down" && axes["z"] === "forward",
     "camera Frame is not ROS optical",
   );
+  return profile;
 }
 
 function validateControlChannel(channel: AukiMessageChannelResource, peerId: string): void {

@@ -12,9 +12,12 @@ import {
   type AukiStreamManifest,
   type AukiStreamRequest,
 } from "../pkg-web/auki_sdk_web.js";
-import { CameraCapture, type CaptureMode } from "./capture.js";
 import {
-  CAMERA_RATE_HZ,
+  CameraCapture,
+  type CaptureDiagnostics,
+  type CaptureMode,
+} from "./capture.js";
+import {
   CAMERA_RESOURCE_ID,
   CameraProtocols,
   type CameraRegistryMetadata,
@@ -22,6 +25,11 @@ import {
   type SnapshotAvailable,
   type VerifiedBlob,
 } from "./protocols.js";
+import {
+  cameraProfileLabel,
+  DEFAULT_CAMERA_PROFILE,
+  type CameraStreamProfile,
+} from "./profile.js";
 
 export type CameraRole = "publisher" | "viewer";
 
@@ -69,6 +77,7 @@ export interface RemoteSnapshot {
 
 export interface CameraMeshHooks {
   event(message: string): void;
+  captureDiagnostics(diagnostics: CaptureDiagnostics): void;
   pendingChanged(peerIds: readonly string[]): void;
   remoteFrame(frame: RemoteFrame): void;
   remoteConnected(connection: RemoteConnection): void;
@@ -109,6 +118,7 @@ export class CameraMesh {
     private readonly peer: AukiPeer,
     readonly role: CameraRole,
     private readonly displayName: string,
+    readonly profile: CameraStreamProfile,
     private readonly hooks: CameraMeshHooks,
   ) {
     this.peerId = peer.peerId;
@@ -126,12 +136,13 @@ export class CameraMesh {
     role: CameraRole,
     displayName: string,
     hooks: CameraMeshHooks,
+    profile: CameraStreamProfile = DEFAULT_CAMERA_PROFILE,
   ): Promise<CameraMesh> {
     const mode = role === "publisher"
       ? AukiDiscoveryMode.DiscoverAndAdvertise
       : AukiDiscoveryMode.DiscoverOnly;
     const peer = await session.startPeerWithDiscovery(domainId, mode);
-    const mesh = new CameraMesh(peer, role, displayName, hooks);
+    const mesh = new CameraMesh(peer, role, displayName, profile, hooks);
     try {
       await mesh.mountProtocols();
       return mesh;
@@ -177,8 +188,10 @@ export class CameraMesh {
 
     const capture = new CameraCapture(
       preview,
+      this.profile,
       (jpeg) => encodeCameraFrameImage(jpeg),
       (message) => this.hooks.event(message),
+      (diagnostics) => this.hooks.captureDiagnostics(diagnostics),
     );
     await capture.start(mode);
     try {
@@ -190,7 +203,9 @@ export class CameraMesh {
       this.capture = capture;
       this.streamEndpoint = endpoint;
       this.protocolStack().setCameraAvailable(true);
-      this.hooks.event(`Publishing ${CAMERA_RESOURCE_ID} at ${CAMERA_RATE_HZ} fps`);
+      this.hooks.event(
+        `Publishing ${CAMERA_RESOURCE_ID} at ${cameraProfileLabel(this.profile)}`,
+      );
     } catch (error) {
       capture.stop();
       throw error;
@@ -437,6 +452,7 @@ export class CameraMesh {
     this.protocols = await CameraProtocols.mount(this.peer, {
       role: this.role,
       displayName: this.displayName,
+      profile: this.profile,
       access: {
         isAllowed: (requester) => this.allowed.has(requester.peerId),
         requestApproval: (requester) => this.requestApproval(requester.peerId),
@@ -572,6 +588,7 @@ export class CameraMesh {
           break;
         }
         const jpeg = decodeCameraFrameImage(next.entry.payload);
+        validateJpegDimensions(jpeg, remote.connection.metadata.profile);
         received += 1;
         bytes += jpeg.byteLength;
         this.hooks.remoteFrame({
@@ -638,7 +655,7 @@ function streamManifest(metadata: CameraRegistryMetadata): AukiStreamManifest {
     toFrameId: "",
     toFrameHash: "",
     writerMode: "live",
-    expectedRateHz: CAMERA_RATE_HZ,
+    expectedRateHz: metadata.profile.rateHz,
     mapPeerId: "",
     mapId: "",
     mapHash: "",
@@ -665,7 +682,7 @@ function validateStreamManifest(
     [manifest.toFrameId, "", "target Frame ID"],
     [manifest.toFrameHash, "", "target Frame hash"],
     [manifest.writerMode, "live", "writer mode"],
-    [manifest.expectedRateHz, CAMERA_RATE_HZ, "expected frame rate"],
+    [manifest.expectedRateHz, metadata.profile.rateHz, "expected frame rate"],
     [manifest.mapPeerId, "", "Map owner"],
     [manifest.mapId, "", "Map ID"],
     [manifest.mapHash, "", "Map hash"],
@@ -673,6 +690,51 @@ function validateStreamManifest(
   for (const [actual, expected, label] of checks) {
     if (actual !== expected) throw new Error(`Stream ${label} does not match verified metadata`);
   }
+}
+
+function validateJpegDimensions(jpeg: Uint8Array, profile: CameraStreamProfile): void {
+  const dimensions = jpegDimensions(jpeg);
+  if (dimensions.width !== profile.width || dimensions.height !== profile.height) {
+    throw new Error(
+      `JPEG is ${dimensions.width}×${dimensions.height}; verified Sensor metadata requires ${profile.width}×${profile.height}`,
+    );
+  }
+}
+
+function jpegDimensions(jpeg: Uint8Array): { width: number; height: number } {
+  if (jpeg.length < 4 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) {
+    throw new Error("camera frame is not a JPEG image");
+  }
+  let offset = 2;
+  while (offset + 1 < jpeg.length) {
+    while (offset < jpeg.length && jpeg[offset] === 0xff) offset += 1;
+    if (offset >= jpeg.length) break;
+    const marker = jpeg[offset++]!;
+    if (marker === 0xd9 || marker === 0xda) break;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 1 >= jpeg.length) break;
+    const length = (jpeg[offset]! << 8) | jpeg[offset + 1]!;
+    if (length < 2 || offset + length > jpeg.length) {
+      throw new Error("camera frame has an invalid JPEG segment");
+    }
+    if (isStartOfFrame(marker)) {
+      if (length < 7) throw new Error("camera frame has an invalid JPEG size segment");
+      return {
+        height: (jpeg[offset + 3]! << 8) | jpeg[offset + 4]!,
+        width: (jpeg[offset + 5]! << 8) | jpeg[offset + 6]!,
+      };
+    }
+    offset += length;
+  }
+  throw new Error("camera frame JPEG dimensions are unavailable");
+}
+
+function isStartOfFrame(marker: number): boolean {
+  return marker >= 0xc0
+    && marker <= 0xcf
+    && marker !== 0xc4
+    && marker !== 0xc8
+    && marker !== 0xcc;
 }
 
 function browserRoutes(routes: readonly string[]): string[] {

@@ -22,7 +22,8 @@ npm run dev
 Open the printed loopback URL in at least two tabs, then:
 
 1. sign every tab into the same Domain;
-2. start one peer as **Share this camera** and another as **Monitor cameras**;
+2. start one peer as **Share this camera**, choose its resolution and rate, and
+   start another as **Monitor cameras**;
 3. start sharing a synthetic source or grant webcam permission;
 4. choose **Add camera** in the monitor, then add the discovered publisher;
 5. allow the pending Viewer Peer ID in the publisher tab; and
@@ -45,15 +46,32 @@ On mobile those choices render as two columns. Choose **1** for focus mode,
 where one camera fills the available wall and previous/next controls switch the
 focused peer.
 
-Browser identities and publisher approvals are intentionally ephemeral. The
-default feed is 480×270 at 5 fps. The application retains only the newest frame
-before each transport write. The Stream itself remains reliable and ordered,
-so sustained network congestion can still increase frame age; that is exactly
-what the live diagnostics are intended to reveal.
+Browser identities and publisher approvals are intentionally ephemeral. A Web
+publisher selects one immutable profile before starting its peer:
 
-Each live tile shows three rolling diagnostics:
+- resolution: 480×270, 960×540, or 1920×1080;
+- rate: 5, 25, or 50 fps.
 
-- received frames per second over the latest five-second window;
+The default remains 480×270 at 5 fps so Rust, Python, and Swift peers keep
+interoperating. The Web viewer accepts all nine Web profiles after verifying
+their Registry metadata and checks every JPEG against the advertised size.
+Restart the publisher peer to change profile; this keeps the Registry hash and
+Stream manifest stable for the whole session. The 1920×1080 at 50 fps profile
+is deliberately a stress target, not a performance promise. Camera Mesh rejects
+JPEG frames larger than 1 MiB.
+
+The application retains only the newest captured frame before each transport
+write. On the viewer, one JPEG is decoded at a time and the previous completed
+frame stays visible until its replacement is ready; superseded pending frames
+are dropped instead of flashing an empty image. The Stream itself remains
+reliable and ordered, so sustained capture, network, or rendering pressure can
+still reduce throughput or increase frame age; the diagnostics separate those
+stages.
+
+The Diagnostics drawer exposes:
+
+- publisher capture/encode FPS, encode p50/p95, and missed capture deadlines;
+- received and displayed frames per second over the latest five-second window;
 - received KiB/s, with average JPEG size in the tooltip and Diagnostics drawer;
 - frame age from the publisher's capture timestamp until the image renders.
 
@@ -78,6 +96,10 @@ viewer by default. It proves simultaneous independent feeds, DDS discovery,
 peer-card fallback, approval, source pause/resume, diagnostics, snapshot,
 layout changes, removal, reconnection, and responsive mobile layout. Set
 `AUKI_CAMERA_WALL_COUNT` from `2` through `16` to increase the publisher count.
+Set `AUKI_CAMERA_TEST_RESOLUTION=low|medium|high` and
+`AUKI_CAMERA_TEST_RATE=low|medium|high` to choose the first synthetic
+publisher's profile while the second publisher remains at the compatibility
+default.
 
 ## Rust, Python, and Web matrix
 

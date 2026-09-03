@@ -35,12 +35,19 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 REGISTRY_HASH = re.compile(r"^[0-9a-f]{32}$")
 DISCOVERY_MODES = ("discover_only", "discover_and_advertise")
 
-# A shared deterministic 480x270 baseline JPEG keeps every runtime byte-identical
-# without requiring Pillow, OpenCV, a camera, or platform codecs.
+# The locked still exercises validation tests. Headless publishers cycle the
+# shared animation below so a wall makes live progress obvious without Pillow,
+# OpenCV, a camera, or platform codecs.
 JPEG = base64.b64decode(
     (Path(__file__).resolve().parents[1] / "assets/deterministic-frame.jpg.base64").read_text()
 )
 JPEG_SHA256 = hashlib.sha256(JPEG).hexdigest()
+SYNTHETIC_JPEGS = tuple(
+    base64.b64decode(frame)
+    for frame in (
+        Path(__file__).resolve().parents[1] / "assets/synthetic-frames.jpg.base64"
+    ).read_text().split()
+)
 _OUTPUT_LOCK = threading.Lock()
 
 
@@ -203,6 +210,9 @@ class CameraMesh:
         self.running.set()
         self.closing = False
         self.close_task: asyncio.Task[None] | None = None
+        self.synthetic_started_ns = time.monotonic_ns()
+        self.frame_mode = os.environ.get("AUKI_CAMERA_FRAME_MODE", "animated")
+        require(self.frame_mode in ("animated", "still"), "AUKI_CAMERA_FRAME_MODE must be animated or still")
 
         frame_entry = {
             "peer_id": self.peer_id,
@@ -271,9 +281,22 @@ class CameraMesh:
             "map_id": "",
             "map_hash": "",
         }
-        self.frame_payload = bytes(auki_sdk.encode_camera_frame_image(JPEG))
-        require(bytes(auki_sdk.decode_camera_frame_image(self.frame_payload)) == JPEG, "CameraFrame codec did not round-trip")
-        require(is_jpeg(JPEG), "embedded image is not a JPEG")
+        require(len(SYNTHETIC_JPEGS) >= 2, "synthetic camera animation needs at least two frames")
+        require(all(is_jpeg(frame) for frame in SYNTHETIC_JPEGS), "synthetic camera frame is not a JPEG")
+        require(len(set(SYNTHETIC_JPEGS)) == len(SYNTHETIC_JPEGS), "synthetic camera frames must be distinct")
+        self.source_jpegs = (JPEG,) if self.frame_mode == "still" else SYNTHETIC_JPEGS
+        self.frame_payloads = tuple(
+            bytes(auki_sdk.encode_camera_frame_image(frame))
+            for frame in self.source_jpegs
+        )
+        require(
+            all(
+                bytes(auki_sdk.decode_camera_frame_image(payload)) == frame
+                for frame, payload in zip(self.source_jpegs, self.frame_payloads)
+            ),
+            "CameraFrame codec did not round-trip",
+        )
+        self.frame_payload = self.frame_payloads[0]
         self.catalog_snapshot = auki_sdk.prepare_catalog_resources(
             {
                 "resources": [
@@ -468,8 +491,14 @@ class CameraMesh:
             await self.running.wait()
             if self.closing:
                 return
-            yield {"timestamp_ns": time.time_ns(), "payload": self.frame_payload}
+            _jpeg, payload = self.current_synthetic_frame()
+            yield {"timestamp_ns": time.time_ns(), "payload": payload}
             await asyncio.sleep(1 / RATE_HZ)
+
+    def current_synthetic_frame(self) -> tuple[bytes, bytes]:
+        elapsed_ns = max(0, time.monotonic_ns() - self.synthetic_started_ns)
+        frame_index = (elapsed_ns * RATE_HZ // 1_000_000_000) % len(self.source_jpegs)
+        return self.source_jpegs[frame_index], self.frame_payloads[frame_index]
 
     def card(self) -> dict[str, Any]:
         routes = self.peer.routes
@@ -800,13 +829,15 @@ class CameraMesh:
         clock = channel.get("clock", {})
         require(clock.get("peer_id") == requester["peer_id"], "snapshot reply clock owner mismatch")
         require(isinstance(clock.get("hash"), str) and REGISTRY_HASH.fullmatch(clock["hash"]) is not None, "snapshot reply clock hash is invalid")
-        self.staged[JPEG_SHA256] = JPEG
-        self.staged.move_to_end(JPEG_SHA256)
+        jpeg, _payload = self.current_synthetic_frame()
+        sha256 = hashlib.sha256(jpeg).hexdigest()
+        self.staged[sha256] = jpeg
+        self.staged.move_to_end(sha256)
         while len(self.staged) > MAX_STAGED_BLOBS:
             self.staged.popitem(last=False)
-        emit({"event": "snapshot_staged", "peerId": requester["peer_id"], "requestId": request_id, "sha256": JPEG_SHA256, "size": len(JPEG)})
+        emit({"event": "snapshot_staged", "peerId": requester["peer_id"], "requestId": request_id, "sha256": sha256, "size": len(jpeg)})
         response = json.dumps(
-            {"version": 1, "requestId": request_id, "sha256": JPEG_SHA256, "size": len(JPEG)},
+            {"version": 1, "requestId": request_id, "sha256": sha256, "size": len(jpeg)},
             separators=(",", ":"),
         ).encode()
         await self.send_message(

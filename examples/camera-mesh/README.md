@@ -10,8 +10,8 @@ Camera Mesh supports publisher and viewer roles in all four runtimes:
 | Runtime | Publisher | Viewer | Source |
 | --- | --- | --- | --- |
 | Web | Yes | Yes | synthetic image or webcam |
-| Native Rust | Yes | Yes | checked-in deterministic JPEG |
-| Python | Yes | Yes | the same deterministic JPEG |
+| Native Rust | Yes | Yes | checked-in synthetic animation |
+| Python | Yes | Yes | the same synthetic animation |
 | Swift/iOS | Yes | Yes | foreground iPhone camera or JPEG viewer |
 
 The Rust and Python programs have a JSON Lines control surface so people and
@@ -41,8 +41,8 @@ protocol connection opens.
 ## Try it
 
 - [Web app](web/README.md): the visual publisher and viewer
-- [Native Rust peer](native/README.md): deterministic publisher or viewer
-- [Python peer](python/README.md): deterministic publisher or viewer
+- [Native Rust peer](native/README.md): headless publisher or viewer
+- [Python peer](python/README.md): headless publisher or viewer
 - [Swift/iOS app](swift/README.md): physical-device foreground publisher or viewer
 
 To fill the CCTV wall with any mix of unattended native and Python publishers,
@@ -65,9 +65,12 @@ all publishers through DDS. Open the Web app with the same login and Domain;
 discovery can add them directly to the wall. Ctrl-C shuts down the batch and
 deletes its identities. The total is limited to 16 publishers.
 
-These unattended publishers repeat the checked-in 480×270, 5 fps test frame.
-For demo convenience they auto-approve any authenticated viewer in the selected
-Domain. Normal publishers retain exact-Peer-ID approval by default.
+These unattended publishers cycle a checked-in 480×270 animation at 5 fps, so
+stalled feeds are visible immediately without cameras or image-codec packages.
+Each CCTV tile shows the authenticated participant name, live duration, frame
+age, rate, and bandwidth. For demo convenience the batch publishers
+auto-approve any authenticated viewer in the selected Domain. Normal
+publishers retain exact-Peer-ID approval by default.
 
 Publishers default to DDS `discover_and_advertise`; viewers default to
 `discover_only`. Headless Rust and Python peers can override either default

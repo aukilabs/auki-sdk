@@ -73,13 +73,32 @@ class CameraMeshTests(unittest.TestCase):
         mesh.stream = Protocol("/stream")
         return mesh
 
-    def test_shared_jpeg_and_camera_frame_are_deterministic(self):
+    def test_shared_still_and_animation_are_valid(self):
         self.assertEqual(
             app.JPEG_SHA256,
             "9cb77ff8f8f6d6af10809750bba03a76a53d6b55c36515c20a688d8437689aa0",
         )
         self.assertTrue(app.is_jpeg(app.JPEG))
-        self.assertEqual(self.mesh().frame_payload, b"camera-frame:" + app.JPEG)
+        self.assertEqual(len(app.SYNTHETIC_JPEGS), 16)
+        self.assertEqual(len(set(app.SYNTHETIC_JPEGS)), 16)
+        self.assertTrue(all(app.is_jpeg(frame) for frame in app.SYNTHETIC_JPEGS))
+        self.assertEqual(
+            self.mesh().frame_payload,
+            b"camera-frame:" + app.SYNTHETIC_JPEGS[0],
+        )
+
+    def test_synthetic_frame_advances_with_stream_age(self):
+        mesh = self.mesh()
+        mesh.synthetic_started_ns = 1_000_000_000
+        with mock.patch.object(app.time, "monotonic_ns", return_value=1_200_000_000):
+            first, first_payload = mesh.current_synthetic_frame()
+        with mock.patch.object(app.time, "monotonic_ns", return_value=1_400_000_000):
+            second, second_payload = mesh.current_synthetic_frame()
+        self.assertEqual(first, app.SYNTHETIC_JPEGS[1])
+        self.assertEqual(second, app.SYNTHETIC_JPEGS[2])
+        self.assertNotEqual(first, second)
+        self.assertEqual(first_payload, b"camera-frame:" + first)
+        self.assertEqual(second_payload, b"camera-frame:" + second)
 
     def test_each_mount_mints_a_fresh_uuid_session(self):
         first = self.mesh()
@@ -264,7 +283,7 @@ class CameraMeshAsyncTests(unittest.IsolatedAsyncioTestCase):
 
         report = await mesh.view(target, 1)
         self.assertTrue(report["ok"])
-        self.assertEqual(report["frameBytes"], len(app.JPEG))
+        self.assertEqual(report["frameBytes"], len(app.SYNTHETIC_JPEGS[0]))
         self.assertEqual(report["frames"], 1)
         self.assertTrue(subscription.cancelled)
 

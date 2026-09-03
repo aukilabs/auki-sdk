@@ -1,8 +1,9 @@
 # Native Rust Camera Mesh
 
-This headless peer can publish the checked-in deterministic 480×270 JPEG or
+This headless peer can publish a checked-in animated 480×270 test feed or
 consume another Camera Mesh publisher. It composes the application in Rust and
-uses one JSON object per line on stdin and stdout.
+uses one JSON object per line on stdin and stdout. The animation needs no camera
+or runtime image codec.
 
 From the SDK root, configure either User credentials:
 
@@ -60,3 +61,5 @@ result is one `exercise_live_result` object.
 `discover_only`. `AUKI_CAMERA_AUTO_APPROVE=1` makes an unattended demo
 publisher admit any authenticated viewer in its Domain; it is disabled by
 default. The [batch launcher](../README.md#try-it) configures this mode for you.
+Set `AUKI_CAMERA_FRAME_MODE=still` only when a byte-stable JPEG fixture is
+needed by an automated interoperability test.

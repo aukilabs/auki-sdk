@@ -16,7 +16,7 @@ pub use contract::{
     SnapshotReplyAddress, SnapshotReplyTarget, SnapshotRequestPayload, camera_catalog,
     control_channel, decode_snapshot_ready, decode_snapshot_request, deterministic_jpeg,
     encode_snapshot_ready, encode_snapshot_request, metadata, protocol_ids, protocol_ids_for_role,
-    reply_channel, sha256_hex, stream_manifest,
+    reply_channel, sha256_hex, stream_manifest, synthetic_jpegs,
 };
 pub use protocols::{
     CameraEvent, CameraProtocols, DiscoveryPeer, RemoteCamera, SnapshotReport, ViewReport,

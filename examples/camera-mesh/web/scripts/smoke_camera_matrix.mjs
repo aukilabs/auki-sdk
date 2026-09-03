@@ -898,6 +898,9 @@ function agentEnvironment(environment, identityFile, nodeName, role) {
     AUKI_NODE_NAME: nodeName,
     AUKI_CAMERA_ROLE: role,
     AUKI_CAMERA_AUTO_APPROVE: "0",
+    // Keep the matrix's byte-for-byte cross-consumer fixture assertions while
+    // the interactive batch launcher uses the visibly animated feed.
+    AUKI_CAMERA_FRAME_MODE: "still",
     AUKI_DISCOVERY_MODE: role === "publisher" ? "discover_and_advertise" : "discover_only",
   };
 }

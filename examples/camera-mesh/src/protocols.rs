@@ -1973,6 +1973,15 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_frames_pass_camera_guard_and_move() {
+        let frames = crate::contract::synthetic_jpegs().unwrap();
+        for frame in &frames {
+            validate_camera_jpeg(frame).unwrap();
+        }
+        assert!(frames.windows(2).all(|pair| pair[0] != pair[1]));
+    }
+
+    #[test]
     fn live_frame_tracker_counts_buffered_pause_frames_and_requires_progress() {
         fn entry(sequence: u64, capture_timestamp_ns: i64) -> StreamEntry<CameraFrame> {
             StreamEntry {

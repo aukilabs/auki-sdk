@@ -29,6 +29,7 @@ interface CameraTileState {
   bytes: number;
   frameSamples: FrameDeliverySample[];
   displayedFrameAgeMs?: number;
+  streamStartedAtMs?: number;
   timestampNs?: bigint;
   frozen: boolean;
   sourcePaused: boolean;
@@ -834,6 +835,7 @@ function openCameraActions(peerId: string): void {
 function showRemoteFrame(frame: RemoteFrame): void {
   const state = cameras.get(frame.peerId);
   if (!state) return;
+  state.streamStartedAtMs ??= Date.now();
   state.latestJpeg = frame.jpeg.slice();
   state.received = frame.received;
   state.bytes = frame.bytes;
@@ -905,6 +907,8 @@ function updateCameraElement(state: CameraTileState): void {
   if (time && state.timestampNs) time.textContent = formatFrameTime(state.timestampNs);
   const metrics = tile.querySelector<HTMLElement>("[data-role='stream-diagnostics']");
   if (metrics) setTileDiagnostics(metrics, state);
+  const status = tile.querySelector<HTMLElement>(".feed-status");
+  if (status) status.textContent = statusLabel(state);
 }
 
 function renderPending(): void {
@@ -1049,6 +1053,7 @@ function resetStreamDiagnostics(state: CameraTileState): void {
   state.bytes = 0;
   state.frameSamples = [];
   state.displayedFrameAgeMs = undefined;
+  state.streamStartedAtMs = undefined;
 }
 
 function recordFrameDelivery(state: CameraTileState, bytes: number): void {
@@ -1354,7 +1359,9 @@ function statusLabel(state: CameraTileState): string {
   if (state.status === "connecting") return "Connecting";
   if (state.status === "ended") return "Offline";
   if (state.status === "error") return "Error";
-  return "Live";
+  return state.streamStartedAtMs === undefined
+    ? "Live"
+    : `Live · ${formatStreamAge(Date.now() - state.streamStartedAtMs)}`;
 }
 
 function centerHeading(state: CameraTileState): string {
@@ -1401,6 +1408,16 @@ function formatFrameAge(value: number | undefined): string {
   if (value === undefined) return "Age —";
   const rounded = Math.round(value);
   return `${rounded >= 0 ? rounded : `−${Math.abs(rounded)}`} ms age`;
+}
+
+function formatStreamAge(milliseconds: number): string {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  if (minutes < 60) return `${minutes}m ${String(remainder).padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
 function formatExpiry(value: string): string {

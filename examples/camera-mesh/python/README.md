@@ -1,8 +1,9 @@
 # Python Camera Mesh
 
-This headless peer can publish the checked-in deterministic 480×270 JPEG or
+This headless peer can publish a checked-in animated 480×270 test feed or
 consume another Camera Mesh publisher. The application uses the Rust-backed
-`auki_sdk` extension and needs no camera, Pillow, or OpenCV.
+`auki_sdk` extension and needs no camera, Pillow, OpenCV, or platform image
+codec.
 
 ## Install the local binding
 
@@ -70,3 +71,5 @@ peer selects their native TCP relay route before dialing.
 `discover_only`. `AUKI_CAMERA_AUTO_APPROVE=1` makes an unattended demo
 publisher admit any authenticated viewer in its Domain; it is disabled by
 default. The [batch launcher](../README.md#try-it) configures this mode for you.
+Set `AUKI_CAMERA_FRAME_MODE=still` only when a byte-stable JPEG fixture is
+needed by an automated interoperability test.

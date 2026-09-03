@@ -40,6 +40,7 @@ pub const MAX_REPLY_ROUTES: usize = 4;
 pub const MAX_BLOB_BYTES: usize = 20 * 1024 * 1024;
 
 const DETERMINISTIC_JPEG_BASE64: &str = include_str!("../assets/deterministic-frame.jpg.base64");
+const SYNTHETIC_JPEGS_BASE64: &str = include_str!("../assets/synthetic-frames.jpg.base64");
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -535,6 +536,32 @@ pub fn deterministic_jpeg() -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Decode the small checked-in animation used by headless demo publishers.
+///
+/// Keeping the JPEGs as fixtures means Rust and Python can publish a visibly
+/// live feed without a camera, platform image APIs, or runtime codec packages.
+pub fn synthetic_jpegs() -> Result<Vec<Vec<u8>>> {
+    let frames = SYNTHETIC_JPEGS_BASE64
+        .split_whitespace()
+        .enumerate()
+        .map(|(index, encoded)| {
+            let bytes = STANDARD
+                .decode(encoded)
+                .with_context(|| format!("decode synthetic Camera Mesh JPEG {index}"))?;
+            ensure!(
+                bytes.starts_with(&[0xff, 0xd8]) && bytes.ends_with(&[0xff, 0xd9]),
+                "synthetic Camera Mesh frame {index} is not a JPEG"
+            );
+            Ok(bytes)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    ensure!(
+        frames.len() >= 2,
+        "synthetic Camera Mesh animation needs at least two frames"
+    );
+    Ok(frames)
+}
+
 pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
@@ -662,6 +689,13 @@ mod tests {
             sha256_hex(&fixture),
             "9cb77ff8f8f6d6af10809750bba03a76a53d6b55c36515c20a688d8437689aa0"
         );
+    }
+
+    #[test]
+    fn synthetic_animation_contains_distinct_jpegs() {
+        let frames = synthetic_jpegs().unwrap();
+        assert_eq!(frames.len(), 16);
+        assert!(frames.windows(2).all(|pair| pair[0] != pair[1]));
     }
 
     #[test]

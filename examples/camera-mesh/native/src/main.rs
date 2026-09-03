@@ -6,7 +6,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use auki_camera_mesh::{CameraEvent, CameraProtocols, CameraRole, PeerCard};
+use auki_camera_mesh::{
+    CAMERA_RATE_HZ, CameraEvent, CameraProtocols, CameraRole, PeerCard, deterministic_jpeg,
+    synthetic_jpegs,
+};
 use auki_sdk::{
     AukiDiscovery, AukiPeerBootstrap, Credentials, DdsTrackerMode, DomainSelection, PeerId,
 };
@@ -119,8 +122,18 @@ async fn command_loop(
     mut events: tokio::sync::mpsc::Receiver<CameraEvent>,
 ) -> Result<()> {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    let frames = camera_frames(protocols.role())?;
+    let mut frame_index = 0;
+    let mut frame_tick = tokio::time::interval(std::time::Duration::from_millis(
+        1_000 / u64::from(CAMERA_RATE_HZ),
+    ));
+    frame_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
+            _ = frame_tick.tick(), if !frames.is_empty() => {
+                protocols.replace_frame(frames[frame_index].clone())?;
+                frame_index = (frame_index + 1) % frames.len();
+            }
             event = events.recv() => {
                 if let Some(event) = event {
                     emit(&serde_json::to_value(event)?)?;
@@ -142,6 +155,22 @@ async fn command_loop(
                 }
             }
         }
+    }
+}
+
+fn camera_frames(role: CameraRole) -> Result<Vec<Vec<u8>>> {
+    if role != CameraRole::Publisher {
+        return Ok(Vec::new());
+    }
+    let mode = match env::var("AUKI_CAMERA_FRAME_MODE") {
+        Ok(value) => value,
+        Err(env::VarError::NotPresent) => "animated".into(),
+        Err(error) => return Err(error).context("read AUKI_CAMERA_FRAME_MODE"),
+    };
+    match mode.as_str() {
+        "still" => Ok(vec![deterministic_jpeg()?]),
+        "animated" => synthetic_jpegs(),
+        value => bail!("AUKI_CAMERA_FRAME_MODE must be animated or still, got {value:?}"),
     }
 }
 

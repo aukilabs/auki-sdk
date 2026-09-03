@@ -1,0 +1,64 @@
+name: AukiCameraMeshIOS
+
+options:
+  bundleIdPrefix: com.aukilabs.examples
+  deploymentTarget:
+    iOS: "17.0"
+
+packages:
+  AukiSDK:
+    path: ../../../bindings/swift/auki-sdk-swift
+  AukiCameraMesh:
+    path: Package
+
+targets:
+  AukiCameraMeshIOS:
+    type: application
+    platform: iOS
+    sources:
+      - App
+    dependencies:
+      - package: AukiSDK
+        product: AukiSDK
+      - package: AukiCameraMesh
+        product: AukiCameraMesh
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.aukilabs.examples.CameraMesh
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+
+  AukiCameraMeshIOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests
+      - Package/Tests/AukiCameraMeshTests
+    dependencies:
+      - target: AukiCameraMeshIOS
+      - package: AukiSDK
+        product: AukiSDK
+      - package: AukiCameraMesh
+        product: AukiCameraMesh
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.aukilabs.examples.CameraMeshTests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+
+schemes:
+  AukiCameraMeshIOS:
+    build:
+      targets:
+        AukiCameraMeshIOS: all
+        AukiCameraMeshIOSTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - AukiCameraMeshIOSTests

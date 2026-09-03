@@ -1,0 +1,20 @@
+[package]
+name = "auki-components"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Typed, network-independent component dataflow primitives for the Auki SDK"
+readme = "README.md"
+
+[dependencies]
+auki-hash = { path = "../auki-hash" }
+auki-jcs = { path = "../auki-jcs" }
+crossbeam-channel = "0.5"
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

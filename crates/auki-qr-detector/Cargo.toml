@@ -9,6 +9,7 @@ authors.workspace = true
 description = "QR Lab-backed Auki SDK Detector producing typed QR Detection Log payloads."
 
 [dependencies]
+auki-components = { path = "../auki-components" }
 auki-datatypes = { path = "../auki-datatypes" }
 auki-registry = { path = "../auki-registry" }
 auki-session = { path = "../auki-session" }

@@ -59,6 +59,24 @@ class AukiSdkExpoModule : Module() {
       throw AndroidUnsupportedException()
     }
 
+    AsyncFunction("registryListExact") { _: String, _: Map<String, String>, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("registryFetchExact") {
+        _: String,
+        _: Map<String, String>,
+        _: String,
+        _: String,
+        _: String,
+      ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("blobFetchExact") { _: String, _: Map<String, String>, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
     AsyncFunction("streamSubscribeExact") {
         _: String,
         _: Map<String, String>,

@@ -36,6 +36,23 @@ declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents
     target: AukiExactTarget,
     variants: string[],
   ): Promise<string>;
+  registryListExact(
+    peerHandle: string,
+    target: AukiExactTarget,
+    kind: string,
+  ): Promise<string>;
+  registryFetchExact(
+    peerHandle: string,
+    target: AukiExactTarget,
+    kind: string,
+    id: string,
+    hash: string,
+  ): Promise<string>;
+  blobFetchExact(
+    peerHandle: string,
+    target: AukiExactTarget,
+    sha256: string,
+  ): Promise<string>;
   streamSubscribeExact(
     peerHandle: string,
     target: AukiExactTarget,

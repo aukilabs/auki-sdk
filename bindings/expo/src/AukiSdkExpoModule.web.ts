@@ -202,6 +202,60 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     return JSON.stringify(resources);
   }
 
+  async registryListExact(
+    peerHandle: string,
+    target: AukiExactTarget,
+    kind: string,
+  ): Promise<string> {
+    const sdk = await this.sdk();
+    const entries = await new sdk.AukiRegistryClient(
+      this.peer(peerHandle),
+    ).listExact(target, kind as "device_model");
+    return JSON.stringify(entries);
+  }
+
+  async registryFetchExact(
+    peerHandle: string,
+    target: AukiExactTarget,
+    kind: string,
+    id: string,
+    hash: string,
+  ): Promise<string> {
+    const sdk = await this.sdk();
+    const entry = await new sdk.AukiRegistryClient(
+      this.peer(peerHandle),
+    ).fetchExact(target, kind as "device_model", id, hash);
+    return JSON.stringify(entry);
+  }
+
+  async blobFetchExact(
+    peerHandle: string,
+    target: AukiExactTarget,
+    sha256: string,
+  ): Promise<string> {
+    const sdk = await this.sdk();
+    const receipt = await new sdk.AukiBlobClient(
+      this.peer(peerHandle),
+    ).fetchExact(target, sha256);
+    const bytes = receipt.bytes as unknown;
+    let payload: Uint8Array;
+    if (bytes instanceof Uint8Array) {
+      payload = bytes;
+    } else if (bytes instanceof ArrayBuffer) {
+      payload = new Uint8Array(bytes);
+    } else if (Array.isArray(bytes)) {
+      payload = Uint8Array.from(bytes);
+    } else {
+      throw new Error("blobFetchExact: unexpected bytes type");
+    }
+    return JSON.stringify({
+      peerId: receipt.peerId,
+      sha256: receipt.sha256,
+      relayed: receipt.relayed,
+      bytesBase64: bytesToBase64(payload),
+    });
+  }
+
   async streamSubscribeExact(
     peerHandle: string,
     target: AukiExactTarget,

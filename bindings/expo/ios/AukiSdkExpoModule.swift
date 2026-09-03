@@ -139,6 +139,21 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
+    AsyncFunction("registryListExact") {
+      (_: String, _: [String: String], _: String) -> String in
+      throw unsupported("registryListExact is web-only in this slice")
+    }
+
+    AsyncFunction("registryFetchExact") {
+      (_: String, _: [String: String], _: String, _: String, _: String) -> String in
+      throw unsupported("registryFetchExact is web-only in this slice")
+    }
+
+    AsyncFunction("blobFetchExact") {
+      (_: String, _: [String: String], _: String) -> String in
+      throw unsupported("blobFetchExact is web-only in this slice")
+    }
+
     AsyncFunction("streamSubscribeExact") {
       (
         _: String,

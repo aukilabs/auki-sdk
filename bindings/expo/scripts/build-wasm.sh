@@ -25,6 +25,7 @@ mkdir -p "$OUT"
 
 # Temporary: --dev like standard-protocols/web. --release + wasm-opt hung under
 # Metro after DMS Ready (no dial / no WSS). Report upstream; switch back when fixed.
+# finite-protocols = info + catalog + registry + blob (dig path needs registry/blob).
 wasm-pack build "$WEB_CRATE" \
   --target web \
   --out-dir "$OUT" \

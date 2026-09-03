@@ -11,22 +11,24 @@ struct ContentView: View {
         domainSection
 
         if !model.localCard.isEmpty {
-          viewerSection
-          discoverySection
-          manualCardSection
-        }
-
-        if model.connection != nil || model.latestFrameImage != nil {
-          cameraSection
-        }
-
-        if model.snapshotImage != nil {
-          snapshotSection
+          peerSection
+          if model.selectedRole == .viewer {
+            discoverySection
+            manualCardSection
+            if model.connection != nil || model.latestFrameImage != nil {
+              viewerCameraSection
+            }
+            if model.snapshotImage != nil {
+              snapshotSection
+            }
+          } else {
+            publisherSection
+          }
         }
 
         if model.canStop {
           Section {
-            Button("Stop viewer", role: .destructive) {
+            Button("Stop \(model.selectedRole.title.lowercased())", role: .destructive) {
               Task { await model.stop() }
             }
           }
@@ -64,17 +66,27 @@ struct ContentView: View {
               .tag(domain.id)
           }
         }
-        Text("The viewer uses DDS discovery without advertising itself.")
+        Picker("Role", selection: $model.selectedRole) {
+          ForEach(CameraMeshRole.allCases) { role in
+            Text(role.title).tag(role)
+          }
+        }
+        .pickerStyle(.segmented)
+        .disabled(model.phase != .authenticated)
+
+        Text(roleExplanation)
           .font(.caption)
           .foregroundStyle(.secondary)
-        Button("Start viewer") { Task { await model.start() } }
-          .disabled(!model.canStart)
+        Button("Start \(model.selectedRole.title.lowercased())") {
+          Task { await model.start() }
+        }
+        .disabled(!model.canStart)
       }
     }
   }
 
-  private var viewerSection: some View {
-    Section("This viewer") {
+  private var peerSection: some View {
+    Section("This \(model.selectedRole.title.lowercased())") {
       LabeledContent("Peer") {
         Text(shortPeerID(model.localPeerID))
           .font(.caption.monospaced())
@@ -90,6 +102,15 @@ struct ContentView: View {
       } label: {
         Label("Copy peer card", systemImage: "doc.on.doc")
       }
+    }
+  }
+
+  private var roleExplanation: String {
+    switch model.selectedRole {
+    case .viewer:
+      "Discover-only: find a camera without publishing this viewer through DDS."
+    case .publisher:
+      "Discoverable: advertise this foreground iPhone camera through DDS and its relay routes."
     }
   }
 
@@ -162,7 +183,7 @@ struct ContentView: View {
     }
   }
 
-  private var cameraSection: some View {
+  private var viewerCameraSection: some View {
     Section("Live camera") {
       if let connection = model.connection {
         VStack(alignment: .leading, spacing: 3) {
@@ -207,6 +228,72 @@ struct ContentView: View {
         Task { await model.disconnect() }
       }
       .disabled(!model.canDisconnect)
+    }
+  }
+
+  private var publisherSection: some View {
+    Section("Foreground camera publisher") {
+      CameraImage(image: model.latestFrameImage, placeholder: "Waiting for the back camera…")
+
+      HStack {
+        Label("\(model.frameCount) captured", systemImage: "photo.stack")
+        Spacer()
+        Label(
+          model.paused ? "Stream paused" : "Streaming",
+          systemImage: model.paused ? "pause.circle" : "dot.radiowaves.left.and.right"
+        )
+        .foregroundStyle(model.paused ? .orange : .green)
+      }
+      .font(.caption.monospacedDigit())
+
+      Text(
+        "The app captures 480×270 JPEG at up to 5 fps while it remains in the foreground. A viewer sees nothing until you approve its exact Peer ID."
+      )
+      .font(.caption)
+      .foregroundStyle(.secondary)
+
+      if model.pendingViewerPeerIDs.isEmpty {
+        Text("No viewer is waiting for approval.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      } else {
+        ForEach(model.pendingViewerPeerIDs, id: \.self) { peerID in
+          VStack(alignment: .leading, spacing: 8) {
+            Text("Viewer requests access")
+              .font(.headline)
+            Text(peerID)
+              .font(.caption2.monospaced())
+              .textSelection(.enabled)
+            Button("Approve exact Peer ID") {
+              Task { await model.approveViewer(peerID) }
+            }
+            .buttonStyle(.borderedProminent)
+          }
+        }
+      }
+
+      if !model.approvedViewerPeerIDs.isEmpty {
+        DisclosureGroup("Approved viewers (\(model.approvedViewerPeerIDs.count))") {
+          ForEach(model.approvedViewerPeerIDs, id: \.self) { peerID in
+            VStack(alignment: .leading, spacing: 6) {
+              Text(peerID)
+                .font(.caption2.monospaced())
+                .textSelection(.enabled)
+              Button("Revoke", role: .destructive) {
+                Task { await model.revokeViewer(peerID) }
+              }
+            }
+          }
+        }
+      }
+
+      if !model.lastPublisherEvent.isEmpty {
+        LabeledContent("Last event") {
+          Text(model.lastPublisherEvent)
+            .font(.caption)
+            .multilineTextAlignment(.trailing)
+        }
+      }
     }
   }
 

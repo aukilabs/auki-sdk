@@ -3,12 +3,33 @@ import Combine
 import Foundation
 import UIKit
 
+enum CameraMeshRole: String, CaseIterable, Identifiable {
+  case viewer
+  case publisher
+
+  var id: Self { self }
+
+  var title: String {
+    switch self {
+    case .viewer: "Viewer"
+    case .publisher: "Publisher"
+    }
+  }
+
+  var discoveryMode: AukiDiscoveryMode {
+    switch self {
+    case .viewer: .discoverOnly
+    case .publisher: .discoverAndAdvertise
+    }
+  }
+}
+
 enum CameraMeshPhase: String {
   case signedOut = "Signed out"
   case authenticating = "Authenticating"
   case authenticated = "Choose a Domain"
-  case starting = "Starting viewer"
-  case ready = "Viewer ready"
+  case starting = "Starting peer"
+  case ready = "Peer ready"
   case discovering = "Discovering cameras"
   case connecting = "Connecting camera"
   case connected = "Camera connected"
@@ -28,6 +49,7 @@ final class CameraMeshModel: ObservableObject {
   @Published var email = ""
   @Published var password = ""
   @Published var selectedDomainID = ""
+  @Published var selectedRole: CameraMeshRole = .viewer
   @Published var selectedCameraPeerID = ""
   @Published var remoteCard = ""
 
@@ -45,6 +67,9 @@ final class CameraMeshModel: ObservableObject {
   @Published private(set) var paused = false
   @Published private(set) var snapshotPending = false
   @Published private(set) var awaitingApproval = false
+  @Published private(set) var pendingViewerPeerIDs: [String] = []
+  @Published private(set) var approvedViewerPeerIDs: [String] = []
+  @Published private(set) var lastPublisherEvent = ""
   @Published private(set) var log = ""
   @Published private(set) var phase: CameraMeshPhase = .signedOut
 
@@ -56,9 +81,14 @@ final class CameraMeshModel: ObservableObject {
   private var identity: AukiPeerIdentity?
   private var session: AukiSession?
   private var viewer: CameraViewer?
+  private var publisher: CameraPublisher?
+  private var capture: CameraCapture?
   private var provisionalPeer: AukiPeer?
   private var provisionalViewer: CameraViewer?
+  private var provisionalPublisher: CameraPublisher?
+  private var provisionalCapture: CameraCapture?
   private var eventTask: Task<Void, Never>?
+  private var frameTask: Task<Void, Never>?
   private var retryAttempt: ConnectionAttempt?
   private var activeConnectionID: CameraViewerConnectionID?
   private var automationStarted = false
@@ -78,21 +108,21 @@ final class CameraMeshModel: ObservableObject {
   }
 
   var canDiscover: Bool {
-    phase == .ready
+    phase == .ready && selectedRole == .viewer
   }
 
   var canConnectDiscovered: Bool {
-    phase == .ready
+    selectedRole == .viewer && phase == .ready
       && discoveredCameras.contains(where: { $0.peerID == selectedCameraPeerID })
   }
 
   var canConnectCard: Bool {
-    phase == .ready
+    selectedRole == .viewer && phase == .ready
       && !remoteCard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
 
   var canRetryConnection: Bool {
-    phase == .ready && retryAttempt != nil
+    selectedRole == .viewer && phase == .ready && retryAttempt != nil
   }
 
   var canPause: Bool {
@@ -161,6 +191,19 @@ final class CameraMeshModel: ObservableObject {
     generation += 1
     let operationGeneration = generation
     phase = .starting
+    let role = selectedRole
+
+    switch role {
+    case .viewer:
+      return await startViewer(session: session, generation: operationGeneration)
+    case .publisher:
+      return await startPublisher(session: session, generation: operationGeneration)
+    }
+  }
+
+  private func startViewer(session: AukiSession, generation operationGeneration: Int) async
+    -> Bool
+  {
     var startedPeer: AukiPeer?
     var mountedViewer: CameraViewer?
 
@@ -173,7 +216,7 @@ final class CameraMeshModel: ObservableObject {
       let peer = try await session.startPeerWithDiscovery(
         domainId: selectedDomainID,
         identity: peerIdentity,
-        mode: .discoverOnly
+        mode: CameraMeshRole.viewer.discoveryMode
       )
       startedPeer = peer
       guard generation == operationGeneration, phase == .starting else {
@@ -226,6 +269,133 @@ final class CameraMeshModel: ObservableObject {
       phase = .authenticated
       write(error)
       return false
+    }
+  }
+
+  private func startPublisher(
+    session: AukiSession,
+    generation operationGeneration: Int
+  ) async -> Bool {
+    var startedPeer: AukiPeer?
+    var mountedPublisher: CameraPublisher?
+    let camera = CameraCapture()
+    provisionalCapture = camera
+
+    do {
+      write("Requesting foreground camera access…")
+      try await camera.start()
+      let initialJPEG = try await firstFrame(from: camera)
+      guard generation == operationGeneration, phase == .starting else {
+        await camera.stop()
+        return false
+      }
+
+      latestFrameImage = UIImage(data: initialJPEG)
+      frameCount = 1
+
+      let peerIdentity = identity ?? AukiPeerIdentity.generate()
+      identity = peerIdentity
+      localPeerID = peerIdentity.peerId()
+      write("Starting ephemeral publisher Peer ID \(localPeerID)…")
+
+      let peer = try await session.startPeerWithDiscovery(
+        domainId: selectedDomainID,
+        identity: peerIdentity,
+        mode: CameraMeshRole.publisher.discoveryMode
+      )
+      startedPeer = peer
+      guard generation == operationGeneration, phase == .starting else {
+        try? await peer.shutdown()
+        await camera.stop()
+        return false
+      }
+      provisionalPeer = peer
+
+      let mounted = try await CameraPublisher.mount(
+        peer: peer,
+        displayName: ProcessInfo.processInfo.environment["AUKI_IOS_CAMERA_NAME"]
+          ?? "iPhone Camera",
+        initialJPEG: initialJPEG
+      )
+      mountedPublisher = mounted
+      provisionalPeer = nil
+      provisionalPublisher = mounted
+      guard generation == operationGeneration, phase == .starting else {
+        try? await mounted.close()
+        await camera.stop()
+        return false
+      }
+      let initialPaused = try await mounted.paused()
+      guard generation == operationGeneration, phase == .starting else {
+        try? await mounted.close()
+        await camera.stop()
+        return false
+      }
+
+      self.session = nil
+      provisionalPublisher = nil
+      provisionalCapture = nil
+      publisher = mounted
+      capture = camera
+      localPeerID = mounted.peerID
+      localCard = mounted.cardJSON
+      pendingViewerPeerIDs = []
+      approvedViewerPeerIDs = []
+      lastPublisherEvent = "Waiting for a viewer"
+      paused = initialPaused
+      phase = .ready
+      observeCapturedFrames(from: camera, publisher: mounted, generation: operationGeneration)
+      observePublisherEvents(from: mounted, generation: operationGeneration)
+      write("Publisher ready and discoverable. Approve each exact viewer Peer ID before access.")
+      print("AUKI_IOS_CAMERA_PUBLISHER_READY PEER_CARD=\(mounted.cardJSON)")
+      return true
+    } catch {
+      provisionalPeer = nil
+      provisionalPublisher = nil
+      provisionalCapture = nil
+      if let mountedPublisher {
+        try? await mountedPublisher.close()
+      } else if let startedPeer {
+        try? await startedPeer.shutdown()
+      }
+      await camera.stop()
+      guard generation == operationGeneration else { return false }
+      resetRemotePresentation(clearSnapshot: true)
+      resetPublisherPresentation()
+      phase = .authenticated
+      write(error)
+      return false
+    }
+  }
+
+  func approveViewer(_ peerID: String) async {
+    guard phase == .ready, let publisher else { return }
+    do {
+      try await publisher.approve(peerID: peerID)
+      pendingViewerPeerIDs = try await publisher.pendingApprovals()
+      if !approvedViewerPeerIDs.contains(peerID) {
+        approvedViewerPeerIDs.append(peerID)
+        approvedViewerPeerIDs.sort()
+      }
+      lastPublisherEvent = "Approved viewer \(peerID)"
+      write("Approved exact viewer Peer ID \(peerID). The viewer may retry now.")
+      print("AUKI_IOS_CAMERA_VIEWER_APPROVED peer=\(peerID)")
+    } catch {
+      write(error)
+    }
+  }
+
+  func revokeViewer(_ peerID: String) async {
+    guard phase == .ready, let publisher else { return }
+    do {
+      try await publisher.revoke(peerID: peerID)
+      pendingViewerPeerIDs = try await publisher.pendingApprovals()
+      approvedViewerPeerIDs.removeAll(where: { $0 == peerID })
+      lastPublisherEvent = "Revoked viewer \(peerID)"
+      write("Revoked viewer Peer ID \(peerID).")
+      print("AUKI_IOS_CAMERA_VIEWER_REVOKED peer=\(peerID)")
+    } catch {
+      write(error)
     }
   }
 
@@ -375,29 +545,44 @@ final class CameraMeshModel: ObservableObject {
     write("Camera disconnected.")
   }
 
-  func stop(reason: String = "Viewer stopped") async {
+  func stop(reason: String = "Camera Mesh stopped") async {
     guard canStop else { return }
     phase = .stopping
     generation += 1
 
-    let mounted = viewer ?? provisionalViewer
-    let peer = mounted == nil ? provisionalPeer : nil
+    let mountedViewer = viewer ?? provisionalViewer
+    let mountedPublisher = publisher ?? provisionalPublisher
+    let peer = mountedViewer == nil && mountedPublisher == nil ? provisionalPeer : nil
+    let activeCapture = capture ?? provisionalCapture
     let observing = eventTask
+    let forwardingFrames = frameTask
     viewer = nil
+    publisher = nil
+    capture = nil
     provisionalViewer = nil
+    provisionalPublisher = nil
+    provisionalCapture = nil
     provisionalPeer = nil
     eventTask = nil
-    observing?.cancel()
+    frameTask = nil
 
     do {
-      if let mounted {
-        try await mounted.close()
+      await activeCapture?.stop()
+      forwardingFrames?.cancel()
+      await forwardingFrames?.value
+
+      if let mountedViewer {
+        try await mountedViewer.close()
+      } else if let mountedPublisher {
+        try await mountedPublisher.close()
       } else if let peer {
         try await peer.shutdown()
       }
+      observing?.cancel()
       await observing?.value
       write(reason)
     } catch {
+      observing?.cancel()
       await observing?.value
       write(error)
     }
@@ -412,6 +597,7 @@ final class CameraMeshModel: ObservableObject {
     retryAttempt = nil
     awaitingApproval = false
     resetRemotePresentation(clearSnapshot: true)
+    resetPublisherPresentation()
     phase = .signedOut
     print("AUKI_IOS_CAMERA_STOPPED")
   }
@@ -428,6 +614,7 @@ final class CameraMeshModel: ObservableObject {
 
     email = automationEmail
     password = automationPassword
+    selectedRole = .viewer
     selectedDomainID = automationDomain
     remoteCard = environment["AUKI_IOS_REMOTE_CARD"] ?? ""
     snapshotAfterFirstFrame = environment["AUKI_IOS_SNAPSHOT_AFTER_FIRST_FRAME"] == "1"
@@ -492,6 +679,128 @@ final class CameraMeshModel: ObservableObject {
         print("AUKI_IOS_CAMERA_APPROVAL_REQUIRED VIEWER_PEER=\(localPeerID)")
       }
       return false
+    }
+  }
+
+  private func firstFrame(from source: CameraCapture) async throws -> Data {
+    try await withThrowingTaskGroup(of: Data.self) { group in
+      group.addTask {
+        var frames = source.frames.makeAsyncIterator()
+        guard let jpeg = await frames.next() else {
+          throw CameraPublisherError("Camera capture stopped before its first frame")
+        }
+        return jpeg
+      }
+      group.addTask {
+        try await Task.sleep(for: .seconds(10))
+        throw CameraPublisherError("Camera did not produce a JPEG within 10 seconds")
+      }
+
+      defer { group.cancelAll() }
+      guard let jpeg = try await group.next() else {
+        throw CameraPublisherError("Camera did not produce its first JPEG")
+      }
+      return jpeg
+    }
+  }
+
+  private func observeCapturedFrames(
+    from source: CameraCapture,
+    publisher target: CameraPublisher,
+    generation frameGeneration: Int
+  ) {
+    let frames = source.frames
+    frameTask = Task { [weak self] in
+      for await jpeg in frames {
+        guard !Task.isCancelled else { return }
+        do {
+          try await target.updateLatestJPEG(jpeg)
+        } catch {
+          guard
+            let self,
+            self.generation == frameGeneration,
+            self.publisher === target,
+            self.phase != .stopping
+          else { return }
+          self.lastPublisherEvent = "Camera frame forwarding failed"
+          self.write(error)
+          return
+        }
+
+        guard
+          let self,
+          self.generation == frameGeneration,
+          self.publisher === target,
+          self.phase == .ready
+        else { return }
+        self.latestFrameImage = UIImage(data: jpeg)
+        self.frameCount &+= 1
+      }
+    }
+  }
+
+  private func observePublisherEvents(
+    from source: CameraPublisher,
+    generation eventGeneration: Int
+  ) {
+    eventTask = Task { [weak self] in
+      while !Task.isCancelled {
+        do {
+          guard let event = try await source.nextEvent() else { return }
+          guard !Task.isCancelled else { return }
+          await self?.handlePublisher(event, from: source, generation: eventGeneration)
+        } catch {
+          guard
+            let self,
+            self.generation == eventGeneration,
+            self.publisher === source,
+            self.phase != .stopping
+          else { return }
+          self.lastPublisherEvent = "Publisher event loop failed"
+          self.write(error)
+          return
+        }
+      }
+    }
+  }
+
+  private func handlePublisher(
+    _ event: CameraPublisherEvent,
+    from source: CameraPublisher,
+    generation eventGeneration: Int
+  ) async {
+    guard generation == eventGeneration, publisher === source else { return }
+
+    switch event {
+    case .approvalRequired(let peerID):
+      if !approvedViewerPeerIDs.contains(peerID), !pendingViewerPeerIDs.contains(peerID) {
+        pendingViewerPeerIDs.append(peerID)
+        pendingViewerPeerIDs.sort()
+      }
+      lastPublisherEvent = "Viewer approval required"
+      write("Viewer requests access. Verify and approve exact Peer ID \(peerID).")
+      print("AUKI_IOS_CAMERA_APPROVAL_PENDING peer=\(peerID)")
+
+    case .controlReceived(let peerID, let control):
+      if let currentPaused = try? await source.paused() {
+        paused = currentPaused
+      }
+      lastPublisherEvent = "\(control) from \(peerID)"
+      write("Accepted \(control) from approved viewer \(peerID).")
+      print("AUKI_IOS_CAMERA_CONTROL peer=\(peerID) control=\(control)")
+
+    case .snapshotStaged(let peerID, let requestID, let sha256, let size):
+      lastPublisherEvent = "Snapshot \(requestID) staged"
+      write("Staged \(size)-byte snapshot for \(peerID); SHA-256 \(sha256).")
+      print(
+        "AUKI_IOS_CAMERA_SNAPSHOT_STAGED peer=\(peerID) request=\(requestID) "
+          + "sha256=\(sha256) bytes=\(size)"
+      )
+
+    case .failed(let message):
+      lastPublisherEvent = "Publisher runtime error"
+      write(message)
+      print("AUKI_IOS_CAMERA_PUBLISHER_FAILURE \(message)")
     }
   }
 
@@ -607,6 +916,12 @@ final class CameraMeshModel: ObservableObject {
       snapshotHash = ""
       snapshotRelayed = false
     }
+  }
+
+  private func resetPublisherPresentation() {
+    pendingViewerPeerIDs = []
+    approvedViewerPeerIDs = []
+    lastPublisherEvent = ""
   }
 
   private func write(_ value: some StringProtocol) {

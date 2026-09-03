@@ -27,7 +27,7 @@ use auki_protocols::{
         v3::{RegistryRequest, RegistryResponse},
     },
     stream::{
-        StreamClient, StreamDispatch, StreamEndpoint, StreamItem,
+        StreamClient, StreamDispatch, StreamEndpoint, StreamEntry, StreamItem, SubscriptionEntries,
         v2::{DeclineReason, ReadFrom, StreamRequest},
     },
 };
@@ -58,6 +58,11 @@ const MESSAGE_QUEUE_CAPACITY: usize = 16;
 const CAMERA_EVENT_QUEUE_CAPACITY: usize = 64;
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(45);
 const FRAME_PERIOD: Duration = Duration::from_millis(1_000 / CAMERA_RATE_HZ as u64);
+const LIVE_EXERCISE_FRAME_TIMEOUT: Duration = Duration::from_secs(30);
+const LIVE_EXERCISE_CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+const LIVE_EXERCISE_PAUSE_QUIET: Duration = Duration::from_millis(800);
+const LIVE_EXERCISE_INITIAL_FRAMES: usize = 2;
+const LIVE_EXERCISE_MAX_IN_FLIGHT_FRAMES: usize = 1;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -111,6 +116,80 @@ pub struct SnapshotReport {
     pub target_peer_id: String,
     pub sha256: String,
     pub size: usize,
+}
+
+/// One bounded end-to-end report produced while a single Stream subscription
+/// remains open across pause, resume, and snapshot controls.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveExerciseReport {
+    pub target_peer_id: String,
+    pub checks: BTreeMap<String, bool>,
+    pub initial_frames: usize,
+    pub paused_in_flight_frames: usize,
+    pub pause_quiet_ms: u64,
+    pub pre_pause_sequence: u64,
+    pub resumed_sequence: u64,
+    pub total_frames: usize,
+    pub frame_sha256: String,
+    pub frame_bytes: usize,
+    pub snapshot: SnapshotReport,
+}
+
+#[derive(Clone, Copy)]
+enum LiveExercisePhase {
+    Initial,
+    PausedInFlight,
+    Resumed,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct LiveFrameObservation {
+    sequence: u64,
+    sha256: String,
+    bytes: usize,
+}
+
+#[derive(Default)]
+struct LiveFrameTracker {
+    last_sequence: Option<u64>,
+    total_frames: usize,
+    paused_in_flight_frames: usize,
+}
+
+impl LiveFrameTracker {
+    fn observe(
+        &mut self,
+        entry: StreamEntry<CameraFrame>,
+        phase: LiveExercisePhase,
+    ) -> Result<LiveFrameObservation> {
+        ensure!(
+            entry.payload.dynamic_intrinsics.is_none(),
+            "Camera frame unexpectedly overrides the locked no-calibration contract"
+        );
+        ensure_jpeg(&entry.payload.frame)?;
+        if let Some(previous) = self.last_sequence {
+            ensure!(
+                entry.seq > previous,
+                "Camera Stream sequence did not advance: {previous} -> {}",
+                entry.seq
+            );
+        }
+        if matches!(phase, LiveExercisePhase::PausedInFlight) {
+            ensure!(
+                self.paused_in_flight_frames < LIVE_EXERCISE_MAX_IN_FLIGHT_FRAMES,
+                "Camera emitted more than one in-flight frame after pause"
+            );
+            self.paused_in_flight_frames += 1;
+        }
+        self.last_sequence = Some(entry.seq);
+        self.total_frames += 1;
+        Ok(LiveFrameObservation {
+            sequence: entry.seq,
+            sha256: sha256_hex(&entry.payload.frame),
+            bytes: entry.payload.frame.len(),
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -665,13 +744,142 @@ impl CameraProtocols {
         }
         Ok(ViewReport {
             target_peer_id: remote.peer_id.to_string(),
-            checks: ["info", "catalog", "registry", "stream"]
+            checks: ["info", "catalog", "registry", "stream", "message", "blob"]
                 .into_iter()
                 .map(|check| (check.into(), true))
                 .collect(),
             frames: frame_count,
             frame_sha256: final_hash,
             frame_bytes: final_bytes,
+        })
+    }
+
+    /// Exercise one live subscription without dropping it between controls.
+    ///
+    /// This is intentionally a single bounded operation for physical-device
+    /// acceptance runners: it receives two frames, proves pause quiescence
+    /// while tolerating one already in-flight frame, proves resume with a
+    /// later sequence, and fetches a SHA-256-verified snapshot.
+    pub async fn exercise_live(
+        &self,
+        target: &PeerCard,
+        request_id: Option<String>,
+    ) -> Result<LiveExerciseReport> {
+        ensure!(
+            self.role == CameraRole::Viewer,
+            "only a viewer exercises camera streams"
+        );
+        let remote = tokio::time::timeout(LIVE_EXERCISE_FRAME_TIMEOUT, self.resolve_remote(target))
+            .await
+            .context("live exercise metadata resolution timed out")??;
+        let mut subscription = tokio::time::timeout(
+            LIVE_EXERCISE_FRAME_TIMEOUT,
+            self.clients.stream.subscribe_exact::<CameraFrame>(
+                remote.peer_id,
+                remote.route.clone(),
+                StreamRequest {
+                    source_peer_id: remote.peer_id.to_string(),
+                    resource_id: CAMERA_RESOURCE_ID.into(),
+                    from: ReadFrom::Latest,
+                },
+            ),
+        )
+        .await
+        .context("live exercise Stream subscription timed out")?
+        .context("subscribe to Camera Stream")?;
+        validate_remote_manifest(&remote, &subscription.manifest)?;
+
+        let mut tracker = LiveFrameTracker::default();
+        for index in 0..LIVE_EXERCISE_INITIAL_FRAMES {
+            let entry = next_live_exercise_entry(
+                &mut subscription.entries,
+                &format!("initial Camera frame {}", index + 1),
+            )
+            .await?;
+            tracker.observe(entry, LiveExercisePhase::Initial)?;
+        }
+        let pre_pause_sequence = tracker
+            .last_sequence
+            .ok_or_else(|| anyhow!("live exercise received no initial Camera frames"))?;
+
+        let pause_result = match tokio::time::timeout(
+            LIVE_EXERCISE_CONTROL_TIMEOUT,
+            self.send_control_remote(&remote, "camera.pause", Vec::new()),
+        )
+        .await
+        {
+            Ok(result) => result.context("send live exercise camera.pause"),
+            Err(error) => Err(error).context("live exercise camera.pause timed out"),
+        };
+        if let Err(pause_error) = pause_result {
+            let resume_result = tokio::time::timeout(
+                LIVE_EXERCISE_CONTROL_TIMEOUT,
+                self.send_control_remote(&remote, "camera.resume", Vec::new()),
+            )
+            .await;
+            return match resume_result {
+                Ok(Ok(())) => Err(pause_error),
+                Ok(Err(resume_error)) => Err(anyhow!(
+                    "{pause_error:#}; additionally failed to restore camera.resume: {resume_error:#}"
+                )),
+                Err(resume_error) => Err(anyhow!(
+                    "{pause_error:#}; additionally timed out restoring camera.resume: {resume_error}"
+                )),
+            };
+        }
+
+        let paused_result = observe_live_exercise_pause(&mut subscription.entries, &mut tracker)
+            .await
+            .context("prove live exercise pause quiescence");
+        let resume_result = match tokio::time::timeout(
+            LIVE_EXERCISE_CONTROL_TIMEOUT,
+            self.send_control_remote(&remote, "camera.resume", Vec::new()),
+        )
+        .await
+        {
+            Ok(result) => result.context("send live exercise camera.resume"),
+            Err(error) => Err(error).context("live exercise camera.resume timed out"),
+        };
+        if let Err(resume_error) = resume_result {
+            return match paused_result {
+                Ok(()) => Err(resume_error),
+                Err(paused_error) => Err(anyhow!(
+                    "{paused_error:#}; additionally failed to resume camera: {resume_error:#}"
+                )),
+            };
+        }
+        paused_result?;
+
+        let entry =
+            next_live_exercise_entry(&mut subscription.entries, "Camera frame after resume")
+                .await?;
+        let resumed = tracker.observe(entry, LiveExercisePhase::Resumed)?;
+
+        let snapshot = self
+            .request_snapshot_remote(
+                &remote,
+                request_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+            )
+            .await
+            .context("request live exercise snapshot")?;
+
+        // Keep the Stream route alive through the completed Blob transfer.
+        drop(subscription);
+        Ok(LiveExerciseReport {
+            target_peer_id: remote.peer_id.to_string(),
+            checks: ["info", "catalog", "registry", "stream"]
+                .into_iter()
+                .map(|check| (check.into(), true))
+                .collect(),
+            initial_frames: LIVE_EXERCISE_INITIAL_FRAMES,
+            paused_in_flight_frames: tracker.paused_in_flight_frames,
+            pause_quiet_ms: LIVE_EXERCISE_PAUSE_QUIET.as_millis() as u64,
+            pre_pause_sequence,
+            resumed_sequence: resumed.sequence,
+            total_frames: tracker.total_frames,
+            frame_sha256: resumed.sha256,
+            frame_bytes: resumed.bytes,
+            snapshot,
         })
     }
 
@@ -694,6 +902,14 @@ impl CameraProtocols {
         );
         let remote = self.resolve_remote(target).await?;
         let request_id = request_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        self.request_snapshot_remote(&remote, request_id).await
+    }
+
+    async fn request_snapshot_remote(
+        &self,
+        remote: &RemoteCamera,
+        request_id: String,
+    ) -> Result<SnapshotReport> {
         let payload = encode_snapshot_request(
             &request_id,
             &self.card,
@@ -710,7 +926,7 @@ impl CameraProtocols {
         send_message(
             &self.clients.message,
             remote.peer_id,
-            remote.route,
+            remote.route.clone(),
             &remote.control_channel,
             "camera.request_snapshot",
             payload,
@@ -735,10 +951,19 @@ impl CameraProtocols {
             "only a viewer sends camera controls"
         );
         let remote = self.resolve_remote(target).await?;
+        self.send_control_remote(&remote, control, payload).await
+    }
+
+    async fn send_control_remote(
+        &self,
+        remote: &RemoteCamera,
+        control: &'static str,
+        payload: Vec<u8>,
+    ) -> Result<()> {
         send_message(
             &self.clients.message,
             remote.peer_id,
-            remote.route,
+            remote.route.clone(),
             &remote.control_channel,
             control,
             payload,
@@ -767,6 +992,33 @@ impl CameraProtocols {
         } else {
             bail!("Camera endpoint shutdown failed: {}", errors.join("; "))
         }
+    }
+}
+
+async fn next_live_exercise_entry(
+    entries: &mut SubscriptionEntries<CameraFrame>,
+    description: &str,
+) -> Result<StreamEntry<CameraFrame>> {
+    tokio::time::timeout(LIVE_EXERCISE_FRAME_TIMEOUT, entries.next())
+        .await
+        .with_context(|| format!("timed out waiting for {description}"))?
+        .ok_or_else(|| anyhow!("Camera Stream ended before {description}"))?
+        .with_context(|| format!("read {description}"))
+}
+
+async fn observe_live_exercise_pause(
+    entries: &mut SubscriptionEntries<CameraFrame>,
+    tracker: &mut LiveFrameTracker,
+) -> Result<()> {
+    loop {
+        let next = match tokio::time::timeout(LIVE_EXERCISE_PAUSE_QUIET, entries.next()).await {
+            Err(_) => return Ok(()),
+            Ok(next) => next,
+        };
+        let entry = next
+            .ok_or_else(|| anyhow!("Camera Stream ended while proving pause quiescence"))?
+            .context("read Camera frame while proving pause quiescence")?;
+        tracker.observe(entry, LiveExercisePhase::PausedInFlight)?;
     }
 }
 
@@ -1370,6 +1622,79 @@ mod tests {
     #[test]
     fn deterministic_frame_passes_camera_guard() {
         validate_camera_jpeg(&deterministic_jpeg().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn live_frame_tracker_allows_only_one_paused_frame_and_requires_progress() {
+        fn entry(sequence: u64) -> StreamEntry<CameraFrame> {
+            StreamEntry {
+                timestamp_ns: 7,
+                seq: sequence,
+                payload: CameraFrame {
+                    dynamic_intrinsics: None,
+                    frame: deterministic_jpeg().unwrap(),
+                },
+            }
+        }
+
+        let mut tracker = LiveFrameTracker::default();
+        tracker
+            .observe(entry(4), LiveExercisePhase::Initial)
+            .unwrap();
+        tracker
+            .observe(entry(5), LiveExercisePhase::PausedInFlight)
+            .unwrap();
+        let overflow = tracker
+            .observe(entry(6), LiveExercisePhase::PausedInFlight)
+            .unwrap_err();
+        assert!(
+            overflow
+                .to_string()
+                .contains("more than one in-flight frame")
+        );
+
+        let resumed = tracker
+            .observe(entry(6), LiveExercisePhase::Resumed)
+            .unwrap();
+        assert_eq!(resumed.sequence, 6);
+        assert_eq!(tracker.total_frames, 3);
+        assert_eq!(tracker.paused_in_flight_frames, 1);
+        assert!(
+            tracker
+                .observe(entry(6), LiveExercisePhase::Resumed)
+                .unwrap_err()
+                .to_string()
+                .contains("sequence did not advance")
+        );
+    }
+
+    #[test]
+    fn live_exercise_report_uses_stable_camel_case_fields() {
+        let report = LiveExerciseReport {
+            target_peer_id: peer().to_string(),
+            checks: [("stream".into(), true)].into_iter().collect(),
+            initial_frames: 2,
+            paused_in_flight_frames: 1,
+            pause_quiet_ms: 800,
+            pre_pause_sequence: 7,
+            resumed_sequence: 9,
+            total_frames: 4,
+            frame_sha256: "a".repeat(64),
+            frame_bytes: 128,
+            snapshot: SnapshotReport {
+                request_id: "snapshot-live".into(),
+                target_peer_id: peer().to_string(),
+                sha256: "b".repeat(64),
+                size: 256,
+            },
+        };
+        let encoded = serde_json::to_value(report).unwrap();
+
+        assert_eq!(encoded["initialFrames"], 2);
+        assert_eq!(encoded["pausedInFlightFrames"], 1);
+        assert_eq!(encoded["prePauseSequence"], 7);
+        assert_eq!(encoded["resumedSequence"], 9);
+        assert_eq!(encoded["snapshot"]["requestId"], "snapshot-live");
     }
 
     #[test]

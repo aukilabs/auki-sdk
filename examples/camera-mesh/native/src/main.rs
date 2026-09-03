@@ -33,6 +33,12 @@ enum Command {
         #[serde(default = "default_frame_count")]
         frames: usize,
     },
+    ExerciseLive {
+        id: String,
+        target: PeerCard,
+        #[serde(rename = "requestId", default)]
+        request_id: Option<String>,
+    },
     Pause {
         id: String,
         target: PeerCard,
@@ -182,6 +188,23 @@ async fn handle_command(
                     "checks":failed_view_checks(),
                     "frames":0,
                     "error":format!("{error:#}"),
+                }))?,
+            }
+        }
+        Command::ExerciseLive {
+            id,
+            target,
+            request_id,
+        } => {
+            let target_peer_id = target.peer_id.clone();
+            match protocols.exercise_live(&target, request_id).await {
+                Ok(report) => emit(&serde_json::json!({
+                    "event":"exercise_live_result","id":id,"ok":true,
+                    "report":report,
+                }))?,
+                Err(error) => emit(&serde_json::json!({
+                    "event":"exercise_live_result","id":id,"ok":false,
+                    "targetPeerId":target_peer_id,"error":format!("{error:#}"),
                 }))?,
             }
         }
@@ -348,6 +371,20 @@ mod tests {
         }))
         .unwrap();
         assert!(matches!(view, Command::View { frames: 3, .. }));
+
+        let exercise: Command = serde_json::from_value(serde_json::json!({
+            "command":"exercise_live", "id":"live", "target":target(),
+            "requestId":"acceptance-snapshot"
+        }))
+        .unwrap();
+        assert!(matches!(
+            exercise,
+            Command::ExerciseLive {
+                id,
+                request_id: Some(request_id),
+                ..
+            } if id == "live" && request_id == "acceptance-snapshot"
+        ));
 
         assert_eq!(
             failed_view_checks(),

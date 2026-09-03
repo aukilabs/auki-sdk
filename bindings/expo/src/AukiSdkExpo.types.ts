@@ -13,6 +13,8 @@ export type AukiDiscoveryCandidateInfo = {
   servedProtocols: string[];
   expiresAt: string;
   source: string;
+  subjectId?: string | null;
+  peerType?: string | null;
 };
 
 export type AukiExactTarget = {

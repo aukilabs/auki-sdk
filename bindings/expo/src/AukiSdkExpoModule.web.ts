@@ -19,12 +19,23 @@ function newId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`;
 }
 
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
 function mapCandidate(candidate: {
   peerId: string;
   routes: string[];
   servedProtocols: string[];
   expiresAt: string;
   source: string;
+  subjectId?: string | null;
+  peerType?: string | null;
 }): AukiDiscoveryCandidateInfo {
   return {
     peerId: candidate.peerId,
@@ -32,6 +43,8 @@ function mapCandidate(candidate: {
     servedProtocols: [...candidate.servedProtocols],
     expiresAt: candidate.expiresAt,
     source: candidate.source,
+    subjectId: candidate.subjectId ?? null,
+    peerType: candidate.peerType ?? null,
   };
 }
 
@@ -218,7 +231,31 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     if (next == null) {
       return null;
     }
-    return JSON.stringify(next);
+    if (next.kind !== "entry") {
+      return JSON.stringify({
+        kind: next.kind,
+        reason: next.reason,
+        entry: null,
+      });
+    }
+    const entry = next.entry;
+    const payload = entry.payload as Uint8Array | ArrayBuffer | number[] | undefined;
+    let payloadBase64: string | null = null;
+    if (payload instanceof Uint8Array) {
+      payloadBase64 = bytesToBase64(payload);
+    } else if (payload instanceof ArrayBuffer) {
+      payloadBase64 = bytesToBase64(new Uint8Array(payload));
+    } else if (Array.isArray(payload)) {
+      payloadBase64 = bytesToBase64(Uint8Array.from(payload));
+    }
+    return JSON.stringify({
+      kind: "entry",
+      entry: {
+        timestampNs: String(entry.timestampNs),
+        sequence: String(entry.sequence),
+        payloadBase64,
+      },
+    });
   }
 
   async streamCancel(subscriptionId: string): Promise<void> {

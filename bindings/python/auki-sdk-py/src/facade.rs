@@ -189,6 +189,8 @@ struct PyAukiDiscoveryCandidate {
     served_protocols: Vec<String>,
     expires_at: String,
     source: String,
+    subject_id: Option<String>,
+    peer_type: Option<String>,
 }
 
 impl From<AukiDiscoveryCandidate> for PyAukiDiscoveryCandidate {
@@ -201,6 +203,8 @@ impl From<AukiDiscoveryCandidate> for PyAukiDiscoveryCandidate {
             source: match candidate.source() {
                 AukiDiscoverySource::DdsTracker => "dds_tracker".into(),
             },
+            subject_id: candidate.subject_id().map(|id| id.to_string()),
+            peer_type: candidate.peer_type().map(str::to_owned),
         }
     }
 }
@@ -230,6 +234,16 @@ impl PyAukiDiscoveryCandidate {
     #[getter]
     fn source(&self) -> String {
         self.source.clone()
+    }
+
+    #[getter]
+    fn subject_id(&self) -> Option<String> {
+        self.subject_id.clone()
+    }
+
+    #[getter]
+    fn peer_type(&self) -> Option<String> {
+        self.peer_type.clone()
     }
 
     fn __repr__(&self) -> String {

@@ -4,23 +4,36 @@ const url = process.argv[2] ?? process.env.CAMERA_MESH_URL ?? "http://127.0.0.1:
 const email = process.env.AUKI_EMAIL;
 const password = process.env.AUKI_PASSWORD;
 const requestedDomain = process.env.AUKI_DOMAIN_ID;
+const cameraCount = Number(process.env.AUKI_CAMERA_WALL_COUNT ?? "2");
+const timeout = 60_000;
+const colocatedAdmissionBatch = 8;
+const relayAdmissionWindowMs = 11_000;
 
 if (!email || !password) {
   throw new Error("AUKI_EMAIL and AUKI_PASSWORD are required");
+}
+if (!Number.isInteger(cameraCount) || cameraCount < 2 || cameraCount > 9) {
+  throw new Error("AUKI_CAMERA_WALL_COUNT must be an integer from 2 through 9");
 }
 
 const browser = await chromium.launch({
   headless: true,
   args: ["--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"],
 });
-const context = await browser.newContext();
-await context.grantPermissions(["camera"], { origin: new URL(url).origin });
-const firstTab = await context.newPage();
-const secondTab = await context.newPage();
+const contexts = [];
+const publishers = [];
+for (let index = 0; index < cameraCount; index += 1) {
+  publishers.push(await newPeerPage());
+}
+const viewer = await newPeerPage();
+const peers = [
+  ...publishers.map((page, index) => [`publisher ${index + 1}`, page]),
+  ["viewer", viewer],
+];
 const pageErrors = [];
 const consoleErrors = [];
 
-for (const [name, page] of [["first tab", firstTab], ["second tab", secondTab]]) {
+for (const [name, page] of peers) {
   page.on("pageerror", (error) => pageErrors.push(`${name}: ${error.message}`));
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(`${name}: ${message.text()}`);
@@ -28,201 +41,379 @@ for (const [name, page] of [["first tab", firstTab], ["second tab", secondTab]])
 }
 
 try {
-  const forward = await runCameraFlow(firstTab, secondTab, {
-    label: "forward",
-    capture: "synthetic",
-    target: "discovery",
-  });
-  const reverse = await runCameraFlow(secondTab, firstTab, {
-    label: "reverse",
-    capture: "webcam",
-    target: "peer-card",
-  });
+  const publisherDomains = [];
+  for (const [index, publisher] of publishers.entries()) {
+    publisherDomains.push(
+      await loginAndStart(publisher, "publisher", `Camera ${index + 1}`),
+    );
+    process.stdout.write(`started publisher ${index + 1}/${cameraCount}\n`);
+    // The smoke puts every Peer behind one IP. Respect the relay's admission
+    // window between batches; real cameras normally arrive from distinct hosts.
+    if ((index + 1) % colocatedAdmissionBatch === 0) {
+      await delay(relayAdmissionWindowMs);
+    }
+  }
+  const viewerDomain = await loginAndStart(viewer, "viewer", "Control room");
+  process.stdout.write("started camera-wall viewer\n");
+  if (publisherDomains.some((value) => value !== viewerDomain)) {
+    throw new Error("browser peers selected different Domains");
+  }
+  await viewer.locator("button[data-grid-size='4']").click();
+
+  const viewerCard = await peerCard(viewer);
+  const cards = [];
+  for (const [index, publisher] of publishers.entries()) {
+    cards.push(await startPublisher(publisher, index === 1 ? "webcam" : "synthetic"));
+  }
+  const cardA = cards[0];
+  const cardB = cards[1];
+  if (!cardA || !cardB) throw new Error("camera wall smoke requires two publishers");
+
+  await requestThroughDiscovery(viewer, cardA.peerId);
+  for (const card of cards.slice(1)) await requestThroughPeerCard(viewer, card);
+  await Promise.all(publishers.map((publisher) => approve(publisher, viewerCard.peerId)));
+
+  for (const card of cards) await connectApproved(viewer, card.peerId);
+  await Promise.all(cards.map((card) => waitForFrames(viewer, card.peerId, 3)));
+  await Promise.all(cards.map((card) => assertStreamDiagnostics(viewer, card.peerId)));
+  await assertInspector(viewer, cardA.peerId, "Smoke Camera 1 publisher");
+  await assertInspector(viewer, cardB.peerId, "Smoke Camera 2 publisher");
+
+  await cameraMenuAction(viewer, cardA.peerId, "source-pause");
+  await waitForText(publishers[0], "#events", "Camera paused by an approved viewer", timeout);
+  await delay(800);
+  const pausedA = await receivedFrames(viewer, cardA.peerId);
+  const runningB = await receivedFrames(viewer, cardB.peerId);
+  await delay(1_000);
+  if (await receivedFrames(viewer, cardA.peerId) !== pausedA) {
+    throw new Error("pausing Camera A did not stop Camera A frames");
+  }
+  if (await receivedFrames(viewer, cardB.peerId) <= runningB) {
+    throw new Error("pausing Camera A stopped Camera B");
+  }
+
+  await cameraMenuAction(viewer, cardA.peerId, "source-resume");
+  await waitForText(publishers[0], "#events", "Camera resumed by an approved viewer", timeout);
+  await waitFor(
+    async () => await receivedFrames(viewer, cardA.peerId) > pausedA,
+    timeout,
+    "Camera A frames after resume",
+  );
+
+  await cameraTile(viewer, cardB.peerId).locator("button[data-action='snapshot']").click();
+  await viewer.locator("#snapshot-image").waitFor({ state: "visible", timeout });
+  await waitFor(async () => {
+    const status = await elementText(viewer, "#snapshot-status");
+    const loaded = await viewer.locator("#snapshot-image").evaluate((image) => image.naturalWidth > 0);
+    return loaded && /\b[0-9a-f]{64}\b/.test(status);
+  }, timeout, "Camera B SHA-256-verified snapshot");
+  await viewer.locator("#close-snapshot-button").click();
+
+  await viewer.locator("button[data-grid-size='3']").click();
+  if (await viewer.locator("#camera-grid > *").count() !== 9) {
+    throw new Error("3×3 layout did not render nine camera slots");
+  }
+  await Promise.all([
+    waitForFrames(viewer, cardA.peerId, (await receivedFrames(viewer, cardA.peerId)) + 1),
+    waitForFrames(viewer, cardB.peerId, (await receivedFrames(viewer, cardB.peerId)) + 1),
+  ]);
+  await assertResponsiveViewer(viewer, cardA.peerId);
+
+  const beforeRemove = await receivedFrames(viewer, cardA.peerId);
+  await cameraMenuAction(viewer, cardB.peerId, "remove");
+  await cameraTile(viewer, cardB.peerId).waitFor({ state: "detached", timeout });
+  await waitFor(
+    async () => await receivedFrames(viewer, cardA.peerId) > beforeRemove,
+    timeout,
+    "Camera A after removing Camera B",
+  );
+
+  await publishers[0].locator("#stop-publish-button").click();
+  await waitForText(publishers[0], "#events", "Camera publication stopped", timeout);
+  await waitFor(
+    async () => await cameraTile(viewer, cardA.peerId).getAttribute("data-status") === "ended",
+    timeout,
+    "Camera A offline tile",
+  );
+  await publishers[0].locator("#publish-button").click();
+  await waitForText(publishers[0], "#events", "Stream endpoint mounted", timeout);
+  await cameraTile(viewer, cardA.peerId)
+    .locator("button.tile-primary-action[data-action='retry']")
+    .click();
+  await waitFor(
+    async () => await cameraTile(viewer, cardA.peerId).getAttribute("data-status") === "awaiting",
+    timeout,
+    "Camera A session-scoped reapproval",
+  );
+  await approve(publishers[0], viewerCard.peerId);
+  await connectApproved(viewer, cardA.peerId);
+  await waitForFrames(viewer, cardA.peerId, 2);
 
   if (pageErrors.length) throw new Error(`browser page errors: ${pageErrors.join("; ")}`);
   if (consoleErrors.length) throw new Error(`browser console errors: ${consoleErrors.join("; ")}`);
 
   process.stdout.write(
-    `camera mesh smoke passed in both directions: ${forward.publisherPeerId} -> ${forward.viewerPeerId}, then ${reverse.publisherPeerId} -> ${reverse.viewerPeerId} in Domain ${forward.domainId}\n`,
+    `camera wall smoke passed: one browser viewer kept ${cameraCount} concurrent camera streams independent in Domain ${viewerDomain}\n`,
   );
 } catch (error) {
-  await Promise.allSettled([
-    firstTab.screenshot({ path: "/tmp/auki-camera-mesh-first-tab.png", fullPage: true }),
-    secondTab.screenshot({ path: "/tmp/auki-camera-mesh-second-tab.png", fullPage: true }),
-  ]);
-  const diagnostics = await Promise.all([
-    firstTab.locator("#events").innerText().catch(() => "unavailable"),
-    secondTab.locator("#events").innerText().catch(() => "unavailable"),
-  ]);
+  await Promise.allSettled(peers.map(([name, page]) =>
+    page.screenshot({
+      path: `/tmp/auki-camera-mesh-${name.replaceAll(" ", "-")}.png`,
+      fullPage: true,
+    })));
+  const diagnostics = await Promise.all(peers.map(async ([name, page]) =>
+    `${name}:\n${await elementText(page, "#events").catch(() => "unavailable")}`));
   throw new Error(
-    `${error instanceof Error ? error.message : String(error)}\nfirst-tab events:\n${diagnostics[0]}\nsecond-tab events:\n${diagnostics[1]}\nconsole errors:\n${consoleErrors.join("\n")}`,
+    `${error instanceof Error ? error.message : String(error)}\n${diagnostics.join("\n")}\nconsole errors:\n${consoleErrors.join("\n")}`,
   );
 } finally {
-  await Promise.allSettled([stopIfRunning(firstTab), stopIfRunning(secondTab)]);
+  await Promise.allSettled(peers.map(([, page]) => stopIfRunning(page)));
+  await Promise.allSettled(contexts.map((context) => context.close()));
   await browser.close();
 }
 
-async function runCameraFlow(publisher, viewer, { label, capture, target }) {
-  const publisherDomain = await loginAndStart(publisher, "publisher", label);
-  const viewerDomain = await loginAndStart(viewer, "viewer", label);
-  if (publisherDomain !== viewerDomain) {
-    throw new Error(`tabs selected different Domains: ${publisherDomain} and ${viewerDomain}`);
-  }
-
-  const viewerCard = JSON.parse(await viewer.locator("#local-card").innerText());
-  await publisher.locator("#capture-source").selectOption(capture);
-  await publisher.locator("#publish-button").click();
-  await waitForText(publisher, "#events", "Stream endpoint mounted", 30_000);
-  if (capture === "webcam") {
-    await waitForText(publisher, "#events", "Webcam permission granted", 30_000);
-  }
-  const publisherCard = JSON.parse(await publisher.locator("#local-card").innerText());
-
-  if (target === "discovery") {
-    await waitForCandidate(viewer, publisherCard.peerId, 60_000);
-  } else {
-    await viewer.locator(".manual-target > summary").click();
-    await viewer.locator("#manual-card").fill(JSON.stringify(publisherCard));
-    await viewer.locator("#add-card-button").click();
-    await waitForText(viewer, "#events", "from a peer card", 10_000);
-  }
-  await viewer.locator("#candidate").selectOption(publisherCard.peerId);
-  await viewer.locator("#connect-button").click();
-  await waitForText(viewer, "#events", "approval requested", 30_000);
-
-  const approval = publisher.locator("#pending-list li", { hasText: viewerCard.peerId }).locator("button", { hasText: "Allow" });
-  await approval.waitFor({ state: "visible", timeout: 30_000 });
-  await approval.click();
-
-  await viewer.locator("#connect-button").click();
-  await viewer.locator("#remote-frame").waitFor({ state: "visible", timeout: 45_000 });
-  await waitFor(async () => {
-    const loaded = await viewer.locator("#remote-frame").evaluate((image) => image.naturalWidth > 0);
-    return loaded && await receivedFrames(viewer) >= 2;
-  }, 30_000, "at least two decoded camera frames");
-
-  const inspector = await viewer.locator("#inspector-details").innerText();
-  if (!inspector.includes('"verified": true') || !inspector.includes(`Smoke ${label} publisher`)) {
-    throw new Error("Protocol Inspector did not expose verified publisher metadata");
-  }
-
-  await viewer.locator("#pause-button").click();
-  await waitForText(publisher, "#events", "Camera paused by an approved viewer", 30_000);
-  await new Promise((resolve) => setTimeout(resolve, 1_000));
-  const pausedAt = await receivedFrames(viewer);
-  await new Promise((resolve) => setTimeout(resolve, 1_000));
-  const pausedAfter = await receivedFrames(viewer);
-  if (pausedAfter !== pausedAt) {
-    throw new Error(`Message pause did not stop frames: ${pausedAt} -> ${pausedAfter}`);
-  }
-
-  await viewer.locator("#resume-button").click();
-  await waitForText(publisher, "#events", "Camera resumed by an approved viewer", 30_000);
-  await waitFor(
-    async () => await receivedFrames(viewer) > pausedAfter,
-    30_000,
-    "camera frames after Message resume",
-  );
-
-  await viewer.locator("#snapshot-button").click();
-  await viewer.locator("#snapshot-image").waitFor({ state: "visible", timeout: 30_000 });
-  await waitFor(async () => {
-    const loaded = await viewer.locator("#snapshot-image").evaluate((image) => image.naturalWidth > 0);
-    const status = await viewer.locator("#snapshot-status").innerText();
-    return loaded && /\b[0-9a-f]{64}\b/.test(status);
-  }, 30_000, "SHA-256-verified Blob snapshot");
-  await waitForText(viewer, "#events", "fetched and SHA-256 verified", 30_000);
-
-  await publisher.locator("#stop-publish-button").click();
-  await waitForText(publisher, "#events", "Camera publication stopped", 30_000);
-  await viewer.locator("#remote-frame").waitFor({ state: "hidden", timeout: 30_000 });
-  await waitForText(viewer, "#remote-empty", "Camera", 30_000);
-
-  await publisher.locator("#publish-button").click();
-  await waitFor(
-    async () => !(await publisher.locator("#stop-publish-button").isDisabled()),
-    30_000,
-    "camera republish",
-  );
-  await viewer.locator("#connect-button").click();
-  await approval.waitFor({ state: "visible", timeout: 30_000 });
-  await waitFor(
-    async () => !(await viewer.locator("#connect-button").isDisabled()),
-    30_000,
-    "unapproved reconnect rejection",
-  );
-
-  await viewer.locator("#stop-peer-button").click();
-  await publisher.locator("#stop-peer-button").click();
-  await Promise.all([
-    waitForText(viewer, "#events", "relay booking released", 30_000),
-    waitForText(publisher, "#events", "relay booking released", 30_000),
-    waitForText(viewer, "#local-card", "Peer stopped", 30_000),
-    waitForText(publisher, "#local-card", "Peer stopped", 30_000),
-  ]);
-
-  return {
-    publisherPeerId: publisherCard.peerId,
-    viewerPeerId: viewerCard.peerId,
-    domainId: publisherDomain,
-  };
+async function newPeerPage() {
+  const context = await browser.newContext();
+  await context.grantPermissions(["camera"], { origin: new URL(url).origin });
+  contexts.push(context);
+  return context.newPage();
 }
 
-async function loginAndStart(page, role, label) {
+async function loginAndStart(page, peerRole, label) {
   await page.goto(url, { waitUntil: "networkidle" });
-  await page.locator("#login-button").waitFor({ state: "visible" });
+  await page.locator("#login-button").waitFor({ state: "visible", timeout });
   await page.locator("#email").fill(email);
   await page.locator("#password").fill(password);
   await page.locator("#login-button").click();
-  await page.locator("#peer-config").waitFor({ state: "visible", timeout: 30_000 });
-
+  await page.locator("#peer-config").waitFor({ state: "visible", timeout });
   const domainIds = await page.locator("#domain option").evaluateAll(
     (options) => options.map((option) => option.value),
   );
   const selectedDomain = requestedDomain ?? domainIds[0];
   if (!selectedDomain || !domainIds.includes(selectedDomain)) {
-    throw new Error(`requested Domain is unavailable for ${role}`);
+    throw new Error(`requested Domain is unavailable for ${peerRole}`);
   }
   await page.locator("#domain").selectOption(selectedDomain);
-  await page.locator("#role").selectOption(role);
-  await page.locator("#display-name").fill(`Smoke ${label} ${role}`);
-  await page.locator("#start-peer-button").click();
-  await page.locator("#runtime-section").waitFor({ state: "visible", timeout: 60_000 });
+  await page.locator("#role").selectOption(peerRole);
+  await page.locator(".advanced-field > summary").click();
+  await page.locator("#display-name").fill(`Smoke ${label} ${peerRole}`);
+  await startPeerWithRetry(page, peerRole);
   return selectedDomain;
 }
 
-async function waitForCandidate(page, peerId, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    await page.locator("#discover-button").click();
-    await waitFor(async () => !(await page.locator("#discover-button").isDisabled()), 15_000, "DDS refresh");
-    const values = await page.locator("#candidate option").evaluateAll(
-      (options) => options.map((option) => option.value),
+async function startPeerWithRetry(page, peerRole) {
+  const startButton = page.locator("#start-peer-button");
+  const runtime = page.locator("#runtime-section");
+  const attempts = 3;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    await startButton.click();
+    await waitFor(
+      async () => await runtime.isVisible() || !(await startButton.isDisabled()),
+      timeout,
+      `${peerRole} runtime startup attempt ${attempt}`,
     );
-    if (values.includes(peerId)) return;
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    if (await runtime.isVisible()) return;
+    if (attempt < attempts) await delay(attempt * 1_000);
   }
-  throw new Error(`DDS did not return camera publisher ${peerId}`);
+  throw new Error(
+    `${peerRole} failed to start after ${attempts} attempts: ${await elementText(page, "#auth-error")}`,
+  );
 }
 
-async function receivedFrames(page) {
-  const metrics = await page.locator("#metrics").innerText();
-  return Number.parseInt(metrics.match(/^(\d+) received/)?.[1] ?? "0", 10);
+async function startPublisher(page, capture) {
+  await page.locator("#capture-source").selectOption(capture);
+  await page.locator("#publish-button").click();
+  await waitForText(page, "#events", "Stream endpoint mounted", timeout);
+  if (capture === "webcam") {
+    await waitForText(page, "#events", "Webcam permission granted", timeout);
+  }
+  return peerCard(page);
+}
+
+async function requestThroughDiscovery(page, peerId) {
+  await page.locator("#add-camera-button").click();
+  const result = page.locator(
+    `#camera-results [data-candidate-peer-id="${peerId}"] button[data-candidate-peer-id]`,
+  );
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (await result.count()) break;
+    await waitFor(async () => !(await page.locator("#discover-button").isDisabled()), 20_000, "DDS scan");
+    await page.locator("#discover-button").click();
+    await delay(750);
+  }
+  if (!(await result.count())) throw new Error(`DDS did not return camera publisher ${peerId}`);
+  await result.click();
+  await waitForCameraStatus(page, peerId, "awaiting");
+}
+
+async function requestThroughPeerCard(page, card) {
+  await page.locator("#add-camera-button").click();
+  await page.locator(".manual-target > summary").click();
+  await page.locator("#manual-card").fill(JSON.stringify(card));
+  await page.locator("#add-card-button").click();
+  await waitForText(page, "#events", "from a peer card", timeout);
+  await waitForCameraStatus(page, card.peerId, "awaiting");
+}
+
+async function connectApproved(page, peerId) {
+  const retry = cameraTile(page, peerId)
+    .locator("button.tile-primary-action[data-action='retry']");
+  await retry.waitFor({ state: "visible", timeout });
+  await retry.click();
+  await waitForCameraStatus(page, peerId, "live");
+}
+
+async function approve(page, peerId) {
+  const control = page
+    .locator("#pending-list li", { hasText: peerId })
+    .locator("button", { hasText: "Allow" });
+  await control.waitFor({ state: "visible", timeout });
+  await control.click();
+  await control.waitFor({ state: "detached", timeout });
+}
+
+async function assertInspector(page, peerId, expectedName) {
+  await cameraTile(page, peerId).click({ position: { x: 10, y: 10 } });
+  await waitFor(async () => {
+    const value = await elementText(page, "#inspector-details");
+    return value.includes(peerId) && value.includes('"verified": true');
+  }, timeout, `verified protocol metadata for ${peerId}`);
+  const value = await elementText(page, "#inspector-details");
+  if (!value.includes(expectedName)) {
+    throw new Error(`camera inspector did not identify ${expectedName}`);
+  }
+}
+
+async function assertStreamDiagnostics(page, peerId) {
+  await waitFor(async () => {
+    const values = await cameraTile(page, peerId).evaluate((tile) => ({
+      fps: Number(tile.dataset.streamFps),
+      bandwidth: Number(tile.dataset.kibPerSecond),
+      frameSize: Number(tile.dataset.averageFrameKib),
+      frameAge: Number(tile.dataset.frameAgeMs),
+    }));
+    return values.fps > 0
+      && values.bandwidth > 0
+      && values.frameSize > 0
+      && Number.isFinite(values.frameAge)
+      && Math.abs(values.frameAge) < 60_000;
+  }, timeout, `rolling Stream diagnostics for ${peerId}`);
+
+  const summary = await cameraTile(page, peerId)
+    .locator("[data-role='stream-diagnostics']")
+    .textContent();
+  if (!summary?.includes("fps") || !summary.includes("KiB/s") || !summary.includes("ms age")) {
+    throw new Error(`camera ${peerId} does not render all three diagnostics: ${summary}`);
+  }
+}
+
+async function assertResponsiveViewer(page, peerId) {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await waitFor(async () => await page.evaluate(() => document.documentElement.scrollWidth <= 391),
+    timeout, "mobile layout without horizontal overflow");
+
+  const layout = await page.evaluate(() => {
+    const topbar = document.querySelector(".topbar")?.getBoundingClientRect();
+    const add = document.querySelector("#add-camera-button")?.getBoundingClientRect();
+    const tile = document.querySelector(".camera-tile")?.getBoundingClientRect();
+    return {
+      viewportWidth: window.innerWidth,
+      topbarRight: topbar?.right,
+      addWidth: add?.width,
+      addHeight: add?.height,
+      tileRight: tile?.right,
+    };
+  });
+  if (
+    layout.topbarRight === undefined
+    || layout.topbarRight > layout.viewportWidth + 1
+    || layout.tileRight === undefined
+    || layout.tileRight > layout.viewportWidth + 1
+    || (layout.addWidth ?? 0) < 44
+    || (layout.addHeight ?? 0) < 44
+  ) {
+    throw new Error(`mobile Camera Mesh layout is invalid: ${JSON.stringify(layout)}`);
+  }
+
+  await cameraMenuAction(page, peerId, "details");
+  const diagnostics = page.locator("#diagnostics-dialog");
+  await diagnostics.waitFor({ state: "visible", timeout });
+  const drawer = await diagnostics.boundingBox();
+  if (!drawer || drawer.x < -1 || drawer.x + drawer.width > 391 || drawer.height > 845) {
+    throw new Error(`mobile diagnostics drawer exceeds the viewport: ${JSON.stringify(drawer)}`);
+  }
+  for (const selector of ["#diagnostic-fps", "#diagnostic-bandwidth", "#diagnostic-frame-age"]) {
+    const value = await elementText(page, selector);
+    if (!value || value === "—") throw new Error(`${selector} did not expose a live value`);
+  }
+  if (!(await elementText(page, "#diagnostic-frame-size")).includes("KiB/frame")) {
+    throw new Error("Diagnostics did not expose average JPEG size");
+  }
+  await page.locator("#close-diagnostics-button").click();
+  await page.setViewportSize({ width: 1280, height: 720 });
+}
+
+async function cameraMenuAction(page, peerId, action) {
+  const tile = cameraTile(page, peerId);
+  await tile.locator(".tile-menu > summary").click();
+  await tile.locator(`button[data-action="${action}"]`).click();
+}
+
+async function waitForCameraStatus(page, peerId, status) {
+  await waitFor(
+    async () => await cameraTile(page, peerId).getAttribute("data-status") === status,
+    timeout,
+    `camera ${peerId} status ${status}`,
+  );
+}
+
+async function waitForFrames(page, peerId, count) {
+  await waitFor(
+    async () => {
+      const tile = cameraTile(page, peerId);
+      const loaded = await tile.locator("[data-role='remote-frame']").evaluate(
+        (image) => !image.hidden && image.naturalWidth > 0,
+      );
+      return loaded && await receivedFrames(page, peerId) >= count;
+    },
+    timeout,
+    `${count} decoded frames from ${peerId}`,
+  );
+}
+
+function cameraTile(page, peerId) {
+  return page.locator(`[data-camera-peer-id="${peerId}"]`);
+}
+
+async function receivedFrames(page, peerId) {
+  return Number(await cameraTile(page, peerId).getAttribute("data-frame-count") ?? "0");
+}
+
+async function peerCard(page) {
+  return JSON.parse(await elementText(page, "#local-card"));
 }
 
 async function stopIfRunning(page) {
   if (page.isClosed()) return;
   const runtime = page.locator("#runtime-section");
   if (await runtime.count() === 0 || !(await runtime.isVisible())) return;
-  const local = await page.locator("#local-card").innerText();
-  if (local.includes("Peer stopped")) return;
+  if ((await elementText(page, "#local-card")).includes("Peer stopped")) return;
+  const menu = page.locator(".session-menu");
+  if (!(await menu.evaluate((element) => element.open))) {
+    await menu.locator("summary").click();
+  }
   await page.locator("#stop-peer-button").click({ timeout: 5_000 });
-  await waitForText(page, "#local-card", "Peer stopped", 20_000);
+  await waitForText(page, "#local-card", "Peer stopped", 30_000);
+}
+
+async function elementText(page, selector) {
+  return page.locator(selector).evaluate((element) => element.textContent ?? "");
 }
 
 async function waitForText(page, selector, text, timeoutMs) {
   await waitFor(
-    async () => (await page.locator(selector).innerText()).toLowerCase().includes(text.toLowerCase()),
+    async () => (await elementText(page, selector)).toLowerCase().includes(text.toLowerCase()),
     timeoutMs,
     `${selector} to contain ${JSON.stringify(text)}`,
   );
@@ -237,7 +428,11 @@ async function waitFor(predicate, timeoutMs, description) {
     } catch (error) {
       lastError = error;
     }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await delay(200);
   }
   throw new Error(`timed out waiting for ${description}${lastError ? `: ${lastError}` : ""}`);
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

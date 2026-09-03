@@ -16,8 +16,9 @@ Camera Mesh supports publisher and viewer roles in all four runtimes:
 
 The Rust and Python programs have a JSON Lines control surface so people and
 test runners can drive the same application flow without a UI. The browser has
-the full interactive camera interface and Protocol Inspector. Headless viewers
-validate the metadata and JPEG bytes, then report frame counts and hashes.
+a responsive CCTV wall for up to 16 simultaneous feeds, with protocol and live
+stream diagnostics kept in a drawer. Headless viewers validate the metadata and
+JPEG bytes, then report frame counts and hashes.
 
 ## How the protocols fit together
 
@@ -102,7 +103,7 @@ export AUKI_DOMAIN_ID='00000000-0000-0000-0000-000000000000'
 ```
 
 First, keep `npm run dev` running in one terminal and run the unique
-browser-to-browser flow in another:
+browser-to-browser multi-camera flow in another:
 
 ```sh
 npm run smoke -- http://127.0.0.1:5173/
@@ -125,9 +126,9 @@ Web    -> Rust      Web    -> Python
 
 Each edge proves rejection before approval, all camera metadata checks, two
 frames, pause/resume, and a verified snapshot. The matrix then shuts down all
-six peers and their temporary state. The separate browser smoke proves
-browser-to-browser publishing in both directions, using DDS discovery once and
-a copied peer card once.
+six peers and their temporary state. The separate browser smoke proves that one
+browser viewer keeps multiple browser publishers independent while mixing DDS
+discovery and copied peer cards.
 
 ## Swift/iOS gates
 

@@ -567,6 +567,7 @@ async function createBrowserPeer(browserInstance, url, label, role, input) {
   const page = await context.newPage();
   const consoleErrors = boundedOutput();
   let stopped = false;
+  let activeTargetPeerId;
 
   page.on("console", (message) => {
     if (
@@ -590,16 +591,16 @@ async function createBrowserPeer(browserInstance, url, label, role, input) {
   assert(domainIds.includes(input.domainId), `${label} cannot access Domain ${input.domainId}`);
   await page.locator("#domain").selectOption(input.domainId);
   await page.locator("#role").selectOption(role);
+  await page.locator(".advanced-field > summary").click();
   await page.locator("#display-name").fill(`Matrix ${label}`);
-  await page.locator("#start-peer-button").click();
-  await page.locator("#runtime-section").waitFor({ state: "visible", timeout: START_TIMEOUT_MS });
+  await startBrowserPeerWithRetry(page, label);
 
   if (role === "publisher") {
     await page.locator("#capture-source").selectOption("synthetic");
     await page.locator("#publish-button").click();
     await waitForText(page, "#events", "Stream endpoint mounted", START_TIMEOUT_MS);
   }
-  const card = JSON.parse(await page.locator("#local-card").innerText());
+  const card = JSON.parse(await browserElementText(page, "#local-card"));
 
   return {
     label,
@@ -621,50 +622,55 @@ async function createBrowserPeer(browserInstance, url, label, role, input) {
       await button.waitFor({ state: "detached", timeout: OPERATION_TIMEOUT_MS });
     },
     async view(target, _id, frames, expectPending) {
-      await loadBrowserTarget(page, target);
+      activeTargetPeerId = target.peerId;
+      const tile = browserCameraTile(page, target.peerId);
+      if (await tile.count() === 0) await loadBrowserTarget(page, target);
       if (expectPending) {
-        const before = await occurrenceCount(page, "#events", "approval requested");
-        await page.locator("#connect-button").click();
-        await waitFor(
-          async () =>
-            await occurrenceCount(page, "#events", "approval requested") > before
-            && !(await page.locator("#connect-button").isDisabled()),
+        await waitForBrowserCameraStatus(
+          page,
+          target.peerId,
+          "awaiting",
           OPERATION_TIMEOUT_MS,
-          `${label} approval-required response`,
         );
         return { ok: false, error: "approval requested" };
       }
 
-      await page.locator("#connect-button").click();
+      if (await tile.getAttribute("data-status") !== "live") {
+        await tile.locator("button.tile-primary-action[data-action='retry']").click();
+      }
       try {
         await waitFor(
           async () =>
-            (await page.locator("#inspector-details").innerText()).includes(target.peerId)
-            || !(await page.locator("#connect-button").isDisabled()),
+            (await browserElementText(page, "#inspector-details")).includes(target.peerId)
+            || await tile.getAttribute("data-status") === "error",
           OPERATION_TIMEOUT_MS,
           `${label} verified protocol metadata for ${target.peerId}`,
         );
         assert(
-          (await page.locator("#inspector-details").innerText()).includes(target.peerId),
+          (await browserElementText(page, "#inspector-details")).includes(target.peerId),
           `${label} camera connection returned before protocol metadata was verified`,
         );
         await waitFor(
           async () =>
-            await receivedFrames(page) >= frames
-            && await page.locator("#remote-frame").evaluate((image) => image.naturalWidth > 0),
+            await receivedFrames(page, target.peerId) >= frames
+            && await tile.locator("[data-role='remote-frame']")
+              .evaluate((image) => image.naturalWidth > 0),
           OPERATION_TIMEOUT_MS,
           `${label} to decode ${frames} camera frames`,
         );
       } catch (error) {
         throw await browserOperationError(page, label, "view", error);
       }
-      const inspector = JSON.parse(await page.locator("#inspector-details").innerText());
+      const inspector = JSON.parse(await browserElementText(page, "#inspector-details"));
       return {
         ok: true,
         targetPeerId: target.peerId,
         checks: browserInspectorChecks(inspector, target.peerId),
-        frames: await receivedFrames(page),
-        frameSha256: await browserImageSha256(page, "#remote-frame"),
+        frames: await receivedFrames(page, target.peerId),
+        frameSha256: await browserImageSha256(
+          page,
+          `[data-camera-peer-id="${target.peerId}"] [data-role="remote-frame"]`,
+        ),
       };
     },
     watchControl(control) {
@@ -674,10 +680,10 @@ async function createBrowserPeer(browserInstance, url, label, role, input) {
       return waitForNewText(page, "#events", phrase, OPERATION_TIMEOUT_MS);
     },
     async control(control, target) {
-      const selector = control === "pause" ? "#pause-button" : "#resume-button";
+      const action = control === "pause" ? "source-pause" : "source-resume";
       const acknowledgement = `Message camera.${control} acknowledged`;
       const before = await occurrenceCount(page, "#events", acknowledgement);
-      await page.locator(selector).click();
+      await browserCameraMenuAction(page, target.peerId, action);
       await waitFor(
         async () => await occurrenceCount(page, "#events", acknowledgement) > before,
         OPERATION_TIMEOUT_MS,
@@ -685,13 +691,17 @@ async function createBrowserPeer(browserInstance, url, label, role, input) {
       );
       if (control === "pause") {
         await delay(800);
-        const pausedAt = await receivedFrames(page);
+        const pausedAt = await receivedFrames(page, target.peerId);
         await delay(800);
-        assert.equal(await receivedFrames(page), pausedAt, `${label} received frames while paused`);
+        assert.equal(
+          await receivedFrames(page, target.peerId),
+          pausedAt,
+          `${label} received frames while paused`,
+        );
       } else {
-        const resumedAt = await receivedFrames(page);
+        const resumedAt = await receivedFrames(page, target.peerId);
         await waitFor(
-          async () => await receivedFrames(page) > resumedAt,
+          async () => await receivedFrames(page, target.peerId) > resumedAt,
           OPERATION_TIMEOUT_MS,
           `${label} frames after resume`,
         );
@@ -707,19 +717,22 @@ async function createBrowserPeer(browserInstance, url, label, role, input) {
     },
     async snapshot(target, _requestId) {
       const before = await occurrenceCount(page, "#events", "fetched and SHA-256 verified");
-      await page.locator("#snapshot-button").click();
+      await browserCameraTile(page, target.peerId)
+        .locator("button[data-action='snapshot']")
+        .click();
       await waitFor(
         async () => {
-          const status = await page.locator("#snapshot-status").innerText();
+          const status = await browserElementText(page, "#snapshot-status");
           return /^[1-9][0-9]* bytes · [0-9a-f]{64} · /.test(status)
             && await occurrenceCount(page, "#events", "fetched and SHA-256 verified") > before;
         },
         OPERATION_TIMEOUT_MS,
         `${label} SHA-256-verified Blob snapshot`,
       );
-      const status = await page.locator("#snapshot-status").innerText();
+      const status = await browserElementText(page, "#snapshot-status");
       const match = status.match(/^([1-9][0-9]*) bytes · ([0-9a-f]{64}) · /);
       assert(match);
+      await page.locator("#close-snapshot-button").click();
       return {
         ok: true,
         targetPeerId: target.peerId,
@@ -736,13 +749,23 @@ async function createBrowserPeer(browserInstance, url, label, role, input) {
       );
     },
     async disconnect() {
-      if (role !== "viewer" || await page.locator("#disconnect-button").isDisabled()) return;
-      await page.locator("#disconnect-button").click();
-      await waitForText(page, "#metrics", "Stream idle", OPERATION_TIMEOUT_MS);
+      if (role !== "viewer" || !activeTargetPeerId) return;
+      const tile = browserCameraTile(page, activeTargetPeerId);
+      if (await tile.count() === 0) return;
+      await browserCameraMenuAction(page, activeTargetPeerId, "remove");
+      await tile.waitFor({ state: "detached", timeout: OPERATION_TIMEOUT_MS });
+      activeTargetPeerId = undefined;
     },
     async stop() {
       try {
         if (!stopped && !page.isClosed()) {
+          await page.locator("dialog[open]").evaluateAll((dialogs) => {
+            for (const openDialog of dialogs) openDialog.close();
+          });
+          const menu = page.locator(".session-menu");
+          if (!(await menu.evaluate((element) => element.open))) {
+            await menu.locator("summary").click();
+          }
           await page.locator("#stop-peer-button").click();
           await waitForText(page, "#local-card", "Peer stopped", CLEANUP_TIMEOUT_MS);
           stopped = true;
@@ -756,11 +779,30 @@ async function createBrowserPeer(browserInstance, url, label, role, input) {
   };
 }
 
+async function startBrowserPeerWithRetry(page, label) {
+  const startButton = page.locator("#start-peer-button");
+  const runtime = page.locator("#runtime-section");
+  const attempts = 3;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    await startButton.click();
+    await waitFor(
+      async () => await runtime.isVisible() || !(await startButton.isDisabled()),
+      START_TIMEOUT_MS,
+      `${label} startup attempt ${attempt}`,
+    );
+    if (await runtime.isVisible()) return;
+    if (attempt < attempts) await delay(attempt * 1_000);
+  }
+  throw new Error(
+    `${label} failed to start after ${attempts} attempts: ${await browserElementText(page, "#auth-error")}`,
+  );
+}
+
 async function browserOperationError(page, label, operation, cause) {
   const values = await Promise.all(
     ["#events", "#metrics", "#inspector-details", "#snapshot-status"].map(async (selector) => {
       try {
-        return `${selector}: ${(await page.locator(selector).innerText()).slice(-4_000)}`;
+        return `${selector}: ${(await browserElementText(page, selector)).slice(-4_000)}`;
       } catch {
         return `${selector}: unavailable`;
       }
@@ -771,17 +813,17 @@ async function browserOperationError(page, label, operation, cause) {
 }
 
 async function loadBrowserTarget(page, card) {
+  await page.locator("#add-camera-button").click();
   const details = page.locator("details.manual-target");
   if (!(await details.evaluate((element) => element.open))) {
     await details.locator("summary").click();
   }
   await page.locator("#manual-card").fill(JSON.stringify(card));
   await page.locator("#add-card-button").click();
-  await page.locator(`#candidate option[value="${card.peerId}"]`).waitFor({
-    state: "attached",
+  await browserCameraTile(page, card.peerId).waitFor({
+    state: "visible",
     timeout: OPERATION_TIMEOUT_MS,
   });
-  await page.locator("#candidate").selectOption(card.peerId);
 }
 
 function browserInspectorChecks(inspector, targetPeerId) {
@@ -970,9 +1012,30 @@ async function serveStatic(request, response) {
   response.end(body);
 }
 
-async function receivedFrames(page) {
-  const metrics = await page.locator("#metrics").innerText();
-  return Number.parseInt(metrics.match(/^(\d+) received/)?.[1] ?? "0", 10);
+function browserCameraTile(page, peerId) {
+  return page.locator(`[data-camera-peer-id="${peerId}"]`);
+}
+
+async function browserCameraMenuAction(page, peerId, action) {
+  const tile = browserCameraTile(page, peerId);
+  await tile.locator(".tile-menu > summary").click();
+  await tile.locator(`button[data-action="${action}"]`).click();
+}
+
+async function waitForBrowserCameraStatus(page, peerId, status, timeoutMs) {
+  await waitFor(
+    async () => await browserCameraTile(page, peerId).getAttribute("data-status") === status,
+    timeoutMs,
+    `camera ${peerId} status ${status}`,
+  );
+}
+
+async function receivedFrames(page, peerId) {
+  return Number(await browserCameraTile(page, peerId).getAttribute("data-frame-count") ?? "0");
+}
+
+async function browserElementText(page, selector) {
+  return page.locator(selector).evaluate((element) => element.textContent ?? "");
 }
 
 async function waitForNewText(page, selector, text, timeoutMs) {
@@ -985,14 +1048,14 @@ async function waitForNewText(page, selector, text, timeoutMs) {
 }
 
 async function occurrenceCount(page, selector, text) {
-  const value = (await page.locator(selector).innerText()).toLowerCase();
+  const value = (await browserElementText(page, selector)).toLowerCase();
   const needle = text.toLowerCase();
   return value.split(needle).length - 1;
 }
 
 async function waitForText(page, selector, text, timeoutMs) {
   await waitFor(
-    async () => (await page.locator(selector).innerText()).toLowerCase().includes(text.toLowerCase()),
+    async () => (await browserElementText(page, selector)).toLowerCase().includes(text.toLowerCase()),
     timeoutMs,
     `${selector} to contain ${JSON.stringify(text)}`,
   );

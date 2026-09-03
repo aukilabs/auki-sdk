@@ -276,11 +276,6 @@ export class CameraMesh {
     }
   }
 
-  /** Compatibility alias for the original single-camera example API. */
-  async view(candidate: CameraCandidate): Promise<void> {
-    await this.connectCamera(candidate);
-  }
-
   private async connectCameraOwned(candidate: CameraCandidate): Promise<RemoteConnection> {
     const request: AukiStreamRequest = {
       sourcePeerId: candidate.peerId,
@@ -379,7 +374,7 @@ export class CameraMesh {
     remote.subscription.free();
   }
 
-  async stopViewing(): Promise<void> {
+  async disconnectAllCameras(): Promise<void> {
     const results = await Promise.allSettled(
       [...this.remotes.keys()].map((peerId) => this.disconnectCamera(peerId)),
     );
@@ -390,10 +385,6 @@ export class CameraMesh {
     }
   }
 
-  async disconnectAllCameras(): Promise<void> {
-    await this.stopViewing();
-  }
-
   private async waitForConnecting(): Promise<void> {
     if (this.connecting.size === 0) return;
     await Promise.allSettled([...this.connecting.values()]);
@@ -401,7 +392,7 @@ export class CameraMesh {
 
   private async closeRemoteConnections(): Promise<void> {
     await this.waitForConnecting();
-    await this.stopViewing();
+    await this.disconnectAllCameras();
   }
 
   close(): Promise<void> {

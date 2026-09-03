@@ -2,410 +2,265 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#090d12" />
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23111820'/%3E%3Ccircle cx='16' cy='16' r='7' fill='none' stroke='%235ee0b5' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='2' fill='%235ee0b5'/%3E%3C/svg%3E" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#070a0d" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230d1419'/%3E%3Ccircle cx='16' cy='16' r='7' fill='none' stroke='%2359e3ad' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='2' fill='%2359e3ad'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/src/styles.css" />
     <title>Auki Camera Mesh</title>
-    <style>
-      :root {
-        color-scheme: dark;
-        font: 15px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        font-synthesis: none;
-        --bg: #090d12;
-        --panel: #111820;
-        --raised: #18212a;
-        --soft: #0c1218;
-        --line: #293642;
-        --line-hi: #3c4c59;
-        --text: #eef4f7;
-        --muted: #94a3ae;
-        --faint: #687782;
-        --accent: #5ee0b5;
-        --accent-hi: #82f3ce;
-        --danger: #ff858a;
-        --radius: 16px;
-        color: var(--text);
-      }
-
-      * { box-sizing: border-box; }
-      html { min-width: 300px; background-color: var(--bg); }
-      body {
-        min-height: 100vh;
-        margin: 0;
-        background-color: var(--bg);
-        background-image:
-          radial-gradient(circle at 8% 0%, rgb(94 224 181 / 9%), transparent 29rem),
-          radial-gradient(circle at 94% 8%, rgb(114 183 255 / 7%), transparent 26rem);
-      }
-      button, input, select, textarea { font: inherit; }
-      button, select, summary { cursor: pointer; }
-      button:disabled, input:disabled, select:disabled, textarea:disabled { cursor: not-allowed; opacity: .46; }
-      button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
-        outline: 3px solid rgb(94 224 181 / 35%);
-        outline-offset: 2px;
-      }
-      [hidden] { display: none !important; }
-
-      .skip-link {
-        position: fixed;
-        z-index: 20;
-        top: .7rem;
-        left: .7rem;
-        translate: 0 -5rem;
-        border-radius: 8px;
-        padding: .55rem .75rem;
-        background-color: var(--accent);
-        color: #06231a;
-        font-weight: 750;
-        text-decoration: none;
-      }
-      .skip-link:focus { translate: 0; }
-
-      main { width: min(1320px, calc(100% - 2rem)); margin: 0 auto; padding: 1.4rem 0 3rem; }
-      .masthead { display: flex; align-items: center; justify-content: space-between; gap: 1.2rem; margin-bottom: 1.4rem; }
-      .brand { display: flex; align-items: center; gap: .8rem; }
-      .brand-mark {
-        display: grid;
-        width: 2.5rem;
-        height: 2.5rem;
-        flex: 0 0 auto;
-        place-items: center;
-        border: 1px solid #34433f;
-        border-radius: 12px;
-        background-image: linear-gradient(145deg, #19251f, #0c1217);
-        box-shadow: inset 0 1px rgb(255 255 255 / 6%);
-      }
-      .brand-mark::before {
-        width: .82rem;
-        height: .82rem;
-        border: 3px solid var(--accent);
-        border-radius: 50%;
-        box-shadow: 0 0 0 3px rgb(94 224 181 / 10%);
-        content: "";
-      }
-      .eyebrow { margin: 0 0 .08rem; color: var(--accent); font-size: .66rem; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
-      h1, h2, h3, p { margin-top: 0; }
-      h1 { margin: 0; font-size: clamp(1.25rem, 3vw, 1.6rem); line-height: 1; letter-spacing: -.04em; }
-      h1 span { color: var(--accent); }
-      h2 { margin-bottom: .2rem; font-size: 1.05rem; letter-spacing: -.02em; }
-      h3 { margin-bottom: .45rem; font-size: .85rem; }
-      p { color: var(--muted); }
-      code, pre { font: .75rem/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
-      .lede { max-width: 58ch; margin: 0; font-size: .82rem; }
-
-      .pill {
-        display: inline-flex;
-        align-items: center;
-        width: fit-content;
-        border: 1px solid var(--line);
-        border-radius: 999px;
-        padding: .35rem .6rem;
-        background-color: rgb(12 18 24 / 65%);
-        color: var(--muted);
-        font-size: .72rem;
-        font-weight: 680;
-        white-space: nowrap;
-      }
-      .pill::before { width: .48rem; height: .48rem; margin-right: .4rem; border-radius: 50%; background-color: var(--accent); box-shadow: 0 0 0 3px rgb(94 224 181 / 11%); content: ""; }
-      .panel {
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        background-color: rgb(17 24 32 / 94%);
-        box-shadow: inset 0 1px rgb(255 255 255 / 3%), 0 18px 55px rgb(0 0 0 / 17%);
-      }
-      .panel-body { padding: 1rem; }
-      .panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .9rem 1rem; border-bottom: 1px solid var(--line); }
-      .panel-heading h2, .panel-heading p { margin-bottom: 0; }
-      .panel-heading p { margin-top: .1rem; font-size: .76rem; }
-
-      .auth { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(280px, .92fr); max-width: 920px; min-height: 360px; margin: clamp(2.5rem, 8vh, 5.5rem) auto 0; overflow: hidden; }
-      .auth-copy {
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-        padding: clamp(1.5rem, 4vw, 2.5rem);
-        border-right: 1px solid var(--line);
-        background-color: var(--soft);
-        background-image: linear-gradient(140deg, rgb(94 224 181 / 12%), transparent 58%);
-      }
-      .auth-copy h2 { max-width: 13ch; margin: .75rem 0 .75rem; font-size: clamp(2rem, 4vw, 2.8rem); line-height: .98; letter-spacing: -.055em; }
-      .auth-copy > div > p:last-child { max-width: 43ch; font-size: .85rem; }
-      .auth-flow { margin: 0; color: var(--faint); font-size: .73rem; }
-      .auth-forms { display: grid; align-content: center; padding: clamp(1.5rem, 4vw, 2.5rem); }
-      form, .form { display: grid; gap: .85rem; }
-      label { display: grid; gap: .32rem; color: #cbd6dc; font-size: .76rem; font-weight: 680; }
-      input, select, textarea {
-        width: 100%;
-        min-height: 2.65rem;
-        border: 1px solid var(--line-hi);
-        border-radius: 10px;
-        padding: .62rem .72rem;
-        background-color: #091016;
-        color: inherit;
-        transition: border-color 130ms ease, box-shadow 130ms ease;
-      }
-      input:hover, select:hover { border-color: #52616e; }
-      input::placeholder { color: #5d6a75; }
-      textarea { min-height: 7rem; resize: vertical; }
-      textarea:hover { border-color: #52616e; }
-      textarea::placeholder { color: #5d6a75; }
-      button {
-        min-height: 2.45rem;
-        border: 1px solid var(--accent);
-        border-radius: 10px;
-        padding: .52rem .82rem;
-        background-color: var(--accent);
-        color: #06231a;
-        font-size: .78rem;
-        font-weight: 780;
-        transition: translate 120ms ease, background-color 120ms ease, border-color 120ms ease;
-      }
-      button:hover:not(:disabled) { background-color: var(--accent-hi); }
-      button:active:not(:disabled) { translate: 0 1px; }
-      button.secondary { border-color: var(--line-hi); background-color: var(--raised); color: var(--text); }
-      button.secondary:hover:not(:disabled) { border-color: #566673; background-color: #202c35; }
-      button.danger { border-color: rgb(255 133 138 / 32%); background-color: transparent; color: #ffb0b3; }
-      button.danger:hover:not(:disabled) { border-color: rgb(255 133 138 / 55%); background-color: rgb(255 133 138 / 8%); }
-      .actions { display: flex; flex-wrap: wrap; gap: .55rem; }
-
-      .runtime { display: grid; gap: 1rem; }
-      .session { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 1rem; padding: .85rem 1rem; }
-      .session-label { display: block; margin-bottom: .12rem; color: var(--faint); font-size: .64rem; font-weight: 760; letter-spacing: .09em; text-transform: uppercase; }
-      .session pre { overflow: hidden; max-width: 90ch; margin: 0; color: #b8c8d1; text-overflow: ellipsis; white-space: nowrap; }
-      .workspace { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(315px, .68fr); gap: 1rem; align-items: start; }
-      .media {
-        position: relative;
-        display: grid;
-        aspect-ratio: 16 / 9;
-        overflow: hidden;
-        place-items: center;
-        background-color: #05090d;
-        background-image:
-          linear-gradient(45deg, rgb(255 255 255 / 1.5%) 25%, transparent 25%),
-          linear-gradient(-45deg, rgb(255 255 255 / 1.5%) 25%, transparent 25%);
-        background-size: 20px 20px;
-      }
-      .media canvas, .media img { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-      .media-empty { z-index: 0; max-width: 28ch; margin: 0; padding: 1rem; color: var(--faint); font-size: .76rem; text-align: center; }
-      .controls { display: grid; grid-template-columns: minmax(180px, 1fr) auto; gap: .85rem; align-items: end; padding: .9rem 1rem 1rem; border-top: 1px solid var(--line); }
-      .subsection { padding: 1rem; border-top: 1px solid var(--line); }
-      .subsection > p { margin-bottom: .7rem; font-size: .75rem; }
-      #pending-list { display: grid; gap: .5rem; margin: 0; padding: 0; color: var(--muted); font-size: .73rem; list-style: none; }
-      #pending-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .65rem; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: .65rem .7rem; background-color: var(--soft); }
-      #pending-list code { overflow: hidden; text-overflow: ellipsis; }
-      #pending-list button { min-height: 2rem; padding: .3rem .55rem; }
-      #candidate-details, #local-card { overflow-wrap: anywhere; white-space: pre-wrap; }
-      #candidate-details { min-height: 6.5rem; max-height: 12rem; overflow: auto; margin: .85rem 0; border: 1px solid var(--line); border-radius: 10px; padding: .7rem .75rem; background-color: var(--soft); color: var(--muted); }
-      .manual-target { margin-top: .9rem; border-top: 1px solid var(--line); }
-      .manual-target > summary { padding: .85rem 0; color: var(--muted); font-size: .75rem; }
-      .manual-target[open] > summary { border-bottom: 0; }
-      .manual-target .form { padding-bottom: .1rem; }
-      #metrics { position: absolute; z-index: 2; right: .65rem; bottom: .65rem; max-width: calc(100% - 1.3rem); margin: 0; border: 1px solid rgb(255 255 255 / 9%); border-radius: 7px; padding: .32rem .5rem; background-color: rgb(5 9 12 / 80%); color: #b8c4cc; font: .62rem ui-monospace, monospace; backdrop-filter: blur(8px); }
-      .hint { margin: .7rem 0 0; color: var(--faint); font-size: .7rem; }
-
-      .side { display: grid; gap: 1rem; }
-      #inspector { position: sticky; top: 1rem; overflow: hidden; }
-      details > summary { cursor: pointer; padding: .85rem 1rem; font-weight: 760; list-style: none; }
-      details > summary::-webkit-details-marker { display: none; }
-      details > summary::after { float: right; width: .46rem; height: .46rem; margin-top: .3rem; rotate: 45deg; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); content: ""; transition: rotate 140ms ease; }
-      details[open] > summary { border-bottom: 1px solid var(--line); }
-      details[open] > summary::after { rotate: 225deg; }
-      .protocols { display: grid; grid-template-columns: repeat(3, 1fr); gap: .4rem; margin-bottom: .9rem; }
-      .protocols span { display: flex; align-items: center; justify-content: center; gap: .32rem; border: 1px solid var(--line); border-radius: 999px; padding: .38rem; color: var(--muted); font-size: .63rem; font-weight: 720; text-align: center; }
-      .protocols span::before { width: .35rem; height: .35rem; border-radius: 50%; background-color: var(--faint); content: ""; }
-      #timeline, #events { min-height: 7rem; max-height: 16rem; overflow: auto; margin: 0; color: #b8c8bf; white-space: pre-wrap; overflow-wrap: anywhere; }
-      #timeline { border-left: 1px solid var(--line); padding-left: .75rem; }
-      #events { min-height: 4rem; max-height: 10rem; }
-      #events:empty::before { color: var(--faint); content: "Events will appear as the peer connects."; }
-      #inspector-details { max-height: 20rem; overflow: auto; margin: 0; color: #9fc7b3; white-space: pre-wrap; overflow-wrap: anywhere; }
-      .events-heading { margin-top: 1.1rem; }
-      .snapshot-result { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: .75rem; align-items: center; margin-top: .8rem; }
-      #snapshot-image { width: 7rem; aspect-ratio: 16 / 9; border: 1px solid var(--line); border-radius: 8px; object-fit: cover; }
-      #snapshot-status { margin: 0; font-size: .73rem; overflow-wrap: anywhere; }
-
-      @media (max-width: 940px) {
-        main { width: min(100% - 1rem, 760px); }
-        .workspace { grid-template-columns: 1fr; }
-        #inspector { position: static; }
-      }
-      @media (max-width: 680px) {
-        main { padding-top: .8rem; }
-        .masthead { align-items: flex-start; }
-        .lede, .masthead > .pill { display: none; }
-        .auth { grid-template-columns: 1fr; margin-top: 1.2rem; }
-        .auth-copy { min-height: 210px; border-right: 0; border-bottom: 1px solid var(--line); }
-        .auth-copy h2 { font-size: 2.15rem; }
-        .session, .controls { grid-template-columns: 1fr; }
-        .session .actions button, .controls .actions button { flex: 1; }
-      }
-      @media (prefers-reduced-motion: reduce) {
-        *, *::before, *::after { transition-duration: .01ms !important; }
-      }
-    </style>
   </head>
   <body>
-    <a class="skip-link" href="#main-content">Skip to camera controls</a>
-    <main id="main-content">
-      <header class="masthead">
-        <div class="brand">
-          <span class="brand-mark" aria-hidden="true"></span>
-          <div>
-            <p class="eyebrow">Auki SDK example</p>
-            <h1>Camera <span>Mesh</span></h1>
-          </div>
-        </div>
-        <p class="lede">One real app. Six portable protocols. Exact authenticated peers.</p>
-        <span class="pill">Rust-backed Web SDK</span>
-      </header>
+    <a class="skip-link" href="#runtime-main">Skip to cameras</a>
 
-      <section class="panel auth" id="auth-section" aria-labelledby="welcome-title">
-        <div class="auth-copy">
-          <div>
-            <p class="eyebrow">Browser → relay → browser</p>
-            <h2 id="welcome-title">Share a camera with a peer you approve.</h2>
-            <p>Open two tabs, choose the same Domain, then publish from one and discover from the other.</p>
+    <main class="gate" id="auth-section">
+      <section class="auth-card" aria-labelledby="welcome-title">
+        <header class="auth-intro">
+          <div class="brand brand-large">
+            <span class="brand-mark" aria-hidden="true"></span>
+            <span>Camera <strong>Mesh</strong></span>
           </div>
-          <p class="auth-flow">Info · Catalog · Registry · Stream · Message · Blob</p>
-        </div>
-        <div class="auth-forms">
+          <div>
+            <p class="eyebrow">Authenticated camera monitoring</p>
+            <h1 id="welcome-title">Your camera wall,<br />without the control-room clutter.</h1>
+            <p>Sign in, choose a Domain, and monitor the peers you trust.</p>
+          </div>
+          <p class="auth-footnote">Browser identities and camera approvals are ephemeral.</p>
+        </header>
+
+        <div class="auth-controls">
           <form id="login">
-            <div>
+            <div class="form-heading">
+              <p class="step">Step 1 of 2</p>
               <h2>Sign in</h2>
-              <p class="hint">Use an account with access to a shared Domain.</p>
             </div>
-            <label>Email <input id="email" name="email" type="email" autocomplete="username" placeholder="you@example.com" required /></label>
-            <label>Password <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Your password" required /></label>
-            <button id="login-button" type="submit" disabled>Sign in</button>
+            <label>Email
+              <input id="email" name="email" type="email" autocomplete="username" placeholder="you@example.com" required />
+            </label>
+            <label>Password
+              <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Your password" required />
+            </label>
+            <button id="login-button" class="primary wide" type="submit" disabled>Sign in</button>
           </form>
-          <div class="form" id="peer-config" hidden>
-            <div>
-              <h2>Start a peer</h2>
-              <p class="hint">Publishers advertise; viewers discover privately.</p>
+
+          <div class="peer-config" id="peer-config" hidden>
+            <div class="form-heading">
+              <p class="step">Step 2 of 2</p>
+              <h2>Open Camera Mesh</h2>
             </div>
-            <label>Domain <select id="domain" name="domain" required></select></label>
-            <label>Role
+            <label>Domain
+              <select id="domain" name="domain" required></select>
+            </label>
+            <label>Mode
               <select id="role" name="role">
-                <option value="publisher">Publisher — share this camera</option>
-                <option value="viewer">Viewer — find a camera</option>
+                <option value="viewer">Monitor cameras</option>
+                <option value="publisher">Share this camera</option>
               </select>
             </label>
-            <label>Display name <input id="display-name" name="display-name" autocomplete="nickname" placeholder="Chrome webcam" maxlength="80" /></label>
-            <button id="start-peer-button" type="button">Start peer</button>
-          </div>
-        </div>
-      </section>
-
-      <section class="runtime" id="runtime-section" hidden>
-        <div class="panel session">
-          <div>
-            <span class="session-label">Local peer card</span>
-            <pre id="local-card" aria-live="polite">Starting authenticated peer…</pre>
-          </div>
-          <div class="actions">
-            <button id="copy-card-button" class="secondary" type="button" disabled>Copy card</button>
-            <button id="stop-peer-button" class="danger" type="button">Stop peer</button>
-          </div>
-        </div>
-
-        <div class="workspace">
-          <div>
-            <section class="panel" id="publisher-panel" hidden>
-              <div class="panel-heading">
-                <div><h2>Publish camera</h2><p>Bounded latest-frame JPEG stream</p></div>
-                <span class="pill">480 × 270 · 5 fps</span>
-              </div>
-              <div class="media">
-                <p class="media-empty">Choose a source and start publishing to preview this camera.</p>
-                <canvas id="preview" width="480" height="270" aria-label="Local camera preview">
-                  Your browser does not support the camera preview canvas.
-                </canvas>
-              </div>
-              <div class="controls">
-                <label>Source
-                  <select id="capture-source">
-                    <option value="webcam">Webcam</option>
-                    <option value="synthetic">Synthetic test camera</option>
-                  </select>
-                </label>
-                <div class="actions">
-                  <button id="publish-button" type="button">Publish</button>
-                  <button id="stop-publish-button" class="secondary" type="button" disabled>Stop</button>
-                </div>
-              </div>
-              <div class="subsection">
-                <h3>Pending viewers</h3>
-                <p>Domain authentication proves identity; you still decide who can see this camera.</p>
-                <ul id="pending-list" aria-live="polite"><li>No pending viewers.</li></ul>
-              </div>
-            </section>
-
-            <section class="panel" id="viewer-panel" hidden>
-              <div class="panel-heading">
-                <div><h2>View camera</h2><p>Discover exact Stream publishers through DDS</p></div>
-                <button id="discover-button" class="secondary" type="button">Refresh</button>
-              </div>
-              <div class="panel-body">
-                <label>Camera publisher <select id="candidate" disabled><option value="">No cameras loaded</option></select></label>
-                <pre id="candidate-details">Publish a camera in another tab, then refresh discovery.</pre>
-                <div class="actions">
-                  <button id="connect-button" type="button" disabled>Request camera</button>
-                  <button id="disconnect-button" class="secondary" type="button" disabled>Disconnect</button>
-                </div>
-                <p class="hint">The first request asks the publisher for approval. Allow this Peer ID there, then retry.</p>
-                <details class="manual-target">
-                  <summary>Use a copied peer card instead</summary>
-                  <div class="form">
-                    <label>Publisher peer card
-                      <textarea id="manual-card" spellcheck="false" placeholder='Paste the publisher’s sanitized JSON peer card'></textarea>
-                    </label>
-                    <div class="actions">
-                      <button id="add-card-button" class="secondary" type="button">Use peer card</button>
-                    </div>
-                    <p class="hint">The card must name this Domain, advertise Camera Stream, and include an exact WSS route.</p>
-                  </div>
-                </details>
-              </div>
-              <div class="media">
-                <img id="remote-frame" alt="Live frame from the selected remote camera" decoding="async" hidden />
-                <p class="media-empty" id="remote-empty">Not connected</p>
-                <p id="metrics" aria-live="polite">Stream idle</p>
-              </div>
-              <div class="subsection">
-                <h3>Approved controls</h3>
-                <p>Message controls are applied only after the publisher checks your authenticated Peer ID.</p>
-                <div class="actions">
-                  <button id="pause-button" class="secondary" type="button" disabled>Pause</button>
-                  <button id="resume-button" class="secondary" type="button" disabled>Resume</button>
-                  <button id="snapshot-button" type="button" disabled>Verified snapshot</button>
-                </div>
-                <div class="snapshot-result">
-                  <img id="snapshot-image" alt="Verified camera snapshot" hidden />
-                  <p id="snapshot-status">No snapshot requested.</p>
-                </div>
-              </div>
-            </section>
-          </div>
-
-          <aside class="side">
-            <details class="panel" id="inspector" open>
-              <summary>Protocol Inspector</summary>
-              <div class="panel-body">
-                <div class="protocols" aria-label="Protocol status">
-                  <span>INFO</span><span>CATALOG</span><span>REGISTRY</span>
-                  <span>BLOB</span><span>MESSAGE</span><span>STREAM</span>
-                </div>
-                <h3>Timeline</h3>
-                <pre id="timeline" aria-live="polite"></pre>
-                <h3 class="events-heading">Decoded state</h3>
-                <pre id="inspector-details">Protocol metadata appears after a camera is approved.</pre>
-                <h3 class="events-heading">Recent events</h3>
-                <pre id="events" aria-live="polite"></pre>
-              </div>
+            <details class="advanced-field">
+              <summary>Advanced</summary>
+              <label>Display name
+                <input id="display-name" name="display-name" autocomplete="nickname" placeholder="Camera Mesh browser" maxlength="80" />
+              </label>
             </details>
-          </aside>
+            <button id="start-peer-button" class="primary wide" type="button">Continue</button>
+          </div>
+          <p class="inline-alert" id="auth-error" role="alert" hidden></p>
         </div>
       </section>
     </main>
+
+    <section class="app-shell" id="runtime-section" hidden>
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">Camera <strong>Mesh</strong></span>
+        </div>
+
+        <div class="domain-status" aria-live="polite">
+          <span class="status-dot" id="peer-status-dot"></span>
+          <span class="domain-name" id="domain-name">Starting…</span>
+          <span class="status-copy" id="wall-status">Connecting</span>
+        </div>
+
+        <div class="monitor-actions" id="viewer-toolbar" hidden>
+          <div class="density-picker" role="group" aria-label="Camera wall layout">
+            <button type="button" data-grid-size="1" aria-label="1 by 1 layout">1×1</button>
+            <button type="button" data-grid-size="2" aria-label="2 by 2 layout">2×2</button>
+            <button type="button" data-grid-size="3" aria-label="3 by 3 layout">3×3</button>
+            <button type="button" data-grid-size="4" aria-label="4 by 4 layout">4×4</button>
+          </div>
+          <div class="page-controls" id="page-controls" hidden>
+            <button id="previous-page-button" class="icon-button" type="button" aria-label="Previous camera page">‹</button>
+            <span id="page-label">1 / 1</span>
+            <button id="next-page-button" class="icon-button" type="button" aria-label="Next camera page">›</button>
+          </div>
+          <button id="add-camera-button" class="primary add-camera" type="button"><span aria-hidden="true">＋</span> Add camera</button>
+        </div>
+
+        <details class="session-menu">
+          <summary class="icon-button" aria-label="Open session menu">•••</summary>
+          <div class="menu-popover">
+            <p class="menu-label">This peer</p>
+            <code id="peer-id-label">Starting…</code>
+            <button id="copy-card-button" class="menu-action" type="button" disabled>Copy peer card</button>
+            <button id="open-diagnostics-button" class="menu-action" type="button">Diagnostics</button>
+            <button id="stop-peer-button" class="menu-action danger" type="button">Stop peer</button>
+          </div>
+        </details>
+      </header>
+
+      <main id="runtime-main" class="runtime-main">
+        <section class="monitor" id="viewer-panel" aria-label="Camera wall" hidden>
+          <div class="camera-grid" id="camera-grid" data-grid-size="2"></div>
+        </section>
+
+        <section class="publisher" id="publisher-panel" hidden>
+          <div class="publisher-stage">
+            <div class="publisher-heading">
+              <div>
+                <p class="eyebrow">Local camera</p>
+                <h2 id="publisher-title">Ready to publish</h2>
+              </div>
+              <span class="camera-spec">480 × 270 · 5 fps</span>
+            </div>
+            <div class="publisher-preview">
+              <canvas id="preview" width="480" height="270" aria-label="Local camera preview">
+                Your browser does not support the camera preview canvas.
+              </canvas>
+              <div class="preview-empty" id="preview-empty">
+                <span class="camera-glyph" aria-hidden="true"></span>
+                <p>Choose a source and start sharing.</p>
+              </div>
+              <span class="feed-badge" id="publisher-badge">OFFLINE</span>
+            </div>
+            <div class="publisher-controls">
+              <label>Source
+                <select id="capture-source">
+                  <option value="webcam">Webcam</option>
+                  <option value="synthetic">Synthetic test camera</option>
+                </select>
+              </label>
+              <div class="button-row">
+                <button id="publish-button" class="primary" type="button">Start sharing</button>
+                <button id="stop-publish-button" class="secondary" type="button" disabled>Stop</button>
+              </div>
+            </div>
+          </div>
+
+          <aside class="approval-panel">
+            <div>
+              <p class="eyebrow">Access requests</p>
+              <h2>Pending viewers</h2>
+              <p>Every viewer is authenticated to this Domain. You still approve camera access explicitly.</p>
+            </div>
+            <ul id="pending-list" aria-live="polite"><li class="empty-row">No pending viewers.</li></ul>
+          </aside>
+        </section>
+      </main>
+
+      <pre id="local-card" class="automation-state" aria-live="polite">Starting authenticated peer…</pre>
+      <p id="metrics" class="automation-state">Stream idle</p>
+    </section>
+
+    <dialog class="sheet add-sheet" id="add-camera-dialog" aria-labelledby="add-camera-title">
+      <div class="sheet-shell">
+        <header class="sheet-header">
+          <div>
+            <p class="eyebrow">Camera wall</p>
+            <h2 id="add-camera-title">Add a camera</h2>
+          </div>
+          <button class="icon-button" id="close-add-camera-button" type="button" aria-label="Close add camera">×</button>
+        </header>
+        <div class="sheet-body">
+          <div class="discovery-heading">
+            <div>
+              <h3>Available in this Domain</h3>
+              <p>Camera publishers advertising through DDS.</p>
+            </div>
+            <button id="discover-button" class="secondary compact" type="button">Refresh</button>
+          </div>
+          <div class="camera-results" id="camera-results" aria-live="polite">
+            <p class="empty-message">Open this panel to discover cameras.</p>
+          </div>
+
+          <details class="manual-target">
+            <summary>Connect with a peer card</summary>
+            <div class="manual-card-form">
+              <label>Publisher peer card
+                <textarea id="manual-card" spellcheck="false" placeholder="Paste the publisher’s JSON peer card"></textarea>
+              </label>
+              <button id="add-card-button" class="secondary" type="button">Add from peer card</button>
+            </div>
+          </details>
+          <p class="inline-alert" id="add-camera-error" role="alert" hidden></p>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog class="sheet diagnostics-sheet" id="diagnostics-dialog" aria-labelledby="diagnostics-title">
+      <div class="sheet-shell">
+        <header class="sheet-header">
+          <div>
+            <p class="eyebrow">Developer tools</p>
+            <h2 id="diagnostics-title">Diagnostics</h2>
+          </div>
+          <button class="icon-button" id="close-diagnostics-button" type="button" aria-label="Close diagnostics">×</button>
+        </header>
+        <div class="sheet-body diagnostics-body">
+          <section aria-labelledby="live-stream-diagnostics-title">
+            <h3 id="live-stream-diagnostics-title">Live stream</h3>
+            <div class="stream-diagnostic-grid">
+              <article>
+                <span>Delivery</span>
+                <output id="diagnostic-fps">—</output>
+                <small>rolling 5 seconds</small>
+              </article>
+              <article>
+                <span>Bandwidth</span>
+                <output id="diagnostic-bandwidth">—</output>
+                <small id="diagnostic-frame-size">Waiting for frames</small>
+              </article>
+              <article>
+                <span>Frame age</span>
+                <output id="diagnostic-frame-age">—</output>
+                <small>capture to rendered image</small>
+              </article>
+            </div>
+          </section>
+          <div class="protocol-strip" aria-label="Protocols in use">
+            <span>INFO</span><span>CATALOG</span><span>REGISTRY</span>
+            <span>BLOB</span><span>MESSAGE</span><span>STREAM</span>
+          </div>
+          <section>
+            <h3>Selected camera</h3>
+            <pre id="inspector-details">Select a connected camera to inspect it.</pre>
+          </section>
+          <section>
+            <h3>Timeline</h3>
+            <pre id="timeline" aria-live="polite"></pre>
+          </section>
+          <section>
+            <h3>Recent events</h3>
+            <pre id="events" aria-live="polite"></pre>
+          </section>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog class="snapshot-dialog" id="snapshot-dialog" aria-labelledby="snapshot-title">
+      <div class="snapshot-shell">
+        <header class="sheet-header">
+          <div>
+            <p class="eyebrow">SHA-256 verified</p>
+            <h2 id="snapshot-title">Camera snapshot</h2>
+          </div>
+          <button class="icon-button" id="close-snapshot-button" type="button" aria-label="Close snapshot">×</button>
+        </header>
+        <img id="snapshot-image" alt="Verified camera snapshot" hidden />
+        <p id="snapshot-status">No snapshot requested.</p>
+      </div>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

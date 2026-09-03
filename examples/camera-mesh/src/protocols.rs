@@ -249,6 +249,7 @@ struct SharedState {
     role: CameraRole,
     domain_id: Uuid,
     local_peer_id: PeerId,
+    auto_approve_same_domain: AtomicBool,
     allowed: Mutex<HashSet<PeerId>>,
     pending_approvals: Mutex<HashSet<PeerId>>,
     blobs: Mutex<VecDeque<(String, Arc<[u8]>)>>,
@@ -265,7 +266,18 @@ impl SharedState {
     }
 
     fn allowed(&self, peer: &AuthenticatedPeer) -> bool {
-        self.same_domain(peer) && lock(&self.allowed).contains(&peer.peer_id)
+        if !self.same_domain(peer) {
+            return false;
+        }
+        if lock(&self.allowed).contains(&peer.peer_id) {
+            return true;
+        }
+        if !self.auto_approve_same_domain.load(Ordering::SeqCst) {
+            return false;
+        }
+        lock(&self.pending_approvals).remove(&peer.peer_id);
+        lock(&self.allowed).insert(peer.peer_id);
+        true
     }
 
     fn request_approval(&self, peer: &AuthenticatedPeer) {
@@ -526,6 +538,7 @@ impl CameraProtocols {
             role,
             domain_id,
             local_peer_id,
+            auto_approve_same_domain: AtomicBool::new(false),
             allowed: Mutex::new(HashSet::new()),
             pending_approvals: Mutex::new(HashSet::new()),
             blobs: Mutex::new(VecDeque::new()),
@@ -652,6 +665,16 @@ impl CameraProtocols {
     pub fn approve(&self, peer_id: PeerId) {
         lock(&self.state.pending_approvals).remove(&peer_id);
         lock(&self.state.allowed).insert(peer_id);
+    }
+
+    /// Automatically admit authenticated peers from this Camera Mesh Domain.
+    ///
+    /// This is disabled by default. It is useful for unattended demos, but an
+    /// interactive publisher should keep exact-Peer-ID operator approval.
+    pub fn set_auto_approve_same_domain(&self, enabled: bool) {
+        self.state
+            .auto_approve_same_domain
+            .store(enabled, Ordering::SeqCst);
     }
 
     pub fn revoke(&self, peer_id: PeerId) {
@@ -1898,6 +1921,7 @@ mod tests {
                 role,
                 domain_id: Uuid::nil(),
                 local_peer_id: peer(),
+                auto_approve_same_domain: AtomicBool::new(false),
                 allowed: Mutex::new(HashSet::new()),
                 pending_approvals: Mutex::new(HashSet::new()),
                 blobs: Mutex::new(VecDeque::new()),
@@ -2101,6 +2125,22 @@ mod tests {
             events.try_recv(),
             Ok(CameraEvent::ApprovalRequired { .. })
         ));
+    }
+
+    #[test]
+    fn automatic_approval_is_opt_in_and_remains_domain_scoped() {
+        let (state, _) = fixture_state_for_role(CameraRole::Publisher);
+        let same_domain = authenticated_peer(generated_peer());
+        assert!(!state.allowed(&same_domain));
+
+        state.auto_approve_same_domain.store(true, Ordering::SeqCst);
+        assert!(state.allowed(&same_domain));
+        assert!(lock(&state.allowed).contains(&same_domain.peer_id));
+
+        let mut other_domain = authenticated_peer(generated_peer());
+        other_domain.domain_ids = vec![Uuid::new_v4()];
+        assert!(!state.allowed(&other_domain));
+        assert!(!lock(&state.allowed).contains(&other_domain.peer_id));
     }
 
     #[tokio::test]

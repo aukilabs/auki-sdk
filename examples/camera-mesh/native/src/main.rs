@@ -67,6 +67,7 @@ async fn main() -> Result<()> {
     let role = env::var("AUKI_CAMERA_ROLE")
         .unwrap_or_else(|_| "publisher".into())
         .parse::<CameraRole>()?;
+    let auto_approve_same_domain = env_flag("AUKI_CAMERA_AUTO_APPROVE")?;
     let domain_id = required_env("AUKI_DOMAIN_ID")?
         .parse::<Uuid>()
         .context("AUKI_DOMAIN_ID must be a UUID")?;
@@ -86,6 +87,7 @@ async fn main() -> Result<()> {
             return Err(error);
         }
     };
+    protocols.set_auto_approve_same_domain(auto_approve_same_domain);
     emit(&serde_json::json!({
         "event": "ready",
         "runtime": "native",
@@ -326,6 +328,22 @@ fn required_env(name: &'static str) -> Result<String> {
     env::var(name).with_context(|| format!("{name} is required"))
 }
 
+fn env_flag(name: &'static str) -> Result<bool> {
+    match env::var(name) {
+        Ok(value) => parse_env_flag(name, &value),
+        Err(env::VarError::NotPresent) => Ok(false),
+        Err(error) => Err(error).with_context(|| format!("read {name}")),
+    }
+}
+
+fn parse_env_flag(name: &'static str, value: &str) -> Result<bool> {
+    match value {
+        "1" | "true" => Ok(true),
+        "0" | "false" => Ok(false),
+        value => bail!("{name} must be 1, true, 0, or false; got {value:?}"),
+    }
+}
+
 fn finish<const N: usize>(operation: Result<()>, cleanup: [(&str, Result<()>); N]) -> Result<()> {
     let cleanup_errors = cleanup
         .into_iter()
@@ -397,5 +415,14 @@ mod tests {
             .into_iter()
             .collect()
         );
+    }
+
+    #[test]
+    fn environment_flags_are_explicit() {
+        assert!(parse_env_flag("FLAG", "1").unwrap());
+        assert!(parse_env_flag("FLAG", "true").unwrap());
+        assert!(!parse_env_flag("FLAG", "0").unwrap());
+        assert!(!parse_env_flag("FLAG", "false").unwrap());
+        assert!(parse_env_flag("FLAG", "yes").is_err());
     }
 }

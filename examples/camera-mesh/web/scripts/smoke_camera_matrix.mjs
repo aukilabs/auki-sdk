@@ -897,6 +897,7 @@ function agentEnvironment(environment, identityFile, nodeName, role) {
     AUKI_IDENTITY_FILE: identityFile,
     AUKI_NODE_NAME: nodeName,
     AUKI_CAMERA_ROLE: role,
+    AUKI_CAMERA_AUTO_APPROVE: "0",
     AUKI_DISCOVERY_MODE: role === "publisher" ? "discover_and_advertise" : "discover_only",
   };
 }

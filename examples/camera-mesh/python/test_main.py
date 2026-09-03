@@ -11,6 +11,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from unittest import mock
 import uuid
 
 
@@ -116,6 +117,24 @@ class CameraMeshTests(unittest.TestCase):
             mesh.catalog_snapshot,
         )
         self.assertTrue(mesh.is_allowed(requester))
+
+    def test_automatic_approval_is_opt_in_and_domain_scoped(self):
+        mesh = app.CameraMesh(Peer(), "publisher", auto_approve_same_domain=True)
+        same_domain = {"peer_id": "viewer", "domain_ids": ["domain"]}
+        other_domain = {"peer_id": "outsider", "domain_ids": ["another-domain"]}
+
+        self.assertTrue(mesh.is_allowed(same_domain))
+        self.assertEqual(mesh.allowed, {"viewer"})
+        self.assertFalse(mesh.is_allowed(other_domain))
+        self.assertNotIn("outsider", mesh.allowed)
+
+    def test_automatic_approval_environment_is_strict(self):
+        self.assertFalse(app.env_flag("AUKI_CAMERA_TEST_MISSING"))
+        with mock.patch.dict(app.os.environ, {"AUKI_CAMERA_TEST_FLAG": "true"}):
+            self.assertTrue(app.env_flag("AUKI_CAMERA_TEST_FLAG"))
+        with mock.patch.dict(app.os.environ, {"AUKI_CAMERA_TEST_FLAG": "yes"}):
+            with self.assertRaisesRegex(RuntimeError, "must be 1, true, 0, or false"):
+                app.env_flag("AUKI_CAMERA_TEST_FLAG")
 
     def test_role_controls_stream_advertisement(self):
         publisher = self.mesh("publisher")

@@ -45,6 +45,30 @@ protocol connection opens.
 - [Python peer](python/README.md): deterministic publisher or viewer
 - [Swift/iOS app](swift/README.md): physical-device foreground publisher or viewer
 
+To fill the CCTV wall with any mix of unattended native and Python publishers,
+export one shared login, a Domain, a name prefix, and the two counts:
+
+```sh
+export AUKI_EMAIL='developer@example.com'
+export AUKI_PASSWORD='...'
+export AUKI_DOMAIN_ID='00000000-0000-0000-0000-000000000000'
+export AUKI_CAMERA_NAME_PREFIX='lab'
+export AUKI_CAMERA_NATIVE_COUNT=4
+export AUKI_CAMERA_PYTHON_COUNT=4
+
+./examples/camera-mesh/scripts/run-publishers.mjs
+```
+
+The launcher prepares both runtimes, staggers authentication, creates unique
+ephemeral Peer IDs named `lab-native-01` through `lab-python-04`, and advertises
+all publishers through DDS. Open the Web app with the same login and Domain;
+discovery can add them directly to the wall. Ctrl-C shuts down the batch and
+deletes its identities. The total is limited to 16 publishers.
+
+These unattended publishers repeat the checked-in 480×270, 5 fps test frame.
+For demo convenience they auto-approve any authenticated viewer in the selected
+Domain. Normal publishers retain exact-Peer-ID approval by default.
+
 Publishers default to DDS `discover_and_advertise`; viewers default to
 `discover_only`. Headless Rust and Python peers can override either default
 with `AUKI_DISCOVERY_MODE`. Every runtime gets both TCP and WSS relay routes,

@@ -58,6 +58,17 @@ def error_text(error: BaseException) -> str:
     return f"{type(error).__name__}: {error}"
 
 
+def env_flag(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    if value in ("1", "true"):
+        return True
+    if value in ("0", "false"):
+        return False
+    raise RuntimeError(f"{name} must be 1, true, 0, or false; got {value!r}")
+
+
 def registry_ref(peer_id: str, envelope: dict[str, Any]) -> dict[str, str]:
     return {"peer_id": peer_id, "id": envelope["id"], "hash": envelope["hash"]}
 
@@ -167,10 +178,16 @@ async def authenticate() -> Any:
 
 
 class CameraMesh:
-    def __init__(self, peer: Any, role: str) -> None:
+    def __init__(
+        self,
+        peer: Any,
+        role: str,
+        auto_approve_same_domain: bool = False,
+    ) -> None:
         self.peer = peer
         self.peer_id = peer.peer_id
         self.role = role
+        self.auto_approve_same_domain = auto_approve_same_domain
         self.node_name = os.environ.get("AUKI_NODE_NAME", f"python-camera-{role}")
         self.session_id = str(uuid.uuid4())
         self.allowed: set[str] = set()
@@ -293,7 +310,7 @@ class CameraMesh:
         require(discovery_mode in DISCOVERY_MODES, "invalid AUKI_DISCOVERY_MODE")
         session = await authenticate()
         peer = await session.start_peer(domain_id, identity_file, discovery_mode=discovery_mode)
-        mesh = cls(peer, role)
+        mesh = cls(peer, role, env_flag("AUKI_CAMERA_AUTO_APPROVE"))
         try:
             mesh.mount()
         except BaseException:
@@ -332,7 +349,18 @@ class CameraMesh:
         return self.peer.domain_id in requester.get("domain_ids", [])
 
     def is_allowed(self, requester: dict[str, Any]) -> bool:
-        return self.same_domain(requester) and requester.get("peer_id") in self.allowed
+        if not self.same_domain(requester):
+            return False
+        peer_id = requester.get("peer_id")
+        if not isinstance(peer_id, str) or not peer_id:
+            return False
+        if peer_id in self.allowed:
+            return True
+        if not self.auto_approve_same_domain:
+            return False
+        self.pending.discard(peer_id)
+        self.allowed.add(peer_id)
+        return True
 
     def request_approval(self, requester: dict[str, Any]) -> None:
         peer_id = requester.get("peer_id")

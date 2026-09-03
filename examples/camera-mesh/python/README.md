@@ -67,4 +67,6 @@ peer selects their native TCP relay route before dialing.
 
 `AUKI_NODE_NAME` changes the participant name. Publishers default to
 `AUKI_DISCOVERY_MODE=discover_and_advertise`; viewers default to
-`discover_only`.
+`discover_only`. `AUKI_CAMERA_AUTO_APPROVE=1` makes an unattended demo
+publisher admit any authenticated viewer in its Domain; it is disabled by
+default. The [batch launcher](../README.md#try-it) configures this mode for you.

@@ -1066,7 +1066,6 @@ struct PublishRequest {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct WireAdvertisement {
     peer_id: String,
     routes: Vec<String>,
@@ -1075,7 +1074,6 @@ struct WireAdvertisement {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ListResponse {
     advertisements: Vec<WireAdvertisement>,
     #[serde(default)]
@@ -1332,6 +1330,8 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
     fn advertisement(peer_id: PeerId, port: u16, protocols: &[&str]) -> serde_json::Value {
         json!({
             "peer_id": peer_id.to_string(),
+            "subject_id": Uuid::nil().to_string(),
+            "peer_type": "user",
             "routes": [direct(port).to_string()],
             "protocols": protocols,
             "expires_at": Utc::now() + chrono::Duration::minutes(2),
@@ -1750,6 +1750,40 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
                 .unwrap_err(),
             AukiDiscoveryError::InvalidProtocol
         );
+    }
+
+    #[test]
+    fn tracker_extensions_are_ignored_while_required_fields_remain_strict() {
+        let peer_id = peer();
+        let mut value = advertisement(peer_id, 4001, &[INFO]);
+        value.as_object_mut().unwrap().insert(
+            "future_metadata".into(),
+            json!({"nested": [true, 42, "anything"]}),
+        );
+        let response: ListResponse = serde_json::from_value(json!({
+            "advertisements": [value],
+            "next_cursor": null,
+            "future_page_metadata": {"total": 1},
+        }))
+        .unwrap();
+        let accepted = response.advertisements.into_iter().next().unwrap();
+        let candidate = validate_advertisement(accepted, "test")
+            .unwrap()
+            .expect("the lease is current");
+        assert_eq!(candidate.peer_id(), peer_id);
+
+        for required_field in ["peer_id", "routes", "protocols", "expires_at"] {
+            let mut value = advertisement(peer_id, 4001, &[INFO]);
+            value.as_object_mut().unwrap().remove(required_field);
+            assert!(serde_json::from_value::<WireAdvertisement>(value).is_err());
+        }
+
+        let mut wrong_type = advertisement(peer_id, 4001, &[INFO]);
+        wrong_type
+            .as_object_mut()
+            .unwrap()
+            .insert("routes".into(), json!("not a list"));
+        assert!(serde_json::from_value::<WireAdvertisement>(wrong_type).is_err());
     }
 
     #[test]

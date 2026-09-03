@@ -597,7 +597,14 @@ fn create_product_buffer(
         crate::BufferLimits::entries(max_entries),
         |observation: &Observation<VideoFrame>| observation.payload.bytes.len(),
     )?;
-    catalog.register_product(manifest.clone())?;
+    catalog.register_product_with_state(
+        manifest.clone(),
+        crate::ProductState::Buffer {
+            entries: 0,
+            at_entry_capacity: false,
+            limits: Some(crate::BufferLimits::entries(max_entries)),
+        },
+    )?;
     Ok(RetainedProduct {
         manifest,
         manifest_hash,

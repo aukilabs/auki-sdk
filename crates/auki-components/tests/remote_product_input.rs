@@ -116,4 +116,25 @@ fn imported_remote_product_binds_through_the_normal_typed_input_api() {
             .peer_id,
         "remote-peer"
     );
+
+    let mut second_producer = producer;
+    second_producer.peer_id = "second-remote-peer".to_owned();
+    let mut second_manifest = product_manifest;
+    second_manifest.peer_id = "second-remote-peer".to_owned();
+    second_manifest.producer = second_producer.reference();
+    let second_imported = RetainedProduct::<Frame>::imported_buffer(
+        second_manifest.clone(),
+        second_manifest.hash(),
+        second_producer,
+        BufferLimits::entries(4),
+        |frame| frame.0.len(),
+    )
+    .unwrap();
+    let second_binding = detector
+        .replace_configured_buffer_input(&_binding, &second_imported, CursorStart::Latest, &input)
+        .expect("the same Product ID on a different Peer is a distinct Product");
+    assert_eq!(
+        second_binding.manifest().product.peer_id,
+        "second-remote-peer"
+    );
 }

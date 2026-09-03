@@ -640,6 +640,7 @@ fn live_buffer_product_limits_can_be_reconfigured() {
         ProductState::Buffer {
             entries: 2,
             at_entry_capacity: false,
+            limits: Some(replacement_limits),
         }
     );
     output.publish(40, Arc::new(4.0)).unwrap();

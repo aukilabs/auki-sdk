@@ -339,6 +339,7 @@ impl<T: Send + Sync + 'static> BufferProductCapture<T> {
                 at_entry_capacity: limits
                     .max_entries
                     .is_some_and(|limit| range.entries == limit),
+                limits: Some(limits),
             },
         );
         Ok(range)
@@ -531,7 +532,14 @@ impl ComponentRuntime {
                 move |observation: &Observation<T>| retained_size(&observation.payload),
             )?,
         };
-        self.catalog().register_product(manifest)?;
+        self.catalog().register_product_with_state(
+            manifest,
+            ProductState::Buffer {
+                entries: 0,
+                at_entry_capacity: false,
+                limits: Some(limits),
+            },
+        )?;
         let state = Arc::new(Mutex::new(BufferCaptureState {
             product,
             end: None,
@@ -564,6 +572,7 @@ impl ComponentRuntime {
                         ProductState::Buffer {
                             entries: range.entries,
                             at_entry_capacity: limit.is_some_and(|limit| range.entries == limit),
+                            limits: Some(state.product.buffer.limits()),
                         },
                     );
                 }

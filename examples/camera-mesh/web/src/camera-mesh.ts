@@ -45,6 +45,7 @@ export interface CameraPeerCard {
 }
 
 export interface RemoteFrame {
+  readonly peerId: string;
   readonly jpeg: Uint8Array;
   readonly sequence: bigint;
   readonly timestampNs: bigint;
@@ -59,6 +60,7 @@ export interface RemoteConnection {
 }
 
 export interface RemoteSnapshot {
+  readonly peerId: string;
   readonly requestId: string;
   readonly sha256: string;
   readonly jpeg: Uint8Array;
@@ -71,8 +73,14 @@ export interface CameraMeshHooks {
   remoteFrame(frame: RemoteFrame): void;
   remoteConnected(connection: RemoteConnection): void;
   remoteSnapshot(snapshot: RemoteSnapshot): void;
-  snapshotExpired(requestId: string): void;
-  remoteEnded(reason: string): void;
+  snapshotExpired(requestId: string, peerId?: string): void;
+  remoteEnded(reason: string, peerId?: string): void;
+}
+
+interface RemoteSession {
+  readonly connection: RemoteConnection;
+  readonly subscription: AukiStreamSubscription;
+  task?: Promise<void>;
 }
 
 type Session = {
@@ -91,10 +99,9 @@ export class CameraMesh {
   private protocols?: CameraProtocols;
   private streamEndpoint?: AukiStreamEndpoint;
   private capture?: CameraCapture;
-  private subscription?: AukiStreamSubscription;
-  private viewerTask?: Promise<void>;
-  private activeTarget?: AukiExactTarget;
-  private remoteMetadata?: RemoteCameraMetadata;
+  private readonly remotes = new Map<string, RemoteSession>();
+  private readonly connecting = new Map<string, Promise<RemoteConnection>>();
+  private readonly pendingSnapshotTargets = new Map<string, AukiExactTarget>();
   private closing = false;
   private closePromise?: Promise<void>;
 
@@ -140,6 +147,10 @@ export class CameraMesh {
 
   get isPublishing(): boolean {
     return this.streamEndpoint !== undefined;
+  }
+
+  get connectedPeerIds(): readonly string[] {
+    return [...this.remotes.keys()];
   }
 
   card(): CameraPeerCard {
@@ -245,10 +256,32 @@ export class CameraMesh {
     });
   }
 
-  async view(candidate: CameraCandidate): Promise<void> {
+  async connectCamera(candidate: CameraCandidate): Promise<RemoteConnection> {
     this.assertOpen();
     if (this.role !== "viewer") throw new Error("this peer is not a viewer");
-    await this.stopViewing();
+    if (candidate.peerId === this.peerId) throw new Error("cannot connect to this viewer");
+    const existing = this.remotes.get(candidate.peerId);
+    if (existing) return existing.connection;
+    const pending = this.connecting.get(candidate.peerId);
+    if (pending) return pending;
+
+    const operation = this.connectCameraOwned(candidate);
+    this.connecting.set(candidate.peerId, operation);
+    try {
+      return await operation;
+    } finally {
+      if (this.connecting.get(candidate.peerId) === operation) {
+        this.connecting.delete(candidate.peerId);
+      }
+    }
+  }
+
+  /** Compatibility alias for the original single-camera example API. */
+  async view(candidate: CameraCandidate): Promise<void> {
+    await this.connectCamera(candidate);
+  }
+
+  private async connectCameraOwned(candidate: CameraCandidate): Promise<RemoteConnection> {
     const request: AukiStreamRequest = {
       sourcePeerId: candidate.peerId,
       resourceId: CAMERA_RESOURCE_ID,
@@ -266,24 +299,27 @@ export class CameraMesh {
         const metadata = await this.protocolStack().resolveRemoteMetadata(target);
         subscription = await this.streamClient.subscribeExact(target, "camera", request);
         validateStreamManifest(subscription.manifest, metadata, candidate.peerId);
-        this.subscription = subscription;
-        adopted = true;
-        this.activeTarget = target;
-        this.remoteMetadata = metadata;
-        this.viewerTask = this.consume(subscription, candidate.peerId);
-        this.hooks.remoteConnected({
+        if (this.closing) throw new Error("Camera Mesh peer is stopping");
+        const connection: RemoteConnection = {
           target: { ...target },
           metadata,
           streamManifest: subscription.manifest,
-        });
+        };
+        const remote: RemoteSession = { connection, subscription };
+        this.remotes.set(candidate.peerId, remote);
+        adopted = true;
+        remote.task = this.consume(candidate.peerId, remote);
+        this.hooks.remoteConnected(connection);
         this.hooks.event(`Viewing ${candidate.peerId} through ${route}`);
-        return;
+        return connection;
       } catch (error) {
         const reasons = [errorMessage(error)];
         if (subscription) {
           try {
             if (adopted) {
-              if (this.subscription === subscription) await this.stopViewing();
+              if (this.remotes.get(candidate.peerId)?.subscription === subscription) {
+                await this.disconnectCamera(candidate.peerId);
+              }
             } else {
               await cancelAndFree(subscription);
             }
@@ -297,49 +333,75 @@ export class CameraMesh {
     throw new Error(`Camera request declined or unreachable: ${failures.join("; ")}`);
   }
 
-  async pauseRemote(): Promise<void> {
-    const { target, metadata } = this.remoteControlContext();
+  async pauseRemote(peerId?: string): Promise<void> {
+    const { target, metadata } = this.remoteControlContext(peerId);
     await this.protocolStack().sendControl(target, metadata.controlChannel, {
       type: "camera.pause",
     });
     this.hooks.event(`Message camera.pause acknowledged by ${target.peerId}`);
   }
 
-  async resumeRemote(): Promise<void> {
-    const { target, metadata } = this.remoteControlContext();
+  async resumeRemote(peerId?: string): Promise<void> {
+    const { target, metadata } = this.remoteControlContext(peerId);
     await this.protocolStack().sendControl(target, metadata.controlChannel, {
       type: "camera.resume",
     });
     this.hooks.event(`Message camera.resume acknowledged by ${target.peerId}`);
   }
 
-  async requestSnapshot(): Promise<string> {
-    const { target, metadata } = this.remoteControlContext();
+  async requestSnapshot(peerId?: string): Promise<string> {
+    const { target, metadata } = this.remoteControlContext(peerId);
     const requestId = globalThis.crypto.randomUUID();
-    await this.protocolStack().sendControl(target, metadata.controlChannel, {
-      type: "camera.request_snapshot",
-      requestId,
-    });
+    this.pendingSnapshotTargets.set(requestId, { ...target });
+    try {
+      await this.protocolStack().sendControl(target, metadata.controlChannel, {
+        type: "camera.request_snapshot",
+        requestId,
+      });
+    } catch (error) {
+      this.pendingSnapshotTargets.delete(requestId);
+      throw error;
+    }
     this.hooks.event(`Message snapshot request ${requestId} acknowledged`);
     return requestId;
   }
 
-  async stopViewing(): Promise<void> {
-    const subscription = this.subscription;
-    const task = this.viewerTask;
-    this.subscription = undefined;
-    this.viewerTask = undefined;
-    this.activeTarget = undefined;
-    this.remoteMetadata = undefined;
-    if (subscription) {
-      try {
-        await subscription.cancel();
-      } catch {
-        // The reader task below owns reporting terminal transport failures.
-      }
+  async disconnectCamera(peerId: string): Promise<void> {
+    const remote = this.remotes.get(peerId);
+    if (!remote) return;
+    this.remotes.delete(peerId);
+    try {
+      await remote.subscription.cancel();
+    } catch {
+      // The reader task below owns reporting terminal transport failures.
     }
-    if (task) await task.catch(() => undefined);
-    subscription?.free();
+    if (remote.task) await remote.task.catch(() => undefined);
+    remote.subscription.free();
+  }
+
+  async stopViewing(): Promise<void> {
+    const results = await Promise.allSettled(
+      [...this.remotes.keys()].map((peerId) => this.disconnectCamera(peerId)),
+    );
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [errorMessage(result.reason)] : []);
+    if (failures.length) {
+      throw new Error(`Camera subscriptions failed to stop: ${failures.join("; ")}`);
+    }
+  }
+
+  async disconnectAllCameras(): Promise<void> {
+    await this.stopViewing();
+  }
+
+  private async waitForConnecting(): Promise<void> {
+    if (this.connecting.size === 0) return;
+    await Promise.allSettled([...this.connecting.values()]);
+  }
+
+  private async closeRemoteConnections(): Promise<void> {
+    await this.waitForConnecting();
+    await this.stopViewing();
   }
 
   close(): Promise<void> {
@@ -351,10 +413,11 @@ export class CameraMesh {
     this.closing = true;
     const errors: string[] = [];
     try {
-      await this.stopViewing();
+      await this.closeRemoteConnections();
     } catch (error) {
       errors.push(`viewer: ${errorMessage(error)}`);
     }
+    this.pendingSnapshotTargets.clear();
     try {
       await this.stopPublishing();
     } catch (error) {
@@ -397,7 +460,11 @@ export class CameraMesh {
           );
         },
         snapshotAvailable: (snapshot) => this.receiveSnapshot(snapshot),
-        snapshotExpired: (requestId) => this.hooks.snapshotExpired(requestId),
+        snapshotExpired: (requestId) => {
+          const peerId = this.pendingSnapshotTargets.get(requestId)?.peerId;
+          this.pendingSnapshotTargets.delete(requestId);
+          this.hooks.snapshotExpired(requestId, peerId);
+        },
         ignored: (event, reason) => {
           this.hooks.event(`Ignored Message ${event.type} from ${event.sender.peerId}: ${reason}`);
         },
@@ -407,10 +474,11 @@ export class CameraMesh {
   }
 
   private async receiveSnapshot(snapshot: SnapshotAvailable): Promise<void> {
-    const target = this.activeTarget;
+    const target = this.pendingSnapshotTargets.get(snapshot.requestId);
     if (!target || target.peerId !== snapshot.publisher.peerId) {
-      throw new Error("snapshot publisher is not the active camera peer");
+      throw new Error("snapshot publisher does not match the pending camera request");
     }
+    this.pendingSnapshotTargets.delete(snapshot.requestId);
     const blob: VerifiedBlob = await this.protocolStack().fetchVerifiedBlob(
       target,
       snapshot.sha256,
@@ -419,6 +487,7 @@ export class CameraMesh {
       throw new Error("verified Blob size differs from its Message announcement");
     }
     this.hooks.remoteSnapshot({
+      peerId: target.peerId,
       requestId: snapshot.requestId,
       sha256: blob.sha256,
       jpeg: blob.bytes,
@@ -435,14 +504,25 @@ export class CameraMesh {
     if (firstRequest) this.hooks.event(`Camera access pending for ${peerId}`);
   }
 
-  private remoteControlContext(): {
+  private remoteControlContext(peerId?: string): {
     target: AukiExactTarget;
     metadata: RemoteCameraMetadata;
   } {
     this.assertOpen();
     if (this.role !== "viewer") throw new Error("only a viewer sends camera controls");
-    if (!this.activeTarget || !this.remoteMetadata) throw new Error("no camera is connected");
-    return { target: this.activeTarget, metadata: this.remoteMetadata };
+    const resolvedPeerId = peerId ?? this.onlyConnectedPeerId();
+    const remote = this.remotes.get(resolvedPeerId);
+    if (!remote) throw new Error(`camera ${resolvedPeerId} is not connected`);
+    return {
+      target: remote.connection.target,
+      metadata: remote.connection.metadata,
+    };
+  }
+
+  private onlyConnectedPeerId(): string {
+    if (this.remotes.size === 0) throw new Error("no camera is connected");
+    if (this.remotes.size > 1) throw new Error("a camera Peer ID is required");
+    return requiredFirst(this.remotes.keys());
   }
 
   private protocolStack(): CameraProtocols {
@@ -484,12 +564,13 @@ export class CameraMesh {
     };
   }
 
-  private async consume(subscription: AukiStreamSubscription, peerId: string): Promise<void> {
+  private async consume(peerId: string, remote: RemoteSession): Promise<void> {
+    const { subscription } = remote;
     let received = 0;
     let bytes = 0;
     let terminalReason: string | undefined;
     try {
-      while (this.subscription === subscription) {
+      while (this.remotes.get(peerId) === remote) {
         const next = await subscription.next();
         if (!next) {
           terminalReason = `Camera ${peerId} closed the Stream`;
@@ -503,6 +584,7 @@ export class CameraMesh {
         received += 1;
         bytes += jpeg.byteLength;
         this.hooks.remoteFrame({
+          peerId,
           jpeg,
           sequence: next.entry.sequence,
           timestampNs: next.entry.timestampNs,
@@ -511,17 +593,14 @@ export class CameraMesh {
         });
       }
     } catch (error) {
-      if (this.subscription === subscription && !this.closing) {
+      if (this.remotes.get(peerId) === remote && !this.closing) {
         terminalReason = `Camera ${peerId} failed: ${errorMessage(error)}`;
       }
     } finally {
-      if (this.subscription === subscription) {
-        this.subscription = undefined;
-        this.viewerTask = undefined;
-        this.activeTarget = undefined;
-        this.remoteMetadata = undefined;
+      if (this.remotes.get(peerId) === remote) {
+        this.remotes.delete(peerId);
         subscription.free();
-        this.hooks.remoteEnded(terminalReason ?? `Camera ${peerId} Stream stopped`);
+        this.hooks.remoteEnded(terminalReason ?? `Camera ${peerId} Stream stopped`, peerId);
       }
     }
   }
@@ -533,6 +612,12 @@ export class CameraMesh {
   private assertOpen(): void {
     if (this.closing) throw new Error("Camera Mesh peer is stopping");
   }
+}
+
+function requiredFirst<T>(values: IterableIterator<T>): T {
+  const value = values.next();
+  if (value.done) throw new Error("expected a connected camera");
+  return value.value;
 }
 
 async function cancelAndFree(subscription: AukiStreamSubscription): Promise<void> {

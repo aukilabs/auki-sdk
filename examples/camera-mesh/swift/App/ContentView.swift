@@ -66,6 +66,7 @@ struct ContentView: View {
               .tag(domain.id)
           }
         }
+        .disabled(model.phase != .authenticated)
         Picker("Role", selection: $model.selectedRole) {
           ForEach(CameraMeshRole.allCases) { role in
             Text(role.title).tag(role)
@@ -87,10 +88,18 @@ struct ContentView: View {
 
   private var peerSection: some View {
     Section("This \(model.selectedRole.title.lowercased())") {
-      LabeledContent("Peer") {
-        Text(shortPeerID(model.localPeerID))
-          .font(.caption.monospaced())
+      VStack(alignment: .leading, spacing: 4) {
+        Text("Peer ID")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        Text(model.localPeerID)
+          .font(.caption2.monospaced())
           .textSelection(.enabled)
+      }
+      Button {
+        UIPasteboard.general.string = model.localPeerID
+      } label: {
+        Label("Copy Peer ID", systemImage: "person.text.rectangle")
       }
       DisclosureGroup("Peer card") {
         Text(model.localCard)

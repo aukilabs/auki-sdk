@@ -10,8 +10,13 @@ enum CameraCaptureError: LocalizedError, Sendable {
   case unavailable
   case cannotAddInput
   case cannotAddOutput
+  case unsupportedLandscapeRotation
   case failedToStart
   case alreadyStopped
+  case interrupted(String)
+  case runtimeFailure(String)
+  case stoppedUnexpectedly
+  case frameStalled
 
   var errorDescription: String? {
     switch self {
@@ -23,10 +28,20 @@ enum CameraCaptureError: LocalizedError, Sendable {
       "The back camera could not be added to the capture session."
     case .cannotAddOutput:
       "Video frames could not be added to the capture session."
+    case .unsupportedLandscapeRotation:
+      "The back camera cannot produce the fixed landscape Camera Mesh feed."
     case .failedToStart:
       "The camera capture session did not start."
     case .alreadyStopped:
       "This camera capture has already stopped. Create a new capture to restart."
+    case .interrupted(let reason):
+      "Camera capture was interrupted: \(reason)"
+    case .runtimeFailure(let reason):
+      "Camera capture failed: \(reason)"
+    case .stoppedUnexpectedly:
+      "Camera capture stopped unexpectedly."
+    case .frameStalled:
+      "Camera capture did not produce an encoded JPEG for 3 seconds."
     }
   }
 }
@@ -37,7 +52,7 @@ enum CameraCaptureError: LocalizedError, Sendable {
 /// queue. The stream retains only its newest frame, so a slow consumer cannot
 /// build an unbounded queue of JPEGs.
 final class CameraCapture: NSObject, @unchecked Sendable {
-  let frames: AsyncStream<Data>
+  let frames: AsyncThrowingStream<Data, any Error>
 
   private enum State: Equatable {
     case idle
@@ -49,7 +64,8 @@ final class CameraCapture: NSObject, @unchecked Sendable {
   private static let targetHeight = CGFloat(CameraMeshContract.height)
   private static let frameIntervalNanoseconds =
     UInt64(1_000_000_000 / CameraMeshContract.rateHz)
-  private let frameContinuation: AsyncStream<Data>.Continuation
+  private static let watchdogTimeoutNanoseconds = UInt64(3_000_000_000)
+  private let frameContinuation: AsyncThrowingStream<Data, any Error>.Continuation
   private let captureQueue = DispatchQueue(
     label: "com.aukilabs.examples.camera-mesh.capture",
     qos: .userInitiated
@@ -63,9 +79,15 @@ final class CameraCapture: NSObject, @unchecked Sendable {
   private var state = State.idle
   private var configured = false
   private var lastFrameUptimeNanoseconds: UInt64?
+  private var watchdogStartedUptimeNanoseconds: UInt64?
+  private var lastSuccessfulJPEGUptimeNanoseconds: UInt64?
+  private var frameWatchdog: DispatchSourceTimer?
+  private var notificationObservers: [NSObjectProtocol] = []
 
   override init() {
-    let pair = AsyncStream<Data>.makeStream(bufferingPolicy: .bufferingNewest(1))
+    let pair = AsyncThrowingStream<Data, any Error>.makeStream(
+      bufferingPolicy: .bufferingNewest(1)
+    )
     frames = pair.stream
     frameContinuation = pair.continuation
     super.init()
@@ -141,6 +163,7 @@ final class CameraCapture: NSObject, @unchecked Sendable {
       throw CameraCaptureError.failedToStart
     }
     state = .running
+    startFrameWatchdogOnCaptureQueue()
   }
 
   private func configureOnCaptureQueue() throws {
@@ -180,13 +203,144 @@ final class CameraCapture: NSObject, @unchecked Sendable {
 
     session.addInput(input)
     session.addOutput(videoOutput)
-    videoOutput.setSampleBufferDelegate(self, queue: captureQueue)
     configured = true
+
+    guard
+      let videoConnection = videoOutput.connection(with: .video),
+      videoConnection.isVideoRotationAngleSupported(0)
+    else {
+      throw CameraCaptureError.unsupportedLandscapeRotation
+    }
+    // Camera Mesh intentionally has one fixed 16:9 wire orientation. Keeping
+    // the sensor-native landscape angle avoids device-dependent defaults and
+    // makes every emitted buffer deterministic regardless of UI rotation.
+    videoConnection.videoRotationAngle = 0
+
+    videoOutput.setSampleBufferDelegate(self, queue: captureQueue)
+    installNotificationObserversOnCaptureQueue()
   }
 
-  private func stopOnCaptureQueue() {
+  private func installNotificationObserversOnCaptureQueue() {
+    guard notificationObservers.isEmpty else { return }
+
+    let center = NotificationCenter.default
+    notificationObservers.append(
+      center.addObserver(
+        forName: AVCaptureSession.runtimeErrorNotification,
+        object: session,
+        queue: nil
+      ) { [weak self] notification in
+        let reason =
+          (notification.userInfo?[AVCaptureSessionErrorKey] as? NSError)?.localizedDescription
+          ?? "unknown AVFoundation runtime error"
+        self?.captureQueue.async { [weak self] in
+          self?.stopOnCaptureQueue(
+            throwing: CameraCaptureError.runtimeFailure(reason)
+          )
+        }
+      }
+    )
+    notificationObservers.append(
+      center.addObserver(
+        forName: AVCaptureSession.wasInterruptedNotification,
+        object: session,
+        queue: nil
+      ) { [weak self] notification in
+        let reason = Self.interruptionReason(notification)
+        self?.captureQueue.async { [weak self] in
+          self?.stopOnCaptureQueue(
+            throwing: CameraCaptureError.interrupted(reason)
+          )
+        }
+      }
+    )
+    notificationObservers.append(
+      center.addObserver(
+        forName: AVCaptureSession.didStopRunningNotification,
+        object: session,
+        queue: nil
+      ) { [weak self] _ in
+        self?.captureQueue.async { [weak self] in
+          self?.stopOnCaptureQueue(
+            throwing: CameraCaptureError.stoppedUnexpectedly
+          )
+        }
+      }
+    )
+  }
+
+  private static func interruptionReason(_ notification: Notification) -> String {
+    guard
+      let value = notification.userInfo?[AVCaptureSessionInterruptionReasonKey] as? NSNumber
+    else {
+      return "the camera became unavailable"
+    }
+    switch value.intValue {
+    case 1:
+      return "the app left the foreground"
+    case 2:
+      return "another client is using the audio device"
+    case 3:
+      return "another client is using the camera"
+    case 4:
+      return "the camera is unavailable in the current multi-app layout"
+    case 5:
+      return "the device is under excessive system pressure"
+    case 6:
+      return "sensitive-content mitigation stopped the camera"
+    default:
+      return "AVFoundation reason \(value.intValue)"
+    }
+  }
+
+  private func startFrameWatchdogOnCaptureQueue() {
+    guard frameWatchdog == nil else { return }
+
+    watchdogStartedUptimeNanoseconds = DispatchTime.now().uptimeNanoseconds
+    lastSuccessfulJPEGUptimeNanoseconds = nil
+    let watchdog = DispatchSource.makeTimerSource(queue: captureQueue)
+    watchdog.schedule(
+      deadline: .now() + .seconds(1),
+      repeating: .seconds(1),
+      leeway: .milliseconds(100)
+    )
+    watchdog.setEventHandler { [weak self] in
+      self?.checkFrameWatchdogOnCaptureQueue()
+    }
+    frameWatchdog = watchdog
+    watchdog.resume()
+  }
+
+  private func checkFrameWatchdogOnCaptureQueue() {
+    guard state == .running else { return }
+    guard
+      let reference = lastSuccessfulJPEGUptimeNanoseconds
+        ?? watchdogStartedUptimeNanoseconds
+    else {
+      return
+    }
+
+    let now = DispatchTime.now().uptimeNanoseconds
+    guard now >= reference, now - reference >= Self.watchdogTimeoutNanoseconds else {
+      return
+    }
+    stopOnCaptureQueue(throwing: CameraCaptureError.frameStalled)
+  }
+
+  private func stopOnCaptureQueue(throwing terminalError: CameraCaptureError? = nil) {
     guard state != .stopped else { return }
     state = .stopped
+
+    frameWatchdog?.cancel()
+    frameWatchdog = nil
+    watchdogStartedUptimeNanoseconds = nil
+    lastSuccessfulJPEGUptimeNanoseconds = nil
+
+    let center = NotificationCenter.default
+    for observer in notificationObservers {
+      center.removeObserver(observer)
+    }
+    notificationObservers.removeAll()
 
     videoOutput.setSampleBufferDelegate(nil, queue: nil)
     if session.isRunning {
@@ -204,7 +358,11 @@ final class CameraCapture: NSObject, @unchecked Sendable {
       configured = false
     }
     lastFrameUptimeNanoseconds = nil
-    frameContinuation.finish()
+    if let terminalError {
+      frameContinuation.finish(throwing: terminalError)
+    } else {
+      frameContinuation.finish()
+    }
   }
 
   private func makeJPEG(from sampleBuffer: CMSampleBuffer) -> Data? {
@@ -279,7 +437,14 @@ extension CameraCapture: AVCaptureVideoDataOutputSampleBufferDelegate {
 
     autoreleasepool {
       guard let jpeg = makeJPEG(from: sampleBuffer) else { return }
-      frameContinuation.yield(jpeg)
+      switch frameContinuation.yield(jpeg) {
+      case .enqueued, .dropped:
+        lastSuccessfulJPEGUptimeNanoseconds = DispatchTime.now().uptimeNanoseconds
+      case .terminated:
+        break
+      @unknown default:
+        break
+      }
     }
   }
 }

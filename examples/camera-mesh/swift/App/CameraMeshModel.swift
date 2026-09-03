@@ -172,7 +172,7 @@ final class CameraMeshModel: ObservableObject {
         selectedDomainID = choices[0].id
       }
       phase = .authenticated
-      write("Authenticated. Choose the Domain that contains the camera publisher.")
+      write("Authenticated. Choose a Domain and Camera Mesh role.")
       return true
     } catch {
       guard generation == operationGeneration else { return false }
@@ -370,9 +370,21 @@ final class CameraMeshModel: ObservableObject {
 
   func approveViewer(_ peerID: String) async {
     guard phase == .ready, let publisher else { return }
+    let operationGeneration = generation
     do {
       try await publisher.approve(peerID: peerID)
-      pendingViewerPeerIDs = try await publisher.pendingApprovals()
+      guard
+        generation == operationGeneration,
+        self.publisher === publisher,
+        phase == .ready
+      else { return }
+      let pending = try await publisher.pendingApprovals()
+      guard
+        generation == operationGeneration,
+        self.publisher === publisher,
+        phase == .ready
+      else { return }
+      pendingViewerPeerIDs = pending.sorted()
       if !approvedViewerPeerIDs.contains(peerID) {
         approvedViewerPeerIDs.append(peerID)
         approvedViewerPeerIDs.sort()
@@ -381,20 +393,42 @@ final class CameraMeshModel: ObservableObject {
       write("Approved exact viewer Peer ID \(peerID). The viewer may retry now.")
       print("AUKI_IOS_CAMERA_VIEWER_APPROVED peer=\(peerID)")
     } catch {
+      guard
+        generation == operationGeneration,
+        self.publisher === publisher,
+        phase == .ready
+      else { return }
       write(error)
     }
   }
 
   func revokeViewer(_ peerID: String) async {
     guard phase == .ready, let publisher else { return }
+    let operationGeneration = generation
     do {
       try await publisher.revoke(peerID: peerID)
-      pendingViewerPeerIDs = try await publisher.pendingApprovals()
+      guard
+        generation == operationGeneration,
+        self.publisher === publisher,
+        phase == .ready
+      else { return }
+      let pending = try await publisher.pendingApprovals()
+      guard
+        generation == operationGeneration,
+        self.publisher === publisher,
+        phase == .ready
+      else { return }
+      pendingViewerPeerIDs = pending.sorted()
       approvedViewerPeerIDs.removeAll(where: { $0 == peerID })
       lastPublisherEvent = "Revoked viewer \(peerID)"
       write("Revoked viewer Peer ID \(peerID).")
       print("AUKI_IOS_CAMERA_VIEWER_REVOKED peer=\(peerID)")
     } catch {
+      guard
+        generation == operationGeneration,
+        self.publisher === publisher,
+        phase == .ready
+      else { return }
       write(error)
     }
   }
@@ -686,7 +720,7 @@ final class CameraMeshModel: ObservableObject {
     try await withThrowingTaskGroup(of: Data.self) { group in
       group.addTask {
         var frames = source.frames.makeAsyncIterator()
-        guard let jpeg = await frames.next() else {
+        guard let jpeg = try await frames.next() else {
           throw CameraPublisherError("Camera capture stopped before its first frame")
         }
         return jpeg
@@ -711,31 +745,91 @@ final class CameraMeshModel: ObservableObject {
   ) {
     let frames = source.frames
     frameTask = Task { [weak self] in
-      for await jpeg in frames {
-        guard !Task.isCancelled else { return }
-        do {
-          try await target.updateLatestJPEG(jpeg)
-        } catch {
+      do {
+        for try await jpeg in frames {
+          guard !Task.isCancelled else { return }
+          do {
+            try await target.updateLatestJPEG(jpeg)
+          } catch {
+            guard
+              let self,
+              self.generation == frameGeneration,
+              self.publisher === target,
+              self.phase == .ready
+            else { return }
+            self.publisherFrameForwardingFailed(
+              error,
+              generation: frameGeneration,
+              publisher: target
+            )
+            return
+          }
+
           guard
             let self,
             self.generation == frameGeneration,
             self.publisher === target,
-            self.phase != .stopping
+            self.phase == .ready
           else { return }
-          self.lastPublisherEvent = "Camera frame forwarding failed"
-          self.write(error)
-          return
+          self.latestFrameImage = UIImage(data: jpeg)
+          self.frameCount &+= 1
         }
-
+      } catch {
         guard
           let self,
           self.generation == frameGeneration,
           self.publisher === target,
           self.phase == .ready
         else { return }
-        self.latestFrameImage = UIImage(data: jpeg)
-        self.frameCount &+= 1
+        self.publisherCaptureFailed(error, generation: frameGeneration, publisher: target)
+        return
       }
+
+      guard
+        let self,
+        !Task.isCancelled,
+        self.generation == frameGeneration,
+        self.publisher === target,
+        self.phase == .ready
+      else { return }
+      self.publisherCaptureFailed(
+        CameraPublisherError("Camera capture ended unexpectedly"),
+        generation: frameGeneration,
+        publisher: target
+      )
+    }
+  }
+
+  private func publisherCaptureFailed(
+    _ error: Error,
+    generation frameGeneration: Int,
+    publisher source: CameraPublisher
+  ) {
+    guard generation == frameGeneration, publisher === source, phase == .ready else { return }
+    lastPublisherEvent = "Camera capture failed"
+    write(error)
+    print("AUKI_IOS_CAMERA_CAPTURE_FAILURE \(error.localizedDescription)")
+    stopPublisherAfterFrameFailure(reason: "Camera capture stopped; publisher unadvertised")
+  }
+
+  private func publisherFrameForwardingFailed(
+    _ error: Error,
+    generation frameGeneration: Int,
+    publisher source: CameraPublisher
+  ) {
+    guard generation == frameGeneration, publisher === source, phase == .ready else { return }
+    lastPublisherEvent = "Camera frame forwarding failed"
+    write(error)
+    print("AUKI_IOS_CAMERA_FRAME_FORWARDING_FAILURE \(error.localizedDescription)")
+    stopPublisherAfterFrameFailure(
+      reason: "Camera frame forwarding stopped; publisher unadvertised")
+  }
+
+  private func stopPublisherAfterFrameFailure(reason: String) {
+    // The stop task must not await the frame task that is asking it to stop.
+    frameTask = nil
+    Task { [weak self] in
+      await self?.stop(reason: reason)
     }
   }
 
@@ -769,7 +863,7 @@ final class CameraMeshModel: ObservableObject {
     from source: CameraPublisher,
     generation eventGeneration: Int
   ) async {
-    guard generation == eventGeneration, publisher === source else { return }
+    guard generation == eventGeneration, publisher === source, phase == .ready else { return }
 
     switch event {
     case .approvalRequired(let peerID):
@@ -782,7 +876,9 @@ final class CameraMeshModel: ObservableObject {
       print("AUKI_IOS_CAMERA_APPROVAL_PENDING peer=\(peerID)")
 
     case .controlReceived(let peerID, let control):
-      if let currentPaused = try? await source.paused() {
+      let currentPaused = try? await source.paused()
+      guard generation == eventGeneration, publisher === source, phase == .ready else { return }
+      if let currentPaused {
         paused = currentPaused
       }
       lastPublisherEvent = "\(control) from \(peerID)"
@@ -801,6 +897,23 @@ final class CameraMeshModel: ObservableObject {
       lastPublisherEvent = "Publisher runtime error"
       write(message)
       print("AUKI_IOS_CAMERA_PUBLISHER_FAILURE \(message)")
+    }
+
+    await reconcilePendingApprovals(from: source, generation: eventGeneration)
+  }
+
+  private func reconcilePendingApprovals(
+    from source: CameraPublisher,
+    generation eventGeneration: Int
+  ) async {
+    do {
+      let pending = try await source.pendingApprovals()
+      guard generation == eventGeneration, publisher === source, phase == .ready else { return }
+      pendingViewerPeerIDs = pending.sorted()
+    } catch {
+      guard generation == eventGeneration, publisher === source, phase == .ready else { return }
+      lastPublisherEvent = "Could not refresh pending viewers"
+      write(error)
     }
   }
 

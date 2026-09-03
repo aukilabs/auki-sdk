@@ -106,10 +106,15 @@ Log in, choose a Domain, select **Publisher**, and start. Grant camera access.
 The app previews the back camera, books TCP and WSS relay routes, advertises the
 Stream protocol through DDS, and displays its complete peer card.
 
-Connect from a Web or native viewer. Before approval, the viewer must receive no
-camera metadata or frames. The phone displays the requesting Peer ID in
-**Pending viewers**; verify the complete value and approve it. Approval lasts
-only for this publisher process and can be revoked in the app.
+Capture uses a fixed sensor-native landscape orientation so every runtime sees
+the same 480×270 wire image. Hold the phone in landscape for an upright preview;
+rotating the UI does not rotate frames already being published.
+
+Connect from a Web or native viewer. Before approval, Info may identify the
+peer, but Catalog and Registry camera resources and Stream frames remain
+unavailable. The phone displays the requesting Peer ID in **Pending viewers**;
+verify the complete value and approve it. Approval lasts only for this
+publisher process and can be revoked in the app.
 
 For the native one-command acceptance flow, start a native viewer and send the
 following JSON line after replacing `target` with the phone's complete card:

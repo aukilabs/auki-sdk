@@ -174,6 +174,13 @@ final class CameraMeshModel: ObservableObject {
   var remainingCameraSlots: Int {
     max(0, CameraMeshContract.maximumViewerConnections - cameraTiles.count)
   }
+
+  var canAddAllCameras: Bool {
+    guard selectedRole == .viewer, phase == .ready, !addingAllCameras else { return false }
+    if discoveredCameras.isEmpty { return true }
+    return !addAllCandidates().isEmpty
+  }
+
   var awaitingApproval: Bool {
     cameraTiles.contains { $0.status == .awaitingApproval }
   }
@@ -609,14 +616,18 @@ final class CameraMeshModel: ObservableObject {
     write("Removed camera \(peerID).")
   }
 
-  func addAllDiscoveredCameras() async {
+  func discoverAndAddAllCameras() async {
     guard phase == .ready, selectedRole == .viewer, !addingAllCameras else { return }
-    let connected = Set(cameraTiles.map(\.peerID))
-    let candidates =
-      discoveredCameras
-      .filter { !connected.contains($0.peerID) }
-      .prefix(remainingCameraSlots)
-    guard !candidates.isEmpty else { return }
+
+    if discoveredCameras.isEmpty {
+      guard await discover() else { return }
+    }
+
+    let candidates = addAllCandidates()
+    guard !candidates.isEmpty else {
+      write("Every discovered camera is already on the wall.")
+      return
+    }
 
     addingAllCameras = true
     defer { addingAllCameras = false }
@@ -627,6 +638,23 @@ final class CameraMeshModel: ObservableObject {
       }
     }
     for task in tasks { _ = await task.value }
+  }
+
+  private func addAllCandidates() -> [CameraMeshCandidate] {
+    var newCameraSlots = remainingCameraSlots
+    return discoveredCameras.filter { candidate in
+      guard let existing = tile(peerID: candidate.peerID) else {
+        guard newCameraSlots > 0 else { return false }
+        newCameraSlots -= 1
+        return true
+      }
+      switch existing.status {
+      case .awaitingApproval, .ended, .error:
+        return true
+      case .connecting, .waiting, .live:
+        return false
+      }
+    }
   }
 
   func focusCamera(peerID: String) {

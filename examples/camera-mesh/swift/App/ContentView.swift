@@ -682,20 +682,24 @@ private struct AddCameraSheet: View {
             } label: {
               Label("Refresh", systemImage: "arrow.clockwise")
             }
+            .buttonStyle(.borderless)
             .disabled(!model.canDiscover)
 
             Spacer()
 
             Button {
-              Task { await model.addAllDiscoveredCameras() }
+              Task { await model.discoverAndAddAllCameras() }
             } label: {
               if model.addingAllCameras {
                 ProgressView()
+                  .frame(minWidth: 72)
               } else {
-                Text("Add all")
+                Label("Add all", systemImage: "rectangle.stack.badge.plus")
               }
             }
-            .disabled(model.addingAllCameras || addableCameras.isEmpty)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+            .disabled(!model.canAddAllCameras)
           }
         } header: {
           Text("Discover publishers")
@@ -767,16 +771,9 @@ private struct AddCameraSheet: View {
           Button("Done", action: dismiss)
         }
       }
-      .task {
-        if model.discoveredCameras.isEmpty { _ = await model.discover() }
-      }
     }
   }
 
-  private var addableCameras: [CameraMeshCandidate] {
-    let existing = Set(model.cameraTiles.map(\.peerID))
-    return model.discoveredCameras.filter { !existing.contains($0.peerID) }
-  }
 }
 
 private struct CameraSessionSheet: View {

@@ -202,6 +202,7 @@ impl CameraComponent {
             schema: "auki.component-manifest/v1".to_owned(),
             peer_id: peer_id.clone(),
             component_id: component_id.clone(),
+            product_inputs: vec![],
             observables: vec![ObservableContract {
                 name: FRAMES_SLOT.to_owned(),
                 datatype: "video_frame".to_owned(),

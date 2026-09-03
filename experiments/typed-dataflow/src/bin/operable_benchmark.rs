@@ -50,6 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         schema: "benchmark.component/v1".to_owned(),
         peer_id: "peer-a".to_owned(),
         component_id: "counter".to_owned(),
+        product_inputs: Vec::new(),
         observables: Vec::new(),
         operables: Vec::new(),
     }

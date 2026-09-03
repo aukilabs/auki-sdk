@@ -8,13 +8,16 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use crate::PublishReport;
+use crate::buffer::{BufferReader, BufferReaderStats, CursorStart};
 use crate::component::{
     Catalog, CatalogError, ComponentManifest, ComponentReference, Exposure, InvocationContext,
     InvocationError, InvocationOrdering, Observable, ObservableContract, Observation,
     ObservationAccess, ObservationEmitter, ObservationEnd, ObservationEndReason, ObservationEvent,
     Operable, OperableContract, OutputManifest, OutputReference, PayloadContract, PeerRuntime,
-    output_observable,
+    ProductForm, ProductInputBindingManifest, ProductInputContract, output_observable,
 };
+use crate::ports::InputPort;
+use crate::product::RetainedProduct;
 
 /// Binds a Rust payload or instruction type to its advertised datatype.
 ///
@@ -47,6 +50,7 @@ primitive_contract_type!(String, "string");
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ComponentSpec {
     pub component_id: String,
+    pub product_inputs: Vec<ProductInputContract>,
     pub observables: Vec<ObservableContract>,
     pub operables: Vec<OperableContract>,
 }
@@ -55,9 +59,15 @@ impl ComponentSpec {
     pub fn new(component_id: impl Into<String>) -> Self {
         Self {
             component_id: component_id.into(),
+            product_inputs: Vec::new(),
             observables: Vec::new(),
             operables: Vec::new(),
         }
+    }
+
+    pub fn product_input(mut self, contract: ProductInputContract) -> Self {
+        self.product_inputs.push(contract);
+        self
     }
 
     pub fn observable(mut self, contract: ObservableContract) -> Self {
@@ -109,12 +119,14 @@ pub enum ComponentBuildError {
     LocalInterfaceInClusterManifest(String),
     UnknownObservable(String),
     UnknownOperable(String),
+    UnknownProductInput(String),
     UnsupportedLiveAccess {
         interface: String,
         access: ObservationAccess,
     },
     DuplicateConfiguredObservable(String),
     DuplicateOperable(String),
+    DuplicateConfiguredProductInput(String),
     ContractMismatch {
         interface: String,
         expected_datatype: String,
@@ -134,9 +146,21 @@ pub enum ComponentBuildError {
         expected_result: String,
         actual_result: String,
     },
+    ProductInputContractMismatch {
+        interface: String,
+        expected_form: ProductForm,
+        actual_form: ProductForm,
+        expected_datatype: String,
+        actual_datatype: String,
+        expected_schema: String,
+        actual_schema: String,
+    },
+    ProductProducerMismatch(String),
     MissingObservable(String),
     MissingOperable(String),
+    MissingProductInput(String),
     DroppedObservable(String),
+    DroppedProductInput(String),
     NotExposed,
     NotCurrentOutput {
         interface: String,
@@ -163,6 +187,9 @@ impl fmt::Display for ComponentBuildError {
             Self::UnknownOperable(name) => {
                 write!(formatter, "Component does not declare Operable {name}")
             }
+            Self::UnknownProductInput(name) => {
+                write!(formatter, "Component does not declare Product input {name}")
+            }
             Self::UnsupportedLiveAccess { interface, access } => write!(
                 formatter,
                 "fresh Observable {interface} cannot advertise retained request {access:?}"
@@ -171,6 +198,9 @@ impl fmt::Display for ComponentBuildError {
                 write!(formatter, "Observable {name} is already configured")
             }
             Self::DuplicateOperable(name) => write!(formatter, "Operable {name} is already live"),
+            Self::DuplicateConfiguredProductInput(name) => {
+                write!(formatter, "Product input {name} is already configured")
+            }
             Self::ContractMismatch {
                 interface,
                 expected_datatype,
@@ -200,6 +230,22 @@ impl fmt::Display for ComponentBuildError {
                 formatter,
                 "Operable {interface} requires {expected_instruction} -> {expected_result}, but its Rust types declare {actual_instruction} -> {actual_result}"
             ),
+            Self::ProductInputContractMismatch {
+                interface,
+                expected_form,
+                actual_form,
+                expected_datatype,
+                actual_datatype,
+                expected_schema,
+                actual_schema,
+            } => write!(
+                formatter,
+                "Product input {interface} requires {expected_form:?} {expected_datatype}/{expected_schema}, but the bound Product is {actual_form:?} {actual_datatype}/{actual_schema}"
+            ),
+            Self::ProductProducerMismatch(product_id) => write!(
+                formatter,
+                "Product {product_id} producer metadata does not match its producer reference"
+            ),
             Self::MissingObservable(name) => {
                 write!(
                     formatter,
@@ -212,9 +258,17 @@ impl fmt::Display for ComponentBuildError {
                     "cannot expose Component: Operable {name} is not live"
                 )
             }
+            Self::MissingProductInput(name) => write!(
+                formatter,
+                "cannot expose Component: Product input {name} is not live"
+            ),
             Self::DroppedObservable(name) => write!(
                 formatter,
                 "cannot expose Component: Observable {name} was dropped before exposure"
+            ),
+            Self::DroppedProductInput(name) => write!(
+                formatter,
+                "cannot expose Component: Product input {name} was dropped before exposure"
             ),
             Self::NotExposed => formatter.write_str("Component is not exposed"),
             Self::NotCurrentOutput {
@@ -247,9 +301,15 @@ impl From<CatalogError> for ComponentBuildError {
 
 #[derive(Default)]
 struct ComponentState {
+    configured_product_inputs: BTreeMap<String, ConfiguredProductInputRegistration>,
     configured_outputs: BTreeMap<String, ConfiguredOutputRegistration>,
     live_operables: BTreeMap<String, std::sync::Weak<()>>,
     exposed: bool,
+}
+
+struct ConfiguredProductInputRegistration {
+    manifest: ProductInputBindingManifest,
+    liveness: std::sync::Weak<()>,
 }
 
 struct ConfiguredOutputRegistration {
@@ -290,6 +350,18 @@ impl PeerRuntime {
             return Err(ComponentBuildError::EmptyComponentId);
         }
         let mut names = BTreeSet::new();
+        for contract in &spec.product_inputs {
+            if contract.exposure != Exposure::Cluster {
+                return Err(ComponentBuildError::LocalInterfaceInClusterManifest(
+                    contract.name.clone(),
+                ));
+            }
+            if !names.insert(("product_input", contract.name.as_str())) {
+                return Err(ComponentBuildError::DuplicateInterface(
+                    contract.name.clone(),
+                ));
+            }
+        }
         for contract in &spec.observables {
             if contract.exposure != Exposure::Cluster {
                 return Err(ComponentBuildError::LocalInterfaceInClusterManifest(
@@ -319,6 +391,7 @@ impl PeerRuntime {
             schema: "auki.component-manifest/v1".to_owned(),
             peer_id: self.peer_id().to_owned(),
             component_id: spec.component_id,
+            product_inputs: spec.product_inputs,
             observables: spec.observables,
             operables: spec.operables,
         };
@@ -341,6 +414,113 @@ impl Component {
 
     pub fn reference(&self) -> &ComponentReference {
         &self.inner.reference
+    }
+
+    /// Binds one declared Product input to a retained Buffer Product and starts
+    /// its typed reader. The returned handle owns the live relationship.
+    ///
+    /// The Component cannot be exposed unless every declared Product input has
+    /// one live binding. The Catalog projects the immutable input contract and
+    /// the concrete Product binding separately.
+    pub fn configured_buffer_input<T: ContractType + Send + Sync + 'static>(
+        &self,
+        name: &str,
+        product: &RetainedProduct<T>,
+        start: CursorStart,
+        input: &InputPort<Observation<T>>,
+    ) -> Result<ConfiguredBufferInput<T>, ComponentBuildError> {
+        let contract = self
+            .inner
+            .manifest
+            .product_inputs
+            .iter()
+            .find(|contract| contract.name == name)
+            .ok_or_else(|| ComponentBuildError::UnknownProductInput(name.to_owned()))?;
+        if product.producer.reference() != product.manifest.producer {
+            return Err(ComponentBuildError::ProductProducerMismatch(
+                product.manifest.product_id.clone(),
+            ));
+        }
+        let actual_datatype = product.producer.payload.datatype();
+        let actual_schema = product.producer.payload.schema();
+        if contract.form != ProductForm::Buffer
+            || product.manifest.form != contract.form
+            || contract.datatype != actual_datatype
+            || contract.schema != actual_schema
+        {
+            return Err(ComponentBuildError::ProductInputContractMismatch {
+                interface: contract.name.clone(),
+                expected_form: contract.form,
+                actual_form: product.manifest.form,
+                expected_datatype: contract.datatype.clone(),
+                actual_datatype: actual_datatype.to_owned(),
+                expected_schema: contract.schema.clone(),
+                actual_schema: actual_schema.to_owned(),
+            });
+        }
+        if T::DATATYPE != contract.datatype {
+            return Err(ComponentBuildError::RustDatatypeMismatch {
+                interface: contract.name.clone(),
+                rust_datatype: T::DATATYPE.to_owned(),
+                contract_datatype: contract.datatype.clone(),
+            });
+        }
+        let catalog_product = self
+            .inner
+            .catalog
+            .product(&product.manifest.product_id)
+            .ok_or_else(|| {
+                ComponentBuildError::Catalog(CatalogError::UnknownProduct(
+                    product.manifest.product_id.clone(),
+                ))
+            })?;
+        if product.manifest_hash != catalog_product.manifest_hash
+            || product.manifest != catalog_product.manifest
+        {
+            return Err(ComponentBuildError::Catalog(
+                CatalogError::ProductManifestMismatch {
+                    product_id: product.manifest.product_id.clone(),
+                    expected: catalog_product.manifest_hash,
+                    actual: product.manifest_hash.clone(),
+                },
+            ));
+        }
+
+        let manifest = ProductInputBindingManifest {
+            schema: "auki.component-product-input-binding/v1".to_owned(),
+            peer_id: self.inner.reference.peer_id.clone(),
+            component_id: self.inner.reference.component_id.clone(),
+            component_manifest_hash: self.inner.reference.manifest_hash.clone(),
+            slot: contract.name.clone(),
+            product: product.manifest.clone(),
+            product_manifest_hash: product.manifest_hash.clone(),
+            producer: product.producer.clone(),
+        };
+        let liveness = Arc::new(());
+        let mut state = self.inner.state.lock().unwrap();
+        if state.exposed {
+            return Err(ComponentBuildError::AlreadyExposed);
+        }
+        if state.configured_product_inputs.contains_key(name) {
+            return Err(ComponentBuildError::DuplicateConfiguredProductInput(
+                name.to_owned(),
+            ));
+        }
+        state.configured_product_inputs.insert(
+            name.to_owned(),
+            ConfiguredProductInputRegistration {
+                manifest: manifest.clone(),
+                liveness: Arc::downgrade(&liveness),
+            },
+        );
+        drop(state);
+
+        Ok(ConfiguredBufferInput {
+            manifest,
+            reader: BufferReader::start(product.buffer(), start, input),
+            owner: Arc::downgrade(&self.inner),
+            _liveness: liveness,
+        })
     }
 
     pub fn configured_observable<T: ContractType + Send + Sync + 'static>(
@@ -667,6 +847,18 @@ impl Component {
                 ));
             }
         }
+        for contract in &self.inner.manifest.product_inputs {
+            let Some(configured) = state.configured_product_inputs.get(&contract.name) else {
+                return Err(ComponentBuildError::MissingProductInput(
+                    contract.name.clone(),
+                ));
+            };
+            if configured.liveness.upgrade().is_none() {
+                return Err(ComponentBuildError::DroppedProductInput(
+                    contract.name.clone(),
+                ));
+            }
+        }
         for contract in &self.inner.manifest.operables {
             let Some(liveness) = state.live_operables.get(&contract.name) else {
                 return Err(ComponentBuildError::MissingOperable(contract.name.clone()));
@@ -679,6 +871,11 @@ impl Component {
         self.inner
             .catalog
             .register_component(self.inner.manifest.clone())?;
+        for input in state.configured_product_inputs.values() {
+            self.inner
+                .catalog
+                .set_current_product_input(input.manifest.clone())?;
+        }
         for output in state.configured_outputs.values() {
             self.inner
                 .catalog
@@ -686,6 +883,53 @@ impl Component {
         }
         state.exposed = true;
         Ok(())
+    }
+}
+
+/// One live, typed binding from a Component input to a retained Buffer Product.
+///
+/// Dropping this handle stops its `BufferReader`. The binding manifest is the
+/// same value projected under the Component's `current_product_inputs` Catalog
+/// field when the Component is exposed.
+pub struct ConfiguredBufferInput<T> {
+    manifest: ProductInputBindingManifest,
+    reader: BufferReader<Observation<T>>,
+    owner: std::sync::Weak<ComponentInner>,
+    _liveness: Arc<()>,
+}
+
+impl<T> fmt::Debug for ConfiguredBufferInput<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConfiguredBufferInput")
+            .field("slot", &self.manifest.slot)
+            .field("product_id", &self.manifest.product.product_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T: Send + Sync + 'static> ConfiguredBufferInput<T> {
+    pub fn manifest(&self) -> &ProductInputBindingManifest {
+        &self.manifest
+    }
+
+    pub fn stats(&self) -> BufferReaderStats {
+        self.reader.stats()
+    }
+}
+
+impl<T> Drop for ConfiguredBufferInput<T> {
+    fn drop(&mut self) {
+        let Some(owner) = self.owner.upgrade() else {
+            return;
+        };
+        if owner.state.lock().unwrap().exposed {
+            owner.catalog.clear_current_product_input(
+                &self.manifest.component_id,
+                &self.manifest.slot,
+                &self.manifest.hash(),
+            );
+        }
     }
 }
 

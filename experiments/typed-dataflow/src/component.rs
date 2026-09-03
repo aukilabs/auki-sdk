@@ -67,11 +67,27 @@ pub struct OperableContract {
     pub exposure: Exposure,
 }
 
+/// One retained Product input required by a Component.
+///
+/// The contract declares the Product form and payload type independently of a
+/// particular Product instance. A live binding is projected separately in the
+/// Catalog so consumers can distinguish capability from configuration.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProductInputContract {
+    pub name: String,
+    pub form: ProductForm,
+    pub datatype: String,
+    pub schema: String,
+    pub exposure: Exposure,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ComponentManifest {
     pub schema: String,
     pub peer_id: String,
     pub component_id: String,
+    #[serde(default)]
+    pub product_inputs: Vec<ProductInputContract>,
     pub observables: Vec<ObservableContract>,
     pub operables: Vec<OperableContract>,
 }
@@ -279,6 +295,25 @@ impl ProductManifest {
     }
 }
 
+/// One live binding from a Component input slot to an immutable Product.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ProductInputBindingManifest {
+    pub schema: String,
+    pub peer_id: String,
+    pub component_id: String,
+    pub component_manifest_hash: ManifestHash,
+    pub slot: String,
+    pub product: ProductManifest,
+    pub product_manifest_hash: ManifestHash,
+    pub producer: OutputManifest,
+}
+
+impl ProductInputBindingManifest {
+    pub fn hash(&self) -> ManifestHash {
+        manifest_hash(self)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogOutputEntry {
     pub manifest: OutputManifest,
@@ -286,9 +321,16 @@ pub struct CatalogOutputEntry {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogProductInputEntry {
+    pub manifest: ProductInputBindingManifest,
+    pub manifest_hash: ManifestHash,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogComponentEntry {
     pub manifest: ComponentManifest,
     pub manifest_hash: ManifestHash,
+    pub current_product_inputs: BTreeMap<String, CatalogProductInputEntry>,
     pub current_outputs: BTreeMap<String, CatalogOutputEntry>,
 }
 
@@ -349,6 +391,11 @@ pub enum CatalogError {
         expected: ManifestHash,
         actual: ManifestHash,
     },
+    ProductManifestMismatch {
+        product_id: String,
+        expected: ManifestHash,
+        actual: ManifestHash,
+    },
 }
 
 impl fmt::Display for CatalogError {
@@ -375,6 +422,14 @@ impl fmt::Display for CatalogError {
                 "Output for Component {component_id} references Component Manifest {actual}, \
                  but the Catalog has {expected}"
             ),
+            Self::ProductManifestMismatch {
+                product_id,
+                expected,
+                actual,
+            } => write!(
+                formatter,
+                "input references Product {product_id} Manifest {actual}, but the Catalog has {expected}"
+            ),
         }
     }
 }
@@ -396,6 +451,7 @@ impl Catalog {
             CatalogComponentEntry {
                 manifest,
                 manifest_hash,
+                current_product_inputs: BTreeMap::new(),
                 current_outputs: BTreeMap::new(),
             },
         );
@@ -424,6 +480,63 @@ impl Catalog {
             },
         );
         Ok(())
+    }
+
+    pub(crate) fn set_current_product_input(
+        &self,
+        manifest: ProductInputBindingManifest,
+    ) -> Result<(), CatalogError> {
+        let manifest_hash = manifest.hash();
+        let mut state = self.inner.write().unwrap();
+        let product = state
+            .products
+            .get(&manifest.product.product_id)
+            .ok_or_else(|| CatalogError::UnknownProduct(manifest.product.product_id.clone()))?;
+        if manifest.product_manifest_hash != product.manifest_hash {
+            return Err(CatalogError::ProductManifestMismatch {
+                product_id: manifest.product.product_id.clone(),
+                expected: product.manifest_hash.clone(),
+                actual: manifest.product_manifest_hash.clone(),
+            });
+        }
+        let component = state
+            .components
+            .get_mut(&manifest.component_id)
+            .ok_or_else(|| CatalogError::UnknownComponent(manifest.component_id.clone()))?;
+        if manifest.component_manifest_hash != component.manifest_hash {
+            return Err(CatalogError::ComponentManifestMismatch {
+                component_id: manifest.component_id.clone(),
+                expected: component.manifest_hash.clone(),
+                actual: manifest.component_manifest_hash.clone(),
+            });
+        }
+        component.current_product_inputs.insert(
+            manifest.slot.clone(),
+            CatalogProductInputEntry {
+                manifest,
+                manifest_hash,
+            },
+        );
+        Ok(())
+    }
+
+    pub(crate) fn clear_current_product_input(
+        &self,
+        component_id: &str,
+        slot: &str,
+        manifest_hash: &str,
+    ) {
+        let mut state = self.inner.write().unwrap();
+        let Some(component) = state.components.get_mut(component_id) else {
+            return;
+        };
+        if component
+            .current_product_inputs
+            .get(slot)
+            .is_some_and(|entry| entry.manifest_hash == manifest_hash)
+        {
+            component.current_product_inputs.remove(slot);
+        }
     }
 
     pub(crate) fn register_product(&self, manifest: ProductManifest) -> Result<(), CatalogError> {

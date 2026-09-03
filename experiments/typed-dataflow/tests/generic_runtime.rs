@@ -5,11 +5,12 @@ use std::time::Duration;
 
 use auki_typed_dataflow_experiment::{
     AudioLayout, AudioPayloadContract, AudioSampleFormat, BufferError, BufferLimits,
-    ComponentBuildError, ComponentSpec, ConfiguredObservableSpec, ContractType, EveryFullPolicy,
-    Exposure, GaugePayloadContract, InMemoryTransport, InvocationContext, InvocationError,
-    InvocationOptions, InvocationOrdering, InvocationStatus, ObservableContract, ObservationAccess,
-    ObservationDelivery, ObservationEndReason, ObservationEvent, OperableContract, PayloadContract,
-    PeerRuntime, ProductCaptureError, ProductState, PublishError, SerializedInMemoryTransport,
+    ComponentBuildError, ComponentSpec, ConfiguredObservableSpec, ContractType, CursorStart,
+    EveryFullPolicy, Exposure, GaugePayloadContract, InMemoryTransport, InputPort,
+    InvocationContext, InvocationError, InvocationOptions, InvocationOrdering, InvocationStatus,
+    ObservableContract, Observation, ObservationAccess, ObservationDelivery, ObservationEndReason,
+    ObservationEvent, OperableContract, PayloadContract, PeerRuntime, ProductCaptureError,
+    ProductForm, ProductInputContract, ProductState, PublishError, SerializedInMemoryTransport,
     SharedScheduler, observation_input,
 };
 
@@ -37,6 +38,16 @@ fn command_contract(name: &str) -> OperableContract {
         name: name.to_owned(),
         instruction: "uint64".to_owned(),
         result: "uint64".to_owned(),
+        exposure: Exposure::Cluster,
+    }
+}
+
+fn gauge_product_input(name: &str) -> ProductInputContract {
+    ProductInputContract {
+        name: name.to_owned(),
+        form: ProductForm::Buffer,
+        datatype: "float64".to_owned(),
+        schema: "demo.gauge/v1".to_owned(),
         exposure: Exposure::Cluster,
     }
 }
@@ -128,6 +139,127 @@ fn components_can_expose_only_observables_only_operables_or_both() {
             .observables
             .is_empty()
     );
+}
+
+#[test]
+fn configured_buffer_input_binds_behavior_contract_and_catalog_projection() {
+    let peer = PeerRuntime::new("peer-a");
+    let sensor = peer
+        .component(ComponentSpec::new("sensor").observable(gauge_contract("level")))
+        .unwrap();
+    let output = sensor
+        .configured_observable::<f64>(ConfiguredObservableSpec::new(
+            "level",
+            "level-1",
+            "peer-a.session-clock",
+            gauge_payload("load"),
+        ))
+        .unwrap();
+    sensor.expose().unwrap();
+    let capture = peer
+        .capture_buffer("level-history", &output, BufferLimits::entries(8), |_| {
+            size_of::<f64>()
+        })
+        .unwrap();
+    let product = capture.product();
+
+    let detector = peer
+        .component(ComponentSpec::new("detector").product_input(gauge_product_input("levels")))
+        .unwrap();
+    assert_eq!(
+        detector.expose().unwrap_err(),
+        ComponentBuildError::MissingProductInput("levels".to_owned())
+    );
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let input_received = Arc::clone(&received);
+    let input = InputPort::<Observation<f64>>::new("detector.levels", move |entry| {
+        input_received
+            .lock()
+            .unwrap()
+            .push((entry.payload.sequence, *entry.payload.payload));
+    });
+    let binding = detector
+        .configured_buffer_input("levels", &product, CursorStart::FromSequence(0), &input)
+        .unwrap();
+    assert_eq!(binding.manifest().product.product_id, "level-history");
+    assert_eq!(binding.manifest().producer.payload, gauge_payload("load"));
+    detector.expose().unwrap();
+
+    let catalog = peer.catalog().component("detector").unwrap();
+    assert_eq!(
+        catalog.manifest.product_inputs,
+        vec![gauge_product_input("levels")]
+    );
+    let catalog_binding = &catalog.current_product_inputs["levels"];
+    assert_eq!(catalog_binding.manifest, *binding.manifest());
+    assert_eq!(catalog_binding.manifest.product, product.manifest);
+    assert_eq!(catalog_binding.manifest.producer, product.producer);
+
+    output.publish(10, Arc::new(42.0)).unwrap();
+    wait_until(Duration::from_secs(1), || binding.stats().delivered == 1);
+    assert_eq!(*received.lock().unwrap(), vec![(0, 42.0)]);
+    drop(binding);
+    assert!(
+        peer.catalog()
+            .component("detector")
+            .unwrap()
+            .current_product_inputs
+            .is_empty()
+    );
+}
+
+#[test]
+fn configured_buffer_input_rejects_mismatch_and_requires_a_live_handle() {
+    let peer = PeerRuntime::new("peer-a");
+    let sensor = peer
+        .component(ComponentSpec::new("sensor").observable(gauge_contract("level")))
+        .unwrap();
+    let output = sensor
+        .configured_observable::<f64>(ConfiguredObservableSpec::new(
+            "level",
+            "level-1",
+            "peer-a.session-clock",
+            gauge_payload("load"),
+        ))
+        .unwrap();
+    sensor.expose().unwrap();
+    let capture = peer
+        .capture_buffer("level-history", &output, BufferLimits::entries(8), |_| {
+            size_of::<f64>()
+        })
+        .unwrap();
+    let product = capture.product();
+    let input = InputPort::<Observation<f64>>::new("detector.levels", |_| {});
+
+    let mismatch = peer
+        .component(
+            ComponentSpec::new("mismatch").product_input(ProductInputContract {
+                name: "levels".to_owned(),
+                form: ProductForm::Buffer,
+                datatype: "float64".to_owned(),
+                schema: "different.gauge/v1".to_owned(),
+                exposure: Exposure::Cluster,
+            }),
+        )
+        .unwrap();
+    assert!(matches!(
+        mismatch.configured_buffer_input("levels", &product, CursorStart::FromSequence(0), &input),
+        Err(ComponentBuildError::ProductInputContractMismatch { .. })
+    ));
+
+    let dropped = peer
+        .component(ComponentSpec::new("dropped").product_input(gauge_product_input("levels")))
+        .unwrap();
+    drop(
+        dropped
+            .configured_buffer_input("levels", &product, CursorStart::FromSequence(0), &input)
+            .unwrap(),
+    );
+    assert_eq!(
+        dropped.expose().unwrap_err(),
+        ComponentBuildError::DroppedProductInput("levels".to_owned())
+    );
+    assert!(peer.catalog().component("dropped").is_none());
 }
 
 #[test]

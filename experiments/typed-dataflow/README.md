@@ -49,6 +49,10 @@ retention APIs that the first clean-room attempt found missing:
   Catalog;
 - `Component::configured_observable` and `Component::operable` bind typed live
   behavior to declared contracts;
+- `ComponentSpec::product_input` and `Component::configured_buffer_input` bind a
+  typed retained Product reader to a declared input contract; Component Catalog
+  entries expose both the immutable requirement and the concrete Product,
+  producer, and manifest hashes currently bound to it;
 - `Component::replace_configured_observable` atomically projects a distinct
   replacement Output and terminates the previous Output as reconfigured;
 - `Component::expose` projects into the Catalog only after every declared

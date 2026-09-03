@@ -687,7 +687,7 @@ mod tests {
         assert!(fixture.len() > 1_000);
         assert_eq!(
             sha256_hex(&fixture),
-            "9cb77ff8f8f6d6af10809750bba03a76a53d6b55c36515c20a688d8437689aa0"
+            "775f2d96e68916cc9958fa78e7fcf6ab457b4629543fbd890d772baf78cc16dc"
         );
     }
 

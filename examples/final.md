@@ -62,7 +62,7 @@ The executable commands and environment are documented in the
 The implementation and phone commands are documented in the
 [Swift/iOS Camera Mesh guide](camera-mesh/swift/README.md).
 
-## Phase 4 — Swift/iOS publisher
+### Phase 4 — Swift/iOS publisher
 
 - The same SwiftUI app can publish its foreground iPhone camera or view another
   Camera Mesh publisher.
@@ -72,11 +72,10 @@ The implementation and phone commands are documented in the
   delivery, Message controls, Blob snapshots, and ordered shutdown.
 - Publishing uses DDS `discover_and_advertise`; viewing remains
   `discover_only`.
-
-The acceptance gate is a physical iPhone publisher consumed by both a Web and
-a deterministic native viewer. Each direction must prove pre-approval
-rejection, live frames, pause/resume, a SHA-256-verified snapshot, and clean
-foreground shutdown.
+- A physical iPhone publisher interoperates with Web over WSS and native Rust
+  over TCP.
+- The acceptance flow proves pre-approval rejection, distinct live captures,
+  pause/resume, a SHA-256-verified snapshot, and clean foreground shutdown.
 
 ## Deliberate boundaries
 

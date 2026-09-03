@@ -44,6 +44,16 @@ shut down. See the
 [shared Camera Mesh guide](../README.md#native-and-python-jsonl-contract) for
 the command shapes.
 
+For one bounded acceptance run against an approved live publisher, send:
+
+```json
+{"command":"exercise_live","id":"live","target":<PUBLISHER_CARD>,"requestId":"live-snapshot"}
+```
+
+The viewer keeps one Stream subscription open while it receives two frames,
+pauses, proves the feed becomes quiet, resumes to a later sequence, and fetches
+a SHA-256-verified snapshot. The result is one `exercise_live_result` object.
+
 `AUKI_NODE_NAME` changes the participant name. Publishers default to
 `AUKI_DISCOVERY_MODE=discover_and_advertise`; viewers default to
 `discover_only`.

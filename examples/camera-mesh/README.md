@@ -5,14 +5,14 @@ protocol families. It is the interoperability example to use after the smaller
 [`portable-echo`](../portable-echo/README.md) and
 [`standard-protocols`](../standard-protocols/README.md) playgrounds.
 
-Camera Mesh now supports four runtimes; the Swift/iOS runtime is a viewer only:
+Camera Mesh supports publisher and viewer roles in all four runtimes:
 
 | Runtime | Publisher | Viewer | Source |
 | --- | --- | --- | --- |
 | Web | Yes | Yes | synthetic image or webcam |
 | Native Rust | Yes | Yes | checked-in deterministic JPEG |
 | Python | Yes | Yes | the same deterministic JPEG |
-| Swift/iOS | No | Yes | foreground JPEG viewer |
+| Swift/iOS | Yes | Yes | foreground iPhone camera or JPEG viewer |
 
 The Rust and Python programs have a JSON Lines control surface so people and
 test runners can drive the same application flow without a UI. The browser has
@@ -40,7 +40,7 @@ protocol connection opens.
 - [Web app](web/README.md): the visual publisher and viewer
 - [Native Rust peer](native/README.md): deterministic publisher or viewer
 - [Python peer](python/README.md): deterministic publisher or viewer
-- [Swift/iOS viewer](swift/README.md): physical-device foreground viewer
+- [Swift/iOS app](swift/README.md): physical-device foreground publisher or viewer
 
 Publishers default to DDS `discover_and_advertise`; viewers default to
 `discover_only`. Headless Rust and Python peers can override either default
@@ -61,6 +61,7 @@ Send one JSON object per line on stdin:
 ```json
 {"command":"discover","id":"find","protocol":"/auki/auth/1/stream/0.2.0"}
 {"command":"view","id":"view","target":{"version":1,"runtime":"browser","domainId":"...","peerId":"...","protocols":["/auki/auth/1/stream/0.2.0"],"routes":{"tcp":"...","wss":"..."}},"frames":3}
+{"command":"exercise_live","id":"live","target":{"version":1,"runtime":"swift","domainId":"...","peerId":"...","protocols":["/auki/auth/1/stream/0.2.0"],"routes":{"tcp":"...","wss":"..."}},"requestId":"live-snapshot"}
 {"command":"approve","id":"allow","peerId":"12D3KooW..."}
 {"command":"pause","id":"pause","target":{"version":1,"runtime":"browser","domainId":"...","peerId":"...","protocols":["/auki/auth/1/stream/0.2.0"],"routes":{"tcp":"...","wss":"..."}}}
 {"command":"resume","id":"resume","target":{"version":1,"runtime":"browser","domainId":"...","peerId":"...","protocols":["/auki/auth/1/stream/0.2.0"],"routes":{"tcp":"...","wss":"..."}}}
@@ -78,6 +79,7 @@ omit it when you want the headless peer to generate a UUID.
 | --- | --- | --- |
 | Viewer | `discover` | `discovery_result` |
 | Viewer | `view` | `view_result`; first attempt also emits `approval_required` on the publisher |
+| Viewer | `exercise_live` | one continuous frames → pause → resume → verified-snapshot report |
 | Publisher | `approve` | `approve_result` |
 | Viewer | `pause` / `resume` | `control_result`; publisher emits `control_received` |
 | Viewer | `snapshot` | `snapshot_result`; publisher emits `snapshot_staged` |
@@ -127,15 +129,15 @@ six peers and their temporary state. The separate browser smoke proves
 browser-to-browser publishing in both directions, using DDS discovery once and
 a copied peer card once.
 
-## Phase 3 Swift/iOS gate
+## Swift/iOS gates
 
-The [Swift/iOS viewer](swift/README.md) is implemented and its offline contract
-tests and unsigned generic iOS arm64 build pass. It uses an ephemeral identity,
-explicit Domain selection, DDS Stream discovery with peer-card fallback,
-publisher approval and retry, JPEG rendering, pause/resume, verified snapshots,
-and ordered foreground lifecycle cleanup.
+The [Swift/iOS app](swift/README.md) uses an ephemeral identity, explicit Domain
+selection, and ordered foreground lifecycle cleanup. Its viewer discovers and
+consumes Web or native publishers. Its publisher advertises a bounded 480×270,
+5 fps iPhone camera and keeps approval, protocol serving, controls, and
+snapshots in the shared Rust Camera Mesh application.
 
-Phase 3 is not yet fully accepted by the automated Phase 2 matrix. Its remaining
-manual gate is a signed physical iPhone consuming both the Web publisher and
-the deterministic native Rust publisher. The Swift guide contains the exact
-build, install, approval, and QA sequence. iOS publishing remains out of scope.
+Phase 3 proves Web/native publisher to iPhone viewer. Phase 4 reverses the
+direction: a physical iPhone publisher must reject an unapproved viewer, then
+serve live frames, pause/resume, and a verified snapshot to Web and native
+viewers. The Swift guide contains the physical-device sequence.

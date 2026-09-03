@@ -1,17 +1,16 @@
-# Swift/iOS Camera Mesh viewer
+# Swift/iOS Camera Mesh
 
-This foreground-only SwiftUI app consumes a Camera Mesh publisher over the
-same Rust-owned Info, Catalog, Registry, Stream, Message, and Blob protocols as
-the Web, native Rust, and Python examples. It discovers Stream publishers or
-accepts a complete peer card, authenticates the exact Peer ID and Domain,
-renders JPEG frames, sends pause/resume, and fetches a SHA-256-verified
-snapshot. It does not publish the iPhone camera.
+This foreground-only SwiftUI app can either publish the iPhone camera or view
+another Camera Mesh publisher.
 
-The app uses a process-scoped `AukiPeerIdentity`; its Peer ID changes after the
-app is relaunched. Credentials are held only long enough to log in and are not
-stored in Keychain. Sending the app to the background performs ordered viewer
-and peer shutdown, so return to the foreground and log in again before another
-test.
+- Rust owns authentication, relay booking, DDS discovery, exact-peer approval,
+  all six standard protocols, hashes, and ordered shutdown.
+- Swift owns the UI, app lifecycle, and AVFoundation camera capture.
+- The publisher retains only the newest 480×270 JPEG and serves at 5 fps.
+
+The identity is process-scoped: relaunching the app creates a new Peer ID.
+Credentials are used only for login and are not stored in Keychain. Sending the
+app to the background stops capture, protocol endpoints, and the peer.
 
 ## Build and test
 
@@ -22,18 +21,18 @@ rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 brew install mint
 ```
 
-Then, from this directory:
+From this directory, generate the one umbrella binding and Xcode project:
 
 ```sh
 ./scripts/build-bindings.sh
 ./scripts/generate-project.sh
 ```
 
-The binding script builds one umbrella `AukiSDK.xcframework` with the six
-standard protocols. The project is generated from `project.yml`; edit that
-file rather than the ignored `.xcodeproj`.
+`AukiCameraMesh.xcframework` contains the generic SDK binding and the thin
+Camera Mesh publisher bridge. Edit `project.yml`, not the ignored generated
+`.xcodeproj`.
 
-Run the offline app and contract tests with temporary derived data:
+Run the offline contract and app tests:
 
 ```sh
 IOS_SIM_DERIVED="$(mktemp -d "${TMPDIR%/}/auki-camera-mesh-sim.XXXXXX")"
@@ -47,58 +46,28 @@ xcodebuild \
   test
 ```
 
-These tests require neither credentials nor network access. They do not prove
-live relay reachability. Before signing, the generic arm64 app can also be
-compiled with:
-
-```sh
-IOS_ARM64_DERIVED="$(mktemp -d "${TMPDIR%/}/auki-camera-mesh-arm64.XXXXXX")"
-xcodebuild \
-  -project AukiCameraMeshIOS.xcodeproj \
-  -scheme AukiCameraMeshIOS \
-  -configuration Debug \
-  -destination 'generic/platform=iOS' \
-  -derivedDataPath "$IOS_ARM64_DERIVED" \
-  CODE_SIGNING_ALLOWED=NO \
-  build
-```
+These tests need neither credentials nor network access. Camera capture and
+live relay interoperability require a physical iPhone.
 
 ## Run on an iPhone
 
-The simplest route is to open `AukiCameraMeshIOS.xcodeproj`, choose the app
-target's **Signing & Capabilities** tab and a Development Team, select an
-unlocked and trusted iPhone, and press Run. Enable Developer Mode on the phone
-if Xcode requests it. If the default bundle identifier is unavailable to your
-team, choose a unique `PRODUCT_BUNDLE_IDENTIFIER` in `project.yml` and
-regenerate the project.
+The simplest route is to open `AukiCameraMeshIOS.xcodeproj`, select a
+Development Team in **Signing & Capabilities**, choose an unlocked and trusted
+iPhone, and press Run.
 
-For a repeatable command-line install, first inspect the destinations and set
-the Apple Developer Team ID shown by Xcode for the intended account. A signing
-certificate's parenthesized suffix is not necessarily its Team ID, so do not
-derive this value from `security find-identity`.
+For a repeatable command-line install, inspect the destinations and use the
+Team ID selected in Xcode:
 
 ```sh
 xcodebuild \
   -project AukiCameraMeshIOS.xcodeproj \
   -scheme AukiCameraMeshIOS \
   -showdestinations
-IOS_DEVICE_UDID="$(
-  xcodebuild \
-    -project AukiCameraMeshIOS.xcodeproj \
-    -scheme AukiCameraMeshIOS \
-    -showdestinations 2>/dev/null |
-    sed -nE 's/.*platform:iOS, arch:arm64(e)?, id:([[:xdigit:]]{8}-[[:xdigit:]]{16}|[[:xdigit:]]{40}), name:.*/\2/p' |
-    head -n 1
-)"
-IOS_TEAM_ID='<Team ID selected in Xcode>'
-test -n "$IOS_DEVICE_UDID"
-test "${IOS_TEAM_ID#<}" = "$IOS_TEAM_ID"
-```
 
-Build, install, and launch that exact destination:
-
-```sh
+IOS_DEVICE_UDID='<physical-device-id>'
+IOS_TEAM_ID='<Apple Developer Team ID>'
 IOS_DEVICE_DERIVED="$(mktemp -d "${TMPDIR%/}/auki-camera-mesh-phone.XXXXXX")"
+
 xcodebuild \
   -project AukiCameraMeshIOS.xcodeproj \
   -scheme AukiCameraMeshIOS \
@@ -112,59 +81,60 @@ xcodebuild \
   build
 
 IOS_APP_PATH="$IOS_DEVICE_DERIVED/Build/Products/Debug-iphoneos/AukiCameraMeshIOS.app"
-test -d "$IOS_APP_PATH"
 xcrun devicectl device install app --device "$IOS_DEVICE_UDID" "$IOS_APP_PATH"
 xcrun devicectl device process launch \
   --device "$IOS_DEVICE_UDID" \
   --terminate-existing \
-  --console \
   com.aukilabs.examples.CameraMesh
 ```
 
-`--console` waits and shows the app's debug sentinels; omit it for a detached
-launch. Add the Apple ID to Xcode **Settings > Accounts** first if no Apple
-Development identity is available.
+## Use the viewer
 
-For debug automation, set `AUKI_IOS_EMAIL`, `AUKI_IOS_PASSWORD`,
-`AUKI_IOS_DOMAIN_ID`, and `AUKI_IOS_REMOTE_CARD` in the Run scheme. Optional
-`AUKI_IOS_RETRY_AFTER_APPROVAL_SECONDS` retries once after an operator has had
-time to approve; `AUKI_IOS_RUN_ACCEPTANCE=1` pauses, resumes, and requests a
-snapshot after two frames; and `AUKI_IOS_STOP_AFTER_SNAPSHOT=1` then stops in
-order. A `devicectl` launch can pass the same values with the
-`DEVICECTL_CHILD_` prefix. Credentials are never printed. Console automation
-can wait for `AUKI_IOS_CAMERA_READY`, `AUKI_IOS_CAMERA_APPROVAL_REQUIRED`,
-`AUKI_IOS_CAMERA_CONNECTED`, `AUKI_IOS_CAMERA_FRAME`,
-`AUKI_IOS_CAMERA_SNAPSHOT`, and `AUKI_IOS_CAMERA_STOPPED`.
+Log in, choose the publisher's Domain, select **Viewer**, and start. The viewer
+uses DDS discovery without advertising itself; a complete peer card is the
+fallback.
 
-## Approval and physical-device QA
+The first connection should return `approval_required`. Compare the complete
+Peer ID shown by the app with the publisher's pending request, approve that
+exact ID, then retry. Verify advancing JPEGs, pause, resume, and a snapshot with
+a SHA-256 hash. The [Web](../web/README.md) and
+[native](../native/README.md) guides provide publishers.
 
-On the phone, log in, choose the same Domain as the publisher, and select
-**Start viewer**. Use **Discover Stream publishers**, or paste only the
-publisher's peer-card object into the fallback field. The first connection is
-expected to report `approval_required`. Compare the complete local iOS Peer ID
-with the pending ID on the publisher, approve that exact ID, then select
-**Retry after approval**.
+## Use the publisher
 
-Exercise both required publisher paths:
+Log in, choose a Domain, select **Publisher**, and start. Grant camera access.
+The app previews the back camera, books TCP and WSS relay routes, advertises the
+Stream protocol through DDS, and displays its complete peer card.
 
-1. Follow the [Web guide](../web/README.md), choose **Publisher**, and publish
-   the synthetic source. Approve the phone in **Pending viewers**.
-2. Follow the [native guide](../native/README.md) to start its deterministic
-   publisher. After its `approval_required` event, send this JSON line to its
-   stdin, substituting the full Peer ID shown on the phone:
+Connect from a Web or native viewer. Before approval, the viewer must receive no
+camera metadata or frames. The phone displays the requesting Peer ID in
+**Pending viewers**; verify the complete value and approve it. Approval lasts
+only for this publisher process and can be revoked in the app.
 
-   ```json
-   {"command":"approve","id":"allow-phone","peerId":"<iOS Peer ID>"}
-   ```
+For the native one-command acceptance flow, start a native viewer and send the
+following JSON line after replacing `target` with the phone's complete card:
 
-For each publisher, verify that JPEG frame count and sequence advance, Pause
-halts the feed after any in-flight frame, Resume restarts it, Snapshot shows an
-image and verified hash, and Disconnect returns to the publisher picker.
-Finally select **Stop viewer** and repeat once by backgrounding the app; both
-paths must reach ordered stop.
-The Phase 3 acceptance gate is complete only after these Web-to-iPhone and
-native-to-iPhone runs pass on a physical device.
+```text
+{"command":"exercise_live","id":"iphone-live","target":<PHONE_CARD>,"requestId":"iphone-snapshot"}
+```
 
-This viewer needs no camera permission, Bonjour declaration, or local-network
-entitlement: it captures nothing and uses the authenticated DDS tracker and
-relay routes. It intentionally does not support background streaming.
+The first attempt triggers approval and fails. Approve its exact Peer ID on the
+phone, then send the same line again. A successful `exercise_live_result`
+proves one continuous subscription received two frames, became quiet after
+Pause, advanced after Resume, and fetched a verified snapshot.
+
+The Web viewer proves the WSS direction separately. Discover or paste the phone
+card, trigger and grant approval, then verify frames, Pause, Resume, and
+Snapshot. Finally background or stop the iOS app and confirm the viewer loses
+the stream cleanly.
+
+No background camera, audio, Bonjour, or local-network entitlement is part of
+this example.
+
+## Debug automation
+
+Viewer automation remains available through `AUKI_IOS_EMAIL`,
+`AUKI_IOS_PASSWORD`, `AUKI_IOS_DOMAIN_ID`, and `AUKI_IOS_REMOTE_CARD` in the
+Run scheme. `AUKI_IOS_RUN_ACCEPTANCE=1` pauses, resumes, and requests a snapshot
+after two frames. Automation always selects the viewer role and never prints
+credentials.

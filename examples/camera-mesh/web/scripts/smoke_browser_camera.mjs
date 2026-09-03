@@ -5,8 +5,6 @@ const email = process.env.AUKI_EMAIL;
 const password = process.env.AUKI_PASSWORD;
 const requestedDomain = process.env.AUKI_DOMAIN_ID;
 const cameraCount = Number(process.env.AUKI_CAMERA_WALL_COUNT ?? "2");
-const testResolution = process.env.AUKI_CAMERA_TEST_RESOLUTION ?? "low";
-const testRate = process.env.AUKI_CAMERA_TEST_RATE ?? "low";
 const timeout = 60_000;
 const colocatedAdmissionBatch = 8;
 const relayAdmissionWindowMs = 11_000;
@@ -16,12 +14,6 @@ if (!email || !password) {
 }
 if (!Number.isInteger(cameraCount) || cameraCount < 2 || cameraCount > 16) {
   throw new Error("AUKI_CAMERA_WALL_COUNT must be an integer from 2 through 16");
-}
-if (!["low", "medium", "high"].includes(testResolution)) {
-  throw new Error("AUKI_CAMERA_TEST_RESOLUTION must be low, medium, or high");
-}
-if (!["low", "medium", "high"].includes(testRate)) {
-  throw new Error("AUKI_CAMERA_TEST_RATE must be low, medium, or high");
 }
 
 const browser = await chromium.launch({
@@ -87,7 +79,7 @@ try {
   await Promise.all(cards.map((card) => assertStreamDiagnostics(viewer, card.peerId)));
   await assertInspector(viewer, cardA.peerId, "Smoke Camera 1 publisher");
   await assertInspector(viewer, cardB.peerId, "Smoke Camera 2 publisher");
-  await assertProfile(viewer, cardA.peerId, testResolution, testRate);
+  await assertProfile(viewer, cardA.peerId, "low");
   const stressMetrics = await cameraTile(viewer, cardA.peerId).evaluate((tile) => ({
     receiveFps: Number(tile.dataset.streamFps),
     displayFps: Number(tile.dataset.displayFps),
@@ -100,6 +92,10 @@ try {
       + `Camera 1 viewer: ${JSON.stringify(stressMetrics)}\n`,
   );
   await assertStableFrameSurface(viewer, cardA.peerId);
+  await assertQualitySwitch(viewer, cardA.peerId, "high");
+  await assertProfile(viewer, cardA.peerId, "high");
+  await assertQualitySwitch(viewer, cardA.peerId, "medium");
+  await assertProfile(viewer, cardA.peerId, "medium");
 
   await cameraMenuAction(viewer, cardA.peerId, "source-pause");
   await waitForText(publishers[0], "#events", "Camera paused by an approved viewer", timeout);
@@ -178,7 +174,7 @@ try {
   if (consoleErrors.length) throw new Error(`browser console errors: ${consoleErrors.join("; ")}`);
 
   process.stdout.write(
-    `camera wall smoke passed: one browser viewer kept ${cameraCount} concurrent camera streams independent; Camera 1 used ${testResolution}/${testRate} in Domain ${viewerDomain}\n`,
+    `camera wall smoke passed: one browser viewer kept ${cameraCount} concurrent camera streams independent and switched Camera 1 low → high → medium in Domain ${viewerDomain}\n`,
   );
 } catch (error) {
   await Promise.allSettled(peers.map(([name, page]) =>
@@ -220,10 +216,6 @@ async function loginAndStart(page, peerRole, label) {
   }
   await page.locator("#domain").selectOption(selectedDomain);
   await page.locator("#role").selectOption(peerRole);
-  if (peerRole === "publisher" && label === "Camera 1") {
-    await page.locator("#camera-resolution").selectOption(testResolution);
-    await page.locator("#camera-rate").selectOption(testRate);
-  }
   await page.locator(".advanced-field > summary").click();
   await page.locator("#display-name").fill(`Smoke ${label} ${peerRole}`);
   await startPeerWithRetry(page, peerRole);
@@ -314,24 +306,58 @@ async function assertInspector(page, peerId, expectedName) {
   }
 }
 
-async function assertProfile(page, peerId, resolution, rate) {
+async function assertProfile(page, peerId, quality) {
   await cameraTile(page, peerId).click({ position: { x: 10, y: 10 } });
+  const expected = {
+    low: { resourceId: "camera/main", width: 480, height: 270, rate: 5 },
+    medium: { resourceId: "camera/main/medium", width: 960, height: 540, rate: 15 },
+    high: { resourceId: "camera/main/high", width: 1920, height: 1080, rate: 30 },
+  }[quality];
+  const details = JSON.parse(await elementText(page, "#inspector-details"));
+  const sensor = details.registry?.sensor?.canonical;
+  if (
+    !expected
+    || sensor?.sensor_id !== expected.resourceId
+    || sensor?.width !== expected.width
+    || sensor?.height !== expected.height
+    || sensor?.frame_rate_hz !== expected.rate
+    || details.catalog?.resource_id !== expected.resourceId
+    || details.stream?.manifest?.resourceId !== expected.resourceId
+    || details.stream?.manifest?.expectedRateHz !== expected.rate
+  ) {
+    throw new Error(
+      `verified camera profile is inconsistent: ${JSON.stringify({ sensor, stream: details.stream })}`,
+    );
+  }
+}
+
+async function assertQualitySwitch(page, peerId, quality) {
+  const continuity = monitorBlankFrameSamples(page, peerId, 180);
+  await cameraMenuAction(page, peerId, `quality-${quality}`);
+  await waitFor(
+    async () => await cameraTile(page, peerId).getAttribute("data-quality") === quality,
+    timeout,
+    `camera ${peerId} quality ${quality}`,
+  );
   const expectedDimensions = {
     low: [480, 270],
     medium: [960, 540],
     high: [1920, 1080],
-  }[resolution];
-  const expectedRate = { low: 5, medium: 15, high: 30 }[rate];
-  const details = JSON.parse(await elementText(page, "#inspector-details"));
-  const sensor = details.registry?.sensor?.canonical;
-  if (
-    sensor?.width !== expectedDimensions?.[0]
-    || sensor?.height !== expectedDimensions?.[1]
-    || sensor?.frame_rate_hz !== expectedRate
-    || details.stream?.manifest?.expectedRateHz !== expectedRate
-  ) {
+  }[quality];
+  await waitFor(
+    () => cameraTile(page, peerId).locator("[data-role='remote-frame']")
+      .evaluate((surface, dimensions) =>
+        surface.width === dimensions[0]
+          && surface.height === dimensions[1]
+          && !surface.hidden,
+      expectedDimensions),
+    timeout,
+    `camera ${peerId} first ${quality} frame`,
+  );
+  const blankSamples = await continuity;
+  if (blankSamples > 0) {
     throw new Error(
-      `verified camera profile is inconsistent: ${JSON.stringify({ sensor, stream: details.stream })}`,
+      `camera ${peerId} exposed ${blankSamples} blank sample(s) while switching to ${quality}`,
     );
   }
 }
@@ -362,11 +388,18 @@ async function assertStreamDiagnostics(page, peerId) {
 }
 
 async function assertStableFrameSurface(page, peerId) {
-  const blankSamples = await cameraTile(page, peerId)
+  const blankSamples = await monitorBlankFrameSamples(page, peerId, 90);
+  if (blankSamples > 0) {
+    throw new Error(`camera ${peerId} exposed ${blankSamples} blank rendered frame sample(s)`);
+  }
+}
+
+async function monitorBlankFrameSamples(page, peerId, samples) {
+  return cameraTile(page, peerId)
     .locator("[data-role='remote-frame']")
-    .evaluate(async (surface) => {
+    .evaluate(async (surface, sampleCount) => {
       let blanks = 0;
-      for (let sample = 0; sample < 90; sample += 1) {
+      for (let sample = 0; sample < sampleCount; sample += 1) {
         await new Promise((resolve) => requestAnimationFrame(resolve));
         const context = surface.getContext("2d");
         const center = context?.getImageData(
@@ -385,10 +418,7 @@ async function assertStableFrameSurface(page, peerId) {
         ) blanks += 1;
       }
       return blanks;
-    });
-  if (blankSamples > 0) {
-    throw new Error(`camera ${peerId} exposed ${blankSamples} blank rendered frame sample(s)`);
-  }
+    }, samples);
 }
 
 async function assertResponsiveViewer(page, peerId, nextPeerId) {

@@ -55,26 +55,6 @@
                 <option value="publisher">Share this camera</option>
               </select>
             </label>
-            <fieldset class="profile-config" id="profile-config" hidden>
-              <legend>Published stream</legend>
-              <div class="profile-fields">
-                <label>Resolution
-                  <select id="camera-resolution" name="camera-resolution">
-                    <option value="low">Low · 480 × 270</option>
-                    <option value="medium">Medium · 960 × 540</option>
-                    <option value="high">High · 1920 × 1080</option>
-                  </select>
-                </label>
-                <label>Frame rate
-                  <select id="camera-rate" name="camera-rate">
-                    <option value="low">Low · 5 fps</option>
-                    <option value="medium">Medium · 15 fps</option>
-                    <option value="high">High · 30 fps</option>
-                  </select>
-                </label>
-              </div>
-              <small>The profile is fixed until this peer stops.</small>
-            </fieldset>
             <details class="advanced-field">
               <summary>Advanced</summary>
               <label>Display name
@@ -141,7 +121,7 @@
                 <p class="eyebrow">Local camera</p>
                 <h2 id="publisher-title">Ready to publish</h2>
               </div>
-              <span class="camera-spec" id="camera-spec">480 × 270 · 5 fps</span>
+              <span class="camera-spec" id="camera-spec">Low, medium, and high</span>
             </div>
             <div class="publisher-preview">
               <canvas id="preview" width="480" height="270" aria-label="Local camera preview">
@@ -315,6 +295,14 @@
           <button class="icon-button" id="close-camera-actions-button" type="button" aria-label="Close camera controls">×</button>
         </header>
         <div class="camera-action-list">
+          <section class="quality-picker" aria-labelledby="camera-quality-title">
+            <p id="camera-quality-title">Stream quality</p>
+            <div>
+              <button type="button" data-camera-action="quality-low">Low · 480×270 @ 5</button>
+              <button type="button" data-camera-action="quality-medium">Medium · 960×540 @ 15</button>
+              <button type="button" data-camera-action="quality-high">High · 1920×1080 @ 30</button>
+            </div>
+          </section>
           <button type="button" data-camera-action="freeze">Freeze local view</button>
           <button type="button" data-camera-action="snapshot">Verified snapshot</button>
           <button type="button" data-camera-action="fullscreen">Full screen</button>

@@ -16,11 +16,13 @@ Camera Mesh supports publisher and viewer roles in all four runtimes:
 
 The Rust and Python programs have a JSON Lines control surface so people and
 test runners can drive the same application flow without a UI. The browser has
-a responsive CCTV wall for up to 16 simultaneous feeds. Its density control
-uses one through four columns, with a single-camera focus mode and a two-column
-mobile wall. Protocol and live stream diagnostics stay in a drawer. Headless
-viewers validate the metadata and JPEG bytes, then report frame counts and
-hashes.
+a responsive CCTV wall for up to 16 simultaneous feeds. A Web publisher offers
+Low (480×270 at 5 fps), Medium (960×540 at 15 fps), and High (1920×1080 at
+30 fps) renditions from one capture session; Web viewers can switch quality
+without blanking the current frame. The wall's density control uses one through
+four columns, with a single-camera focus mode and a two-column mobile wall.
+Protocol and live stream diagnostics stay in a drawer. Headless viewers
+validate the metadata and JPEG bytes, then report frame counts and hashes.
 
 ## How the protocols fit together
 

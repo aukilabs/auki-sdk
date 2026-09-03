@@ -22,8 +22,7 @@ npm run dev
 Open the printed loopback URL in at least two tabs, then:
 
 1. sign every tab into the same Domain;
-2. start one peer as **Share this camera**, choose its resolution and rate, and
-   start another as **Monitor cameras**;
+2. start one peer as **Share this camera** and another as **Monitor cameras**;
 3. start sharing a synthetic source or grant webcam permission;
 4. choose **Add camera** in the monitor, then add the discovered publisher;
 5. allow the pending Viewer Peer ID in the publisher tab; and
@@ -46,19 +45,23 @@ On mobile those choices render as two columns. Choose **1** for focus mode,
 where one camera fills the available wall and previous/next controls switch the
 focused peer.
 
-Browser identities and publisher approvals are intentionally ephemeral. A Web
-publisher selects one immutable profile before starting its peer:
+Browser identities and publisher approvals are intentionally ephemeral. One
+Web publisher captures once and advertises three immutable renditions:
 
-- resolution: 480×270, 960×540, or 1920×1080;
-- rate: 5, 15, or 30 fps.
+| Quality | Resource | Profile |
+| --- | --- | --- |
+| Low | `camera/main` | 480×270 at 5 fps |
+| Medium | `camera/main/medium` | 960×540 at 15 fps |
+| High | `camera/main/high` | 1920×1080 at 30 fps |
 
-The default remains 480×270 at 5 fps so Rust, Python, and Swift peers keep
-interoperating. The Web viewer accepts all nine Web profiles after verifying
-their Registry metadata and checks every JPEG against the advertised size.
-Restart the publisher peer to change profile; this keeps the Registry hash and
-Stream manifest stable for the whole session. The 1920×1080 at 30 fps profile
-is the highest browser-camera target. Camera Mesh rejects JPEG frames larger
-than 1 MiB.
+Keeping Low at the original `camera/main` resource preserves Rust, Python, and
+Swift viewer compatibility. A Web viewer selects Low, Medium, or High from the
+camera action menu. It verifies that the chosen Catalog resource, Registry
+metadata, Stream manifest, and every JPEG agree. Switching opens and validates
+the replacement stream before closing the current one, so the last decoded
+frame remains visible throughout the handoff. The wall initially chooses High
+for one column, Medium for two, and Low for denser layouts. Camera Mesh rejects
+JPEG frames larger than 1 MiB.
 
 The application retains only the newest captured frame before each transport
 write. On the viewer, one JPEG is decoded at a time into a persistent canvas;
@@ -93,13 +96,10 @@ npm run smoke -- http://127.0.0.1:5173/
 `AUKI_DOMAIN_ID` is optional for this test; without it, the first accessible
 Domain is selected. The test starts two browser publishers and one browser
 viewer by default. It proves simultaneous independent feeds, DDS discovery,
-peer-card fallback, approval, source pause/resume, diagnostics, snapshot,
-layout changes, removal, reconnection, and responsive mobile layout. Set
-`AUKI_CAMERA_WALL_COUNT` from `2` through `16` to increase the publisher count.
-Set `AUKI_CAMERA_TEST_RESOLUTION=low|medium|high` and
-`AUKI_CAMERA_TEST_RATE=low|medium|high` to choose the first synthetic
-publisher's profile while the second publisher remains at the compatibility
-default.
+peer-card fallback, approval, Low → High → Medium make-before-break switching,
+source pause/resume, diagnostics, snapshot, layout changes, removal,
+reconnection, and responsive mobile layout. Set `AUKI_CAMERA_WALL_COUNT` from
+`2` through `16` to increase the publisher count.
 
 ## Rust, Python, and Web matrix
 

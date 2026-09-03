@@ -30,11 +30,19 @@ import {
   type AukiSensorRegistryEntry,
 } from "../pkg-web/auki_sdk_web.js";
 import {
+  CAMERA_QUALITY_TIERS,
+  cameraStreamProfile,
+  type CameraQualityTier,
   type CameraStreamProfile,
   verifiedCameraProfile,
 } from "./profile.js";
 
 export const CAMERA_RESOURCE_ID = "camera/main";
+export const CAMERA_RESOURCE_IDS: Readonly<Record<CameraQualityTier, string>> = {
+  low: CAMERA_RESOURCE_ID,
+  medium: "camera/main/medium",
+  high: "camera/main/high",
+};
 export const CAMERA_CONTROL_RESOURCE_ID = "camera/control";
 export const CAMERA_REPLY_RESOURCE_ID = "camera/replies";
 
@@ -47,6 +55,14 @@ const MAX_PENDING_SNAPSHOTS = 16;
 const MAX_BLOB_BYTES = 20 * 1024 * 1024;
 const SNAPSHOT_TIMEOUT_MS = 45_000;
 const EMPTY_BYTES = new Uint8Array();
+
+export function cameraResourceId(quality: CameraQualityTier): string {
+  return CAMERA_RESOURCE_IDS[quality];
+}
+
+export function cameraQualityForResourceId(resourceId: string): CameraQualityTier | undefined {
+  return CAMERA_QUALITY_TIERS.find((quality) => CAMERA_RESOURCE_IDS[quality] === resourceId);
+}
 
 type Awaitable<T> = T | Promise<T>;
 type Endpoint = { close(): Promise<void>; free(): void };
@@ -122,7 +138,6 @@ export interface CameraControlHandlers {
 export interface CameraProtocolOptions {
   readonly role: CameraProtocolRole;
   readonly displayName: string;
-  readonly profile: CameraStreamProfile;
   readonly access: AccessPolicy;
   readonly controls: CameraControlHandlers;
   readonly sessionId?: string;
@@ -139,6 +154,7 @@ export interface VerifiedRegistryEntry<T extends AukiRegistryEntry> {
 }
 
 export interface CameraRegistryMetadata {
+  readonly resourceId: string;
   readonly profile: CameraStreamProfile;
   readonly sensor: VerifiedRegistryEntry<AukiSensorRegistryEntry>;
   readonly clock: VerifiedRegistryEntry<AukiClockRegistryEntry>;
@@ -149,6 +165,7 @@ export interface RemoteCameraMetadata extends CameraRegistryMetadata {
   readonly info: AukiParticipantInfo;
   readonly catalog: AukiCatalogResource;
   readonly controlChannel: AukiMessageChannelResource;
+  readonly availableQualities: readonly CameraQualityTier[];
 }
 
 export interface VerifiedBlob {
@@ -169,6 +186,8 @@ export interface CameraProtocolIds {
 }
 
 type CameraCatalogDescription = {
+  readonly resourceId: string;
+  readonly quality: CameraQualityTier;
   readonly row: AukiCatalogResource;
   readonly sensor: AukiRegistryRef;
   readonly clock: AukiRegistryRef;
@@ -192,6 +211,7 @@ export class CameraProtocols {
   private readonly pendingSnapshots = new Map<string, PendingSnapshot>();
   private readonly controlChannel: AukiMessageChannelResource;
   private readonly sessionId: string;
+  private readonly renditions: readonly CameraRegistryMetadata[];
   private readonly publisherCatalog?: AukiCatalogResourcesResponse;
   private infoClient?: AukiInfoClient;
   private catalogClient?: AukiCatalogClient;
@@ -209,7 +229,14 @@ export class CameraProtocols {
     private readonly options: CameraProtocolOptions,
   ) {
     this.sessionId = options.sessionId ?? globalThis.crypto.randomUUID();
-    this.metadata = prepareCameraMetadata(peer.peerId, this.sessionId, options.profile);
+    this.renditions = CAMERA_QUALITY_TIERS.map((quality) =>
+      prepareCameraMetadata(
+        peer.peerId,
+        this.sessionId,
+        CAMERA_RESOURCE_IDS[quality],
+        cameraStreamProfile(quality),
+      ));
+    this.metadata = required(this.renditions[0], "low camera rendition");
     this.controlChannel = {
       variant: "message_channel",
       owner_peer_id: peer.peerId,
@@ -219,7 +246,7 @@ export class CameraProtocols {
     if (options.role === "publisher") {
       this.publisherCatalog = prepareCatalogResources({
         resources: [
-          this.cameraCatalog(),
+          ...this.renditions.map((metadata) => this.cameraCatalog(metadata)),
           this.controlChannel as unknown as AukiCatalogResource,
         ],
       });
@@ -265,6 +292,13 @@ export class CameraProtocols {
     return Object.values(this.protocolIds);
   }
 
+  rendition(quality: CameraQualityTier): CameraRegistryMetadata {
+    return required(
+      this.renditions.find((metadata) => metadata.profile.quality === quality),
+      `${quality} camera rendition`,
+    );
+  }
+
   setCameraAvailable(available: boolean): void {
     this.assertOpen();
     if (this.options.role !== "publisher" && available) {
@@ -277,7 +311,10 @@ export class CameraProtocols {
     return this.track(() => this.fetchInfoImpl(target));
   }
 
-  resolveRemoteMetadata(target: AukiExactTarget): Promise<RemoteCameraMetadata> {
+  resolveRemoteMetadata(
+    target: AukiExactTarget,
+    preferredQuality: CameraQualityTier,
+  ): Promise<RemoteCameraMetadata> {
     return this.track(async () => {
       const [info, catalog] = await Promise.all([
         this.fetchInfoImpl(target),
@@ -293,7 +330,15 @@ export class CameraProtocols {
           .map((resource) => `${String(resource.variant)}:${String(resource["resource_id"])}`)
           .join(", ") || "none"}`,
       );
-      const camera = parseCameraCatalog(catalog.resources, target.peerId);
+      const cameras = parseCameraCatalog(catalog.resources, target.peerId);
+      const availableQualities = cameras.map((camera) => camera.quality);
+      const camera = cameras.find((candidate) => candidate.quality === preferredQuality)
+        ?? required(cameras[0], "camera Catalog rendition");
+      if (camera.quality !== preferredQuality) {
+        this.emit(
+          `Camera does not offer ${preferredQuality}; using ${camera.quality} rendition`,
+        );
+      }
       assert(info.sessionClockId === camera.clock.id, "Info and Catalog use different clocks");
       assert(info.sessionClockHash === camera.clock.hash, "Info and Catalog clock hashes differ");
       const controlChannel = parseControlChannel(catalog.resources, target.peerId, camera.clock);
@@ -325,7 +370,17 @@ export class CameraProtocols {
       const clock = verifyRegistryEntry("clock", camera.clock, clockEntry);
       const frame = verifyRegistryEntry("frame", camera.frame, frameEntry);
       const profile = validateCameraEntries(sensor.entry, clock.entry, frame.entry, camera);
-      return { info, catalog: camera.row, controlChannel, profile, sensor, clock, frame };
+      return {
+        info,
+        catalog: camera.row,
+        controlChannel,
+        resourceId: camera.resourceId,
+        availableQualities,
+        profile,
+        sensor,
+        clock,
+        frame,
+      };
     });
   }
 
@@ -476,25 +531,25 @@ export class CameraProtocols {
 
   }
 
-  private cameraCatalog(): AukiCatalogResource {
+  private cameraCatalog(metadata: CameraRegistryMetadata): AukiCatalogResource {
     return {
       variant: "sensor_log",
       source_peer_id: this.peer.peerId,
       writer_peer_id: this.peer.peerId,
-      resource_id: CAMERA_RESOURCE_ID,
+      resource_id: metadata.resourceId,
       state: "live",
       head: {
         kind: "rolling",
-        retention_ns: 1_000_000_000n / BigInt(this.metadata.profile.rateHz),
+        retention_ns: 1_000_000_000n / BigInt(metadata.profile.rateHz),
       },
       available: { bytes: 0n, entries: 0n, duration_ns: 0n },
       sensor: {
         kind: "camera",
         type: "rgb",
-        sensor_id: this.metadata.sensor.id,
-        sensor_hash: this.metadata.sensor.hash,
+        sensor_id: metadata.sensor.id,
+        sensor_hash: metadata.sensor.hash,
       },
-      manifest: { clock: this.metadata.clock.ref, frame: this.metadata.frame.ref },
+      manifest: { clock: metadata.clock.ref, frame: metadata.frame.ref },
     };
   }
 
@@ -505,7 +560,16 @@ export class CameraProtocols {
     if (!this.sameDomain(requester) || !this.allowed(requester)) {
       return { op: "error" as const, reason: "access_denied" };
     }
-    const entries = [this.metadata.sensor, this.metadata.clock, this.metadata.frame];
+    const sourceEntries = this.options.role === "publisher"
+      ? this.renditions.flatMap((metadata) => [
+        metadata.sensor,
+        metadata.clock,
+        metadata.frame,
+      ])
+      : [this.metadata.sensor, this.metadata.clock, this.metadata.frame];
+    const entries = [...new Map(
+      sourceEntries.map((entry) => [`${entry.kind}:${entry.id}:${entry.hash}`, entry]),
+    ).values()];
     if (request.op === "list") {
       return {
         op: "list" as const,
@@ -766,6 +830,7 @@ export class CameraProtocols {
 function prepareCameraMetadata(
   peerId: string,
   sessionId: string,
+  resourceId: string,
   profile: CameraStreamProfile,
 ): CameraRegistryMetadata {
   const frameEntry: AukiFrameRegistryEntry = {
@@ -797,7 +862,7 @@ function prepareCameraMetadata(
   );
   const sensorEntry: AukiSensorRegistryEntry = {
     peer_id: peerId,
-    sensor_id: CAMERA_RESOURCE_ID,
+    sensor_id: resourceId,
     kind: "camera",
     type: "rgb",
     width: profile.width,
@@ -816,7 +881,7 @@ function prepareCameraMetadata(
     envelopeRef(peerId, prepareRegistryEntry("sensor", sensorEntry)),
     sensorEntry,
   );
-  return { profile, sensor, clock, frame };
+  return { resourceId, profile, sensor, clock, frame };
 }
 
 function verifyRegistryEntry<T extends AukiRegistryEntry>(
@@ -842,31 +907,48 @@ function verifyRegistryEntry<T extends AukiRegistryEntry>(
 function parseCameraCatalog(
   resources: readonly AukiCatalogResource[],
   peerId: string,
-): CameraCatalogDescription {
+): CameraCatalogDescription[] {
   const candidates = resources.filter((resource) =>
-    resource.variant === "sensor_log" && resource["resource_id"] === CAMERA_RESOURCE_ID);
+    resource.variant === "sensor_log"
+      && cameraQualityForResourceId(String(resource["resource_id"])) !== undefined);
   assert(candidates.length > 0, "approval_required: camera Catalog row is unavailable");
-  assert(candidates.length === 1, "camera Catalog contains duplicate resource IDs");
-  const row = required(candidates[0], "camera Catalog row");
-  assert(row["source_peer_id"] === peerId, "camera Catalog source does not match authenticated peer");
-  assert(row["writer_peer_id"] === peerId, "camera Catalog writer does not match authenticated peer");
-  assert(row["state"] === "live", "camera Catalog resource is not live");
-  const sensorBlock = record(row["sensor"], "camera Catalog sensor");
-  assert(sensorBlock["kind"] === "camera", "camera Catalog has the wrong sensor kind");
-  assert(sensorBlock["type"] === "rgb", "camera Catalog has the wrong sensor type");
-  const sensorId = stringField(sensorBlock, "sensor_id", "camera Catalog sensor");
-  const sensorHash = registryHash(sensorBlock["sensor_hash"], "camera Catalog sensor hash");
-  const manifest = record(row["manifest"], "camera Catalog manifest");
-  const clock = registryRef(manifest["clock"], "camera Catalog clock");
-  const frame = registryRef(manifest["frame"], "camera Catalog frame");
-  assert(clock.peer_id === peerId, "camera clock is owned by another peer");
-  assert(frame.peer_id === peerId, "camera frame is owned by another peer");
-  return {
-    row,
-    sensor: { peer_id: peerId, id: sensorId, hash: sensorHash },
-    clock,
-    frame,
-  };
+  const resourceIds = candidates.map((row) =>
+    stringField(row, "resource_id", "camera Catalog row"));
+  assert(new Set(resourceIds).size === resourceIds.length,
+    "camera Catalog contains duplicate resource IDs");
+  return candidates
+    .map((row): CameraCatalogDescription => {
+      const resourceId = stringField(row, "resource_id", "camera Catalog row");
+      const quality = required(
+        cameraQualityForResourceId(resourceId),
+        "camera Catalog quality",
+      );
+      assert(row["source_peer_id"] === peerId,
+        "camera Catalog source does not match authenticated peer");
+      assert(row["writer_peer_id"] === peerId,
+        "camera Catalog writer does not match authenticated peer");
+      assert(row["state"] === "live", "camera Catalog resource is not live");
+      const sensorBlock = record(row["sensor"], "camera Catalog sensor");
+      assert(sensorBlock["kind"] === "camera", "camera Catalog has the wrong sensor kind");
+      assert(sensorBlock["type"] === "rgb", "camera Catalog has the wrong sensor type");
+      const sensorId = stringField(sensorBlock, "sensor_id", "camera Catalog sensor");
+      const sensorHash = registryHash(sensorBlock["sensor_hash"], "camera Catalog sensor hash");
+      const manifest = record(row["manifest"], "camera Catalog manifest");
+      const clock = registryRef(manifest["clock"], "camera Catalog clock");
+      const frame = registryRef(manifest["frame"], "camera Catalog frame");
+      assert(clock.peer_id === peerId, "camera clock is owned by another peer");
+      assert(frame.peer_id === peerId, "camera frame is owned by another peer");
+      return {
+        resourceId,
+        quality,
+        row,
+        sensor: { peer_id: peerId, id: sensorId, hash: sensorHash },
+        clock,
+        frame,
+      };
+    })
+    .sort((left, right) =>
+      CAMERA_QUALITY_TIERS.indexOf(left.quality) - CAMERA_QUALITY_TIERS.indexOf(right.quality));
 }
 
 function parseControlChannel(
@@ -897,6 +979,8 @@ function validateCameraEntries(
   catalog: CameraCatalogDescription,
 ): CameraStreamProfile {
   assert(sensor.sensor_id === catalog.sensor.id, "camera Sensor ID mismatch");
+  assert(sensor.sensor_id === catalog.resourceId,
+    "camera Sensor ID does not match its Catalog resource");
   assert(sensor["kind"] === "camera", "camera Sensor Registry kind mismatch");
   assert(sensor["type"] === "rgb", "camera Sensor Registry type mismatch");
   const profile = verifiedCameraProfile(
@@ -904,6 +988,8 @@ function validateCameraEntries(
     positiveNumber(sensor["height"], "camera Sensor height"),
     positiveNumber(sensor["frame_rate_hz"], "camera Sensor frame rate"),
   );
+  assert(profile.quality === catalog.quality,
+    "camera profile does not match its Catalog rendition");
   assert(sensor["image_encoding"] === "jpeg", "camera Sensor must describe JPEG frames");
   assert(sensor["pixel_format"] === "rgb8", "camera Sensor pixel format must be rgb8");
   assert(sensor["row_stride_bytes"] === 0, "compressed camera Sensor must have zero row stride");

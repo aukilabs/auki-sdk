@@ -18,7 +18,7 @@ import {
   type CaptureMode,
 } from "./capture.js";
 import {
-  CAMERA_RESOURCE_ID,
+  cameraQualityForResourceId,
   CameraProtocols,
   type CameraRegistryMetadata,
   type RemoteCameraMetadata,
@@ -26,8 +26,10 @@ import {
   type VerifiedBlob,
 } from "./protocols.js";
 import {
-  cameraProfileLabel,
-  DEFAULT_CAMERA_PROFILE,
+  CAMERA_QUALITY_TIERS,
+  cameraQualityLabel,
+  cameraStreamProfile,
+  type CameraQualityTier,
   type CameraStreamProfile,
 } from "./profile.js";
 
@@ -92,6 +94,20 @@ interface RemoteSession {
   task?: Promise<void>;
 }
 
+interface DecodedStreamFrame {
+  readonly jpeg: Uint8Array;
+  readonly sequence: bigint;
+  readonly timestampNs: bigint;
+}
+
+interface CameraStreamData {
+  readonly entry: {
+    readonly payload: Uint8Array;
+    readonly sequence: bigint;
+    readonly timestampNs: bigint;
+  };
+}
+
 type Session = {
   startPeerWithDiscovery(domainId: string, mode: AukiDiscoveryMode): Promise<AukiPeer>;
 };
@@ -118,7 +134,6 @@ export class CameraMesh {
     private readonly peer: AukiPeer,
     readonly role: CameraRole,
     private readonly displayName: string,
-    readonly profile: CameraStreamProfile,
     private readonly hooks: CameraMeshHooks,
   ) {
     this.peerId = peer.peerId;
@@ -136,13 +151,12 @@ export class CameraMesh {
     role: CameraRole,
     displayName: string,
     hooks: CameraMeshHooks,
-    profile: CameraStreamProfile = DEFAULT_CAMERA_PROFILE,
   ): Promise<CameraMesh> {
     const mode = role === "publisher"
       ? AukiDiscoveryMode.DiscoverAndAdvertise
       : AukiDiscoveryMode.DiscoverOnly;
     const peer = await session.startPeerWithDiscovery(domainId, mode);
-    const mesh = new CameraMesh(peer, role, displayName, profile, hooks);
+    const mesh = new CameraMesh(peer, role, displayName, hooks);
     try {
       await mesh.mountProtocols();
       return mesh;
@@ -158,6 +172,10 @@ export class CameraMesh {
 
   get isPublishing(): boolean {
     return this.streamEndpoint !== undefined;
+  }
+
+  get profiles(): readonly CameraStreamProfile[] {
+    return CAMERA_QUALITY_TIERS.map((quality) => cameraStreamProfile(quality));
   }
 
   get connectedPeerIds(): readonly string[] {
@@ -188,7 +206,6 @@ export class CameraMesh {
 
     const capture = new CameraCapture(
       preview,
-      this.profile,
       (jpeg) => encodeCameraFrameImage(jpeg),
       (message) => this.hooks.event(message),
       (diagnostics) => this.hooks.captureDiagnostics(diagnostics),
@@ -204,7 +221,7 @@ export class CameraMesh {
       this.streamEndpoint = endpoint;
       this.protocolStack().setCameraAvailable(true);
       this.hooks.event(
-        `Publishing ${CAMERA_RESOURCE_ID} at ${cameraProfileLabel(this.profile)}`,
+        `Publishing ${this.profiles.map((profile) => cameraQualityLabel(profile.quality)).join(", ")}`,
       );
     } catch (error) {
       capture.stop();
@@ -271,7 +288,10 @@ export class CameraMesh {
     });
   }
 
-  async connectCamera(candidate: CameraCandidate): Promise<RemoteConnection> {
+  async connectCamera(
+    candidate: CameraCandidate,
+    preferredQuality: CameraQualityTier = "low",
+  ): Promise<RemoteConnection> {
     this.assertOpen();
     if (this.role !== "viewer") throw new Error("this peer is not a viewer");
     if (candidate.peerId === this.peerId) throw new Error("cannot connect to this viewer");
@@ -280,7 +300,7 @@ export class CameraMesh {
     const pending = this.connecting.get(candidate.peerId);
     if (pending) return pending;
 
-    const operation = this.connectCameraOwned(candidate);
+    const operation = this.connectCameraOwned(candidate, preferredQuality);
     this.connecting.set(candidate.peerId, operation);
     try {
       return await operation;
@@ -291,12 +311,37 @@ export class CameraMesh {
     }
   }
 
-  private async connectCameraOwned(candidate: CameraCandidate): Promise<RemoteConnection> {
-    const request: AukiStreamRequest = {
-      sourcePeerId: candidate.peerId,
-      resourceId: CAMERA_RESOURCE_ID,
-      from: { kind: "latest" },
-    };
+  async switchCameraQuality(
+    peerId: string,
+    quality: CameraQualityTier,
+  ): Promise<RemoteConnection> {
+    this.assertOpen();
+    if (this.role !== "viewer") throw new Error("this peer is not a viewer");
+    const existing = this.remotes.get(peerId);
+    if (!existing) throw new Error(`camera ${peerId} is not connected`);
+    if (existing.connection.metadata.profile.quality === quality) return existing.connection;
+    if (!existing.connection.metadata.availableQualities.includes(quality)) {
+      throw new Error(`camera ${peerId} does not publish the ${quality} rendition`);
+    }
+    if (this.connecting.has(peerId)) throw new Error(`camera ${peerId} is already switching quality`);
+    const operation = this.connectCameraOwned({
+      peerId,
+      routes: [existing.connection.target.route],
+      servedProtocols: [this.streamProtocol],
+      expiresAt: new Date().toISOString(),
+    }, quality);
+    this.connecting.set(peerId, operation);
+    try {
+      return await operation;
+    } finally {
+      if (this.connecting.get(peerId) === operation) this.connecting.delete(peerId);
+    }
+  }
+
+  private async connectCameraOwned(
+    candidate: CameraCandidate,
+    preferredQuality: CameraQualityTier,
+  ): Promise<RemoteConnection> {
     const routes = browserRoutes(candidate.routes);
     if (!routes.length) throw new Error("camera publisher has no browser-compatible WSS route");
 
@@ -306,9 +351,15 @@ export class CameraMesh {
       let subscription: AukiStreamSubscription | undefined;
       let adopted = false;
       try {
-        const metadata = await this.protocolStack().resolveRemoteMetadata(target);
+        const metadata = await this.protocolStack().resolveRemoteMetadata(target, preferredQuality);
+        const request: AukiStreamRequest = {
+          sourcePeerId: candidate.peerId,
+          resourceId: metadata.resourceId,
+          from: { kind: "latest" },
+        };
         subscription = await this.streamClient.subscribeExact(target, "camera", request);
         validateStreamManifest(subscription.manifest, metadata, candidate.peerId);
+        const firstFrame = await readStreamFrame(subscription, metadata, candidate.peerId);
         if (this.closing) throw new Error("Camera Mesh peer is stopping");
         const connection: RemoteConnection = {
           target: { ...target },
@@ -316,11 +367,25 @@ export class CameraMesh {
           streamManifest: subscription.manifest,
         };
         const remote: RemoteSession = { connection, subscription };
+        const previous = this.remotes.get(candidate.peerId);
         this.remotes.set(candidate.peerId, remote);
         adopted = true;
-        remote.task = this.consume(candidate.peerId, remote);
         this.hooks.remoteConnected(connection);
-        this.hooks.event(`Viewing ${candidate.peerId} through ${route}`);
+        this.emitRemoteFrame(candidate.peerId, firstFrame, 1, firstFrame.jpeg.byteLength);
+        remote.task = this.consume(
+          candidate.peerId,
+          remote,
+          1,
+          firstFrame.jpeg.byteLength,
+        );
+        if (previous && previous !== remote) {
+          void this.stopDetachedRemote(previous).catch((error) => {
+            this.hooks.event(`Previous camera rendition cleanup failed: ${errorMessage(error)}`);
+          });
+        }
+        this.hooks.event(
+          `Viewing ${candidate.peerId} ${metadata.profile.quality} through ${route}`,
+        );
         return connection;
       } catch (error) {
         const reasons = [errorMessage(error)];
@@ -452,7 +517,6 @@ export class CameraMesh {
     this.protocols = await CameraProtocols.mount(this.peer, {
       role: this.role,
       displayName: this.displayName,
-      profile: this.profile,
       access: {
         isAllowed: (requester) => this.allowed.has(requester.peerId),
         requestApproval: (requester) => this.requestApproval(requester.peerId),
@@ -543,9 +607,10 @@ export class CameraMesh {
     request: AukiStreamRequest,
     capture: CameraCapture,
   ): AukiStreamDispatch {
+    const quality = cameraQualityForResourceId(request.resourceId);
     if (
       request.sourcePeerId !== this.peerId
-      || request.resourceId !== CAMERA_RESOURCE_ID
+      || quality === undefined
       || request.from?.kind !== "latest"
     ) {
       return { kind: "decline", reason: { kind: "sensor_not_found" } };
@@ -563,18 +628,22 @@ export class CameraMesh {
         },
       };
     }
+    const metadata = this.protocolStack().rendition(quality);
     return {
       kind: "accept",
       payloadKind: "camera",
-      manifest: streamManifest(this.protocolStack().metadata),
-      source: capture.source(),
+      manifest: streamManifest(metadata),
+      source: capture.source(quality),
     };
   }
 
-  private async consume(peerId: string, remote: RemoteSession): Promise<void> {
+  private async consume(
+    peerId: string,
+    remote: RemoteSession,
+    received: number,
+    bytes: number,
+  ): Promise<void> {
     const { subscription } = remote;
-    let received = 0;
-    let bytes = 0;
     let terminalReason: string | undefined;
     try {
       while (this.remotes.get(peerId) === remote) {
@@ -587,18 +656,10 @@ export class CameraMesh {
           terminalReason = `Camera ${peerId} ended: ${next.reason.kind}`;
           break;
         }
-        const jpeg = decodeCameraFrameImage(next.entry.payload);
-        validateJpegDimensions(jpeg, remote.connection.metadata.profile);
+        const frame = decodeStreamFrame(next, remote.connection.metadata);
         received += 1;
-        bytes += jpeg.byteLength;
-        this.hooks.remoteFrame({
-          peerId,
-          jpeg,
-          sequence: next.entry.sequence,
-          timestampNs: next.entry.timestampNs,
-          received,
-          bytes,
-        });
+        bytes += frame.jpeg.byteLength;
+        this.emitRemoteFrame(peerId, frame, received, bytes);
       }
     } catch (error) {
       if (this.remotes.get(peerId) === remote && !this.closing) {
@@ -611,6 +672,27 @@ export class CameraMesh {
         this.hooks.remoteEnded(terminalReason ?? `Camera ${peerId} Stream stopped`, peerId);
       }
     }
+  }
+
+  private emitRemoteFrame(
+    peerId: string,
+    frame: DecodedStreamFrame,
+    received: number,
+    bytes: number,
+  ): void {
+    this.hooks.remoteFrame({ peerId, ...frame, received, bytes });
+  }
+
+  private async stopDetachedRemote(remote: RemoteSession): Promise<void> {
+    let cancellationError: unknown;
+    try {
+      await remote.subscription.cancel();
+    } catch (error) {
+      cancellationError = error;
+    }
+    if (remote.task) await remote.task.catch(() => undefined);
+    remote.subscription.free();
+    if (cancellationError !== undefined) throw cancellationError;
   }
 
   private emitPending(): void {
@@ -626,6 +708,32 @@ function requiredFirst<T>(values: IterableIterator<T>): T {
   const value = values.next();
   if (value.done) throw new Error("expected a connected camera");
   return value.value;
+}
+
+async function readStreamFrame(
+  subscription: AukiStreamSubscription,
+  metadata: RemoteCameraMetadata,
+  peerId: string,
+): Promise<DecodedStreamFrame> {
+  const next = await subscription.next();
+  if (!next) throw new Error(`Camera ${peerId} closed before its first frame`);
+  if (next.kind === "end") {
+    throw new Error(`Camera ${peerId} ended before its first frame: ${next.reason.kind}`);
+  }
+  return decodeStreamFrame(next, metadata);
+}
+
+function decodeStreamFrame(
+  next: CameraStreamData,
+  metadata: RemoteCameraMetadata,
+): DecodedStreamFrame {
+  const jpeg = decodeCameraFrameImage(next.entry.payload);
+  validateJpegDimensions(jpeg, metadata.profile);
+  return {
+    jpeg,
+    sequence: next.entry.sequence,
+    timestampNs: next.entry.timestampNs,
+  };
 }
 
 async function cancelAndFree(subscription: AukiStreamSubscription): Promise<void> {
@@ -648,7 +756,7 @@ function streamManifest(metadata: CameraRegistryMetadata): AukiStreamManifest {
     clockHash: metadata.clock.hash,
     frameId: metadata.frame.id,
     frameHash: metadata.frame.hash,
-    resourceId: CAMERA_RESOURCE_ID,
+    resourceId: metadata.resourceId,
     payload: "camera_frame",
     fromFrameId: "",
     fromFrameHash: "",
@@ -668,7 +776,7 @@ function validateStreamManifest(
   peerId: string,
 ): void {
   const checks: ReadonlyArray<[unknown, unknown, string]> = [
-    [manifest.resourceId, CAMERA_RESOURCE_ID, "resource ID"],
+    [manifest.resourceId, metadata.resourceId, "resource ID"],
     [manifest.payload, "camera_frame", "payload"],
     [manifest.sensorId, metadata.sensor.id, "Sensor ID"],
     [manifest.sensorHash, metadata.sensor.hash, "Sensor hash"],

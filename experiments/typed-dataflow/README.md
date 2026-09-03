@@ -49,6 +49,8 @@ retention APIs that the first clean-room attempt found missing:
   Catalog;
 - `Component::configured_observable` and `Component::operable` bind typed live
   behavior to declared contracts;
+- `Component::replace_configured_observable` atomically projects a distinct
+  replacement Output and terminates the previous Output as reconfigured;
 - `Component::expose` projects into the Catalog only after every declared
   interface is live;
 - direct Catalog mutation is crate-private;
@@ -64,8 +66,8 @@ retention APIs that the first clean-room attempt found missing:
 - external storage is exercised with explicit leases, accounting, and
   serialized readback.
 
-The Camera vertical slice currently represents a configuration change with a
-replacement Output:
+The generic runtime and Camera vertical slice represent a configuration change
+with a replacement Output:
 
 ```text
 Camera Component @ stable Component Manifest hash

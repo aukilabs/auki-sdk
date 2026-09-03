@@ -137,6 +137,13 @@ pub enum ComponentBuildError {
     MissingObservable(String),
     MissingOperable(String),
     DroppedObservable(String),
+    NotExposed,
+    NotCurrentOutput {
+        interface: String,
+        output_id: String,
+    },
+    ReplacementOutputIdReused(String),
+    OutputAlreadyEnded(String),
     AlreadyExposed,
     Catalog(CatalogError),
 }
@@ -209,6 +216,21 @@ impl fmt::Display for ComponentBuildError {
                 formatter,
                 "cannot expose Component: Observable {name} was dropped before exposure"
             ),
+            Self::NotExposed => formatter.write_str("Component is not exposed"),
+            Self::NotCurrentOutput {
+                interface,
+                output_id,
+            } => write!(
+                formatter,
+                "Output {output_id} is not the current configured Output for Observable {interface}"
+            ),
+            Self::ReplacementOutputIdReused(output_id) => write!(
+                formatter,
+                "replacement Output must use a new Output ID; {output_id} is already current"
+            ),
+            Self::OutputAlreadyEnded(output_id) => {
+                write!(formatter, "Output {output_id} has already ended")
+            }
             Self::AlreadyExposed => formatter.write_str("Component is already exposed"),
             Self::Catalog(error) => error.fmt(formatter),
         }
@@ -412,6 +434,151 @@ impl Component {
         })
     }
 
+    /// Replaces one exposed, configured Output while preserving the stable
+    /// Component and Observable interface.
+    ///
+    /// The replacement receives a distinct Output identity. The Catalog is
+    /// updated before the previous Output emits its terminal `Reconfigured`
+    /// notice, so observers can immediately resolve the referenced successor.
+    /// Existing Products remain bound to the previous Output; callers must
+    /// explicitly attach new Products to [`ConfiguredObservableReplacement::replacement`].
+    pub fn replace_configured_observable<T: ContractType + Send + Sync + 'static>(
+        &self,
+        current: &ConfiguredObservable<T>,
+        spec: ConfiguredObservableSpec,
+        effective_at_timestamp_ns: u64,
+    ) -> Result<ConfiguredObservableReplacement<T>, ComponentBuildError> {
+        let contract = self
+            .inner
+            .manifest
+            .observables
+            .iter()
+            .find(|contract| contract.name == spec.interface)
+            .ok_or_else(|| ComponentBuildError::UnknownObservable(spec.interface.clone()))?;
+        if let Some(access) = contract
+            .access
+            .iter()
+            .copied()
+            .find(|access| *access != ObservationAccess::FollowNew)
+        {
+            return Err(ComponentBuildError::UnsupportedLiveAccess {
+                interface: contract.name.clone(),
+                access,
+            });
+        }
+        if contract.datatype != spec.payload.datatype() || contract.schema != spec.payload.schema()
+        {
+            return Err(ComponentBuildError::ContractMismatch {
+                interface: spec.interface,
+                expected_datatype: contract.datatype.clone(),
+                actual_datatype: spec.payload.datatype().to_owned(),
+                expected_schema: contract.schema.clone(),
+                actual_schema: spec.payload.schema().to_owned(),
+            });
+        }
+        if T::DATATYPE != contract.datatype {
+            return Err(ComponentBuildError::RustDatatypeMismatch {
+                interface: contract.name.clone(),
+                rust_datatype: T::DATATYPE.to_owned(),
+                contract_datatype: contract.datatype.clone(),
+            });
+        }
+        if !current.owner.ptr_eq(&Arc::downgrade(&self.inner))
+            || current.reference.slot != contract.name
+        {
+            return Err(ComponentBuildError::NotCurrentOutput {
+                interface: contract.name.clone(),
+                output_id: current.reference.output_id.clone(),
+            });
+        }
+        if current.reference.output_id == spec.output_id {
+            return Err(ComponentBuildError::ReplacementOutputIdReused(
+                spec.output_id,
+            ));
+        }
+
+        let manifest = OutputManifest {
+            schema: "auki.component-output-manifest/v1".to_owned(),
+            peer_id: self.inner.reference.peer_id.clone(),
+            component_id: self.inner.reference.component_id.clone(),
+            component_manifest_hash: self.inner.reference.manifest_hash.clone(),
+            slot: contract.name.clone(),
+            output_id: spec.output_id,
+            clock_id: spec.clock_id,
+            spatial_frame_id: spec.spatial_frame_id,
+            payload: spec.payload,
+        };
+        let reference = manifest.reference();
+        let (observable, emitter) = output_observable(reference.clone(), contract.access.clone());
+        let liveness = Arc::new(());
+        let replacement = ConfiguredObservable {
+            manifest: manifest.clone(),
+            reference: reference.clone(),
+            observable,
+            emitter,
+            state: Arc::new(Mutex::new(PublisherState {
+                next_sequence: 0,
+                last_sequence: None,
+                ended: false,
+            })),
+            owner: Arc::downgrade(&self.inner),
+            _liveness: Arc::clone(&liveness),
+        };
+
+        let mut publisher_state = current.state.lock().unwrap();
+        if publisher_state.ended {
+            return Err(ComponentBuildError::OutputAlreadyEnded(
+                current.reference.output_id.clone(),
+            ));
+        }
+        let mut component_state = self.inner.state.lock().unwrap();
+        if !component_state.exposed {
+            return Err(ComponentBuildError::NotExposed);
+        }
+        let registered = component_state
+            .configured_outputs
+            .get(&contract.name)
+            .ok_or_else(|| ComponentBuildError::NotCurrentOutput {
+                interface: contract.name.clone(),
+                output_id: current.reference.output_id.clone(),
+            })?;
+        if registered.manifest.reference() != current.reference {
+            return Err(ComponentBuildError::NotCurrentOutput {
+                interface: contract.name.clone(),
+                output_id: current.reference.output_id.clone(),
+            });
+        }
+
+        self.inner.catalog.set_current_output(manifest.clone())?;
+        component_state.configured_outputs.insert(
+            contract.name.clone(),
+            ConfiguredOutputRegistration {
+                manifest,
+                liveness: Arc::downgrade(&liveness),
+            },
+        );
+        publisher_state.ended = true;
+        let previous_end = ObservationEnd {
+            output: current.reference.clone(),
+            last_sequence: publisher_state.last_sequence,
+            timestamp_ns: effective_at_timestamp_ns,
+            reason: ObservationEndReason::Reconfigured {
+                replacement: Some(reference),
+            },
+        };
+        drop(component_state);
+        drop(publisher_state);
+        current.emitter.emit(
+            effective_at_timestamp_ns,
+            ObservationEvent::Ended(previous_end.clone()),
+        );
+
+        Ok(ConfiguredObservableReplacement {
+            previous_end,
+            replacement,
+        })
+    }
+
     pub fn operable<I: ContractType, R: ContractType>(
         &self,
         name: &str,
@@ -554,6 +721,22 @@ pub struct ConfiguredObservable<T> {
     state: Arc<Mutex<PublisherState>>,
     owner: std::sync::Weak<ComponentInner>,
     _liveness: Arc<()>,
+}
+
+/// The result of replacing one immutable configured Output with another.
+pub struct ConfiguredObservableReplacement<T> {
+    pub previous_end: ObservationEnd,
+    pub replacement: ConfiguredObservable<T>,
+}
+
+impl<T> fmt::Debug for ConfiguredObservableReplacement<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConfiguredObservableReplacement")
+            .field("previous_end", &self.previous_end)
+            .field("replacement", &self.replacement.reference)
+            .finish()
+    }
 }
 
 impl<T> Clone for ConfiguredObservable<T> {

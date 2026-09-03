@@ -113,6 +113,6 @@ pub use pump::{
     PumpError, PumpOptions, PumpStats, SinkFullPolicy, StreamPump, connect_direct_latest_pump,
 };
 pub use runtime::{
-    Component, ComponentBuildError, ComponentSpec, ConfiguredObservable, ConfiguredObservableSpec,
-    ContractType, PublishError,
+    Component, ComponentBuildError, ComponentSpec, ConfiguredObservable,
+    ConfiguredObservableReplacement, ConfiguredObservableSpec, ContractType, PublishError,
 };

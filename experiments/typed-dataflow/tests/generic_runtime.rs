@@ -4,12 +4,12 @@ use std::thread;
 use std::time::Duration;
 
 use auki_typed_dataflow_experiment::{
-    AudioLayout, AudioPayloadContract, AudioSampleFormat, ComponentBuildError, ComponentSpec,
-    ConfiguredObservableSpec, ContractType, EveryFullPolicy, Exposure, GaugePayloadContract,
-    InMemoryTransport, InvocationContext, InvocationError, InvocationOptions, InvocationOrdering,
-    InvocationStatus, ObservableContract, ObservationAccess, ObservationDelivery, ObservationEvent,
-    OperableContract, PayloadContract, PeerRuntime, SerializedInMemoryTransport, SharedScheduler,
-    observation_input,
+    AudioLayout, AudioPayloadContract, AudioSampleFormat, BufferLimits, ComponentBuildError,
+    ComponentSpec, ConfiguredObservableSpec, ContractType, EveryFullPolicy, Exposure,
+    GaugePayloadContract, InMemoryTransport, InvocationContext, InvocationError, InvocationOptions,
+    InvocationOrdering, InvocationStatus, ObservableContract, ObservationAccess,
+    ObservationDelivery, ObservationEndReason, ObservationEvent, OperableContract, PayloadContract,
+    PeerRuntime, PublishError, SerializedInMemoryTransport, SharedScheduler, observation_input,
 };
 
 fn gauge_payload(observes: &str) -> PayloadContract {
@@ -215,6 +215,118 @@ fn exposure_requires_live_handles_and_exact_contracts() {
         .unwrap();
     component.expose().unwrap();
     assert!(peer.catalog().component("incomplete").is_some());
+}
+
+#[test]
+fn configured_output_replacement_updates_catalog_ends_old_output_and_requires_new_product() {
+    let peer = PeerRuntime::new("peer-a");
+    let component = peer
+        .component(ComponentSpec::new("sensor").observable(gauge_contract("level")))
+        .unwrap();
+    let first = component
+        .configured_observable::<f64>(ConfiguredObservableSpec::new(
+            "level",
+            "level-1",
+            "peer-a.session-clock",
+            gauge_payload("load"),
+        ))
+        .unwrap();
+    component.expose().unwrap();
+    let first_product = peer
+        .capture_buffer(
+            "level-history-1",
+            &first,
+            BufferLimits {
+                max_entries: Some(10),
+                max_bytes: None,
+                target_duration: None,
+            },
+            |_| size_of::<f64>(),
+        )
+        .unwrap();
+    first.publish(10, Arc::new(1.0)).unwrap();
+
+    let transition = component
+        .replace_configured_observable::<f64>(
+            &first,
+            ConfiguredObservableSpec::new(
+                "level",
+                "level-2",
+                "peer-a.session-clock",
+                gauge_payload("load after reconfiguration"),
+            ),
+            20,
+        )
+        .unwrap();
+    let second = transition.replacement;
+
+    assert_eq!(transition.previous_end.output, *first.reference());
+    assert_eq!(transition.previous_end.last_sequence, Some(0));
+    assert_eq!(transition.previous_end.timestamp_ns, 20);
+    assert_eq!(
+        transition.previous_end.reason,
+        ObservationEndReason::Reconfigured {
+            replacement: Some(second.reference().clone()),
+        }
+    );
+    assert!(matches!(
+        first.publish(21, Arc::new(2.0)),
+        Err(PublishError::Ended)
+    ));
+    assert_eq!(first_product.end_notice(), Some(transition.previous_end));
+    assert_eq!(first_product.product().buffer().range().entries, 1);
+
+    let catalog_component = peer.catalog().component("sensor").unwrap();
+    assert_eq!(
+        catalog_component.current_outputs["level"]
+            .manifest
+            .reference(),
+        *second.reference()
+    );
+    assert_eq!(
+        catalog_component.current_outputs["level"].manifest.payload,
+        gauge_payload("load after reconfiguration")
+    );
+
+    let second_product = peer
+        .capture_buffer(
+            "level-history-2",
+            &second,
+            BufferLimits {
+                max_entries: Some(10),
+                max_bytes: None,
+                target_duration: None,
+            },
+            |_| size_of::<f64>(),
+        )
+        .unwrap();
+    second.publish(30, Arc::new(3.0)).unwrap();
+    assert_eq!(second_product.product().buffer().range().entries, 1);
+    assert_eq!(peer.catalog().products().len(), 2);
+    assert_eq!(
+        peer.catalog()
+            .product("level-history-2")
+            .unwrap()
+            .manifest
+            .producer,
+        *second.reference()
+    );
+
+    assert_eq!(
+        component
+            .replace_configured_observable::<f64>(
+                &first,
+                ConfiguredObservableSpec::new(
+                    "level",
+                    "level-3",
+                    "peer-a.session-clock",
+                    gauge_payload("load"),
+                ),
+                40,
+            )
+            .unwrap_err(),
+        ComponentBuildError::OutputAlreadyEnded("level-1".to_owned())
+    );
 }
 
 #[test]

@@ -5,12 +5,14 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
+
 use crate::ports::{
     ComponentError, Connection, ConnectionStats, DeliveryStatus, Endpoint, EndpointKind, Envelope,
     InputPort, OutputPort,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BufferLimits {
     pub max_entries: Option<usize>,
     pub max_bytes: Option<usize>,

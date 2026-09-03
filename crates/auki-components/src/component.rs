@@ -8,9 +8,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ComponentError, Connection, ConnectionControl, ConnectionError, ConnectionOptions,
-    ConnectionStats, Envelope, EveryFullPolicy, InputPort, OutputPort, PublishReport,
-    SharedDelivery, SharedDispatcher, connect, connect_shared,
+    BufferLimits, ComponentError, Connection, ConnectionControl, ConnectionError,
+    ConnectionOptions, ConnectionStats, Envelope, EveryFullPolicy, InputPort, OutputPort,
+    PublishReport, SharedDelivery, SharedDispatcher, connect, connect_shared,
 };
 
 pub type ManifestHash = String;
@@ -355,6 +355,7 @@ pub enum ProductState {
     Buffer {
         entries: usize,
         at_entry_capacity: bool,
+        limits: Option<BufferLimits>,
     },
     Episode {
         observations: usize,
@@ -584,6 +585,7 @@ impl Catalog {
             ProductForm::Buffer => ProductState::Buffer {
                 entries: 0,
                 at_entry_capacity: false,
+                limits: None,
             },
             ProductForm::Episode => ProductState::Episode {
                 observations: 0,

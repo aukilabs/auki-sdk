@@ -587,7 +587,7 @@ impl Component {
                 product_id: current.manifest.product.product_id.clone(),
             });
         }
-        if current.manifest.product.product_id == product.manifest.product_id {
+        if current.manifest.product.reference() == product.reference() {
             return Err(ComponentBuildError::ReplacementProductInputReused(
                 product.manifest.product_id.clone(),
             ));

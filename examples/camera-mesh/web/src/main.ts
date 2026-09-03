@@ -83,6 +83,7 @@ const snapshotDialog = dialog("snapshot-dialog");
 const cameraActionsDialog = dialog("camera-actions-dialog");
 const cameraActionsTitle = get<HTMLElement>("camera-actions-title");
 const cameraResults = get<HTMLElement>("camera-results");
+const addAllCamerasButton = button("add-all-cameras-button");
 const manualCard = get<HTMLTextAreaElement>("manual-card");
 const addCameraError = get<HTMLElement>("add-camera-error");
 const diagnosticFps = get<HTMLOutputElement>("diagnostic-fps");
@@ -111,6 +112,7 @@ let columnCount = initialColumnCount();
 let generation = 0;
 let snapshotObjectUrl: string | undefined;
 let toastTimer: number | undefined;
+let addingAllCameras = false;
 const timelineRows: string[] = [];
 const eventRows: string[] = [];
 
@@ -131,6 +133,7 @@ button("publish-button").addEventListener("click", () => void publish());
 button("stop-publish-button").addEventListener("click", () => void stopPublishing());
 button("add-camera-button").addEventListener("click", openAddCamera);
 button("discover-button").addEventListener("click", () => void discover());
+addAllCamerasButton.addEventListener("click", () => void addAllCameras());
 button("add-card-button").addEventListener("click", () => void addManualCard());
 button("close-add-camera-button").addEventListener("click", () => addDialog.close());
 button("close-diagnostics-button").addEventListener("click", () => diagnosticsDialog.close());
@@ -413,6 +416,52 @@ async function addManualCard(): Promise<void> {
   }
 }
 
+async function addAllCameras(): Promise<void> {
+  if (addingAllCameras) return;
+  const additions = addableCandidates();
+  if (additions.length === 0) return;
+
+  addingAllCameras = true;
+  addAllCamerasButton.disabled = true;
+  addAllCamerasButton.textContent = `Adding ${additions.length}…`;
+  record(
+    `Burst-connecting ${additions.length} discovered camera(s) concurrently (stress path)`,
+  );
+  addDialog.close();
+  try {
+    const results = await Promise.allSettled(
+      additions.map((candidate) => addCamera(candidate)),
+    );
+    for (const result of results) {
+      if (result.status === "rejected") report(result.reason, false);
+    }
+  } finally {
+    addingAllCameras = false;
+    renderCandidates();
+    const live = [...cameras.values()].filter((state) => state.status === "live").length;
+    const failed = [...cameras.values()].filter(
+      (state) => state.status === "error" || state.status === "ended",
+    ).length;
+    showToast(
+      `Burst complete · ${live} live${failed ? ` · ${failed} failed` : ""}`,
+      failed > 0,
+    );
+  }
+}
+
+function addableCandidates(): CameraCandidate[] {
+  let remainingSlots = MAX_CAMERAS - cameras.size;
+  return [...candidates.values()]
+    .sort((left, right) => left.peerId.localeCompare(right.peerId))
+    .filter((candidate) => {
+      const state = cameras.get(candidate.peerId);
+      if (state) return state.status !== "live" && state.status !== "connecting";
+      if (remainingSlots === 0) return false;
+      remainingSlots -= 1;
+      return true;
+    });
+}
+
 async function addCamera(candidate: CameraCandidate): Promise<void> {
   const running = mesh;
   if (!running || running.role !== "viewer") return;
@@ -576,6 +625,13 @@ async function openFullscreen(peerId: string): Promise<void> {
 }
 
 function renderCandidates(): void {
+  const addable = addableCandidates();
+  addAllCamerasButton.disabled = addingAllCameras || addable.length === 0;
+  addAllCamerasButton.textContent = addingAllCameras
+    ? "Adding…"
+    : addable.length > 0
+      ? `Add all (${addable.length})`
+      : "Add all";
   if (candidates.size === 0) {
     const empty = document.createElement("p");
     empty.className = "empty-message";
@@ -601,7 +657,9 @@ function renderCandidates(): void {
       action.type = "button";
       action.className = state ? "secondary compact" : "primary compact";
       action.dataset.candidatePeerId = candidate.peerId;
-      action.disabled = state?.status === "live" || state?.status === "connecting";
+      action.disabled = addingAllCameras
+        || state?.status === "live"
+        || state?.status === "connecting";
       action.textContent = state?.status === "live"
         ? "On wall"
         : state?.status === "connecting"

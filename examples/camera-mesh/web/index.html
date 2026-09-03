@@ -177,7 +177,16 @@
               <h3>Available in this Domain</h3>
               <p>Camera publishers advertising through DDS.</p>
             </div>
-            <button id="discover-button" class="secondary compact" type="button">Refresh</button>
+            <div class="discovery-actions">
+              <button id="discover-button" class="secondary compact" type="button">Refresh</button>
+              <button
+                id="add-all-cameras-button"
+                class="primary compact"
+                type="button"
+                title="Connect to every discovered camera concurrently"
+                disabled
+              >Add all</button>
+            </div>
           </div>
           <div class="camera-results" id="camera-results" aria-live="polite">
             <p class="empty-message">Open this panel to discover cameras.</p>

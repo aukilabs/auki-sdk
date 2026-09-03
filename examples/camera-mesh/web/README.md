@@ -34,6 +34,11 @@ paste it under **Add camera → Connect with a peer card**. Add more publisher
 tabs to exercise the one- through four-column wall layouts. Camera Mesh keeps a
 maximum of 16 peers on the wall.
 
+The discovery sheet's **Add all** control intentionally opens every discovered
+camera concurrently, capped by the 16-camera wall. It is a burst/stress path
+for reproducing connection-pressure failures; adding cameras individually is
+the paced operator flow.
+
 The column selector changes density; it does not divide cameras into square
 pages. Two, three, and four columns keep every camera in one scrolling wall.
 On mobile those choices render as two columns. Choose **1** for focus mode,

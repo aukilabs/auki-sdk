@@ -9,6 +9,7 @@ shutdown while leaving product policy explicit.
 - [Author a portable protocol](authoring-protocols.md)
 - [Discover peers by mounted protocol](discovery.md)
 - [Choose or prototype a discovery provider](discovery-providers.md)
+- [Network typed Components and Products](component-protocols.md)
 - [Exercise all six standard protocols](../../examples/standard-protocols/README.md)
 - [Try the Web echo app](../../examples/portable-echo/web/README.md)
 - [Try the Python echo app](../../examples/portable-echo/python/README.md)
@@ -111,6 +112,12 @@ across eight directed edges: 48 checks in total, including both
 browser-to-browser directions. The portable echo remains the small
 custom-protocol authoring reference and supports call + serve on all four
 hosts.
+
+Typed Component applications can instead use the standalone
+`auki-component-protocol` family. It layers revisioned Component/Product
+discovery, retained observation reads, remote Product mirrors, and typed
+Operable invocation over the same authenticated peer without depending on
+`auki-protocols`. See [Network typed Components](component-protocols.md).
 
 Catalog v2 is wire-only because v3 embeds its locked log-row shape. Registry
 support begins at v3. Portable endpoints do not host or negotiate an older

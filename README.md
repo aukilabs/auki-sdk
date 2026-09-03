@@ -10,6 +10,7 @@ Start here:
 - [Build a P2P application](docs/p2p/README.md)
 - [Run the native echo example](docs/p2p/getting-started.md)
 - [Author a portable protocol](docs/p2p/authoring-protocols.md)
+- [Network typed Components](docs/p2p/component-protocols.md)
 - [Understand the longer-term direction](VISION.md)
 - [Look up terminology](GLOSSARY.md)
 
@@ -45,6 +46,10 @@ The split is deliberate:
 - `auki-protocols` provides opt-in wire contracts and portable `Client` /
   `Endpoint` APIs. A peer serves nothing until an application mounts an
   endpoint.
+- `auki-components` owns typed, network-independent Component execution,
+  Products, buffers, and its local Catalog. `auki-component-protocol` can
+  explicitly project selected Products and Operables over `AukiPeer` without
+  depending on the manager-era protocol family.
 - `auki-session` owns the network-free `Peer`, `Session`, registries, and local
   logs.
 - `SessionProtocolProvider` mechanically projects a local Session into Catalog
@@ -110,6 +115,8 @@ The main layers are:
 | [`auki-auth`](crates/auki-auth) | User/App authentication and Domain-scoped peer preparation |
 | [`auki-p2p`](crates/auki-p2p) | Low-level identity, mutual authentication, native TCP/browser WSS transport, relay circuits |
 | [`auki-protocols`](crates/auki-protocols) | Opt-in wire contracts, clients, endpoints, providers, and adapters |
+| [`auki-components`](crates/auki-components) | Network-independent typed Components, Products, buffers, Operables, and local Catalog |
+| [`auki-component-protocol`](crates/auki-component-protocol) | Standalone authenticated Catalog, Product-observation, and Operable protocols |
 | [`auki-session`](crates/auki-session) | Network-free recording model and log lifecycle |
 | [`auki-registry`](crates/auki-registry) | Content-addressed Sensor, Clock, Frame, Detector, Map, and Device Model entries plus blobs |
 | [`auki-logs`](crates/auki-logs) | Segmented append-only storage |

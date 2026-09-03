@@ -136,6 +136,27 @@ async fn catalog_products_and_operables_cross_two_authenticated_peers() {
         .unwrap();
     output.publish(10, Arc::new(12.5)).unwrap();
 
+    let private_sensor = server_runtime
+        .component(ComponentSpec::new("unexported-sensor").observable(gauge_contract("level")))
+        .unwrap();
+    let private_output = private_sensor
+        .configured_observable::<f64>(ConfiguredObservableSpec::new(
+            "level",
+            "private-level-1",
+            format!("{}.clock", server_peer.peer_id()),
+            gauge_payload(),
+        ))
+        .unwrap();
+    private_sensor.expose().unwrap();
+    let _private_capture = server_runtime
+        .capture_buffer(
+            "unexported-level-history",
+            &private_output,
+            BufferLimits::entries(8),
+            |_| 8,
+        )
+        .unwrap();
+
     let expected_client = client_peer.peer_id().to_string();
     let actuator = server_runtime
         .component(ComponentSpec::new("actuator").operable(OperableContract {
@@ -180,6 +201,18 @@ async fn catalog_products_and_operables_cross_two_authenticated_peers() {
     };
     assert_eq!(snapshot.components.len(), 2);
     assert_eq!(snapshot.products.len(), 1);
+    assert!(
+        snapshot
+            .components
+            .iter()
+            .all(|entry| entry.manifest.component_id != "unexported-sensor")
+    );
+    assert!(
+        snapshot
+            .products
+            .iter()
+            .all(|entry| entry.manifest.product_id != "unexported-level-history")
+    );
     assert!(matches!(
         client
             .catalog_exact(
@@ -260,7 +293,7 @@ async fn catalog_products_and_operables_cross_two_authenticated_peers() {
     let unauthorized = client
         .invoke_exact::<u64, u64>(
             server_peer.peer_id(),
-            server_route,
+            server_route.clone(),
             actuator.reference().clone(),
             "double",
             "impostor",
@@ -274,6 +307,19 @@ async fn catalog_products_and_operables_cross_two_authenticated_peers() {
         unauthorized,
         ComponentProtocolError::RemoteOperation(error) if error.code == "unauthorized"
     ));
+
+    assert!(endpoint.unexport_product("level-history"));
+    let revised = client
+        .catalog_exact(server_peer.peer_id(), server_route, Some(snapshot.revision))
+        .await
+        .unwrap();
+    let CatalogResponse::Snapshot { snapshot: revised } = revised else {
+        panic!("unexporting a Product must revise the network Catalog")
+    };
+    assert!(revised.revision > snapshot.revision);
+    assert!(revised.products.is_empty());
+    assert_eq!(revised.components.len(), 1);
+    assert_eq!(revised.components[0].manifest.component_id, "actuator");
 
     mirror.close();
     endpoint.close().await.unwrap();

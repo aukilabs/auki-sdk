@@ -1,8 +1,9 @@
 //! AukiPeer registration, authenticated dispatch, and portable clients.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 #[cfg(target_arch = "wasm32")]
 use std::time::Instant;
@@ -70,12 +71,21 @@ type OperationHandler = dyn Fn(
 
 struct ServiceState {
     runtime: ComponentRuntime,
+    catalog_gate: RwLock<()>,
     products: RwLock<BTreeMap<String, Arc<ProductHandler>>>,
     operations: RwLock<BTreeMap<(String, String), Arc<OperationHandler>>>,
+    export_revision: AtomicU64,
+    catalog_projection: Mutex<CatalogProjection>,
     #[cfg(not(target_arch = "wasm32"))]
     _scheduler: Arc<SharedScheduler>,
     #[cfg(not(target_arch = "wasm32"))]
     dispatcher: SharedDispatcher,
+}
+
+#[derive(Default)]
+struct CatalogProjection {
+    last_source_revisions: Option<(u64, u64)>,
+    revision: u64,
 }
 
 /// Mounted Catalog, observation, and operation services for one Component runtime.
@@ -108,8 +118,11 @@ impl ComponentProtocolEndpoint {
         );
         let state = Arc::new(ServiceState {
             runtime,
+            catalog_gate: RwLock::new(()),
             products: RwLock::new(BTreeMap::new()),
             operations: RwLock::new(BTreeMap::new()),
+            export_revision: AtomicU64::new(0),
+            catalog_projection: Mutex::new(CatalogProjection::default()),
             #[cfg(not(target_arch = "wasm32"))]
             dispatcher: scheduler.dispatcher(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -198,6 +211,7 @@ impl ComponentProtocolEndpoint {
                 gap,
             })
         });
+        let _catalog_guard = self.state.catalog_gate.write().unwrap();
         let mut products = self.state.products.write().unwrap();
         if products.contains_key(&reference.product_id) {
             return Err(ComponentProtocolError::DuplicateExport(format!(
@@ -206,16 +220,23 @@ impl ComponentProtocolEndpoint {
             )));
         }
         products.insert(reference.product_id, handler);
+        self.state.export_revision.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 
     pub fn unexport_product(&self, product_id: &str) -> bool {
-        self.state
+        let _catalog_guard = self.state.catalog_gate.write().unwrap();
+        let removed = self
+            .state
             .products
             .write()
             .unwrap()
             .remove(product_id)
-            .is_some()
+            .is_some();
+        if removed {
+            self.state.export_revision.fetch_add(1, Ordering::AcqRel);
+        }
+        removed
     }
 
     /// Make one typed Operable available through authenticated invocation.
@@ -287,6 +308,7 @@ impl ComponentProtocolEndpoint {
             }
             .boxed()
         });
+        let _catalog_guard = self.state.catalog_gate.write().unwrap();
         let key = (
             operable.owner().component_id.clone(),
             operable.name().to_owned(),
@@ -299,16 +321,23 @@ impl ComponentProtocolEndpoint {
             )));
         }
         operations.insert(key, handler);
+        self.state.export_revision.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 
     pub fn unexport_operable(&self, component_id: &str, operable: &str) -> bool {
-        self.state
+        let _catalog_guard = self.state.catalog_gate.write().unwrap();
+        let removed = self
+            .state
             .operations
             .write()
             .unwrap()
             .remove(&(component_id.to_owned(), operable.to_owned()))
-            .is_some()
+            .is_some();
+        if removed {
+            self.state.export_revision.fetch_add(1, Ordering::AcqRel);
+        }
+        removed
     }
 
     pub async fn close(self) -> Result<(), ComponentProtocolError> {
@@ -751,7 +780,7 @@ where
     S: futures::AsyncRead + futures::AsyncWrite + Unpin,
 {
     let request: CatalogRequest = read_json(stream).await?;
-    let snapshot = state.runtime.catalog().snapshot();
+    let snapshot = network_catalog_snapshot(state);
     let response = if request.known_revision == Some(snapshot.revision) {
         CatalogResponse::Unchanged {
             revision: snapshot.revision,
@@ -761,6 +790,52 @@ where
     };
     write_json(stream, &response).await?;
     Ok(())
+}
+
+fn network_catalog_snapshot(state: &ServiceState) -> auki_components::CatalogSnapshot {
+    let _catalog_guard = state.catalog_gate.read().unwrap();
+    let mut snapshot = state.runtime.catalog().snapshot();
+    let exported_products = state
+        .products
+        .read()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let exported_operations = state
+        .operations
+        .read()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    snapshot
+        .products
+        .retain(|product| exported_products.contains(&product.manifest.product_id));
+
+    let mut exported_components = exported_operations
+        .iter()
+        .map(|(component_id, _)| component_id.clone())
+        .collect::<BTreeSet<_>>();
+    exported_components.extend(
+        snapshot
+            .products
+            .iter()
+            .map(|product| product.manifest.producer.component_id.clone()),
+    );
+    snapshot
+        .components
+        .retain(|component| exported_components.contains(&component.manifest.component_id));
+
+    let export_revision = state.export_revision.load(Ordering::Acquire);
+    let mut projection = state.catalog_projection.lock().unwrap();
+    let source_revisions = (snapshot.revision, export_revision);
+    if projection.last_source_revisions != Some(source_revisions) {
+        projection.revision = projection.revision.saturating_add(1);
+        projection.last_source_revisions = Some(source_revisions);
+    }
+    snapshot.revision = projection.revision;
+    snapshot
 }
 
 async fn serve_observations<S>(stream: &mut S, state: &ServiceState) -> Result<(), ServiceError>

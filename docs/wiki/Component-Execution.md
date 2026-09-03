@@ -1,8 +1,11 @@
 # Component execution
 
-Detectors and Mappers are application-controlled processing components. They
-consume SDK Resources and produce SDK Resources, but the running component is
-not itself a Resource advertised to peers.
+Detectors and Mappers are application-controlled processing Components. They
+consume SDK Products and produce SDK Products. A running Component is not
+itself a durable Product, but its immutable Manifest and currently configured
+inputs/outputs may be projected in a Catalog. Applications may explicitly
+export its Products or cluster-visible Operables through
+`auki-component-protocol`.
 
 For example, an application can ask the SDK to run `QRDetectorBeta2` against a
 particular RGB camera stream once per second. The detector implementation owns
@@ -34,10 +37,12 @@ Sensor Log + Pose Log -> Mapper instance -> Map Log
 Camera Sensor Log     -> Detector instance -> Detection Log
 ```
 
-Other peers discover and consume the output log. They do not remotely consume
-the in-process component instance. A future remote-compute protocol could expose
-an application service that starts components, but that service would remain
-distinct from the produced Resource.
+Other peers discover and consume the output Product. A remote Product mirror
+becomes an ordinary typed input on the consuming peer while preserving its
+source Manifest, sequence, and timestamp. Peers do not receive the producer's
+in-process object. Remote Operable invocation addresses an explicitly exported
+control interface on an already-running Component; starting or placing new
+Components would remain a separate application service.
 
 ## Live mode
 

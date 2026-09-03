@@ -12,8 +12,8 @@ const relayAdmissionWindowMs = 11_000;
 if (!email || !password) {
   throw new Error("AUKI_EMAIL and AUKI_PASSWORD are required");
 }
-if (!Number.isInteger(cameraCount) || cameraCount < 2 || cameraCount > 9) {
-  throw new Error("AUKI_CAMERA_WALL_COUNT must be an integer from 2 through 9");
+if (!Number.isInteger(cameraCount) || cameraCount < 2 || cameraCount > 16) {
+  throw new Error("AUKI_CAMERA_WALL_COUNT must be an integer from 2 through 16");
 }
 
 const browser = await chromium.launch({
@@ -58,7 +58,7 @@ try {
   if (publisherDomains.some((value) => value !== viewerDomain)) {
     throw new Error("browser peers selected different Domains");
   }
-  await viewer.locator("button[data-grid-size='4']").click();
+  await viewer.locator("button[data-column-count='4']").click();
 
   const viewerCard = await peerCard(viewer);
   const cards = [];
@@ -75,6 +75,7 @@ try {
 
   for (const card of cards) await connectApproved(viewer, card.peerId);
   await Promise.all(cards.map((card) => waitForFrames(viewer, card.peerId, 3)));
+  await assertColumnLayout(viewer, 4, "desktop four-column wall");
   await Promise.all(cards.map((card) => assertStreamDiagnostics(viewer, card.peerId)));
   await assertInspector(viewer, cardA.peerId, "Smoke Camera 1 publisher");
   await assertInspector(viewer, cardB.peerId, "Smoke Camera 2 publisher");
@@ -100,7 +101,9 @@ try {
     "Camera A frames after resume",
   );
 
-  await cameraTile(viewer, cardB.peerId).locator("button[data-action='snapshot']").click();
+  await cameraTile(viewer, cardB.peerId)
+    .locator("button.tile-action[data-action='snapshot']")
+    .click();
   await viewer.locator("#snapshot-image").waitFor({ state: "visible", timeout });
   await waitFor(async () => {
     const status = await elementText(viewer, "#snapshot-status");
@@ -109,15 +112,16 @@ try {
   }, timeout, "Camera B SHA-256-verified snapshot");
   await viewer.locator("#close-snapshot-button").click();
 
-  await viewer.locator("button[data-grid-size='3']").click();
-  if (await viewer.locator("#camera-grid > *").count() !== 9) {
-    throw new Error("3×3 layout did not render nine camera slots");
+  await viewer.locator("button[data-column-count='3']").click();
+  await assertColumnLayout(viewer, 3, "desktop three-column wall");
+  if (await viewer.locator("#camera-grid > *").count() !== cameraCount + 1) {
+    throw new Error("column layout did not render every camera plus one add-camera slot");
   }
   await Promise.all([
     waitForFrames(viewer, cardA.peerId, (await receivedFrames(viewer, cardA.peerId)) + 1),
     waitForFrames(viewer, cardB.peerId, (await receivedFrames(viewer, cardB.peerId)) + 1),
   ]);
-  await assertResponsiveViewer(viewer, cardA.peerId);
+  await assertResponsiveViewer(viewer, cardA.peerId, cardB.peerId);
 
   const beforeRemove = await receivedFrames(viewer, cardA.peerId);
   await cameraMenuAction(viewer, cardB.peerId, "remove");
@@ -308,10 +312,11 @@ async function assertStreamDiagnostics(page, peerId) {
   }
 }
 
-async function assertResponsiveViewer(page, peerId) {
+async function assertResponsiveViewer(page, peerId, nextPeerId) {
   await page.setViewportSize({ width: 390, height: 844 });
   await waitFor(async () => await page.evaluate(() => document.documentElement.scrollWidth <= 391),
     timeout, "mobile layout without horizontal overflow");
+  await assertColumnLayout(page, 2, "mobile column clamp");
 
   const layout = await page.evaluate(() => {
     const topbar = document.querySelector(".topbar")?.getBoundingClientRect();
@@ -351,13 +356,48 @@ async function assertResponsiveViewer(page, peerId) {
     throw new Error("Diagnostics did not expose average JPEG size");
   }
   await page.locator("#close-diagnostics-button").click();
+
+  await page.locator("button[data-column-count='1']").click();
+  await assertColumnLayout(page, 1, "mobile focus mode");
+  if (await page.locator("#camera-grid > .camera-tile").count() !== 1) {
+    throw new Error("focus mode did not render exactly one camera");
+  }
+  const focused = cameraTile(page, peerId);
+  const focusBox = await focused.boundingBox();
+  if (!focusBox || focusBox.width < 370 || focusBox.height < 650) {
+    throw new Error(`focused camera does not fill the mobile wall: ${JSON.stringify(focusBox)}`);
+  }
+  await page.locator("#next-camera-button").click();
+  await cameraTile(page, nextPeerId).waitFor({ state: "visible", timeout });
+  if (await elementText(page, "#focus-label") !== `2 / ${cameraCount}`) {
+    throw new Error("focus navigation did not advance to the next camera");
+  }
+  await page.locator("#previous-camera-button").click();
+  await cameraTile(page, peerId).waitFor({ state: "visible", timeout });
+
+  await page.locator("button[data-column-count='2']").click();
+  await assertColumnLayout(page, 2, "mobile two-column wall");
   await page.setViewportSize({ width: 1280, height: 720 });
+  await page.locator("button[data-column-count='3']").click();
+  await assertColumnLayout(page, 3, "restored desktop column preference");
+}
+
+async function assertColumnLayout(page, expected, label) {
+  await waitFor(async () => {
+    const tracks = await page.locator("#camera-grid").evaluate((grid) =>
+      getComputedStyle(grid).gridTemplateColumns.split(/\s+/).filter(Boolean).length);
+    const selected = await page.locator(`button[data-column-count='${expected}']`)
+      .getAttribute("aria-pressed");
+    return tracks === expected && selected === "true";
+  }, timeout, label);
 }
 
 async function cameraMenuAction(page, peerId, action) {
   const tile = cameraTile(page, peerId);
-  await tile.locator(".tile-menu > summary").click();
-  await tile.locator(`button[data-action="${action}"]`).click();
+  await tile.locator("button.tile-menu-trigger[data-action='menu']").click();
+  const sheet = page.locator("#camera-actions-dialog");
+  await sheet.waitFor({ state: "visible", timeout });
+  await sheet.locator(`button[data-camera-action="${action}"]`).click();
 }
 
 async function waitForCameraStatus(page, peerId, status) {

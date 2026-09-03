@@ -39,7 +39,8 @@ interface CameraTileState {
 const MAX_CAMERAS = 16;
 const DIAGNOSTIC_WINDOW_MS = 5_000;
 const MAX_DIAGNOSTIC_SAMPLES = 120;
-const GRID_STORAGE_KEY = "auki-camera-mesh-grid";
+const COLUMN_STORAGE_KEY = "auki-camera-mesh-columns";
+const mobileLayout = matchMedia("(max-width: 720px)");
 
 const get = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
@@ -78,6 +79,8 @@ const previewEmpty = get<HTMLElement>("preview-empty");
 const addDialog = dialog("add-camera-dialog");
 const diagnosticsDialog = dialog("diagnostics-dialog");
 const snapshotDialog = dialog("snapshot-dialog");
+const cameraActionsDialog = dialog("camera-actions-dialog");
+const cameraActionsTitle = get<HTMLElement>("camera-actions-title");
 const cameraResults = get<HTMLElement>("camera-results");
 const manualCard = get<HTMLTextAreaElement>("manual-card");
 const addCameraError = get<HTMLElement>("add-camera-error");
@@ -92,8 +95,8 @@ const snapshotImage = get<HTMLImageElement>("snapshot-image");
 const snapshotStatus = get<HTMLElement>("snapshot-status");
 const snapshotTitle = get<HTMLElement>("snapshot-title");
 const toast = get<HTMLElement>("toast");
-const pageControls = get<HTMLElement>("page-controls");
-const pageLabel = get<HTMLElement>("page-label");
+const focusControls = get<HTMLElement>("focus-controls");
+const focusLabel = get<HTMLElement>("focus-label");
 
 let session: AukiUserSession | undefined;
 let mesh: CameraMesh | undefined;
@@ -102,8 +105,8 @@ let pendingPeerIds: readonly string[] = [];
 const cameras = new Map<string, CameraTileState>();
 let cameraOrder: string[] = [];
 let selectedPeerId: string | undefined;
-let gridSize = initialGridSize();
-let gridPage = 0;
+let actionPeerId: string | undefined;
+let columnCount = initialColumnCount();
 let generation = 0;
 let snapshotObjectUrl: string | undefined;
 let toastTimer: number | undefined;
@@ -131,12 +134,14 @@ button("add-card-button").addEventListener("click", () => void addManualCard());
 button("close-add-camera-button").addEventListener("click", () => addDialog.close());
 button("close-diagnostics-button").addEventListener("click", () => diagnosticsDialog.close());
 button("close-snapshot-button").addEventListener("click", () => snapshotDialog.close());
-button("previous-page-button").addEventListener("click", () => changePage(-1));
-button("next-page-button").addEventListener("click", () => changePage(1));
+button("close-camera-actions-button").addEventListener("click", () => cameraActionsDialog.close());
+button("previous-camera-button").addEventListener("click", () => changeFocusedCamera(-1));
+button("next-camera-button").addEventListener("click", () => changeFocusedCamera(1));
 
-for (const control of document.querySelectorAll<HTMLButtonElement>("[data-grid-size]")) {
-  control.addEventListener("click", () => setGridSize(Number(control.dataset.gridSize)));
+for (const control of document.querySelectorAll<HTMLButtonElement>("[data-column-count]")) {
+  control.addEventListener("click", () => setColumnCount(Number(control.dataset.columnCount)));
 }
+mobileLayout.addEventListener("change", () => renderWall());
 
 cameraResults.addEventListener("click", (event) => {
   const control = (event.target as Element).closest<HTMLButtonElement>("button[data-candidate-peer-id]");
@@ -160,7 +165,16 @@ cameraGrid.addEventListener("click", (event) => {
   }
 });
 
-for (const candidate of [addDialog, diagnosticsDialog, snapshotDialog]) {
+cameraActionsDialog.addEventListener("click", (event) => {
+  const control = (event.target as Element).closest<HTMLButtonElement>("button[data-camera-action]");
+  const peerId = actionPeerId;
+  if (!control || !peerId) return;
+  const action = control.dataset.cameraAction;
+  cameraActionsDialog.close();
+  if (action) void handleTileAction(action, peerId);
+});
+
+for (const candidate of [addDialog, diagnosticsDialog, snapshotDialog, cameraActionsDialog]) {
   candidate.addEventListener("click", (event) => {
     if (event.target === candidate) candidate.close();
   });
@@ -426,7 +440,6 @@ async function addCamera(candidate: CameraCandidate): Promise<void> {
   }
   if (existing && (state.status === "live" || state.status === "connecting")) {
     selectedPeerId = candidate.peerId;
-    focusCameraPage(candidate.peerId);
     renderWall();
     addDialog.close();
     return;
@@ -438,7 +451,6 @@ async function addCamera(candidate: CameraCandidate): Promise<void> {
   resetStreamDiagnostics(state);
   state.sourcePaused = false;
   selectedPeerId = candidate.peerId;
-  focusCameraPage(candidate.peerId);
   renderWall();
   addDialog.close();
   try {
@@ -473,7 +485,9 @@ async function addCamera(candidate: CameraCandidate): Promise<void> {
 async function handleTileAction(action: string, peerId: string): Promise<void> {
   const state = cameras.get(peerId);
   if (!state) return;
-  if (action === "retry") {
+  if (action === "menu") {
+    openCameraActions(peerId);
+  } else if (action === "retry") {
     await addCamera(state.candidate);
   } else if (action === "remove") {
     await removeCamera(peerId);
@@ -503,6 +517,7 @@ async function removeCamera(peerId: string): Promise<void> {
   cameraOrder = cameraOrder.filter((candidate) => candidate !== peerId);
   clearCameraUrl(state);
   if (selectedPeerId === peerId) selectedPeerId = cameraOrder[0];
+  if (actionPeerId === peerId) actionPeerId = undefined;
   renderWall();
   try {
     await running.disconnectCamera(peerId);
@@ -600,31 +615,42 @@ function renderCandidates(): void {
 }
 
 function renderWall(): void {
-  const capacity = gridSize * gridSize;
-  const pageCount = Math.max(1, Math.ceil(Math.max(1, cameraOrder.length) / capacity));
-  gridPage = Math.min(gridPage, pageCount - 1);
-  const visiblePeerIds = cameraOrder.slice(gridPage * capacity, (gridPage + 1) * capacity);
+  if (selectedPeerId && !cameras.has(selectedPeerId)) selectedPeerId = undefined;
+  selectedPeerId ??= cameraOrder[0];
+  const renderedColumns = effectiveColumnCount();
+  const focusMode = renderedColumns === 1;
+  const visiblePeerIds = focusMode
+    ? selectedPeerId ? [selectedPeerId] : []
+    : [...cameraOrder];
   const visible = new Set(visiblePeerIds);
   for (const [peerId, state] of cameras) {
     if (!visible.has(peerId)) clearCameraUrl(state);
   }
 
-  cameraGrid.dataset.gridSize = String(gridSize);
-  cameraGrid.style.setProperty("--grid-size", String(gridSize));
+  cameraGrid.dataset.columnCount = String(renderedColumns);
+  cameraGrid.style.setProperty("--column-count", String(renderedColumns));
   const children: HTMLElement[] = visiblePeerIds.map((peerId) => {
     const state = cameras.get(peerId);
     return state ? renderCameraTile(state) : renderEmptyTile();
   });
-  while (children.length < capacity) children.push(renderEmptyTile());
+  if ((!focusMode || children.length === 0) && cameras.size < MAX_CAMERAS) {
+    children.push(renderEmptyTile());
+  }
   cameraGrid.replaceChildren(...children);
 
-  for (const control of document.querySelectorAll<HTMLButtonElement>("[data-grid-size]")) {
-    control.setAttribute("aria-pressed", String(Number(control.dataset.gridSize) === gridSize));
+  for (const control of document.querySelectorAll<HTMLButtonElement>("[data-column-count]")) {
+    control.setAttribute(
+      "aria-pressed",
+      String(Number(control.dataset.columnCount) === renderedColumns),
+    );
   }
-  pageControls.hidden = pageCount === 1;
-  pageLabel.textContent = `${gridPage + 1} / ${pageCount}`;
-  button("previous-page-button").disabled = gridPage === 0;
-  button("next-page-button").disabled = gridPage >= pageCount - 1;
+  const focusIndex = selectedPeerId ? cameraOrder.indexOf(selectedPeerId) : -1;
+  focusControls.hidden = !focusMode || cameraOrder.length < 2;
+  focusLabel.textContent = focusIndex >= 0
+    ? `${focusIndex + 1} / ${cameraOrder.length}`
+    : `0 / ${cameraOrder.length}`;
+  button("previous-camera-button").disabled = cameraOrder.length < 2;
+  button("next-camera-button").disabled = cameraOrder.length < 2;
   button("add-camera-button").disabled = cameras.size >= MAX_CAMERAS;
   updateWallStatus();
   updateAggregateMetrics();
@@ -721,12 +747,13 @@ function renderCameraTile(state: CameraTileState): HTMLElement {
       tileAction("freeze", peerId, state.frozen ? "▶" : "Ⅱ", state.frozen ? "Resume local view" : "Freeze local view"),
       tileAction("snapshot", peerId, "◎", "Verified snapshot", state.snapshotPending),
       tileAction("fullscreen", peerId, "⛶", "Full screen"),
-      tileMenu(state),
+      tileAction("menu", peerId, "•••", "Camera actions", false, true),
     );
   } else {
     actions.append(
       tileAction("retry", peerId, "↻", "Retry camera"),
       tileAction("remove", peerId, "×", "Remove camera"),
+      tileAction("menu", peerId, "•••", "Camera actions", false, true),
     );
   }
   bottom.append(frameDetails, actions);
@@ -757,10 +784,11 @@ function tileAction(
   symbol: string,
   label: string,
   disabled = false,
+  menu = false,
 ): HTMLButtonElement {
   const control = document.createElement("button");
   control.type = "button";
-  control.className = "tile-action";
+  control.className = menu ? "tile-action tile-menu-trigger" : "tile-action";
   control.dataset.action = action;
   control.dataset.peerId = peerId;
   control.textContent = symbol;
@@ -770,44 +798,37 @@ function tileAction(
   return control;
 }
 
-function tileMenu(state: CameraTileState): HTMLDetailsElement {
-  const menu = document.createElement("details");
-  menu.className = "tile-menu";
-  const summary = document.createElement("summary");
-  summary.textContent = "•••";
-  summary.title = "Camera actions";
-  summary.setAttribute("aria-label", "Camera actions");
-  const popover = document.createElement("div");
-  popover.className = "tile-menu-popover";
-  const source = menuAction(
-    state.sourcePaused ? "source-resume" : "source-pause",
-    state.candidate.peerId,
-    state.sourcePaused ? "Resume camera source" : "Pause camera source",
-  );
-  const warning = state.sourcePaused ? "" : " for every viewer";
-  source.textContent += warning;
-  popover.append(
-    source,
-    menuAction("details", state.candidate.peerId, "Connection details"),
-    menuAction("remove", state.candidate.peerId, "Disconnect and remove", true),
-  );
-  menu.append(summary, popover);
-  return menu;
-}
-
-function menuAction(
-  action: string,
-  peerId: string,
-  label: string,
-  danger = false,
-): HTMLButtonElement {
-  const control = document.createElement("button");
-  control.type = "button";
-  control.dataset.action = action;
-  control.dataset.peerId = peerId;
-  control.textContent = label;
-  if (danger) control.className = "danger";
-  return control;
+function openCameraActions(peerId: string): void {
+  const state = cameras.get(peerId);
+  if (!state) return;
+  actionPeerId = peerId;
+  selectedPeerId = peerId;
+  cameraActionsTitle.textContent = state.name;
+  for (const control of cameraActionsDialog.querySelectorAll<HTMLButtonElement>(
+    "button[data-camera-action]",
+  )) {
+    const action = control.dataset.cameraAction;
+    const liveOnly = action === "freeze"
+      || action === "snapshot"
+      || action === "fullscreen"
+      || action === "source-pause"
+      || action === "source-resume";
+    control.hidden = liveOnly && state.status !== "live";
+    if (action === "freeze") {
+      control.textContent = state.frozen ? "Resume local view" : "Freeze local view";
+    } else if (action === "snapshot") {
+      control.disabled = state.snapshotPending;
+    } else if (action === "source-pause" || action === "source-resume") {
+      control.dataset.cameraAction = state.sourcePaused ? "source-resume" : "source-pause";
+      control.textContent = state.sourcePaused
+        ? "Resume camera for every viewer"
+        : "Pause camera for every viewer";
+    } else if (action === "retry") {
+      control.hidden = state.status === "live" || state.status === "connecting";
+    }
+  }
+  renderDiagnostics();
+  showModal(cameraActionsDialog);
 }
 
 function showRemoteFrame(frame: RemoteFrame): void {
@@ -973,27 +994,30 @@ function renderDiagnostics(): void {
   }
 }
 
-function setGridSize(value: number): void {
-  if (!Number.isInteger(value) || value < 1 || value > 4 || value === gridSize) return;
-  gridSize = value;
-  gridPage = 0;
+function setColumnCount(value: number): void {
+  if (!Number.isInteger(value) || value < 1 || value > 4 || value === columnCount) return;
+  columnCount = value;
+  selectedPeerId ??= cameraOrder[0];
   try {
-    localStorage.setItem(GRID_STORAGE_KEY, String(value));
+    localStorage.setItem(COLUMN_STORAGE_KEY, String(value));
   } catch {
-    // Grid preference is optional.
+    // Column preference is optional.
   }
   renderWall();
 }
 
-function changePage(offset: number): void {
-  const pageCount = Math.max(1, Math.ceil(cameraOrder.length / (gridSize * gridSize)));
-  gridPage = Math.max(0, Math.min(pageCount - 1, gridPage + offset));
-  renderWall();
+function effectiveColumnCount(): number {
+  return mobileLayout.matches && columnCount > 1 ? 2 : columnCount;
 }
 
-function focusCameraPage(peerId: string): void {
-  const index = cameraOrder.indexOf(peerId);
-  if (index >= 0) gridPage = Math.floor(index / (gridSize * gridSize));
+function changeFocusedCamera(offset: number): void {
+  if (columnCount !== 1 || cameraOrder.length < 2) return;
+  const current = selectedPeerId ? cameraOrder.indexOf(selectedPeerId) : 0;
+  const normalized = current < 0 ? 0 : current;
+  selectedPeerId = cameraOrder[
+    (normalized + offset + cameraOrder.length) % cameraOrder.length
+  ];
+  renderWall();
 }
 
 function updateWallStatus(): void {
@@ -1194,7 +1218,7 @@ async function stopPeer(): Promise<void> {
     viewerToolbar.hidden = true;
     publisherPanel.hidden = true;
     viewerPanel.hidden = true;
-    for (const candidate of [addDialog, diagnosticsDialog, snapshotDialog]) {
+    for (const candidate of [addDialog, diagnosticsDialog, snapshotDialog, cameraActionsDialog]) {
       if (candidate.open) candidate.close();
     }
   }
@@ -1313,14 +1337,14 @@ function showModal(target: HTMLDialogElement): void {
   if (!target.open) target.showModal();
 }
 
-function initialGridSize(): number {
+function initialColumnCount(): number {
   try {
-    const stored = Number(localStorage.getItem(GRID_STORAGE_KEY));
+    const stored = Number(localStorage.getItem(COLUMN_STORAGE_KEY));
     if (Number.isInteger(stored) && stored >= 1 && stored <= 4) return stored;
   } catch {
-    // Grid preference is optional.
+    // Column preference is optional.
   }
-  return matchMedia("(max-width: 720px)").matches ? 1 : 2;
+  return 2;
 }
 
 function statusLabel(state: CameraTileState): string {

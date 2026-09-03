@@ -30,8 +30,9 @@ the viewer.
 - DDS discovery and copied peer-card fallback both work;
 - explicit approval protects Catalog, Registry, Stream, Blob, and control
   effects; and
-- the responsive CCTV wall monitors up to 16 independent feeds with 1×1 through
-  4×4 layouts; and
+- the responsive CCTV wall monitors up to 16 independent feeds with one- through
+  four-column density, a two-column mobile wall, and single-camera focus mode;
+  and
 - its drawer explains the six-family flow plus rolling frame rate, bandwidth,
   average JPEG size, and capture-to-render frame age.
 

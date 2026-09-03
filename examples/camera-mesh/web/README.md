@@ -31,7 +31,14 @@ Open the printed loopback URL in at least two tabs, then:
 
 If DDS discovery is unavailable, copy the publisher's sanitized peer card and
 paste it under **Add camera → Connect with a peer card**. Add more publisher
-tabs to exercise the 1×1, 2×2, 3×3, and 4×4 wall layouts.
+tabs to exercise the one- through four-column wall layouts. Camera Mesh keeps a
+maximum of 16 peers on the wall.
+
+The column selector changes density; it does not divide cameras into square
+pages. Two, three, and four columns keep every camera in one scrolling wall.
+On mobile those choices render as two columns. Choose **1** for focus mode,
+where one camera fills the available wall and previous/next controls switch the
+focused peer.
 
 Browser identities and publisher approvals are intentionally ephemeral. The
 default feed is 480×270 at 5 fps. The application retains only the newest frame
@@ -65,7 +72,7 @@ Domain is selected. The test starts two browser publishers and one browser
 viewer by default. It proves simultaneous independent feeds, DDS discovery,
 peer-card fallback, approval, source pause/resume, diagnostics, snapshot,
 layout changes, removal, reconnection, and responsive mobile layout. Set
-`AUKI_CAMERA_WALL_COUNT` from `2` through `9` to increase the publisher count.
+`AUKI_CAMERA_WALL_COUNT` from `2` through `16` to increase the publisher count.
 
 ## Rust, Python, and Web matrix
 

@@ -82,16 +82,17 @@
         </div>
 
         <div class="monitor-actions" id="viewer-toolbar" hidden>
-          <div class="density-picker" role="group" aria-label="Camera wall layout">
-            <button type="button" data-grid-size="1" aria-label="1 by 1 layout">1×1</button>
-            <button type="button" data-grid-size="2" aria-label="2 by 2 layout">2×2</button>
-            <button type="button" data-grid-size="3" aria-label="3 by 3 layout">3×3</button>
-            <button type="button" data-grid-size="4" aria-label="4 by 4 layout">4×4</button>
+          <div class="density-picker" role="group" aria-label="Camera wall columns">
+            <span aria-hidden="true">Columns</span>
+            <button type="button" data-column-count="1" aria-label="One column focus mode" title="Focus mode">1</button>
+            <button type="button" data-column-count="2" aria-label="Two camera columns">2</button>
+            <button type="button" data-column-count="3" aria-label="Three camera columns">3</button>
+            <button type="button" data-column-count="4" aria-label="Four camera columns">4</button>
           </div>
-          <div class="page-controls" id="page-controls" hidden>
-            <button id="previous-page-button" class="icon-button" type="button" aria-label="Previous camera page">‹</button>
-            <span id="page-label">1 / 1</span>
-            <button id="next-page-button" class="icon-button" type="button" aria-label="Next camera page">›</button>
+          <div class="focus-controls" id="focus-controls" aria-label="Focused camera navigation" hidden>
+            <button id="previous-camera-button" class="icon-button" type="button" aria-label="Previous camera">‹</button>
+            <span id="focus-label">1 / 1</span>
+            <button id="next-camera-button" class="icon-button" type="button" aria-label="Next camera">›</button>
           </div>
           <button id="add-camera-button" class="primary add-camera" type="button"><span aria-hidden="true">＋</span> Add camera</button>
         </div>
@@ -110,7 +111,7 @@
 
       <main id="runtime-main" class="runtime-main">
         <section class="monitor" id="viewer-panel" aria-label="Camera wall" hidden>
-          <div class="camera-grid" id="camera-grid" data-grid-size="2"></div>
+          <div class="camera-grid" id="camera-grid" data-column-count="2"></div>
         </section>
 
         <section class="publisher" id="publisher-panel" hidden>
@@ -257,6 +258,27 @@
         </header>
         <img id="snapshot-image" alt="Verified camera snapshot" hidden />
         <p id="snapshot-status">No snapshot requested.</p>
+      </div>
+    </dialog>
+
+    <dialog class="camera-actions-dialog" id="camera-actions-dialog" aria-labelledby="camera-actions-title">
+      <div class="camera-actions-shell">
+        <header class="sheet-header">
+          <div>
+            <p class="eyebrow">Camera controls</p>
+            <h2 id="camera-actions-title">Selected camera</h2>
+          </div>
+          <button class="icon-button" id="close-camera-actions-button" type="button" aria-label="Close camera controls">×</button>
+        </header>
+        <div class="camera-action-list">
+          <button type="button" data-camera-action="freeze">Freeze local view</button>
+          <button type="button" data-camera-action="snapshot">Verified snapshot</button>
+          <button type="button" data-camera-action="fullscreen">Full screen</button>
+          <button type="button" data-camera-action="source-pause">Pause camera for every viewer</button>
+          <button type="button" data-camera-action="retry">Retry connection</button>
+          <button type="button" data-camera-action="details">Connection details</button>
+          <button class="danger" type="button" data-camera-action="remove">Disconnect and remove</button>
+        </div>
       </div>
     </dialog>
 

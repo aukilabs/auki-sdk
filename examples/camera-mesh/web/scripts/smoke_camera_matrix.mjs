@@ -718,7 +718,7 @@ async function createBrowserPeer(browserInstance, url, label, role, input) {
     async snapshot(target, _requestId) {
       const before = await occurrenceCount(page, "#events", "fetched and SHA-256 verified");
       await browserCameraTile(page, target.peerId)
-        .locator("button[data-action='snapshot']")
+        .locator("button.tile-action[data-action='snapshot']")
         .click();
       await waitFor(
         async () => {
@@ -1018,8 +1018,10 @@ function browserCameraTile(page, peerId) {
 
 async function browserCameraMenuAction(page, peerId, action) {
   const tile = browserCameraTile(page, peerId);
-  await tile.locator(".tile-menu > summary").click();
-  await tile.locator(`button[data-action="${action}"]`).click();
+  await tile.locator("button.tile-menu-trigger[data-action='menu']").click();
+  const sheet = page.locator("#camera-actions-dialog");
+  await sheet.waitFor({ state: "visible", timeout: OPERATION_TIMEOUT_MS });
+  await sheet.locator(`button[data-camera-action="${action}"]`).click();
 }
 
 async function waitForBrowserCameraStatus(page, peerId, status, timeoutMs) {

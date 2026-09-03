@@ -167,7 +167,7 @@ struct BufferState<T> {
 
 struct BufferInner<T> {
     name: Arc<str>,
-    limits: BufferLimits,
+    limits: Mutex<BufferLimits>,
     retained_size: Arc<dyn Fn(&T) -> usize + Send + Sync>,
     time_policy: BufferTimePolicy,
     state: Mutex<BufferState<T>>,
@@ -187,7 +187,7 @@ impl<T> fmt::Debug for Buffer<T> {
         formatter
             .debug_struct("Buffer")
             .field("name", &self.inner.name)
-            .field("limits", &self.inner.limits)
+            .field("limits", &self.limits())
             .field("range", &self.range())
             .finish()
     }
@@ -224,7 +224,7 @@ impl<T> Buffer<T> {
         Ok(Self {
             inner: Arc::new(BufferInner {
                 name: name.into(),
-                limits,
+                limits: Mutex::new(limits),
                 retained_size: Arc::new(retained_size),
                 time_policy,
                 state: Mutex::new(BufferState {
@@ -244,7 +244,30 @@ impl<T> Buffer<T> {
     }
 
     pub fn limits(&self) -> BufferLimits {
-        self.inner.limits
+        *self.inner.limits.lock().unwrap()
+    }
+
+    /// Reconfigures this Buffer's retention limits and immediately evicts
+    /// entries that do not fit the replacement policy.
+    pub fn set_limits(&self, limits: BufferLimits) -> Result<(), BufferError> {
+        validate_limits(limits)?;
+        if limits.target_duration.is_some()
+            && self.inner.time_policy.duration_basis == DurationTimeBasis::SourceTimestamp
+            && self.inner.time_policy.source_timestamps == SourceTimestampPolicy::Unordered
+        {
+            return Err(BufferError::UnorderedSourceDuration);
+        }
+        let mut current_limits = self.inner.limits.lock().unwrap();
+        let mut state = self.inner.state.lock().unwrap();
+        if state.closed {
+            return Err(BufferError::Closed);
+        }
+        *current_limits = limits;
+        evict_to_limits(&mut state, limits, self.inner.time_policy);
+        drop(state);
+        drop(current_limits);
+        self.inner.changed.notify_all();
+        Ok(())
     }
 
     pub fn time_policy(&self) -> BufferTimePolicy {
@@ -263,7 +286,8 @@ impl<T> Buffer<T> {
         arrival: Instant,
     ) -> Result<(), BufferError> {
         let bytes = (self.inner.retained_size)(&envelope.payload);
-        if let Some(limit) = self.inner.limits.max_bytes
+        let limits = self.inner.limits.lock().unwrap();
+        if let Some(limit) = limits.max_bytes
             && bytes > limit
         {
             return Err(BufferError::PayloadExceedsByteLimit {
@@ -308,8 +332,9 @@ impl<T> Buffer<T> {
             bytes,
             arrival,
         });
-        evict_to_limits(&mut state, self.inner.limits, self.inner.time_policy);
+        evict_to_limits(&mut state, *limits, self.inner.time_policy);
         drop(state);
+        drop(limits);
         self.inner.changed.notify_all();
         Ok(())
     }

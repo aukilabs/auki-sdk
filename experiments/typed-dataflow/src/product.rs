@@ -5,7 +5,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::PeerRuntime;
-use crate::buffer::{Buffer, BufferError, BufferLimits};
+use crate::buffer::{Buffer, BufferError, BufferLimits, BufferRange};
 use crate::component::{
     CatalogError, Observation, ObservationAccess, ObservationDelivery, ObservationEnd,
     ObservationError, ObservationEvent, ObservationHandle, OutputManifest, ProductForm,
@@ -240,6 +240,26 @@ impl<T: Send + Sync + 'static> BufferProductCapture<T> {
     pub fn cancel(&self) {
         self.observation.cancel();
         self.state.lock().unwrap().product.buffer.close();
+    }
+
+    /// Reconfigures the live Buffer Product's retention policy and updates its
+    /// Catalog state after any immediate eviction.
+    pub fn set_limits(&self, limits: BufferLimits) -> Result<BufferRange, ProductCaptureError> {
+        let state = self.state.lock().unwrap();
+        state.product.buffer.set_limits(limits)?;
+        let range = state.product.buffer.range();
+        let product_id = state.product.manifest.product_id.clone();
+        drop(state);
+        self.catalog.update_product_state(
+            &product_id,
+            ProductState::Buffer {
+                entries: range.entries,
+                at_entry_capacity: limits
+                    .max_entries
+                    .is_some_and(|limit| range.entries == limit),
+            },
+        );
+        Ok(range)
     }
 
     /// Permanently stops this capture and removes its Product from the Catalog.

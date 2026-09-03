@@ -4,12 +4,13 @@ use std::thread;
 use std::time::Duration;
 
 use auki_typed_dataflow_experiment::{
-    AudioLayout, AudioPayloadContract, AudioSampleFormat, BufferLimits, ComponentBuildError,
-    ComponentSpec, ConfiguredObservableSpec, ContractType, EveryFullPolicy, Exposure,
-    GaugePayloadContract, InMemoryTransport, InvocationContext, InvocationError, InvocationOptions,
-    InvocationOrdering, InvocationStatus, ObservableContract, ObservationAccess,
+    AudioLayout, AudioPayloadContract, AudioSampleFormat, BufferError, BufferLimits,
+    ComponentBuildError, ComponentSpec, ConfiguredObservableSpec, ContractType, EveryFullPolicy,
+    Exposure, GaugePayloadContract, InMemoryTransport, InvocationContext, InvocationError,
+    InvocationOptions, InvocationOrdering, InvocationStatus, ObservableContract, ObservationAccess,
     ObservationDelivery, ObservationEndReason, ObservationEvent, OperableContract, PayloadContract,
-    PeerRuntime, PublishError, SerializedInMemoryTransport, SharedScheduler, observation_input,
+    PeerRuntime, ProductCaptureError, ProductState, PublishError, SerializedInMemoryTransport,
+    SharedScheduler, observation_input,
 };
 
 fn gauge_payload(observes: &str) -> PayloadContract {
@@ -365,6 +366,64 @@ fn deleting_a_buffer_capture_unregisters_its_product_and_stops_retention() {
     assert!(peer.catalog().product("level-history").is_none());
     output.publish(20, Arc::new(2.0)).unwrap();
     assert_eq!(retained_lease.buffer().range().entries, 1);
+}
+
+#[test]
+fn live_buffer_product_limits_can_be_reconfigured() {
+    let peer = PeerRuntime::new("peer-a");
+    let component = peer
+        .component(ComponentSpec::new("sensor").observable(gauge_contract("level")))
+        .unwrap();
+    let output = component
+        .configured_observable::<f64>(ConfiguredObservableSpec::new(
+            "level",
+            "level-1",
+            "peer-a.session-clock",
+            gauge_payload("load"),
+        ))
+        .unwrap();
+    component.expose().unwrap();
+    let capture = peer
+        .capture_buffer(
+            "level-history",
+            &output,
+            BufferLimits {
+                max_entries: Some(4),
+                max_bytes: None,
+                target_duration: None,
+            },
+            |_| size_of::<f64>(),
+        )
+        .unwrap();
+    output.publish(10, Arc::new(1.0)).unwrap();
+    output.publish(20, Arc::new(2.0)).unwrap();
+    output.publish(30, Arc::new(3.0)).unwrap();
+
+    let replacement_limits = BufferLimits {
+        max_entries: Some(4),
+        max_bytes: None,
+        target_duration: Some(Duration::from_nanos(10)),
+    };
+    let range = capture.set_limits(replacement_limits).unwrap();
+
+    assert_eq!(capture.product().buffer().limits(), replacement_limits);
+    assert_eq!(range.first_sequence, Some(1));
+    assert_eq!(range.entries, 2);
+    assert_eq!(
+        peer.catalog().product("level-history").unwrap().state,
+        ProductState::Buffer {
+            entries: 2,
+            at_entry_capacity: false,
+        }
+    );
+    output.publish(40, Arc::new(4.0)).unwrap();
+    assert_eq!(capture.product().buffer().range().first_sequence, Some(2));
+
+    capture.cancel();
+    assert!(matches!(
+        capture.set_limits(replacement_limits),
+        Err(ProductCaptureError::Buffer(BufferError::Closed))
+    ));
 }
 
 #[test]

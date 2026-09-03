@@ -63,6 +63,9 @@ retention APIs that the first clean-room attempt found missing:
 - `BufferProductCapture::delete` consumes the capture, closes its retained
   Buffer, and removes the Product from the Catalog while preserving any
   already-held `RetainedProduct` leases;
+- `Buffer::set_limits` and `BufferProductCapture::set_limits` replace a live
+  Product's retention policy, evict immediately when necessary, and keep its
+  Catalog state synchronized;
 - Operables support bounded outstanding work, serial acceptance ordering,
   inspectable asynchronous completion, cancellation, deadlines, and failure;
 - Buffer duration retention declares source-time or arrival-time policy;

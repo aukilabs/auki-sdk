@@ -330,6 +330,44 @@ fn configured_output_replacement_updates_catalog_ends_old_output_and_requires_ne
 }
 
 #[test]
+fn deleting_a_buffer_capture_unregisters_its_product_and_stops_retention() {
+    let peer = PeerRuntime::new("peer-a");
+    let component = peer
+        .component(ComponentSpec::new("sensor").observable(gauge_contract("level")))
+        .unwrap();
+    let output = component
+        .configured_observable::<f64>(ConfiguredObservableSpec::new(
+            "level",
+            "level-1",
+            "peer-a.session-clock",
+            gauge_payload("load"),
+        ))
+        .unwrap();
+    component.expose().unwrap();
+    let capture = peer
+        .capture_buffer(
+            "level-history",
+            &output,
+            BufferLimits {
+                max_entries: Some(10),
+                max_bytes: None,
+                target_duration: None,
+            },
+            |_| size_of::<f64>(),
+        )
+        .unwrap();
+    output.publish(10, Arc::new(1.0)).unwrap();
+    let retained_lease = capture.product();
+
+    let deleted = capture.delete().unwrap();
+
+    assert_eq!(deleted.product_id, "level-history");
+    assert!(peer.catalog().product("level-history").is_none());
+    output.publish(20, Arc::new(2.0)).unwrap();
+    assert_eq!(retained_lease.buffer().range().entries, 1);
+}
+
+#[test]
 fn fresh_observables_cannot_claim_retained_access_or_outlive_their_handle_at_exposure() {
     let peer = PeerRuntime::new("peer-a");
     let false_access = peer

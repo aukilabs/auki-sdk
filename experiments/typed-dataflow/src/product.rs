@@ -221,6 +221,7 @@ struct BufferCaptureState<T> {
 pub struct BufferProductCapture<T: Send + Sync + 'static> {
     state: Arc<Mutex<BufferCaptureState<T>>>,
     observation: ObservationHandle<T>,
+    catalog: crate::Catalog,
 }
 
 impl<T: Send + Sync + 'static> BufferProductCapture<T> {
@@ -239,6 +240,19 @@ impl<T: Send + Sync + 'static> BufferProductCapture<T> {
     pub fn cancel(&self) {
         self.observation.cancel();
         self.state.lock().unwrap().product.buffer.close();
+    }
+
+    /// Permanently stops this capture and removes its Product from the Catalog.
+    ///
+    /// Existing `RetainedProduct` clones remain valid until their owners drop
+    /// them, but the deleted Product can no longer be discovered or selected by
+    /// new Catalog readers.
+    pub fn delete(self) -> Result<ProductManifest, ProductCaptureError> {
+        let product = self.product();
+        self.catalog
+            .unregister_product(&product.manifest.product_id)?;
+        self.cancel();
+        Ok(product.manifest)
     }
 }
 
@@ -460,7 +474,11 @@ impl PeerRuntime {
         let observation = output
             .observable()
             .follow_new(&input, ObservationDelivery::inline_every_selected())?;
-        Ok(BufferProductCapture { state, observation })
+        Ok(BufferProductCapture {
+            state,
+            observation,
+            catalog: self.catalog().clone(),
+        })
     }
 
     pub fn capture_episode<T: Send + Sync + 'static>(

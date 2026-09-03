@@ -343,6 +343,7 @@ pub enum CatalogError {
     DuplicateComponent(String),
     DuplicateProduct(String),
     UnknownComponent(String),
+    UnknownProduct(String),
     ComponentManifestMismatch {
         component_id: String,
         expected: ManifestHash,
@@ -361,6 +362,9 @@ impl fmt::Display for CatalogError {
             }
             Self::UnknownComponent(component_id) => {
                 write!(formatter, "Catalog has no Component {component_id}")
+            }
+            Self::UnknownProduct(product_id) => {
+                write!(formatter, "Catalog has no Product {product_id}")
             }
             Self::ComponentManifestMismatch {
                 component_id,
@@ -462,6 +466,18 @@ impl Catalog {
         if let Some(product) = self.inner.write().unwrap().products.get_mut(product_id) {
             product.state = product_state;
         }
+    }
+
+    pub(crate) fn unregister_product(
+        &self,
+        product_id: &str,
+    ) -> Result<CatalogProductEntry, CatalogError> {
+        self.inner
+            .write()
+            .unwrap()
+            .products
+            .remove(product_id)
+            .ok_or_else(|| CatalogError::UnknownProduct(product_id.to_owned()))
     }
 
     pub fn component(&self, component_id: &str) -> Option<CatalogComponentEntry> {

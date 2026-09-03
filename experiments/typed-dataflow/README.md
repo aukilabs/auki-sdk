@@ -60,6 +60,9 @@ retention APIs that the first clean-room attempt found missing:
   fields instead of one optional-property bag;
 - `PeerRuntime::capture_buffer` and `capture_episode` construct live Product
   behavior and Catalog entries together;
+- `BufferProductCapture::delete` consumes the capture, closes its retained
+  Buffer, and removes the Product from the Catalog while preserving any
+  already-held `RetainedProduct` leases;
 - Operables support bounded outstanding work, serial acceptance ordering,
   inspectable asynchronous completion, cancellation, deadlines, and failure;
 - Buffer duration retention declares source-time or arrival-time policy;

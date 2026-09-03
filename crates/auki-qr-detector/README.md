@@ -18,6 +18,16 @@ Detector Registry entry. Its `start` method tails an open local Camera Sensor
 Log; `start_stream` consumes an asynchronous local or remote camera stream.
 Both declare and write the named Detection Log resource that other peers
 discover and consume.
+
+For applications built on the network-independent typed-dataflow primitives,
+`QrDetector::bind_product` constructs a real Detector Component whose `frames`
+Product input binds directly to an existing `RetainedProduct<VideoFrame>`.
+Results are exposed as a typed `detections` Observable, so an application can
+retain them as a normal Buffer Product. This path does not create a parallel
+Sensor or Sensor Log. `QrDetectorComponent::replace_product` moves the stable
+Detector Component to a compatible replacement camera Product while keeping
+its Catalog input binding current.
+
 It accepts `image_encoding = "raw"` with `pixel_format = "luma8"`, `rgb8`, or
 `YUV_NV12`, plus `image_encoding = "jpeg"`. Raw layout comes from the Camera
 Registry; JPEG dimensions are checked against that immutable contract after

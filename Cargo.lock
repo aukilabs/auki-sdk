@@ -1008,6 +1008,7 @@ dependencies = [
  "auki-logs",
  "auki-registry",
  "auki-session",
+ "auki-typed-dataflow-experiment",
  "futures",
  "image",
  "qr-lab",

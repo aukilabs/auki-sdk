@@ -166,6 +166,11 @@ pub enum ComponentBuildError {
         interface: String,
         output_id: String,
     },
+    NotCurrentProductInput {
+        interface: String,
+        product_id: String,
+    },
+    ReplacementProductInputReused(String),
     ReplacementOutputIdReused(String),
     OutputAlreadyEnded(String),
     AlreadyExposed,
@@ -277,6 +282,17 @@ impl fmt::Display for ComponentBuildError {
             } => write!(
                 formatter,
                 "Output {output_id} is not the current configured Output for Observable {interface}"
+            ),
+            Self::NotCurrentProductInput {
+                interface,
+                product_id,
+            } => write!(
+                formatter,
+                "Product {product_id} is not the current configured Product for input {interface}"
+            ),
+            Self::ReplacementProductInputReused(product_id) => write!(
+                formatter,
+                "replacement Product input must use a new Product; {product_id} is already current"
             ),
             Self::ReplacementOutputIdReused(output_id) => write!(
                 formatter,
@@ -508,6 +524,136 @@ impl Component {
         }
         state.configured_product_inputs.insert(
             name.to_owned(),
+            ConfiguredProductInputRegistration {
+                manifest: manifest.clone(),
+                liveness: Arc::downgrade(&liveness),
+            },
+        );
+        drop(state);
+
+        Ok(ConfiguredBufferInput {
+            manifest,
+            reader: BufferReader::start(product.buffer(), start, input),
+            owner: Arc::downgrade(&self.inner),
+            _liveness: liveness,
+        })
+    }
+
+    /// Replaces one exposed Component's configured Buffer Product input.
+    ///
+    /// The Component and input slot remain stable while the binding manifest
+    /// moves to a different, contract-compatible Product. The old reader stays
+    /// alive until its [`ConfiguredBufferInput`] handle is dropped; dropping it
+    /// after this method returns cannot clear the replacement Catalog binding.
+    pub fn replace_configured_buffer_input<T: ContractType + Send + Sync + 'static>(
+        &self,
+        current: &ConfiguredBufferInput<T>,
+        product: &RetainedProduct<T>,
+        start: CursorStart,
+        input: &InputPort<Observation<T>>,
+    ) -> Result<ConfiguredBufferInput<T>, ComponentBuildError> {
+        let name = &current.manifest.slot;
+        let contract = self
+            .inner
+            .manifest
+            .product_inputs
+            .iter()
+            .find(|contract| contract.name == *name)
+            .ok_or_else(|| ComponentBuildError::UnknownProductInput(name.clone()))?;
+        if !current.owner.ptr_eq(&Arc::downgrade(&self.inner)) {
+            return Err(ComponentBuildError::NotCurrentProductInput {
+                interface: name.clone(),
+                product_id: current.manifest.product.product_id.clone(),
+            });
+        }
+        if current.manifest.product.product_id == product.manifest.product_id {
+            return Err(ComponentBuildError::ReplacementProductInputReused(
+                product.manifest.product_id.clone(),
+            ));
+        }
+        if product.producer.reference() != product.manifest.producer {
+            return Err(ComponentBuildError::ProductProducerMismatch(
+                product.manifest.product_id.clone(),
+            ));
+        }
+        let actual_datatype = product.producer.payload.datatype();
+        let actual_schema = product.producer.payload.schema();
+        if contract.form != ProductForm::Buffer
+            || product.manifest.form != contract.form
+            || contract.datatype != actual_datatype
+            || contract.schema != actual_schema
+        {
+            return Err(ComponentBuildError::ProductInputContractMismatch {
+                interface: contract.name.clone(),
+                expected_form: contract.form,
+                actual_form: product.manifest.form,
+                expected_datatype: contract.datatype.clone(),
+                actual_datatype: actual_datatype.to_owned(),
+                expected_schema: contract.schema.clone(),
+                actual_schema: actual_schema.to_owned(),
+            });
+        }
+        if T::DATATYPE != contract.datatype {
+            return Err(ComponentBuildError::RustDatatypeMismatch {
+                interface: contract.name.clone(),
+                rust_datatype: T::DATATYPE.to_owned(),
+                contract_datatype: contract.datatype.clone(),
+            });
+        }
+        let catalog_product = self
+            .inner
+            .catalog
+            .product(&product.manifest.product_id)
+            .ok_or_else(|| {
+                ComponentBuildError::Catalog(CatalogError::UnknownProduct(
+                    product.manifest.product_id.clone(),
+                ))
+            })?;
+        if product.manifest_hash != catalog_product.manifest_hash
+            || product.manifest != catalog_product.manifest
+        {
+            return Err(ComponentBuildError::Catalog(
+                CatalogError::ProductManifestMismatch {
+                    product_id: product.manifest.product_id.clone(),
+                    expected: catalog_product.manifest_hash,
+                    actual: product.manifest_hash.clone(),
+                },
+            ));
+        }
+
+        let manifest = ProductInputBindingManifest {
+            schema: "auki.component-product-input-binding/v1".to_owned(),
+            peer_id: self.inner.reference.peer_id.clone(),
+            component_id: self.inner.reference.component_id.clone(),
+            component_manifest_hash: self.inner.reference.manifest_hash.clone(),
+            slot: contract.name.clone(),
+            product: product.manifest.clone(),
+            product_manifest_hash: product.manifest_hash.clone(),
+            producer: product.producer.clone(),
+        };
+        let liveness = Arc::new(());
+        let mut state = self.inner.state.lock().unwrap();
+        if !state.exposed {
+            return Err(ComponentBuildError::NotExposed);
+        }
+        let registered = state.configured_product_inputs.get(name).ok_or_else(|| {
+            ComponentBuildError::NotCurrentProductInput {
+                interface: name.clone(),
+                product_id: current.manifest.product.product_id.clone(),
+            }
+        })?;
+        if registered.manifest.hash() != current.manifest.hash() {
+            return Err(ComponentBuildError::NotCurrentProductInput {
+                interface: name.clone(),
+                product_id: current.manifest.product.product_id.clone(),
+            });
+        }
+
+        self.inner
+            .catalog
+            .set_current_product_input(manifest.clone())?;
+        state.configured_product_inputs.insert(
+            name.clone(),
             ConfiguredProductInputRegistration {
                 manifest: manifest.clone(),
                 liveness: Arc::downgrade(&liveness),

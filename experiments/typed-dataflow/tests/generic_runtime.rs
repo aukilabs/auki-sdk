@@ -209,6 +209,100 @@ fn configured_buffer_input_binds_behavior_contract_and_catalog_projection() {
 }
 
 #[test]
+fn configured_buffer_input_can_move_to_a_replacement_product() {
+    let peer = PeerRuntime::new("peer-a");
+    let first_sensor = peer
+        .component(ComponentSpec::new("sensor-a").observable(gauge_contract("level")))
+        .unwrap();
+    let first_output = first_sensor
+        .configured_observable::<f64>(ConfiguredObservableSpec::new(
+            "level",
+            "level-a",
+            "peer-a.session-clock",
+            gauge_payload("load"),
+        ))
+        .unwrap();
+    first_sensor.expose().unwrap();
+    let first_capture = peer
+        .capture_buffer(
+            "level-history-a",
+            &first_output,
+            BufferLimits::entries(8),
+            |_| size_of::<f64>(),
+        )
+        .unwrap();
+
+    let second_sensor = peer
+        .component(ComponentSpec::new("sensor-b").observable(gauge_contract("level")))
+        .unwrap();
+    let second_output = second_sensor
+        .configured_observable::<f64>(ConfiguredObservableSpec::new(
+            "level",
+            "level-b",
+            "peer-a.session-clock",
+            gauge_payload("load"),
+        ))
+        .unwrap();
+    second_sensor.expose().unwrap();
+    let second_capture = peer
+        .capture_buffer(
+            "level-history-b",
+            &second_output,
+            BufferLimits::entries(8),
+            |_| size_of::<f64>(),
+        )
+        .unwrap();
+
+    let detector = peer
+        .component(ComponentSpec::new("detector").product_input(gauge_product_input("levels")))
+        .unwrap();
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let input_received = Arc::clone(&received);
+    let input = InputPort::<Observation<f64>>::new("detector.levels", move |entry| {
+        input_received.lock().unwrap().push((
+            entry.payload.output.output_id.clone(),
+            *entry.payload.payload,
+        ));
+    });
+    let first_binding = detector
+        .configured_buffer_input(
+            "levels",
+            &first_capture.product(),
+            CursorStart::Latest,
+            &input,
+        )
+        .unwrap();
+    detector.expose().unwrap();
+
+    let second_binding = detector
+        .replace_configured_buffer_input(
+            &first_binding,
+            &second_capture.product(),
+            CursorStart::Latest,
+            &input,
+        )
+        .unwrap();
+    drop(first_binding);
+    assert_eq!(
+        peer.catalog()
+            .component("detector")
+            .unwrap()
+            .current_product_inputs["levels"]
+            .manifest
+            .product
+            .product_id,
+        "level-history-b"
+    );
+
+    first_output.publish(10, Arc::new(1.0)).unwrap();
+    second_output.publish(10, Arc::new(2.0)).unwrap();
+    wait_until(Duration::from_secs(1), || {
+        second_binding.stats().delivered == 1
+    });
+    assert_eq!(*received.lock().unwrap(), vec![("level-b".to_owned(), 2.0)]);
+}
+
+#[test]
 fn configured_buffer_input_rejects_mismatch_and_requires_a_live_handle() {
     let peer = PeerRuntime::new("peer-a");
     let sensor = peer

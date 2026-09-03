@@ -12,7 +12,7 @@ use crate::component::{
     OutputManifest, OutputReference, PayloadContract, ProductForm, ProductManifest,
     observation_input, output_observable,
 };
-use crate::{Buffer, BufferError, Envelope, RetainedProduct};
+use crate::{Buffer, BufferError, ContractType, Envelope, RetainedProduct};
 
 const FRAMES_SLOT: &str = "frames";
 const RGB8_ENCODING: &str = "rgb8";
@@ -23,6 +23,10 @@ pub struct VideoFrame {
     pub height: u32,
     pub encoding: String,
     pub bytes: Arc<[u8]>,
+}
+
+impl ContractType for VideoFrame {
+    const DATATYPE: &'static str = "video_frame";
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

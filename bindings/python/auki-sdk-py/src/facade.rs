@@ -4,9 +4,9 @@ use std::sync::Arc;
 use auki_sdk_rs::{
     AukiDiscovery, AukiDiscoveryCandidate, AukiDiscoveryError, AukiDiscoverySource, AukiPeer,
     AukiPeerBootstrap, AukiPeerConfig, AukiPeerExit, AukiPeerLifecycle, AukiPeerProtocols,
-    AukiPeerRoutes, Credentials, DdsTrackerMode, DdsVerificationKeys, DomainDescriptor,
-    DomainSelection, ExternalAuthorityControl, ExternalAuthorityUpdate, Identity, Multiaddr,
-    SignedP2pCredential,
+    AukiPeerRoutes, Credentials, DdsTrackerConfig, DdsTrackerMode, DdsVerificationKeys,
+    DomainDescriptor, DomainSelection, ExternalAuthorityControl, ExternalAuthorityUpdate, Identity,
+    Multiaddr, SignedP2pCredential,
 };
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -458,6 +458,20 @@ impl PyAukiPeerConfig {
             .with_peer_routes(peer, parsed)
             .map(|inner| Self { inner })
             .map_err(|error| runtime_error("with_peer_routes", error))
+    }
+
+    #[pyo3(signature = (mode, dds_url=None))]
+    fn with_dds_tracker(&self, mode: String, dds_url: Option<String>) -> PyResult<Self> {
+        let mode = parse_discovery_mode(Some(mode))?
+            .expect("discovery mode is required");
+        let tracker = match dds_url.filter(|s| !s.is_empty()) {
+            Some(url) => DdsTrackerConfig::for_trusted_dds(url, mode)
+                .map_err(|error| runtime_error("with_dds_tracker", error))?,
+            None => DdsTrackerConfig::dev(mode),
+        };
+        Ok(Self {
+            inner: self.inner.clone().with_dds_tracker(tracker),
+        })
     }
 }
 

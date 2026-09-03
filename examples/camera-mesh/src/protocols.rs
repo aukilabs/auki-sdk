@@ -54,6 +54,8 @@ use crate::contract::{
 
 const MAX_STAGED_BLOBS: usize = 8;
 const MAX_PENDING_SNAPSHOTS: usize = 16;
+const MAX_PENDING_APPROVALS: usize = 64;
+const MAX_CAMERA_FRAME_BYTES: usize = 1024 * 1024;
 const MESSAGE_QUEUE_CAPACITY: usize = 16;
 const CAMERA_EVENT_QUEUE_CAPACITY: usize = 64;
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(45);
@@ -62,7 +64,6 @@ const LIVE_EXERCISE_FRAME_TIMEOUT: Duration = Duration::from_secs(30);
 const LIVE_EXERCISE_CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 const LIVE_EXERCISE_PAUSE_QUIET: Duration = Duration::from_millis(800);
 const LIVE_EXERCISE_INITIAL_FRAMES: usize = 2;
-const LIVE_EXERCISE_MAX_IN_FLIGHT_FRAMES: usize = 1;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -129,7 +130,9 @@ pub struct LiveExerciseReport {
     pub paused_in_flight_frames: usize,
     pub pause_quiet_ms: u64,
     pub pre_pause_sequence: u64,
+    pub pre_pause_capture_timestamp_ns: i64,
     pub resumed_sequence: u64,
+    pub resumed_capture_timestamp_ns: i64,
     pub total_frames: usize,
     pub frame_sha256: String,
     pub frame_bytes: usize,
@@ -146,6 +149,7 @@ enum LiveExercisePhase {
 #[derive(Debug, Eq, PartialEq)]
 struct LiveFrameObservation {
     sequence: u64,
+    capture_timestamp_ns: i64,
     sha256: String,
     bytes: usize,
 }
@@ -153,6 +157,7 @@ struct LiveFrameObservation {
 #[derive(Default)]
 struct LiveFrameTracker {
     last_sequence: Option<u64>,
+    last_capture_timestamp_ns: Option<i64>,
     total_frames: usize,
     paused_in_flight_frames: usize,
 }
@@ -175,17 +180,22 @@ impl LiveFrameTracker {
                 entry.seq
             );
         }
-        if matches!(phase, LiveExercisePhase::PausedInFlight) {
+        if let Some(previous) = self.last_capture_timestamp_ns {
             ensure!(
-                self.paused_in_flight_frames < LIVE_EXERCISE_MAX_IN_FLIGHT_FRAMES,
-                "Camera emitted more than one in-flight frame after pause"
+                entry.timestamp_ns >= previous,
+                "Camera capture timestamp moved backwards: {previous} -> {}",
+                entry.timestamp_ns
             );
+        }
+        if matches!(phase, LiveExercisePhase::PausedInFlight) {
             self.paused_in_flight_frames += 1;
         }
         self.last_sequence = Some(entry.seq);
+        self.last_capture_timestamp_ns = Some(entry.timestamp_ns);
         self.total_frames += 1;
         Ok(LiveFrameObservation {
             sequence: entry.seq,
+            capture_timestamp_ns: entry.timestamp_ns,
             sha256: sha256_hex(&entry.payload.frame),
             bytes: entry.payload.frame.len(),
         })
@@ -231,6 +241,8 @@ impl Drop for PendingSnapshotGuard {
 #[derive(Clone)]
 struct LiveFrame {
     bytes: Arc<[u8]>,
+    capture_timestamp_ns: i64,
+    generation: u64,
 }
 
 struct SharedState {
@@ -242,7 +254,7 @@ struct SharedState {
     blobs: Mutex<VecDeque<(String, Arc<[u8]>)>>,
     pending_snapshots: Mutex<HashMap<String, PendingSnapshot>>,
     latest_frame: Mutex<LiveFrame>,
-    paused: AtomicBool,
+    paused_by: Mutex<Option<PeerId>>,
     camera_available: AtomicBool,
     events: mpsc::Sender<CameraEvent>,
 }
@@ -257,11 +269,53 @@ impl SharedState {
     }
 
     fn request_approval(&self, peer: &AuthenticatedPeer) {
-        if self.same_domain(peer) && lock(&self.pending_approvals).insert(peer.peer_id) {
-            self.emit(CameraEvent::ApprovalRequired {
-                peer_id: peer.peer_id.to_string(),
-            });
+        if !self.same_domain(peer) {
+            return;
         }
+        {
+            let mut pending = lock(&self.pending_approvals);
+            if pending.contains(&peer.peer_id) || pending.len() >= MAX_PENDING_APPROVALS {
+                return;
+            }
+            pending.insert(peer.peer_id);
+        }
+        if self
+            .events
+            .try_send(CameraEvent::ApprovalRequired {
+                peer_id: peer.peer_id.to_string(),
+            })
+            .is_err()
+        {
+            // Approval events drive the operator UI. If the bounded queue is
+            // temporarily full, leave this peer retryable instead of silently
+            // stranding it in an invisible pending state.
+            lock(&self.pending_approvals).remove(&peer.peer_id);
+        }
+    }
+
+    fn revoke(&self, peer_id: PeerId) {
+        let mut allowed = lock(&self.allowed);
+        allowed.remove(&peer_id);
+        let mut paused_by = lock(&self.paused_by);
+        if paused_by.as_ref() == Some(&peer_id) {
+            *paused_by = None;
+        }
+        drop(paused_by);
+        drop(allowed);
+        lock(&self.pending_approvals).remove(&peer_id);
+    }
+
+    fn set_paused_if_allowed(&self, peer: &AuthenticatedPeer, paused: bool) -> bool {
+        if !self.same_domain(peer) {
+            return false;
+        }
+        let allowed = lock(&self.allowed);
+        if !allowed.contains(&peer.peer_id) {
+            return false;
+        }
+        let mut paused_by = lock(&self.paused_by);
+        *paused_by = paused.then_some(peer.peer_id);
+        true
     }
 
     fn emit(&self, event: CameraEvent) {
@@ -294,8 +348,20 @@ impl SharedState {
 
     fn replace_frame(&self, bytes: Vec<u8>) -> Result<()> {
         validate_camera_jpeg(&bytes)?;
-        *lock(&self.latest_frame) = LiveFrame {
+        let mut latest = lock(&self.latest_frame);
+        let generation = latest
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("camera frame generation exhausted"))?;
+        let next_timestamp = latest
+            .capture_timestamp_ns
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("camera capture timestamp exhausted"))?;
+        let capture_timestamp_ns = utc_now_ns_i64().max(next_timestamp);
+        *latest = LiveFrame {
             bytes: Arc::from(bytes),
+            capture_timestamp_ns,
+            generation,
         };
         self.camera_available.store(true, Ordering::SeqCst);
         Ok(())
@@ -434,6 +500,14 @@ impl CameraProtocols {
         initial_frame: Vec<u8>,
     ) -> Result<(Self, mpsc::Receiver<CameraEvent>)> {
         validate_camera_jpeg(&initial_frame)?;
+        ensure!(
+            protocols.peer_id() == local_peer_id,
+            "Camera Mesh Peer ID does not match the authenticated protocol context"
+        );
+        ensure!(
+            protocols.domain_id() == domain_id,
+            "Camera Mesh Domain does not match the authenticated protocol context"
+        );
         let session_id = new_session_id();
         let metadata = metadata(local_peer_id, &session_id);
         let runtime = runtime.into();
@@ -458,8 +532,10 @@ impl CameraProtocols {
             pending_snapshots: Mutex::new(HashMap::new()),
             latest_frame: Mutex::new(LiveFrame {
                 bytes: Arc::clone(&initial_frame),
+                capture_timestamp_ns: utc_now_ns_i64(),
+                generation: 0,
             }),
-            paused: AtomicBool::new(false),
+            paused_by: Mutex::new(None),
             camera_available: AtomicBool::new(role == CameraRole::Publisher),
             events: event_tx,
         });
@@ -579,8 +655,7 @@ impl CameraProtocols {
     }
 
     pub fn revoke(&self, peer_id: PeerId) {
-        lock(&self.state.allowed).remove(&peer_id);
-        lock(&self.state.pending_approvals).remove(&peer_id);
+        self.state.revoke(peer_id);
     }
 
     pub fn pending_approvals(&self) -> Vec<PeerId> {
@@ -604,7 +679,7 @@ impl CameraProtocols {
     }
 
     pub fn paused(&self) -> bool {
-        self.state.paused.load(Ordering::SeqCst)
+        lock(&self.state.paused_by).is_some()
     }
 
     pub async fn discover(
@@ -744,7 +819,7 @@ impl CameraProtocols {
         }
         Ok(ViewReport {
             target_peer_id: remote.peer_id.to_string(),
-            checks: ["info", "catalog", "registry", "stream", "message", "blob"]
+            checks: ["info", "catalog", "registry", "stream"]
                 .into_iter()
                 .map(|check| (check.into(), true))
                 .collect(),
@@ -757,9 +832,10 @@ impl CameraProtocols {
     /// Exercise one live subscription without dropping it between controls.
     ///
     /// This is intentionally a single bounded operation for physical-device
-    /// acceptance runners: it receives two frames, proves pause quiescence
-    /// while tolerating one already in-flight frame, proves resume with a
-    /// later sequence, and fetches a SHA-256-verified snapshot.
+    /// acceptance runners: it receives two distinct captures, drains any
+    /// frames already in flight until Pause becomes quiet, proves Resume with
+    /// a genuinely newer capture timestamp, and fetches a SHA-256-verified
+    /// snapshot.
     pub async fn exercise_live(
         &self,
         target: &PeerCard,
@@ -790,18 +866,25 @@ impl CameraProtocols {
         validate_remote_manifest(&remote, &subscription.manifest)?;
 
         let mut tracker = LiveFrameTracker::default();
-        for index in 0..LIVE_EXERCISE_INITIAL_FRAMES {
-            let entry = next_live_exercise_entry(
-                &mut subscription.entries,
-                &format!("initial Camera frame {}", index + 1),
-            )
-            .await?;
-            tracker.observe(entry, LiveExercisePhase::Initial)?;
-        }
-        let pre_pause_sequence = tracker
-            .last_sequence
-            .ok_or_else(|| anyhow!("live exercise received no initial Camera frames"))?;
+        let first_entry =
+            next_live_exercise_entry(&mut subscription.entries, "initial Camera frame 1").await?;
+        let first = tracker.observe(first_entry, LiveExercisePhase::Initial)?;
+        let before_pause = next_distinct_live_exercise_entry(
+            &mut subscription.entries,
+            &mut tracker,
+            LiveExercisePhase::Initial,
+            first.capture_timestamp_ns,
+            "initial Camera frame 2 with a new capture timestamp",
+        )
+        .await?;
+        let pre_pause_sequence = before_pause.sequence;
+        let pre_pause_capture_timestamp_ns = before_pause.capture_timestamp_ns;
 
+        // Arm before sending Pause because a cancelled Message exchange is
+        // indeterminate: the publisher may have enqueued Pause before its ACK
+        // was lost. Drop starts one detached best-effort Resume in every early
+        // return/cancellation path.
+        let mut resume_guard = BestEffortResumeGuard::new(self.clients.message.clone(), &remote);
         let pause_result = match tokio::time::timeout(
             LIVE_EXERCISE_CONTROL_TIMEOUT,
             self.send_control_remote(&remote, "camera.pause", Vec::new()),
@@ -818,7 +901,10 @@ impl CameraProtocols {
             )
             .await;
             return match resume_result {
-                Ok(Ok(())) => Err(pause_error),
+                Ok(Ok(())) => {
+                    resume_guard.disarm();
+                    Err(pause_error)
+                }
                 Ok(Err(resume_error)) => Err(anyhow!(
                     "{pause_error:#}; additionally failed to restore camera.resume: {resume_error:#}"
                 )),
@@ -848,12 +934,20 @@ impl CameraProtocols {
                 )),
             };
         }
+        resume_guard.disarm();
         paused_result?;
 
-        let entry =
-            next_live_exercise_entry(&mut subscription.entries, "Camera frame after resume")
-                .await?;
-        let resumed = tracker.observe(entry, LiveExercisePhase::Resumed)?;
+        let last_paused_capture_timestamp_ns = tracker
+            .last_capture_timestamp_ns
+            .ok_or_else(|| anyhow!("live exercise received no Camera frames"))?;
+        let resumed = next_distinct_live_exercise_entry(
+            &mut subscription.entries,
+            &mut tracker,
+            LiveExercisePhase::Resumed,
+            last_paused_capture_timestamp_ns,
+            "Camera frame captured after resume",
+        )
+        .await?;
 
         let snapshot = self
             .request_snapshot_remote(
@@ -867,7 +961,7 @@ impl CameraProtocols {
         drop(subscription);
         Ok(LiveExerciseReport {
             target_peer_id: remote.peer_id.to_string(),
-            checks: ["info", "catalog", "registry", "stream"]
+            checks: ["info", "catalog", "registry", "stream", "message", "blob"]
                 .into_iter()
                 .map(|check| (check.into(), true))
                 .collect(),
@@ -875,7 +969,9 @@ impl CameraProtocols {
             paused_in_flight_frames: tracker.paused_in_flight_frames,
             pause_quiet_ms: LIVE_EXERCISE_PAUSE_QUIET.as_millis() as u64,
             pre_pause_sequence,
+            pre_pause_capture_timestamp_ns,
             resumed_sequence: resumed.sequence,
+            resumed_capture_timestamp_ns: resumed.capture_timestamp_ns,
             total_frames: tracker.total_frames,
             frame_sha256: resumed.sha256,
             frame_bytes: resumed.bytes,
@@ -975,6 +1071,7 @@ impl CameraProtocols {
         self.state.camera_available.store(false, Ordering::SeqCst);
         lock(&self.state.allowed).clear();
         lock(&self.state.pending_approvals).clear();
+        *lock(&self.state.paused_by) = None;
         let mut errors = Vec::new();
         if let Some(stream) = self.stream {
             collect_close(&mut errors, "Stream", stream.close().await);
@@ -995,23 +1092,119 @@ impl CameraProtocols {
     }
 }
 
+struct BestEffortResumeGuard {
+    client: MessageClient,
+    peer_id: PeerId,
+    route: Multiaddr,
+    channel: MessageChannelResource,
+    armed: bool,
+}
+
+impl BestEffortResumeGuard {
+    fn new(client: MessageClient, remote: &RemoteCamera) -> Self {
+        Self {
+            client,
+            peer_id: remote.peer_id,
+            route: remote.route.clone(),
+            channel: remote.control_channel.clone(),
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for BestEffortResumeGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let client = self.client.clone();
+        let peer_id = self.peer_id;
+        let route = self.route.clone();
+        let channel = self.channel.clone();
+        runtime.spawn(async move {
+            let _ = tokio::time::timeout(
+                LIVE_EXERCISE_CONTROL_TIMEOUT,
+                send_message(
+                    &client,
+                    peer_id,
+                    route,
+                    &channel,
+                    "camera.resume",
+                    Vec::new(),
+                ),
+            )
+            .await;
+        });
+    }
+}
+
 async fn next_live_exercise_entry(
     entries: &mut SubscriptionEntries<CameraFrame>,
     description: &str,
 ) -> Result<StreamEntry<CameraFrame>> {
-    tokio::time::timeout(LIVE_EXERCISE_FRAME_TIMEOUT, entries.next())
+    next_live_exercise_entry_before(
+        entries,
+        description,
+        tokio::time::Instant::now() + LIVE_EXERCISE_FRAME_TIMEOUT,
+    )
+    .await
+}
+
+async fn next_live_exercise_entry_before(
+    entries: &mut SubscriptionEntries<CameraFrame>,
+    description: &str,
+    deadline: tokio::time::Instant,
+) -> Result<StreamEntry<CameraFrame>> {
+    ensure!(
+        tokio::time::Instant::now() < deadline,
+        "timed out waiting for {description}"
+    );
+    tokio::time::timeout_at(deadline, entries.next())
         .await
         .with_context(|| format!("timed out waiting for {description}"))?
         .ok_or_else(|| anyhow!("Camera Stream ended before {description}"))?
         .with_context(|| format!("read {description}"))
 }
 
+async fn next_distinct_live_exercise_entry(
+    entries: &mut SubscriptionEntries<CameraFrame>,
+    tracker: &mut LiveFrameTracker,
+    phase: LiveExercisePhase,
+    after_capture_timestamp_ns: i64,
+    description: &str,
+) -> Result<LiveFrameObservation> {
+    let deadline = tokio::time::Instant::now() + LIVE_EXERCISE_FRAME_TIMEOUT;
+    loop {
+        let entry = next_live_exercise_entry_before(entries, description, deadline).await?;
+        let observation = tracker.observe(entry, phase)?;
+        if observation.capture_timestamp_ns > after_capture_timestamp_ns {
+            return Ok(observation);
+        }
+    }
+}
+
 async fn observe_live_exercise_pause(
     entries: &mut SubscriptionEntries<CameraFrame>,
     tracker: &mut LiveFrameTracker,
 ) -> Result<()> {
+    let absolute_deadline = tokio::time::Instant::now() + LIVE_EXERCISE_CONTROL_TIMEOUT;
+    let mut quiet_deadline = tokio::time::Instant::now() + LIVE_EXERCISE_PAUSE_QUIET;
     loop {
-        let next = match tokio::time::timeout(LIVE_EXERCISE_PAUSE_QUIET, entries.next()).await {
+        if tokio::time::Instant::now() >= absolute_deadline {
+            bail!("Camera Stream did not become quiet before the pause deadline");
+        }
+        let deadline = quiet_deadline.min(absolute_deadline);
+        let next = match tokio::time::timeout_at(deadline, entries.next()).await {
+            Err(_) if tokio::time::Instant::now() >= absolute_deadline => {
+                bail!("Camera Stream did not become quiet before the pause deadline")
+            }
             Err(_) => return Ok(()),
             Ok(next) => next,
         };
@@ -1019,6 +1212,7 @@ async fn observe_live_exercise_pause(
             .ok_or_else(|| anyhow!("Camera Stream ended while proving pause quiescence"))?
             .context("read Camera frame while proving pause quiescence")?;
         tracker.observe(entry, LiveExercisePhase::PausedInFlight)?;
+        quiet_deadline = tokio::time::Instant::now() + LIVE_EXERCISE_PAUSE_QUIET;
     }
 }
 
@@ -1053,7 +1247,10 @@ async fn handle_publisher_message(
     match event.message_type() {
         "camera.pause" => {
             ensure!(event.payload().is_empty(), "pause payload must be empty");
-            state.paused.store(true, Ordering::SeqCst);
+            ensure!(
+                state.set_paused_if_allowed(&event.sender, true),
+                "camera control sender was revoked"
+            );
             state.emit(CameraEvent::ControlReceived {
                 control: "camera.pause".into(),
                 peer_id: event.sender.peer_id.to_string(),
@@ -1061,7 +1258,10 @@ async fn handle_publisher_message(
         }
         "camera.resume" => {
             ensure!(event.payload().is_empty(), "resume payload must be empty");
-            state.paused.store(false, Ordering::SeqCst);
+            ensure!(
+                state.set_paused_if_allowed(&event.sender, false),
+                "camera control sender was revoked"
+            );
             state.emit(CameraEvent::ControlReceived {
                 control: "camera.resume".into(),
                 peer_id: event.sender.peer_id.to_string(),
@@ -1178,26 +1378,35 @@ fn stream_dispatch(
             reason: DeclineReason::sensor_unavailable(),
         };
     }
-    let paused = Arc::clone(state);
-    let source = futures::stream::unfold((), move |()| {
-        let state = Arc::clone(&paused);
+    let stream_state = Arc::clone(state);
+    let requester_peer_id = requester.peer_id;
+    let source = futures::stream::unfold(None, move |last_generation: Option<u64>| {
+        let state = Arc::clone(&stream_state);
         async move {
             loop {
                 tokio::time::sleep(FRAME_PERIOD).await;
-                if !state.paused.load(Ordering::SeqCst) {
+                if !lock(&state.allowed).contains(&requester_peer_id) {
+                    return None;
+                }
+                if lock(&state.paused_by).is_none() {
                     break;
                 }
             }
             let frame = state.latest_frame();
+            if !lock(&state.allowed).contains(&requester_peer_id) {
+                return None;
+            }
+            debug_assert!(last_generation.is_none_or(|last| frame.generation >= last));
+            let generation = frame.generation;
             Some((
                 Ok(StreamItem {
-                    timestamp_ns: utc_now_ns_i64(),
+                    timestamp_ns: frame.capture_timestamp_ns,
                     payload: CameraFrame {
                         dynamic_intrinsics: None,
                         frame: frame.bytes.to_vec(),
                     },
                 }),
-                (),
+                Some(generation),
             ))
         }
     });
@@ -1438,11 +1647,107 @@ fn validate_remote_manifest(
 }
 
 fn ensure_jpeg(bytes: &[u8]) -> Result<()> {
+    ensure!(!bytes.is_empty(), "camera JPEG must not be empty");
+    ensure!(
+        bytes.len() <= MAX_CAMERA_FRAME_BYTES,
+        "camera JPEG exceeds the 1 MiB Camera Mesh frame limit"
+    );
     ensure!(
         bytes.starts_with(&[0xff, 0xd8]) && bytes.ends_with(&[0xff, 0xd9]),
         "Camera frame is not a JPEG"
     );
+    let (width, height) = jpeg_dimensions(bytes)?;
+    ensure!(
+        width == CAMERA_WIDTH && height == CAMERA_HEIGHT,
+        "Camera JPEG dimensions must be {CAMERA_WIDTH}x{CAMERA_HEIGHT}, got {width}x{height}"
+    );
     Ok(())
+}
+
+fn jpeg_dimensions(bytes: &[u8]) -> Result<(u32, u32)> {
+    let mut cursor = 2_usize;
+    let mut dimensions = None;
+    while cursor + 1 < bytes.len() {
+        ensure!(
+            bytes[cursor] == 0xff,
+            "Camera JPEG contains data before its image scan"
+        );
+        while cursor < bytes.len() && bytes[cursor] == 0xff {
+            cursor += 1;
+        }
+        let marker = *bytes
+            .get(cursor)
+            .ok_or_else(|| anyhow!("Camera JPEG ends inside a marker"))?;
+        cursor += 1;
+
+        match marker {
+            0xd9 => break,
+            0x00 | 0xd8 => bail!("Camera JPEG contains an invalid marker"),
+            0x01 | 0xd0..=0xd7 => continue,
+            _ => {}
+        }
+
+        let length_bytes = bytes
+            .get(cursor..cursor + 2)
+            .ok_or_else(|| anyhow!("Camera JPEG ends inside a segment length"))?;
+        let segment_length = usize::from(u16::from_be_bytes([length_bytes[0], length_bytes[1]]));
+        ensure!(segment_length >= 2, "Camera JPEG segment length is invalid");
+        let segment_end = cursor
+            .checked_add(segment_length)
+            .ok_or_else(|| anyhow!("Camera JPEG segment length overflows"))?;
+        ensure!(
+            segment_end <= bytes.len(),
+            "Camera JPEG segment exceeds the frame"
+        );
+
+        if is_start_of_frame(marker) {
+            ensure!(
+                dimensions.is_none(),
+                "Camera JPEG contains more than one Start Of Frame"
+            );
+            ensure!(
+                segment_length >= 8,
+                "Camera JPEG Start Of Frame is truncated"
+            );
+            let precision = bytes[cursor + 2];
+            let height = u32::from(u16::from_be_bytes([bytes[cursor + 3], bytes[cursor + 4]]));
+            let width = u32::from(u16::from_be_bytes([bytes[cursor + 5], bytes[cursor + 6]]));
+            let components = usize::from(bytes[cursor + 7]);
+            let component_bytes = components
+                .checked_mul(3)
+                .ok_or_else(|| anyhow!("Camera JPEG component count overflows"))?;
+            let expected_length = 8_usize
+                .checked_add(component_bytes)
+                .ok_or_else(|| anyhow!("Camera JPEG component count overflows"))?;
+            ensure!(
+                components > 0 && segment_length == expected_length,
+                "Camera JPEG Start Of Frame component layout is invalid"
+            );
+            ensure!(
+                precision == 8,
+                "Camera JPEG must use 8-bit samples, got {precision}"
+            );
+            ensure!(width > 0 && height > 0, "Camera JPEG dimensions are empty");
+            dimensions = Some((width, height));
+        }
+        if marker == 0xda {
+            ensure!(
+                segment_end < bytes.len().saturating_sub(2),
+                "Camera JPEG image scan has no body"
+            );
+            return dimensions
+                .ok_or_else(|| anyhow!("Camera JPEG has no Start Of Frame before its image scan"));
+        }
+        cursor = segment_end;
+    }
+    bail!("Camera JPEG has no image scan")
+}
+
+fn is_start_of_frame(marker: u8) -> bool {
+    matches!(
+        marker,
+        0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf
+    )
 }
 
 fn remote_cache_key(peer_id: PeerId, route: &Multiaddr) -> (PeerId, String) {
@@ -1504,11 +1809,6 @@ fn peer_routes(peer: &AukiPeer) -> Result<PeerRoutes> {
 }
 
 fn validate_camera_jpeg(bytes: &[u8]) -> Result<()> {
-    ensure!(!bytes.is_empty(), "camera JPEG must not be empty");
-    ensure!(
-        bytes.len() <= MAX_BLOB_BYTES,
-        "camera JPEG exceeds the Camera Mesh limit"
-    );
     ensure_jpeg(bytes)
 }
 
@@ -1591,11 +1891,11 @@ mod tests {
         (metadata, remote)
     }
 
-    fn fixture_state() -> (Arc<SharedState>, mpsc::Receiver<CameraEvent>) {
+    fn fixture_state_for_role(role: CameraRole) -> (Arc<SharedState>, mpsc::Receiver<CameraEvent>) {
         let (events, receiver) = mpsc::channel(CAMERA_EVENT_QUEUE_CAPACITY);
         (
             Arc::new(SharedState {
-                role: CameraRole::Viewer,
+                role,
                 domain_id: Uuid::nil(),
                 local_peer_id: peer(),
                 allowed: Mutex::new(HashSet::new()),
@@ -1604,13 +1904,37 @@ mod tests {
                 pending_snapshots: Mutex::new(HashMap::new()),
                 latest_frame: Mutex::new(LiveFrame {
                     bytes: Arc::from(deterministic_jpeg().unwrap()),
+                    capture_timestamp_ns: 1,
+                    generation: 0,
                 }),
-                paused: AtomicBool::new(false),
-                camera_available: AtomicBool::new(false),
+                paused_by: Mutex::new(None),
+                camera_available: AtomicBool::new(role == CameraRole::Publisher),
                 events,
             }),
             receiver,
         )
+    }
+
+    fn fixture_state() -> (Arc<SharedState>, mpsc::Receiver<CameraEvent>) {
+        fixture_state_for_role(CameraRole::Viewer)
+    }
+
+    fn authenticated_peer(peer_id: PeerId) -> AuthenticatedPeer {
+        AuthenticatedPeer {
+            peer_id,
+            subject: Uuid::new_v4(),
+            peer_type: None,
+            domain_ids: vec![Uuid::nil()],
+            scopes: Vec::new(),
+            application: None,
+            verified_until: SystemTime::now().into(),
+        }
+    }
+
+    fn generated_peer() -> PeerId {
+        libp2p_identity::Keypair::generate_ed25519()
+            .public()
+            .to_peer_id()
     }
 
     fn fixture_route() -> Multiaddr {
@@ -1625,10 +1949,10 @@ mod tests {
     }
 
     #[test]
-    fn live_frame_tracker_allows_only_one_paused_frame_and_requires_progress() {
-        fn entry(sequence: u64) -> StreamEntry<CameraFrame> {
+    fn live_frame_tracker_counts_buffered_pause_frames_and_requires_progress() {
+        fn entry(sequence: u64, capture_timestamp_ns: i64) -> StreamEntry<CameraFrame> {
             StreamEntry {
-                timestamp_ns: 7,
+                timestamp_ns: capture_timestamp_ns,
                 seq: sequence,
                 payload: CameraFrame {
                     dynamic_intrinsics: None,
@@ -1639,32 +1963,35 @@ mod tests {
 
         let mut tracker = LiveFrameTracker::default();
         tracker
-            .observe(entry(4), LiveExercisePhase::Initial)
+            .observe(entry(4, 7), LiveExercisePhase::Initial)
             .unwrap();
         tracker
-            .observe(entry(5), LiveExercisePhase::PausedInFlight)
+            .observe(entry(5, 7), LiveExercisePhase::PausedInFlight)
             .unwrap();
-        let overflow = tracker
-            .observe(entry(6), LiveExercisePhase::PausedInFlight)
-            .unwrap_err();
-        assert!(
-            overflow
-                .to_string()
-                .contains("more than one in-flight frame")
-        );
+        tracker
+            .observe(entry(6, 8), LiveExercisePhase::PausedInFlight)
+            .unwrap();
 
         let resumed = tracker
-            .observe(entry(6), LiveExercisePhase::Resumed)
+            .observe(entry(7, 9), LiveExercisePhase::Resumed)
             .unwrap();
-        assert_eq!(resumed.sequence, 6);
-        assert_eq!(tracker.total_frames, 3);
-        assert_eq!(tracker.paused_in_flight_frames, 1);
+        assert_eq!(resumed.sequence, 7);
+        assert_eq!(resumed.capture_timestamp_ns, 9);
+        assert_eq!(tracker.total_frames, 4);
+        assert_eq!(tracker.paused_in_flight_frames, 2);
         assert!(
             tracker
-                .observe(entry(6), LiveExercisePhase::Resumed)
+                .observe(entry(7, 10), LiveExercisePhase::Resumed)
                 .unwrap_err()
                 .to_string()
                 .contains("sequence did not advance")
+        );
+        assert!(
+            tracker
+                .observe(entry(8, 8), LiveExercisePhase::Resumed)
+                .unwrap_err()
+                .to_string()
+                .contains("timestamp moved backwards")
         );
     }
 
@@ -1677,7 +2004,9 @@ mod tests {
             paused_in_flight_frames: 1,
             pause_quiet_ms: 800,
             pre_pause_sequence: 7,
+            pre_pause_capture_timestamp_ns: 70,
             resumed_sequence: 9,
+            resumed_capture_timestamp_ns: 90,
             total_frames: 4,
             frame_sha256: "a".repeat(64),
             frame_bytes: 128,
@@ -1693,22 +2022,119 @@ mod tests {
         assert_eq!(encoded["initialFrames"], 2);
         assert_eq!(encoded["pausedInFlightFrames"], 1);
         assert_eq!(encoded["prePauseSequence"], 7);
+        assert_eq!(encoded["prePauseCaptureTimestampNs"], 70);
         assert_eq!(encoded["resumedSequence"], 9);
+        assert_eq!(encoded["resumedCaptureTimestampNs"], 90);
         assert_eq!(encoded["snapshot"]["requestId"], "snapshot-live");
     }
 
     #[test]
     fn latest_camera_frame_is_bounded_validated_and_replaceable() {
         let (state, _) = fixture_state();
-        let replacement = vec![0xff, 0xd8, 1, 2, 3, 0xff, 0xd9];
+        let replacement = deterministic_jpeg().unwrap();
+        let initial = state.latest_frame();
 
         state.replace_frame(replacement.clone()).unwrap();
 
         let latest = state.latest_frame();
         assert_eq!(latest.bytes.as_ref(), replacement);
+        assert_eq!(latest.generation, initial.generation + 1);
+        assert!(latest.capture_timestamp_ns > initial.capture_timestamp_ns);
         assert!(state.camera_available.load(Ordering::SeqCst));
         assert!(state.replace_frame(vec![]).is_err());
         assert_eq!(state.latest_frame().bytes.as_ref(), replacement);
+    }
+
+    #[test]
+    fn camera_jpeg_guard_rejects_markers_without_a_frame_header() {
+        assert!(validate_camera_jpeg(&[0xff, 0xd8, 1, 2, 3, 0xff, 0xd9]).is_err());
+    }
+
+    #[test]
+    fn camera_jpeg_guard_enforces_dimensions_and_frame_size() {
+        let mut wrong_dimensions = deterministic_jpeg().unwrap();
+        let frame_header = wrong_dimensions
+            .windows(2)
+            .position(|marker| marker[0] == 0xff && is_start_of_frame(marker[1]))
+            .expect("fixture must contain a Start Of Frame")
+            + 2;
+        wrong_dimensions[frame_header + 5..frame_header + 7]
+            .copy_from_slice(&u16::try_from(CAMERA_WIDTH + 1).unwrap().to_be_bytes());
+        assert!(validate_camera_jpeg(&wrong_dimensions).is_err());
+
+        let mut oversized = deterministic_jpeg().unwrap();
+        oversized.splice(
+            oversized.len() - 2..oversized.len() - 2,
+            std::iter::repeat_n(0, MAX_CAMERA_FRAME_BYTES),
+        );
+        assert!(validate_camera_jpeg(&oversized).is_err());
+    }
+
+    #[test]
+    fn pending_approvals_are_bounded_and_full_event_queue_remains_retryable() {
+        let (state, mut events) = fixture_state();
+        for _ in 0..MAX_PENDING_APPROVALS {
+            let remote = authenticated_peer(generated_peer());
+            state.request_approval(&remote);
+            assert!(matches!(
+                events.try_recv(),
+                Ok(CameraEvent::ApprovalRequired { .. })
+            ));
+        }
+        let overflow = authenticated_peer(generated_peer());
+        state.request_approval(&overflow);
+        assert_eq!(lock(&state.pending_approvals).len(), MAX_PENDING_APPROVALS);
+        assert!(!lock(&state.pending_approvals).contains(&overflow.peer_id));
+
+        lock(&state.pending_approvals).clear();
+        for index in 0..CAMERA_EVENT_QUEUE_CAPACITY {
+            state.emit(CameraEvent::RuntimeError {
+                error: format!("event-{index}"),
+            });
+        }
+        state.request_approval(&overflow);
+        assert!(!lock(&state.pending_approvals).contains(&overflow.peer_id));
+        while events.try_recv().is_ok() {}
+        state.request_approval(&overflow);
+        assert!(lock(&state.pending_approvals).contains(&overflow.peer_id));
+        assert!(matches!(
+            events.try_recv(),
+            Ok(CameraEvent::ApprovalRequired { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn revocation_ends_an_already_admitted_camera_stream() {
+        let (state, _events) = fixture_state_for_role(CameraRole::Publisher);
+        let requester = authenticated_peer(generated_peer());
+        lock(&state.allowed).insert(requester.peer_id);
+        let metadata = metadata(state.local_peer_id, "revocation-test");
+        let dispatch = stream_dispatch(
+            &state,
+            &metadata,
+            &requester,
+            StreamRequest {
+                source_peer_id: state.local_peer_id.to_string(),
+                resource_id: CAMERA_RESOURCE_ID.into(),
+                from: ReadFrom::Latest,
+            },
+        );
+        let StreamDispatch::AcceptCamera { mut source, .. } = dispatch else {
+            panic!("approved requester must receive a Camera Stream")
+        };
+        assert!(source.next().await.is_some());
+        assert!(state.set_paused_if_allowed(&requester, true));
+
+        state.revoke(requester.peer_id);
+
+        assert!(lock(&state.paused_by).is_none());
+        assert!(!state.set_paused_if_allowed(&requester, true));
+        assert!(
+            tokio::time::timeout(FRAME_PERIOD * 2, source.next())
+                .await
+                .expect("revoked stream must finish promptly")
+                .is_none()
+        );
     }
 
     #[test]

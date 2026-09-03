@@ -50,9 +50,10 @@ For one bounded acceptance run against an approved live publisher, send:
 {"command":"exercise_live","id":"live","target":<PUBLISHER_CARD>,"requestId":"live-snapshot"}
 ```
 
-The viewer keeps one Stream subscription open while it receives two frames,
-pauses, proves the feed becomes quiet, resumes to a later sequence, and fetches
-a SHA-256-verified snapshot. The result is one `exercise_live_result` object.
+The viewer keeps one Stream subscription open while it receives two distinct
+camera captures, pauses, drains buffered frames until the feed becomes quiet,
+resumes to a newly captured frame, and fetches a SHA-256-verified snapshot. The
+result is one `exercise_live_result` object.
 
 `AUKI_NODE_NAME` changes the participant name. Publishers default to
 `AUKI_DISCOVERY_MODE=discover_and_advertise`; viewers default to

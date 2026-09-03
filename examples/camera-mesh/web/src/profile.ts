@@ -17,8 +17,8 @@ const RESOLUTIONS: Record<CameraResolutionTier, readonly [number, number]> = {
 
 const RATES: Record<CameraRateTier, number> = {
   low: 5,
-  medium: 25,
-  high: 50,
+  medium: 15,
+  high: 30,
 };
 
 export const DEFAULT_CAMERA_PROFILE = cameraStreamProfile("low", "low");

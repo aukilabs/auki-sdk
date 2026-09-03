@@ -321,7 +321,7 @@ async function assertProfile(page, peerId, resolution, rate) {
     medium: [960, 540],
     high: [1920, 1080],
   }[resolution];
-  const expectedRate = { low: 5, medium: 25, high: 50 }[rate];
+  const expectedRate = { low: 5, medium: 15, high: 30 }[rate];
   const details = JSON.parse(await elementText(page, "#inspector-details"));
   const sensor = details.registry?.sensor?.canonical;
   if (

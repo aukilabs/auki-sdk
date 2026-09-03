@@ -50,15 +50,15 @@ Browser identities and publisher approvals are intentionally ephemeral. A Web
 publisher selects one immutable profile before starting its peer:
 
 - resolution: 480×270, 960×540, or 1920×1080;
-- rate: 5, 25, or 50 fps.
+- rate: 5, 15, or 30 fps.
 
 The default remains 480×270 at 5 fps so Rust, Python, and Swift peers keep
 interoperating. The Web viewer accepts all nine Web profiles after verifying
 their Registry metadata and checks every JPEG against the advertised size.
 Restart the publisher peer to change profile; this keeps the Registry hash and
-Stream manifest stable for the whole session. The 1920×1080 at 50 fps profile
-is deliberately a stress target, not a performance promise. Camera Mesh rejects
-JPEG frames larger than 1 MiB.
+Stream manifest stable for the whole session. The 1920×1080 at 30 fps profile
+is the highest browser-camera target. Camera Mesh rejects JPEG frames larger
+than 1 MiB.
 
 The application retains only the newest captured frame before each transport
 write. On the viewer, one JPEG is decoded at a time into a persistent canvas;

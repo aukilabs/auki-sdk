@@ -1,4 +1,3 @@
-import AukiSDK
 import Foundation
 
 public struct CameraViewerFrame: Equatable, Sendable {

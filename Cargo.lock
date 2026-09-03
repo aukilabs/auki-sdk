@@ -348,6 +348,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-camera-mesh-swift"
+version = "0.1.0"
+dependencies = [
+ "auki-camera-mesh",
+ "auki-sdk-swift",
+ "parking_lot",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uniffi",
+ "uuid",
+]
+
+[[package]]
 name = "auki-datatypes"
 version = "0.0.0"
 dependencies = [

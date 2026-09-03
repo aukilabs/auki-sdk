@@ -1,5 +1,4 @@
 import AukiCameraMesh
-import AukiSDK
 import XCTest
 
 final class CameraContractTests: XCTestCase {

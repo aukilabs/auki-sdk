@@ -1,5 +1,4 @@
 import AukiCameraMesh
-import AukiSDK
 import Combine
 import Foundation
 import UIKit

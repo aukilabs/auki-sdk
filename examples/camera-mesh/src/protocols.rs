@@ -36,8 +36,8 @@ use auki_registry::{
     Scope, SensorBody, SensorRegistryEntry,
 };
 use auki_sdk::{
-    AukiDiscovery, AukiDiscoveryCandidate, AukiDiscoverySource, AukiPeer, AuthenticatedPeer,
-    Multiaddr, PeerId,
+    AukiDiscovery, AukiDiscoveryCandidate, AukiDiscoverySource, AukiPeer, AukiPeerProtocols,
+    AuthenticatedPeer, Multiaddr, PeerId,
 };
 use futures::StreamExt;
 use serde::Serialize;
@@ -58,7 +58,6 @@ const MESSAGE_QUEUE_CAPACITY: usize = 16;
 const CAMERA_EVENT_QUEUE_CAPACITY: usize = 64;
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(45);
 const FRAME_PERIOD: Duration = Duration::from_millis(1_000 / CAMERA_RATE_HZ as u64);
-const FIXTURE_TIMESTAMP_NS: i64 = 1_800_000_000_000_000_000;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
@@ -150,6 +149,11 @@ impl Drop for PendingSnapshotGuard {
     }
 }
 
+#[derive(Clone)]
+struct LiveFrame {
+    bytes: Arc<[u8]>,
+}
+
 struct SharedState {
     role: CameraRole,
     domain_id: Uuid,
@@ -158,6 +162,7 @@ struct SharedState {
     pending_approvals: Mutex<HashSet<PeerId>>,
     blobs: Mutex<VecDeque<(String, Arc<[u8]>)>>,
     pending_snapshots: Mutex<HashMap<String, PendingSnapshot>>,
+    latest_frame: Mutex<LiveFrame>,
     paused: AtomicBool,
     camera_available: AtomicBool,
     events: mpsc::Sender<CameraEvent>,
@@ -202,6 +207,19 @@ impl SharedState {
             blobs.push_back((sha256.clone(), Arc::from(bytes)));
         }
         Ok((sha256, size))
+    }
+
+    fn latest_frame(&self) -> LiveFrame {
+        lock(&self.latest_frame).clone()
+    }
+
+    fn replace_frame(&self, bytes: Vec<u8>) -> Result<()> {
+        validate_camera_jpeg(&bytes)?;
+        *lock(&self.latest_frame) = LiveFrame {
+            bytes: Arc::from(bytes),
+        };
+        self.camera_available.store(true, Ordering::SeqCst);
+        Ok(())
     }
 }
 
@@ -306,24 +324,66 @@ impl CameraProtocols {
         display_name: impl Into<String>,
     ) -> Result<(Self, mpsc::Receiver<CameraEvent>)> {
         let local_peer_id = peer.peer_id();
+        let routes = peer_routes(peer)?;
+        Self::mount_context(
+            peer.protocols(),
+            local_peer_id,
+            peer.domain_id(),
+            routes,
+            role,
+            display_name,
+            "native",
+            deterministic_jpeg()?,
+        )
+        .await
+    }
+
+    /// Mount Camera Mesh on an already-running peer context.
+    ///
+    /// Platform bindings use this seam to keep the application protocol and
+    /// exact-viewer approval policy in Rust while supplying platform-owned
+    /// camera frames.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn mount_context(
+        protocols: AukiPeerProtocols,
+        local_peer_id: PeerId,
+        domain_id: Uuid,
+        routes: PeerRoutes,
+        role: CameraRole,
+        display_name: impl Into<String>,
+        runtime: impl Into<String>,
+        initial_frame: Vec<u8>,
+    ) -> Result<(Self, mpsc::Receiver<CameraEvent>)> {
+        validate_camera_jpeg(&initial_frame)?;
         let session_id = new_session_id();
         let metadata = metadata(local_peer_id, &session_id);
-        let card = peer_card(peer, role)?;
-        let fixture = Arc::<[u8]>::from(deterministic_jpeg()?);
+        let runtime = runtime.into();
+        ensure!(!runtime.is_empty(), "camera runtime must not be empty");
+        let card = PeerCard {
+            version: 1,
+            runtime: runtime.clone(),
+            domain_id: domain_id.to_string(),
+            peer_id: local_peer_id.to_string(),
+            protocols: protocol_ids_for_role(role),
+            routes,
+        };
+        let initial_frame = Arc::<[u8]>::from(initial_frame);
         let (event_tx, event_rx) = mpsc::channel(CAMERA_EVENT_QUEUE_CAPACITY);
         let state = Arc::new(SharedState {
             role,
-            domain_id: peer.domain_id(),
+            domain_id,
             local_peer_id,
             allowed: Mutex::new(HashSet::new()),
             pending_approvals: Mutex::new(HashSet::new()),
             blobs: Mutex::new(VecDeque::new()),
             pending_snapshots: Mutex::new(HashMap::new()),
+            latest_frame: Mutex::new(LiveFrame {
+                bytes: Arc::clone(&initial_frame),
+            }),
             paused: AtomicBool::new(false),
             camera_available: AtomicBool::new(role == CameraRole::Publisher),
             events: event_tx,
         });
-        let protocols = peer.protocols();
         let display_name = display_name.into();
 
         let info_state = Arc::clone(&state);
@@ -340,7 +400,7 @@ impl CameraProtocols {
                     session_clock_hash: info_metadata.clock_ref.hash.clone(),
                     session_now_ns: utc_now_ns_u64(),
                     peer_id: local_peer_id,
-                    app_instance: format!("native/{}", role.as_str()),
+                    app_instance: format!("{runtime}/{}", role.as_str()),
                 })
         })?;
         let catalog = CatalogEndpoint::mount(
@@ -379,17 +439,10 @@ impl CameraProtocols {
         let stream = if role == CameraRole::Publisher {
             let stream_state = Arc::clone(&state);
             let stream_metadata = metadata.clone();
-            let stream_fixture = Arc::clone(&fixture);
             Some(StreamEndpoint::mount(
                 protocols.clone(),
                 move |requester: &AuthenticatedPeer, request: StreamRequest| {
-                    stream_dispatch(
-                        &stream_state,
-                        &stream_metadata,
-                        Arc::clone(&stream_fixture),
-                        requester,
-                        request,
-                    )
+                    stream_dispatch(&stream_state, &stream_metadata, requester, request)
                 },
             )?)
         } else {
@@ -411,7 +464,6 @@ impl CameraProtocols {
             Arc::clone(&state),
             clients.message.clone(),
             clients.blob.clone(),
-            fixture,
         ));
 
         Ok((
@@ -459,6 +511,21 @@ impl CameraProtocols {
             .collect::<Vec<_>>();
         peers.sort_unstable_by_key(ToString::to_string);
         peers
+    }
+
+    /// Replace the newest bounded JPEG used by future Stream items and
+    /// snapshots. Slow consumers observe the newest frame rather than growing
+    /// an application-side queue.
+    pub fn replace_frame(&self, bytes: Vec<u8>) -> Result<()> {
+        ensure!(
+            self.role == CameraRole::Publisher,
+            "only a publisher accepts camera frames"
+        );
+        self.state.replace_frame(bytes)
+    }
+
+    pub fn paused(&self) -> bool {
+        self.state.paused.load(Ordering::SeqCst)
     }
 
     pub async fn discover(
@@ -708,13 +775,10 @@ async fn drain_messages(
     state: Arc<SharedState>,
     message_client: MessageClient,
     blob_client: BlobClient,
-    fixture: Arc<[u8]>,
 ) {
     while let Some(event) = receiver.recv().await {
         let result = match state.role {
-            CameraRole::Publisher => {
-                handle_publisher_message(&state, &message_client, &fixture, event).await
-            }
+            CameraRole::Publisher => handle_publisher_message(&state, &message_client, event).await,
             CameraRole::Viewer => handle_viewer_message(&state, &blob_client, event).await,
         };
         if let Err(error) = result {
@@ -728,7 +792,6 @@ async fn drain_messages(
 async fn handle_publisher_message(
     state: &Arc<SharedState>,
     message_client: &MessageClient,
-    fixture: &[u8],
     event: MessageEvent,
 ) -> Result<()> {
     ensure!(
@@ -755,7 +818,7 @@ async fn handle_publisher_message(
         "camera.request_snapshot" => {
             let request = decode_snapshot_request(event.payload(), event.sender.peer_id)?;
             let (channel, route) = request.reply.native_route_for(event.sender.peer_id)?;
-            let (sha256, size) = state.stage_blob(fixture.to_vec())?;
+            let (sha256, size) = state.stage_blob(state.latest_frame().bytes.to_vec())?;
             send_message(
                 message_client,
                 event.sender.peer_id,
@@ -841,7 +904,6 @@ async fn handle_viewer_message(
 fn stream_dispatch(
     state: &Arc<SharedState>,
     metadata: &CameraMetadata,
-    fixture: Arc<[u8]>,
     requester: &AuthenticatedPeer,
     request: StreamRequest,
 ) -> StreamDispatch {
@@ -865,9 +927,8 @@ fn stream_dispatch(
         };
     }
     let paused = Arc::clone(state);
-    let source = futures::stream::unfold(0_u64, move |sequence| {
+    let source = futures::stream::unfold((), move |()| {
         let state = Arc::clone(&paused);
-        let fixture = Arc::clone(&fixture);
         async move {
             loop {
                 tokio::time::sleep(FRAME_PERIOD).await;
@@ -875,20 +936,16 @@ fn stream_dispatch(
                     break;
                 }
             }
-            let timestamp_ns = FIXTURE_TIMESTAMP_NS.saturating_add(
-                i64::try_from(sequence)
-                    .unwrap_or(i64::MAX)
-                    .saturating_mul(1_000_000_000_i64 / i64::from(CAMERA_RATE_HZ)),
-            );
+            let frame = state.latest_frame();
             Some((
                 Ok(StreamItem {
-                    timestamp_ns,
+                    timestamp_ns: utc_now_ns_i64(),
                     payload: CameraFrame {
                         dynamic_intrinsics: None,
-                        frame: fixture.to_vec(),
+                        frame: frame.bytes.to_vec(),
                     },
                 }),
-                sequence.saturating_add(1),
+                (),
             ))
         }
     });
@@ -1179,7 +1236,7 @@ fn register_pending_snapshot(
     })
 }
 
-fn peer_card(peer: &AukiPeer, role: CameraRole) -> Result<PeerCard> {
+fn peer_routes(peer: &AukiPeer) -> Result<PeerRoutes> {
     let published = peer
         .protocol_context()
         .routes()
@@ -1188,17 +1245,19 @@ fn peer_card(peer: &AukiPeer, role: CameraRole) -> Result<PeerCard> {
         .into_iter()
         .next()
         .ok_or_else(|| anyhow!("Auki peer has no confirmed relay route"))?;
-    Ok(PeerCard {
-        version: 1,
-        runtime: "native".into(),
-        domain_id: peer.domain_id().to_string(),
-        peer_id: peer.peer_id().to_string(),
-        protocols: protocol_ids_for_role(role),
-        routes: PeerRoutes {
-            tcp: published.routes.tcp().to_string(),
-            wss: published.routes.wss().to_string(),
-        },
+    Ok(PeerRoutes {
+        tcp: published.routes.tcp().to_string(),
+        wss: published.routes.wss().to_string(),
     })
+}
+
+fn validate_camera_jpeg(bytes: &[u8]) -> Result<()> {
+    ensure!(!bytes.is_empty(), "camera JPEG must not be empty");
+    ensure!(
+        bytes.len() <= MAX_BLOB_BYTES,
+        "camera JPEG exceeds the Camera Mesh limit"
+    );
+    ensure_jpeg(bytes)
 }
 
 fn discovery_peer(candidate: AukiDiscoveryCandidate) -> DiscoveryPeer {
@@ -1291,6 +1350,9 @@ mod tests {
                 pending_approvals: Mutex::new(HashSet::new()),
                 blobs: Mutex::new(VecDeque::new()),
                 pending_snapshots: Mutex::new(HashMap::new()),
+                latest_frame: Mutex::new(LiveFrame {
+                    bytes: Arc::from(deterministic_jpeg().unwrap()),
+                }),
                 paused: AtomicBool::new(false),
                 camera_available: AtomicBool::new(false),
                 events,
@@ -1307,7 +1369,21 @@ mod tests {
 
     #[test]
     fn deterministic_frame_passes_camera_guard() {
-        ensure_jpeg(&deterministic_jpeg().unwrap()).unwrap();
+        validate_camera_jpeg(&deterministic_jpeg().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn latest_camera_frame_is_bounded_validated_and_replaceable() {
+        let (state, _) = fixture_state();
+        let replacement = vec![0xff, 0xd8, 1, 2, 3, 0xff, 0xd9];
+
+        state.replace_frame(replacement.clone()).unwrap();
+
+        let latest = state.latest_frame();
+        assert_eq!(latest.bytes.as_ref(), replacement);
+        assert!(state.camera_available.load(Ordering::SeqCst));
+        assert!(state.replace_frame(vec![]).is_err());
+        assert_eq!(state.latest_frame().bytes.as_ref(), replacement);
     }
 
     #[test]

@@ -1,0 +1,33 @@
+[package]
+name = "auki-camera-mesh-swift"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Swift adapter and umbrella Apple artifact for Camera Mesh"
+publish = false
+
+[lib]
+name = "auki_camera_mesh_swift"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = []
+cli = ["uniffi/cli"]
+
+[dependencies]
+auki-camera-mesh = { path = "../.." }
+auki-sdk-binding = { package = "auki-sdk-swift", path = "../../../../bindings/swift/auki-sdk-swift", features = ["standard-protocols"] }
+parking_lot.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+uniffi = { version = "0.31", features = ["tokio"] }
+uuid.workspace = true
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]

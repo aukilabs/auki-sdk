@@ -6,8 +6,6 @@ options:
     iOS: "17.0"
 
 packages:
-  AukiSDK:
-    path: ../../../bindings/swift/auki-sdk-swift
   AukiCameraMesh:
     path: Package
 
@@ -18,8 +16,6 @@ targets:
     sources:
       - App
     dependencies:
-      - package: AukiSDK
-        product: AukiSDK
       - package: AukiCameraMesh
         product: AukiCameraMesh
     settings:
@@ -40,8 +36,6 @@ targets:
       - Package/Tests/AukiCameraMeshTests
     dependencies:
       - target: AukiCameraMeshIOS
-      - package: AukiSDK
-        product: AukiSDK
       - package: AukiCameraMesh
         product: AukiCameraMesh
     settings:

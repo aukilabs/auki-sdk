@@ -10,22 +10,24 @@ let package = Package(
   products: [
     .library(name: "AukiCameraMesh", targets: ["AukiCameraMesh"])
   ],
-  dependencies: [
-    .package(path: "../../../../bindings/swift/auki-sdk-swift")
-  ],
+  dependencies: [],
   targets: [
+    .binaryTarget(
+      name: "AukiCameraMeshFFI",
+      path: "Artifacts/AukiCameraMesh.xcframework"
+    ),
     .target(
       name: "AukiCameraMesh",
-      dependencies: [
-        .product(name: "AukiSDK", package: "auki-sdk-swift")
+      dependencies: ["AukiCameraMeshFFI"],
+      linkerSettings: [
+        .linkedFramework("SystemConfiguration"),
+        .linkedFramework("CoreFoundation"),
+        .linkedLibrary("iconv"),
       ]
     ),
     .testTarget(
       name: "AukiCameraMeshTests",
-      dependencies: [
-        "AukiCameraMesh",
-        .product(name: "AukiSDK", package: "auki-sdk-swift"),
-      ]
+      dependencies: ["AukiCameraMesh"]
     ),
   ]
 )

@@ -41,6 +41,7 @@ members = [
     "examples/standard-protocols/native",
     "examples/camera-mesh",
     "examples/camera-mesh/native",
+    "examples/camera-mesh/swift/ffi",
 ]
 
 [workspace.package]

@@ -52,7 +52,6 @@ pub const MAX_INFO_FRAME_BYTES: u32 = 64 * 1024;
 /// diagnostic application/session metadata only, so it intentionally has no
 /// membership, authorization-role, or route fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct AuthenticatedParticipantInfo {
     /// Application identifier, such as `boosterapp` or `sentinel`.
     pub app: String,
@@ -231,6 +230,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn participant_info_accepts_extensions_but_requires_known_fields() {
+        let expected = authenticated_fixture();
+        let mut value = serde_json::to_value(&expected).unwrap();
+        value.as_object_mut().unwrap().insert(
+            "future_metadata".into(),
+            serde_json::json!({"camera_count": 9}),
+        );
+        assert_eq!(
+            serde_json::from_value::<AuthenticatedParticipantInfo>(value.clone()).unwrap(),
+            expected
+        );
+
+        value.as_object_mut().unwrap().remove("peer_id");
+        assert!(serde_json::from_value::<AuthenticatedParticipantInfo>(value).is_err());
+    }
+
     #[tokio::test]
     async fn request_round_trips() {
         let req = InfoRequest::default();
@@ -291,13 +307,16 @@ mod tests {
     }
 
     #[test]
-    fn authenticated_info_v1_rejects_manager_era_fields() {
+    fn authenticated_info_v1_ignores_manager_era_extensions() {
         let mut value = serde_json::to_value(authenticated_fixture()).unwrap();
         value
             .as_object_mut()
             .unwrap()
             .insert("is_manager".into(), serde_json::Value::Bool(false));
-        assert!(serde_json::from_value::<AuthenticatedParticipantInfo>(value).is_err());
+        assert_eq!(
+            serde_json::from_value::<AuthenticatedParticipantInfo>(value).unwrap(),
+            authenticated_fixture()
+        );
     }
 
     #[tokio::test]

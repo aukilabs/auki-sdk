@@ -34,7 +34,6 @@ pub enum ResourceVariant {
 
 /// Optional v0.3 catalog variant filter; empty means all variants.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ResourcesRequest {
     /// Variants to include, or empty for all variants.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -100,7 +99,6 @@ impl ResourceEntry {
 }
 
 #[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct MessageChannelResourceWire {
     variant: MessageChannelVariant,
     owner_peer_id: PeerId,
@@ -157,7 +155,6 @@ impl<'de> Deserialize<'de> for ResourceEntry {
 
 /// Framed v0.3 catalog response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ResourcesResponse {
     /// Current resource rows.
     pub resources: Vec<ResourceEntry>,

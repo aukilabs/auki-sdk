@@ -8,20 +8,17 @@ pub(crate) struct LoginRequest<'a> {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct ApiTokenResponse {
     pub access_token: String,
     pub refresh_token: String,
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct ServiceTokenResponse {
     pub access_token: String,
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct AccessibleDomainsResponse {
     pub domains: Vec<AccessibleDomain>,
     pub total: u64,
@@ -30,7 +27,6 @@ pub(crate) struct AccessibleDomainsResponse {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct AccessibleDomain {
     pub id: String,
     pub name: String,
@@ -45,7 +41,6 @@ pub(crate) struct PeerChallengeRequest<'a> {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct PeerChallengeResponse {
     pub challenge_id: String,
     pub challenge: String,
@@ -59,7 +54,6 @@ pub(crate) struct PeerVerifyRequest<'a> {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct PeerVerifyResponse {
     pub peer_id: String,
     pub domain_id: String,
@@ -69,7 +63,6 @@ pub(crate) struct PeerVerifyResponse {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct VerificationKeysResponse {
     pub version: u8,
     pub generation: u64,
@@ -85,7 +78,6 @@ pub(crate) enum VerificationKeyStatus {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct VerificationKey {
     pub id: String,
     pub status: VerificationKeyStatus,

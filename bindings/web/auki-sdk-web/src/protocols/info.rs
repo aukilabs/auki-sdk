@@ -129,7 +129,7 @@ impl InfoProvider for JavaScriptInfoProvider {
 }
 
 #[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct ParticipantInfo {
     app: String,
     app_version: String,

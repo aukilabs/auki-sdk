@@ -22,7 +22,6 @@ use serde::Deserialize;
 const VECTOR_JSON: &str = include_str!("fixtures/stage1_cross_repository_vector.json");
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct Stage1Vector {
     schema_version: u32,
     protocol_id: String,

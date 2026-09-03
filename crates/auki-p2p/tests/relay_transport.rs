@@ -1156,7 +1156,6 @@ enum RelayConnectionEvent {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct AdmissionRequest {
     version: u8,
     domain_id: String,

@@ -159,7 +159,7 @@ impl StreamPayloadKind {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 enum StreamReadFromRecord {
     #[default]
     Latest,
@@ -192,7 +192,6 @@ impl From<StreamReadFromRecord> for ReadFrom {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 struct StreamRequestRecord {
     source_peer_id: String,
     resource_id: String,
@@ -229,7 +228,7 @@ fn request_to_python(py: Python<'_>, request: &StreamRequest) -> PyResult<PyObje
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 struct StreamManifestRecord {
     sensor_id: String,
     sensor_hash: String,
@@ -310,7 +309,7 @@ fn manifest_to_python(py: Python<'_>, manifest: &StreamManifest) -> PyResult<PyO
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 enum StreamDeclineReasonRecord {
     SensorNotFound,
     SensorUnavailable,

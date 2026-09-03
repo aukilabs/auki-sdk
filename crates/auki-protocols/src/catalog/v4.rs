@@ -16,7 +16,6 @@ pub const ID: &str = "/auki/auth/1/resources/0.4.0";
 pub const MAX_RESOURCES_FRAME_BYTES: u32 = 1024 * 1024;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ResourcesRequest {}
 
 impl ResourcesRequest {
@@ -28,7 +27,6 @@ impl ResourcesRequest {
 /// One Map Log row. The Map Registry ref pins its grid contract; the clock ref
 /// defines the timestamp of every MapUpdate segment entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct MapLogResource {
     pub source_peer_id: String,
     pub writer_peer_id: String,
@@ -58,7 +56,6 @@ impl MapLogResource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ResourcesResponse {
     pub resources: Vec<MapLogResource>,
 }

@@ -595,7 +595,7 @@ impl StreamPayloadKind {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 enum StreamReadFromRecord {
     #[default]
     Latest,
@@ -629,7 +629,7 @@ impl From<StreamReadFromRecord> for ReadFrom {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct StreamRequestRecord {
     source_peer_id: String,
     resource_id: String,
@@ -744,7 +744,7 @@ fn stream_manifest_from_js(value: JsValue) -> Result<StreamManifest, JsValue> {
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 enum StreamDeclineReasonRecord {
     SensorNotFound,
     SensorUnavailable,

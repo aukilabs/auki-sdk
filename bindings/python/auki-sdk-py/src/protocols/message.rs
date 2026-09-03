@@ -33,7 +33,6 @@ enum MessageChannelVariant {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 struct MessageChannelRecord {
     variant: MessageChannelVariant,
     owner_peer_id: String,

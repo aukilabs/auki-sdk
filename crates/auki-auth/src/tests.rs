@@ -1285,19 +1285,36 @@ fn challenge_expiration_accepts_exact_clock_skew_edges_and_rejects_outside_them(
 }
 
 #[tokio::test]
-async fn strict_json_size_and_cancellation_bounds_fail_closed() {
-    let unknown = MockServer::start(vec![MockResponse::json(json!({
+async fn json_extensions_are_ignored_while_known_fields_size_and_cancellation_stay_strict() {
+    let extensions = MockServer::start(vec![
+        MockResponse::json(json!({
+            "access_token": "access",
+            "refresh_token": "refresh",
+            "future_metadata": {"enabled": true}
+        })),
+        MockResponse::json(json!({
+            "access_token": "dds-service",
+            "future_metadata": [1, 2, 3]
+        })),
+    ])
+    .await;
+    let _session = client_for(&extensions)
+        .authenticate(Credentials::user_password("person@example.com", "password"))
+        .await
+        .unwrap();
+    extensions.finish().await;
+
+    let missing = MockServer::start(vec![MockResponse::json(json!({
         "access_token": "access",
-        "refresh_token": "refresh",
-        "unexpected": true
+        "future_metadata": true
     }))])
     .await;
-    let error = client_for(&unknown)
+    let error = client_for(&missing)
         .authenticate(Credentials::user_password("person@example.com", "password"))
         .await
         .unwrap_err();
     assert!(matches!(error, Error::InvalidResponse { .. }));
-    unknown.finish().await;
+    missing.finish().await;
 
     let oversized = MockServer::start(vec![MockResponse {
         status: 200,

@@ -136,21 +136,27 @@ mod tests {
     use super::*;
 
     #[derive(Debug, Deserialize, Eq, PartialEq, Serialize)]
-    #[serde(deny_unknown_fields)]
     struct Fixture {
         value: u64,
     }
 
     #[test]
-    fn bounded_json_rejects_oversize_and_unknown_fields() {
+    fn bounded_json_accepts_extensions_but_rejects_invalid_known_fields_and_oversize() {
         assert_eq!(
             parse_bounded_json::<Fixture>("read fixture", r#"{"value":7}"#, 32).unwrap(),
             Fixture { value: 7 }
         );
-        assert!(
-            parse_bounded_json::<Fixture>("read fixture", r#"{"value":7,"unexpected":true}"#, 64,)
-                .is_err()
+        assert_eq!(
+            parse_bounded_json::<Fixture>(
+                "read fixture",
+                r#"{"value":7,"futureMetadata":{"enabled":true}}"#,
+                64,
+            )
+            .unwrap(),
+            Fixture { value: 7 }
         );
+        assert!(parse_bounded_json::<Fixture>("read fixture", r#"{}"#, 32).is_err());
+        assert!(parse_bounded_json::<Fixture>("read fixture", r#"{"value":"seven"}"#, 32).is_err());
         assert!(parse_bounded_json::<Fixture>("read fixture", r#"{"value":7}"#, 2).is_err());
         assert!(bounded_json("write fixture", &Fixture { value: 7 }, 2).is_err());
     }

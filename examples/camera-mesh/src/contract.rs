@@ -335,7 +335,6 @@ pub fn protocol_ids_for_role(role: CameraRole) -> Vec<String> {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct MessageChannelWire {
     pub variant: String,
     pub owner_peer_id: String,
@@ -376,14 +375,13 @@ impl TryFrom<MessageChannelWire> for MessageChannelResource {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct SnapshotReplyTarget {
     pub peer_id: String,
     pub routes: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct SnapshotReplyAddress {
     pub target: SnapshotReplyTarget,
     pub channel: MessageChannelWire,
@@ -454,7 +452,7 @@ impl SnapshotReplyAddress {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct SnapshotRequestPayload {
     pub version: u8,
     pub request_id: String,
@@ -462,7 +460,7 @@ pub struct SnapshotRequestPayload {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct SnapshotReadyPayload {
     pub version: u8,
     pub request_id: String,

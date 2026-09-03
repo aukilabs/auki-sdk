@@ -59,7 +59,6 @@ impl std::fmt::Display for PeerRole {
 
 /// Bounded signed application diagnostics carried without granting authority.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct SignedApplicationMetadata {
     pub name: String,
     pub version: String,
@@ -67,7 +66,6 @@ pub struct SignedApplicationMetadata {
 
 /// The currently supported bounded DDS claim schema.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct P2PAccessClaims {
     #[serde(rename = "type")]
     pub token_type: String,
@@ -713,6 +711,41 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
 MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAxcARQLozLIqu/CFm6ub89EElhHX
 O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
 -----END PUBLIC KEY-----"#;
+
+    #[test]
+    fn signed_claim_extensions_are_ignored_while_known_claims_remain_strict() {
+        let now = unix_time_now();
+        let value = serde_json::json!({
+            "type": P2P_TOKEN_TYPE,
+            "iss": P2P_TOKEN_ISSUER,
+            "aud": [P2P_TOKEN_AUDIENCE],
+            "sub": Uuid::new_v4().to_string(),
+            "peer_id": crate::Identity::generate().peer_id().to_string(),
+            "domain_ids": [Uuid::new_v4().to_string()],
+            "application": {
+                "name": "camera-mesh",
+                "version": "0.1.0",
+                "future_metadata": {"channel": "dev"}
+            },
+            "iat": now,
+            "exp": now + P2P_TOKEN_TTL.as_secs(),
+            "future_metadata": ["anything", 7]
+        });
+
+        let claims: P2PAccessClaims = serde_json::from_value(value.clone()).unwrap();
+        validate_profile(&claims, now).unwrap();
+
+        let mut missing = value.clone();
+        missing.as_object_mut().unwrap().remove("peer_id");
+        assert!(serde_json::from_value::<P2PAccessClaims>(missing).is_err());
+
+        let mut wrong_type = value;
+        wrong_type
+            .as_object_mut()
+            .unwrap()
+            .insert("exp".into(), serde_json::json!("later"));
+        assert!(serde_json::from_value::<P2PAccessClaims>(wrong_type).is_err());
+    }
 
     #[test]
     fn signed_credential_produces_exact_sensitive_bearer_header() {

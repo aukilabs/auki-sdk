@@ -205,7 +205,7 @@ impl From<ReadFrom> for AukiStreamReadFrom {
 
 /// Exact Stream v2 subscription request.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, uniffi::Record)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct AukiStreamRequest {
     pub source_peer_id: String,
     pub resource_id: String,
@@ -246,7 +246,7 @@ impl From<&StreamRequest> for AukiStreamRequest {
 
 /// Immutable Stream v2 handshake metadata.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, uniffi::Record)]
-#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase")]
 pub struct AukiStreamManifest {
     pub sensor_id: String,
     pub sensor_hash: String,

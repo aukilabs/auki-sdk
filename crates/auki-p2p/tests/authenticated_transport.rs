@@ -189,7 +189,7 @@ async fn wait_for_listeners_reports_an_occupied_tcp_port() {
 }
 
 #[test]
-fn verifier_enforces_the_exact_dds_claim_profile() {
+fn verifier_enforces_known_dds_claims_and_ignores_extensions() {
     let verifier = verifier();
     let identity = Identity::generate();
     let domain_id = Uuid::new_v4().to_string();
@@ -417,18 +417,23 @@ fn verifier_enforces_the_exact_dds_claim_profile() {
                 "version": "1".repeat(P2P_TOKEN_MAX_APPLICATION_VERSION_BYTES + 1)
             }),
         ),
-        (
-            "extra nested field",
-            serde_json::json!({"name": "client", "version": "1", "role": "admin"}),
-        ),
     ] {
         let mut invalid = application_base.clone();
         invalid["application"] = application;
         assert!(verifier.verify(&sign(&invalid)).is_err(), "accepted {name}");
     }
-    let mut unknown_outer_field = application_base;
-    unknown_outer_field["application_name"] = serde_json::json!("client");
-    assert!(verifier.verify(&sign(&unknown_outer_field)).is_err());
+    let mut extended_claims = application_base;
+    extended_claims["application"] =
+        serde_json::json!({"name": "client", "version": "1", "role": "admin"});
+    extended_claims["application_name"] = serde_json::json!("client");
+    let verified = verifier.verify(&sign(&extended_claims)).unwrap();
+    assert_eq!(
+        verified.application,
+        Some(SignedApplicationMetadata {
+            name: "client".into(),
+            version: "1".into(),
+        })
+    );
 
     let mut missing_issued_at = serde_json::to_value(&valid_claims).unwrap();
     missing_issued_at.as_object_mut().unwrap().remove("iat");

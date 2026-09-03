@@ -861,7 +861,6 @@ impl fmt::Debug for RelayIdempotencyKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct CreateRelayBookingRequest {
     pub mode: RelayBookingMode,
     pub requested_duration_seconds: u64,
@@ -905,7 +904,6 @@ pub enum ReservationFailureReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct ReservationFailedRequest {
     pub slot_id: Uuid,
     pub assignment_id: Uuid,
@@ -956,14 +954,12 @@ pub enum RelaySlotState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct RelayLimits {
     pub duration_seconds: u32,
     pub data_bytes_per_direction: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct RelaySlotSnapshot {
     pub slot_id: Uuid,
     pub slot_index: u8,
@@ -978,7 +974,6 @@ pub struct RelaySlotSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct RelayBookingSnapshot {
     pub booking_id: Uuid,
     pub mode: RelayBookingMode,
@@ -1214,7 +1209,6 @@ impl fmt::Display for RelayErrorCode {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct RelayErrorResponse {
     code: RelayErrorCode,
     error: String,
@@ -1781,7 +1775,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_cacheable_oversized_and_non_exact_responses_without_echoing_bodies() {
+    async fn accepts_extensions_but_rejects_cacheable_and_oversized_responses() {
         let missing_no_store_server = MockServer::start();
         missing_no_store_server.mock(|when, then| {
             when.method(GET).path("/relay-bookings/active");
@@ -1819,30 +1813,28 @@ mod tests {
             RelayBookingClientError::ResponseTooLarge { .. }
         ));
 
-        const ATTACKER_VALUE: &str = "attacker-controlled-secret-value";
-        let non_exact_server = MockServer::start();
+        let extended_server = MockServer::start();
         let booking_id = Uuid::new_v4();
         let mut body = booking_snapshot(booking_id, RelayBookingState::Active);
         body.as_object_mut()
             .unwrap()
-            .insert("unexpected".to_string(), json!(ATTACKER_VALUE));
-        non_exact_server.mock(|when, then| {
+            .insert("future_metadata".to_string(), json!({"region": "dev"}));
+        extended_server.mock(|when, then| {
             when.method(GET).path("/relay-bookings/active");
             relay_json(then, 200, body.clone());
         });
-        let error = make_client(
-            &non_exact_server,
-            Arc::new(StaticProvider("requester-token")),
-        )
-        .active()
-        .await
-        .unwrap_err();
-        let rendered = format!("{error:?} {error}");
-        assert!(matches!(
-            error,
-            RelayBookingClientError::InvalidResponse { .. }
-        ));
-        assert!(!rendered.contains(ATTACKER_VALUE));
+        assert_eq!(
+            make_client(
+                &extended_server,
+                Arc::new(StaticProvider("requester-token")),
+            )
+            .active()
+            .await
+            .unwrap()
+            .unwrap()
+            .booking_id,
+            booking_id
+        );
     }
 
     #[tokio::test]
@@ -2037,5 +2029,38 @@ mod tests {
         let mut incomplete = recovering;
         incomplete.slots[0].limits = None;
         assert!(incomplete.validate(RelayOperation::Active).is_err());
+    }
+
+    #[test]
+    fn relay_response_extensions_are_ignored_while_known_fields_remain_strict() {
+        let booking_id = Uuid::new_v4();
+        let (mut value, _, _, _) = ready_booking_snapshot(booking_id);
+        let root = value.as_object_mut().unwrap();
+        root.insert("future_metadata".into(), json!({"region": "dev"}));
+        let slot = root
+            .get_mut("slots")
+            .and_then(Value::as_array_mut)
+            .and_then(|slots| slots.first_mut())
+            .and_then(Value::as_object_mut)
+            .unwrap();
+        slot.insert("future_slot_metadata".into(), json!(true));
+        slot.get_mut("limits")
+            .and_then(Value::as_object_mut)
+            .unwrap()
+            .insert("future_limit".into(), json!(7));
+
+        let snapshot: RelayBookingSnapshot = serde_json::from_value(value.clone()).unwrap();
+        snapshot.validate(RelayOperation::Active).unwrap();
+
+        value.as_object_mut().unwrap().remove("booking_id");
+        assert!(serde_json::from_value::<RelayBookingSnapshot>(value).is_err());
+        assert!(
+            serde_json::from_value::<RelayErrorResponse>(json!({
+                "code": "not_found",
+                "error": "not found",
+                "future_metadata": true
+            }))
+            .is_ok()
+        );
     }
 }

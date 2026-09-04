@@ -137,6 +137,8 @@ const peerConfig = get<HTMLElement>("peer-config");
 const domain = get<HTMLSelectElement>("domain");
 const role = get<HTMLSelectElement>("role");
 const displayName = input("display-name");
+const viewerInboundRelay = input("viewer-inbound-relay");
+const viewerInboundRelayField = get<HTMLElement>("viewer-inbound-relay-field");
 const runtimeSection = get<HTMLElement>("runtime-section");
 const viewerPanel = get<HTMLElement>("viewer-panel");
 const publisherPanel = get<HTMLElement>("publisher-panel");
@@ -223,6 +225,7 @@ loginForm.addEventListener("submit", (event) => {
   event.preventDefault();
   void login();
 });
+role.addEventListener("change", renderReachabilityOption);
 button("start-peer-button").addEventListener("click", () => void startPeer());
 button("copy-card-button").addEventListener("click", () => void copyCard());
 button("open-diagnostics-button").addEventListener("click", () => openDiagnostics());
@@ -255,6 +258,7 @@ document.addEventListener("visibilitychange", () => {
   performanceCapture?.recordEvent(`Page visibility changed to ${document.visibilityState}`);
   refreshCameraVisibility();
 });
+renderReachabilityOption();
 
 cameraResults.addEventListener("click", (event) => {
   const control = (event.target as Element).closest<HTMLButtonElement>("button[data-candidate-peer-id]");
@@ -405,6 +409,7 @@ async function startPeer(): Promise<void> {
           }
         },
       },
+      { viewerInboundRelay: viewerInboundRelay.checked },
     );
     if (generation !== currentGeneration) {
       await started.close();
@@ -426,7 +431,9 @@ async function startPeer(): Promise<void> {
       .map((profile) => `${profile.quality} ${profile.width}×${profile.height}@${profile.rateHz}`)
       .join(" · ");
     button("copy-card-button").disabled = false;
-    record(`${capitalized(started.role)} peer ${shortPeer(started.peerId)} is ready`);
+    record(
+      `${capitalized(started.role)} peer ${shortPeer(started.peerId)} is ready (${started.relayBacked ? "relay-backed" : "outbound-only"})`,
+    );
     if (started.role === "viewer") {
       renderWall();
     } else {
@@ -438,6 +445,10 @@ async function startPeer(): Promise<void> {
     showInlineError(authError, errorMessage(error));
     report(error, false);
   }
+}
+
+function renderReachabilityOption(): void {
+  viewerInboundRelayField.hidden = role.value !== "viewer";
 }
 
 async function publish(): Promise<void> {
@@ -851,6 +862,10 @@ async function requestSnapshot(peerId: string): Promise<void> {
   const running = mesh;
   const state = cameras.get(peerId);
   if (!running || !state || state.status !== "live" || state.snapshotPending) return;
+  if (!running.supportsSnapshots) {
+    showToast("Restart Monitor mode with an inbound relay to request snapshots", true);
+    return;
+  }
   state.snapshotPending = true;
   state.snapshotRequestId = undefined;
   renderWall();
@@ -1099,7 +1114,13 @@ function renderCameraTile(state: CameraTileState): HTMLElement {
   if (state.status === "live") {
     actions.append(
       tileAction("freeze", peerId, state.frozen ? "▶" : "Ⅱ", state.frozen ? "Resume local view" : "Freeze local view"),
-      tileAction("snapshot", peerId, "◎", "Verified snapshot", state.snapshotPending),
+      tileAction(
+        "snapshot",
+        peerId,
+        "◎",
+        mesh?.supportsSnapshots ? "Verified snapshot" : "Verified snapshots require an inbound relay",
+        state.snapshotPending || !mesh?.supportsSnapshots,
+      ),
       tileAction("fullscreen", peerId, "⛶", "Full screen"),
       tileAction("menu", peerId, "•••", "Camera actions", false, true),
     );
@@ -1172,7 +1193,10 @@ function openCameraActions(peerId: string): void {
     if (action === "freeze") {
       control.textContent = state.frozen ? "Resume local view" : "Freeze local view";
     } else if (action === "snapshot") {
-      control.disabled = state.snapshotPending;
+      control.disabled = state.snapshotPending || !mesh?.supportsSnapshots;
+      control.title = mesh?.supportsSnapshots
+        ? "Request a verified snapshot"
+        : "Restart Monitor mode with an inbound relay to request snapshots";
     } else if (action === "source-pause" || action === "source-resume") {
       control.dataset.cameraAction = state.sourcePaused ? "source-resume" : "source-pause";
       control.textContent = state.sourcePaused

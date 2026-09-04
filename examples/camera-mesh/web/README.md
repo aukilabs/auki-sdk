@@ -26,8 +26,14 @@ Open the printed loopback URL in at least two tabs, then:
 3. start sharing a synthetic source or grant webcam permission;
 4. choose **Add camera** in the monitor, then add the discovered publisher;
 5. allow the pending Viewer Peer ID in the publisher tab; and
-6. retry the camera tile, then try local freeze, source pause/resume, fullscreen,
-   and a verified snapshot.
+6. retry the camera tile, then try local freeze, source pause/resume, and
+   fullscreen.
+
+**Monitor cameras** is outbound-only by default: it skips an inbound relay
+booking and can immediately dial discovered publishers over their WSS routes.
+If you also want verified snapshots, open **Advanced** before starting and
+enable **Enable an inbound relay**. Snapshot announcements are callbacks to the
+viewer, so that optional flow still needs a reachable return route.
 
 If DDS discovery is unavailable, copy the publisher's sanitized peer card and
 paste it under **Add camera → Connect with a peer card**. Add more publisher
@@ -69,17 +75,16 @@ still letting the operator override it before connecting. Camera Mesh rejects
 JPEG frames larger than 1 MiB.
 
 The application retains only the newest captured frame before each transport
-write. The Web viewer keeps at most two compressed frames behind each active
-decode and shares a bounded, fair decode scheduler across the wall. This small
-queue absorbs short delivery bursts without allowing latency or memory to grow
-without bound. It decodes JPEGs to
-the pixels the current tile can display, hands the resulting bitmap directly
-to the canvas compositor when the browser supports it, and stops decoding
-off-screen or background-tab cameras. Fullscreen naturally requests a larger
-decode on the next frame. Pending compressed frames are coalesced before decode,
-but every completed decode is presented even when a newer frame has arrived.
-The previous complete canvas stays visible until its replacement is ready, so
-the surface never flashes empty between frames.
+write. The Web viewer shares a bounded, fair decode scheduler across the wall
+and keeps a tiny decoded-frame playout buffer per camera. It absorbs short
+delivery bursts and presents on the browser animation clock without allowing
+latency or memory to grow without bound. JPEGs are decoded to the pixels the
+current tile can display and handed directly to the canvas compositor when the
+browser supports it. Off-screen and background-tab cameras stop decoding.
+Fullscreen naturally requests a larger decode on the next frame. Stale frames
+are coalesced when a bounded queue fills, and the previous complete canvas
+stays visible until its replacement is ready, so the surface never flashes
+empty between frames.
 
 The Stream itself remains reliable and ordered, so sustained capture, network,
 or rendering pressure can still reduce throughput or increase frame age; the
@@ -124,7 +129,9 @@ viewer by default. It proves simultaneous independent feeds, DDS discovery,
 peer-card fallback, approval, Low → High → Medium make-before-break switching,
 source pause/resume, diagnostics, snapshot, layout changes, removal,
 reconnection, performance-report export, and responsive mobile layout. Set `AUKI_CAMERA_WALL_COUNT` from
-`2` through `16` to increase the publisher count.
+`2` through `16` to increase the publisher count. The smoke explicitly enables
+the viewer's optional inbound relay because verified snapshots are part of the
+acceptance path.
 
 ## Rust, Python, and Web matrix
 
@@ -147,7 +154,8 @@ directed edges without starting them.
 The matrix intentionally uses exact peer cards rather than DDS discovery. It
 isolates protocol interoperability across Web↔Rust, Web↔Python, and
 Rust↔Python; the browser smoke separately covers the unique browser↔browser
-path and the discovery flow.
+path and the discovery flow. Its Web viewer also opts into an inbound relay so
+the cross-runtime snapshot callback remains covered.
 
 See the [Camera Mesh guide](../README.md) for the shared JSONL contract and the
 complete Phase 2 gate.

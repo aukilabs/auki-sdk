@@ -287,6 +287,10 @@ async function loginAndStart(page, peerRole, label) {
   await page.locator("#domain").selectOption(selectedDomain);
   await page.locator("#role").selectOption(peerRole);
   await page.locator(".advanced-field > summary").click();
+  if (peerRole === "viewer") {
+    assert.equal(await page.locator("#viewer-inbound-relay").isChecked(), false);
+    await page.locator("#viewer-inbound-relay").check();
+  }
   await page.locator("#display-name").fill(`Smoke ${label} ${peerRole}`);
   await startPeerWithRetry(page, peerRole);
   return selectedDomain;

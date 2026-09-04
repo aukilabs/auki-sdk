@@ -177,6 +177,9 @@ textarea { min-height: 8rem; resize: vertical; font-family: ui-monospace, SFMono
 .form-heading h2 { margin: 0; font-size: 1.5rem; }
 .advanced-field > summary { color: var(--muted); font-size: .74rem; font-weight: 700; }
 .advanced-field[open] > summary { margin-bottom: .75rem; }
+.checkbox-field { grid-template-columns: auto 1fr; align-items: start; gap: .65rem; }
+.checkbox-field input { width: 1rem; min-height: 1rem; margin-top: .12rem; padding: 0; accent-color: var(--live); }
+.checkbox-field small { display: block; margin-top: .2rem; color: var(--faint); font-size: .67rem; font-weight: 500; line-height: 1.4; }
 .inline-alert { margin: 1rem 0 0; border: 1px solid rgb(255 127 133 / 35%); border-radius: 8px; padding: .7rem .75rem; background: rgb(255 127 133 / 7%); color: #ffc0c3; font-size: .74rem; overflow-wrap: anywhere; }
 
 .app-shell { min-height: 100vh; min-height: 100dvh; background: var(--bg); }

@@ -49,10 +49,15 @@ export interface CameraPeerCard {
   readonly domainId: string;
   readonly peerId: string;
   readonly protocols: string[];
+  readonly reachability: "outbound-only" | "relay-backed";
   readonly routes: {
-    readonly tcp: string;
-    readonly wss: string;
+    readonly tcp?: string;
+    readonly wss?: string;
   };
+}
+
+export interface CameraMeshStartOptions {
+  readonly viewerInboundRelay?: boolean;
 }
 
 export interface RemoteFrame {
@@ -157,14 +162,18 @@ export class CameraMesh {
     role: CameraRole,
     displayName: string,
     hooks: CameraMeshHooks,
+    options: CameraMeshStartOptions = {},
   ): Promise<CameraMesh> {
     const mode = role === "publisher"
       ? AukiDiscoveryMode.DiscoverAndAdvertise
       : AukiDiscoveryMode.DiscoverOnly;
+    const reachability = role === "publisher" || options.viewerInboundRelay === true
+      ? AukiPeerReachabilityMode.RelayBacked
+      : AukiPeerReachabilityMode.OutboundOnly;
     const peer = await session.startPeerWithDiscovery(
       domainId,
       mode,
-      AukiPeerReachabilityMode.RelayBacked,
+      reachability,
     );
     const mesh = new CameraMesh(peer, role, displayName, hooks);
     try {
@@ -188,6 +197,14 @@ export class CameraMesh {
     return CAMERA_QUALITY_TIERS.map((quality) => cameraStreamProfile(quality));
   }
 
+  get relayBacked(): boolean {
+    return this.peer.relayBacked;
+  }
+
+  get supportsSnapshots(): boolean {
+    return this.peer.relayBacked;
+  }
+
   get connectedPeerIds(): readonly string[] {
     return [...this.remotes.keys()];
   }
@@ -195,14 +212,12 @@ export class CameraMesh {
   card(): CameraPeerCard {
     const tcp = this.peer.tcpRoute;
     const wss = this.peer.wssRoute;
-    if (tcp === undefined || wss === undefined) {
-      throw new Error("camera mesh requires relay-backed browser reachability");
-    }
     return {
       version: 1,
       runtime: "browser",
       domainId: this.domainId,
       peerId: this.peerId,
+      reachability: this.peer.relayBacked ? "relay-backed" : "outbound-only",
       protocols: [
         ...(this.protocols?.servedProtocols ?? []),
         ...(this.isPublishing ? [this.streamProtocol] : []),

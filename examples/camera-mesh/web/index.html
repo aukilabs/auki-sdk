@@ -60,6 +60,13 @@
               <label>Display name
                 <input id="display-name" name="display-name" autocomplete="nickname" placeholder="Camera Mesh browser" maxlength="80" />
               </label>
+              <label class="checkbox-field" id="viewer-inbound-relay-field">
+                <input id="viewer-inbound-relay" name="viewer-inbound-relay" type="checkbox" />
+                <span>
+                  Enable an inbound relay
+                  <small>Optional for monitoring; required for verified snapshots.</small>
+                </span>
+              </label>
             </details>
             <button id="start-peer-button" class="primary wide" type="button">Continue</button>
           </div>

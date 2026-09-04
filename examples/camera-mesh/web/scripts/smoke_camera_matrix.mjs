@@ -608,6 +608,10 @@ async function createBrowserPeer(browserInstance, url, label, role, input) {
   await page.locator("#domain").selectOption(input.domainId);
   await page.locator("#role").selectOption(role);
   await page.locator(".advanced-field > summary").click();
+  if (role === "viewer") {
+    assert.equal(await page.locator("#viewer-inbound-relay").isChecked(), false);
+    await page.locator("#viewer-inbound-relay").check();
+  }
   await page.locator("#display-name").fill(`Matrix ${label}`);
   await startBrowserPeerWithRetry(page, label);
 

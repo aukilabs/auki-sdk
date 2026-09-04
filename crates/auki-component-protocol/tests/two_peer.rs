@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use auki_component_protocol::{
     CatalogResponse, ComponentProtocolClient, ComponentProtocolEndpoint, ComponentProtocolError,
+    RemoteMirrorStart,
 };
 use auki_components::{
     BufferLimits, ComponentRuntime, ComponentSpec, ConfiguredObservableSpec, CursorStart, Exposure,
@@ -275,6 +276,33 @@ async fn catalog_products_and_operables_cross_two_authenticated_peers() {
         tokio::task::yield_now().await;
     }
 
+    output.publish(30, Arc::new(22.0)).unwrap();
+    let mut live_mirror = client
+        .mirror_product_exact_with_start::<f64>(
+            server_peer.peer_id(),
+            server_route.clone(),
+            capture.product().reference(),
+            RemoteMirrorStart::LatestExisting,
+            BufferLimits::entries(8),
+            |_| 8,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        live_mirror.product().buffer().range().first_sequence,
+        Some(2)
+    );
+    assert_eq!(live_mirror.next_sequence(), 3);
+
+    output.publish(40, Arc::new(24.0)).unwrap();
+    let live_sync = live_mirror.sync_once().await.unwrap();
+    assert_eq!(live_sync.accepted, 1);
+    assert_eq!(live_sync.next_sequence, 4);
+    assert_eq!(
+        live_mirror.product().buffer().range().last_sequence,
+        Some(3)
+    );
+
     let invocation = client
         .invoke_exact::<u64, u64>(
             server_peer.peer_id(),
@@ -322,6 +350,7 @@ async fn catalog_products_and_operables_cross_two_authenticated_peers() {
     assert_eq!(revised.components[0].manifest.component_id, "actuator");
 
     mirror.close();
+    live_mirror.close();
     endpoint.close().await.unwrap();
     client_peer.shutdown().await.unwrap();
     server_peer.shutdown().await.unwrap();

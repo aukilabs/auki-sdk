@@ -3,12 +3,12 @@
 use auki_sdk::RelayCircuitRoutes;
 use auki_sdk::{
     AukiKnownPeerEvent, AukiKnownPeerRecvError, AukiKnownPeerSnapshot, AukiKnownPeers, AukiPeer,
-    AukiPeerAuthorityError, AukiPeerBootstrap, AukiPeerBootstrapError, AukiPeerExit,
-    AukiPeerLifecycle, AukiPeerProtocolContext, AukiPeerProtocols, AukiPeerRelayError,
-    AukiPeerShutdownError, AukiPeerStartError, AukiPeerStatus, AukiProtocolError,
-    AukiProtocolRegistration, AukiProtocolRouteAttempt, AukiProtocolSpec, AukiProtocolStream,
-    AuthClient, AuthEnvironment, AuthenticatedPeer, AuthenticatedRouteStream, Credentials,
-    DdsVerificationKeys, DomainChoice, DomainSelection, ExternalAuthorityControl,
+    AukiPeerAuthorityError, AukiPeerBootstrap, AukiPeerBootstrapError, AukiPeerConfig,
+    AukiPeerExit, AukiPeerLifecycle, AukiPeerProtocolContext, AukiPeerProtocols,
+    AukiPeerRelayError, AukiPeerShutdownError, AukiPeerStartError, AukiPeerStatus,
+    AukiProtocolError, AukiProtocolRegistration, AukiProtocolRouteAttempt, AukiProtocolSpec,
+    AukiProtocolStream, AuthClient, AuthEnvironment, AuthenticatedPeer, AuthenticatedRouteStream,
+    Credentials, DdsVerificationKeys, DomainChoice, DomainSelection, ExternalAuthorityControl,
     ExternalAuthorityRefreshRequest, ExternalAuthorityReplaceOutcome, ExternalAuthorityUpdate,
     Identity, PreparedPeer, SignedP2pCredential,
 };
@@ -33,6 +33,21 @@ fn start_persistent_peer_is_public(
     identity_file: &Path,
 ) {
     drop(bootstrap.start_persistent_peer(selection, identity_file));
+}
+
+#[test]
+fn documented_direct_only_bootstrap_configuration_is_public_and_offline() {
+    let client = AuthClient::new(AuthEnvironment::dev()).unwrap();
+    let config = AukiPeerConfig::dev().direct_only();
+    assert!(!config.relay_required());
+
+    // Constructing an async authentication call does not poll it, so this
+    // compile-check mirrors the guide without making a network request.
+    drop(AukiPeerBootstrap::authenticate(
+        client,
+        Credentials::user_password("developer@example.com", "not-used"),
+        config,
+    ));
 }
 
 #[test]

@@ -222,6 +222,63 @@ Everything else uses the same `AukiPeerBootstrap` and `AukiPeer` lifecycle.
 Never embed an App secret in a browser, mobile binary, public repository,
 container image, or log.
 
+## Disable relay booking on a native peer
+
+Relay booking and relay transport are separate responsibilities. The
+`auki-relay-booking` crate talks to DMS to create, renew, and delete a booking.
+`AukiPeer` in `auki-sdk` coordinates that booking with the corresponding
+Circuit Relay v2 reservation, which `auki-p2p` establishes and monitors against
+the assigned relay provider.
+
+Native Rust applications can opt out of that entire path with
+`AukiPeerConfig::direct_only()`. Because `AukiPeerBootstrap::dev` supplies the
+default relay-backed configuration, construct the bootstrap with an explicit
+peer configuration instead:
+
+```rust
+use auki_sdk::{
+    AuthClient, AuthEnvironment, AukiPeerBootstrap, AukiPeerConfig, Credentials,
+};
+
+let bootstrap = AukiPeerBootstrap::authenticate(
+    AuthClient::new(AuthEnvironment::dev())?,
+    Credentials::user_password(email, password),
+    AukiPeerConfig::dev().direct_only(),
+)
+.await?;
+```
+
+This guarantees that the peer makes no relay-booking DMS calls and does not
+open a relay reservation. With no listener or advertised direct route, the
+result is an outbound-only peer. To accept inbound connections, also configure
+`with_listen_addresses` and a dialable `with_advertised_direct_routes` address,
+then distribute that route directly or publish it through DDS.
+
+The repository compile-checks the public bootstrap construction and separately
+starts a direct-only runtime against an intentionally unreachable DMS address.
+Run both regression tests locally with:
+
+```sh
+cargo test --locked -p auki-sdk direct_only
+```
+
+For the native [standard protocol
+playground](../../examples/standard-protocols/native/src/main.rs), use the same
+explicit bootstrap configuration before applying `with_dds_tracker`. Its
+current peer-card output and protected four-peer matrix deliberately require a
+confirmed TCP/WSS relay-route pair, so those relay-specific assertions and the
+peer-card representation must also be adapted for a direct-only experiment.
+Browser peers always require a relay; the current Python and Swift facades also
+expose relay-backed startup only.
+
+There is currently no equivalent Web code sample. A browser application that
+only initiates protocol calls would not inherently need its own inbound relay
+reservation, but the current Web `AukiPeer` contract always acquires one and
+exposes its required `tcpRoute` and `wssRoute`. In particular,
+`AukiDiscoveryMode.DiscoverOnly` disables DDS publication, not relay booking.
+Supporting a genuinely outbound-only browser peer therefore requires a new Web
+runtime/startup mode rather than a different invocation of the existing API.
+
 ## Relay and discovery are separate
 
 Relay allocation makes A reachable. The optional DDS tracker lets B find A's

@@ -527,22 +527,34 @@ impl ComponentProtocolClient {
     where
         T: DeserializeOwned + Send + Sync + 'static,
     {
-        let initial = self
-            .observations(
-                remote_peer_id,
-                ObservationRequest {
-                    product,
-                    selection: start.initial_selection(),
-                },
-            )
-            .await?;
-        RemoteProductMirror::from_initial(
+        let mut stream = deadline(
+            ComponentProtocolOperation::Open,
+            self.protocols
+                .open(remote_peer_id, OBSERVATIONS_PROTOCOL_ID),
+            NETWORK_TIMEOUT,
+        )
+        .await??;
+        let initial = observations_exchange(
+            &mut stream,
+            ObservationRequest {
+                product,
+                selection: start.initial_selection(),
+            },
+        )
+        .await?;
+        let mirror = RemoteProductMirror::from_initial(
             self.clone(),
             RemoteRoute::Configured(remote_peer_id),
             initial,
             limits,
             retained_size,
-        )
+        )?;
+        mirror
+            .observation_stream
+            .lock()
+            .expect("observation stream lock poisoned")
+            .replace(stream);
+        Ok(mirror)
     }
 
     /// Create a portable typed mirror through one exact advertised route.
@@ -582,17 +594,22 @@ impl ComponentProtocolClient {
     where
         T: DeserializeOwned + Send + Sync + 'static,
     {
-        let initial = self
-            .observations_exact(
-                remote_peer_id,
-                route.clone(),
-                ObservationRequest {
-                    product,
-                    selection: start.initial_selection(),
-                },
-            )
-            .await?;
-        RemoteProductMirror::from_initial(
+        let mut stream = deadline(
+            ComponentProtocolOperation::Open,
+            self.protocols
+                .open_exact(remote_peer_id, route.clone(), OBSERVATIONS_PROTOCOL_ID),
+            NETWORK_TIMEOUT,
+        )
+        .await??;
+        let initial = observations_exchange(
+            &mut stream,
+            ObservationRequest {
+                product,
+                selection: start.initial_selection(),
+            },
+        )
+        .await?;
+        let mirror = RemoteProductMirror::from_initial(
             self.clone(),
             RemoteRoute::Exact {
                 peer_id: remote_peer_id,
@@ -601,7 +618,13 @@ impl ComponentProtocolClient {
             initial,
             limits,
             retained_size,
-        )
+        )?;
+        mirror
+            .observation_stream
+            .lock()
+            .expect("observation stream lock poisoned")
+            .replace(stream);
+        Ok(mirror)
     }
 
     #[allow(clippy::too_many_arguments)]

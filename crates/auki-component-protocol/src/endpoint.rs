@@ -148,12 +148,7 @@ impl ComponentProtocolEndpoint {
             protocols.register(observations_spec()?, move |mut stream| {
                 let state = Arc::clone(&observation_state);
                 async move {
-                    let _ = deadline(
-                        ComponentProtocolOperation::Exchange,
-                        serve_observations(&mut stream, &state),
-                        NETWORK_TIMEOUT,
-                    )
-                    .await;
+                    serve_observation_session(&mut stream, &state).await;
                     let _ = stream.close().await;
                 }
             })?;
@@ -719,9 +714,12 @@ enum RemoteRoute {
 /// Call [`RemoteProductMirror::sync_once`] from the host's normal async task.
 /// A Component consumes `product()` through the same `configured_buffer_input`
 /// API used for a local Product; only the producer and Product peer are remote.
+/// Successive syncs reuse one authenticated observation stream and reconnect
+/// after transport failure.
 pub struct RemoteProductMirror<T> {
     client: ComponentProtocolClient,
     route: RemoteRoute,
+    observation_stream: Mutex<Option<AuthenticatedRouteStream>>,
     product: RetainedProduct<T>,
     next_sequence: u64,
     batch_size: u32,
@@ -750,6 +748,7 @@ where
         let mut mirror = Self {
             client,
             route,
+            observation_stream: Mutex::new(None),
             product,
             next_sequence: 0,
             batch_size: 256,
@@ -790,13 +789,28 @@ where
                 max_observations: self.batch_size,
             },
         };
-        let batch = match &self.route {
-            #[cfg(not(target_arch = "wasm32"))]
-            RemoteRoute::Configured(peer_id) => self.client.observations(*peer_id, request).await?,
-            RemoteRoute::Exact { peer_id, route } => {
-                self.client
-                    .observations_exact(*peer_id, route.clone(), request)
-                    .await?
+        let mut stream = self
+            .observation_stream
+            .lock()
+            .expect("observation stream lock poisoned")
+            .take();
+        if stream.is_none() {
+            stream = Some(self.open_observation_stream().await?);
+        }
+        let mut stream = stream.expect("observation stream was opened above");
+        let batch = match observations_exchange(&mut stream, request).await {
+            Ok(batch) => {
+                self.observation_stream
+                    .lock()
+                    .expect("observation stream lock poisoned")
+                    .replace(stream);
+                batch
+            }
+            Err(error) => {
+                // A peer running the original one-request server closes after
+                // every response. Dropping the stale stream here lets the next
+                // sync reconnect, so the persistent client remains compatible.
+                return Err(error);
             }
         };
         let gap = batch.gap;
@@ -809,7 +823,42 @@ where
         })
     }
 
+    async fn open_observation_stream(
+        &self,
+    ) -> Result<AuthenticatedRouteStream, ComponentProtocolError> {
+        let stream = match &self.route {
+            #[cfg(not(target_arch = "wasm32"))]
+            RemoteRoute::Configured(peer_id) => {
+                deadline(
+                    ComponentProtocolOperation::Open,
+                    self.client
+                        .protocols
+                        .open(*peer_id, OBSERVATIONS_PROTOCOL_ID),
+                    NETWORK_TIMEOUT,
+                )
+                .await??
+            }
+            RemoteRoute::Exact { peer_id, route } => {
+                deadline(
+                    ComponentProtocolOperation::Open,
+                    self.client.protocols.open_exact(
+                        *peer_id,
+                        route.clone(),
+                        OBSERVATIONS_PROTOCOL_ID,
+                    ),
+                    NETWORK_TIMEOUT,
+                )
+                .await??
+            }
+        };
+        Ok(stream)
+    }
+
     pub fn close(&self) {
+        self.observation_stream
+            .lock()
+            .expect("observation stream lock poisoned")
+            .take();
         self.product.buffer().close();
     }
 
@@ -907,7 +956,31 @@ fn network_catalog_snapshot(state: &ServiceState) -> auki_components::CatalogSna
     snapshot
 }
 
-async fn serve_observations<S>(stream: &mut S, state: &ServiceState) -> Result<(), ServiceError>
+async fn serve_observation_session<S>(stream: &mut S, state: &ServiceState)
+where
+    S: futures::AsyncRead + futures::AsyncWrite + Unpin,
+{
+    loop {
+        match deadline(
+            ComponentProtocolOperation::Exchange,
+            serve_observation_request(stream, state),
+            NETWORK_TIMEOUT,
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            // EOF is the normal end of a one-request legacy client. Timeouts
+            // and malformed requests also fence this session without affecting
+            // other authenticated streams.
+            Ok(Err(_)) | Err(_) => return,
+        }
+    }
+}
+
+async fn serve_observation_request<S>(
+    stream: &mut S,
+    state: &ServiceState,
+) -> Result<(), ServiceError>
 where
     S: futures::AsyncRead + futures::AsyncWrite + Unpin,
 {
@@ -1216,12 +1289,24 @@ where
     T: DeserializeOwned,
 {
     let mut stream = deadline(ComponentProtocolOperation::Open, opening, NETWORK_TIMEOUT).await??;
+    let exchange = observations_exchange(&mut stream, request).await;
+    let cleanup = close_stream(&mut stream).await;
+    prefer_primary(exchange, cleanup)
+}
+
+async fn observations_exchange<T>(
+    stream: &mut AuthenticatedRouteStream,
+    request: ObservationRequest,
+) -> Result<RemoteObservations<T>, ComponentProtocolError>
+where
+    T: DeserializeOwned,
+{
     let requested = request.product.clone();
-    let exchange = deadline(
+    deadline(
         ComponentProtocolOperation::Exchange,
         async {
-            write_json(&mut stream, &request).await?;
-            let header: ObservationBatchHeader = read_json(&mut stream).await?;
+            write_json(stream, &request).await?;
+            let header: ObservationBatchHeader = read_json(stream).await?;
             let ObservationBatchHeader::Accepted {
                 product,
                 product_manifest_hash,
@@ -1255,7 +1340,7 @@ where
             }
             let mut decoded = Vec::with_capacity(observations as usize);
             for _ in 0..observations {
-                let record: ObservationRecordHeader = read_json(&mut stream).await?;
+                let record: ObservationRecordHeader = read_json(stream).await?;
                 if record.output != producer_reference
                     || record.payload_encoding != "application/json"
                 {
@@ -1263,7 +1348,7 @@ where
                         "observation record violates the Product contract".to_owned(),
                     ));
                 }
-                let payload = read_payload(&mut stream, record.payload_bytes).await?;
+                let payload = read_payload(stream, record.payload_bytes).await?;
                 let payload = serde_json::from_slice(&payload)
                     .map_err(|error| ComponentProtocolError::Codec(error.to_string()))?;
                 decoded.push(Observation {
@@ -1284,9 +1369,7 @@ where
         NETWORK_TIMEOUT,
     )
     .await
-    .and_then(|result| result);
-    let cleanup = close_stream(&mut stream).await;
-    prefer_primary(exchange, cleanup)
+    .and_then(|result| result)
 }
 
 struct PreparedOperation {

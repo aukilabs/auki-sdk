@@ -303,6 +303,15 @@ async fn catalog_products_and_operables_cross_two_authenticated_peers() {
         Some(3)
     );
 
+    output.publish(50, Arc::new(26.0)).unwrap();
+    let second_live_sync = live_mirror.sync_once().await.unwrap();
+    assert_eq!(second_live_sync.accepted, 1);
+    assert_eq!(second_live_sync.next_sequence, 5);
+    assert_eq!(
+        live_mirror.product().buffer().range().last_sequence,
+        Some(4)
+    );
+
     let invocation = client
         .invoke_exact::<u64, u64>(
             server_peer.peer_id(),

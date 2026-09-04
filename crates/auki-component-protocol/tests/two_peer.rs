@@ -312,6 +312,30 @@ async fn catalog_products_and_operables_cross_two_authenticated_peers() {
         Some(4)
     );
 
+    assert!(
+        !live_mirror
+            .rebind_exact_route(server_route.clone())
+            .unwrap()
+    );
+    assert!(
+        live_mirror
+            .rebind_exact_route(Multiaddr::from_str("/ip4/127.0.0.1/tcp/9").unwrap())
+            .unwrap()
+    );
+    assert!(
+        live_mirror
+            .rebind_exact_route(server_route.clone())
+            .unwrap()
+    );
+    output.publish(60, Arc::new(28.0)).unwrap();
+    let rebound_sync = live_mirror.sync_once().await.unwrap();
+    assert_eq!(rebound_sync.accepted, 1);
+    assert_eq!(rebound_sync.next_sequence, 6);
+    assert_eq!(
+        live_mirror.product().buffer().range().last_sequence,
+        Some(5)
+    );
+
     let invocation = client
         .invoke_exact::<u64, u64>(
             server_peer.peer_id(),

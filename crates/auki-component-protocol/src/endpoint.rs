@@ -780,6 +780,34 @@ where
         Ok(self)
     }
 
+    /// Rebind an exact-route mirror without replacing its imported Product or
+    /// resetting its source cursor.
+    ///
+    /// Discovery routes are leases and may change while a Product remains the
+    /// same. When the route differs, the current authenticated stream is
+    /// dropped so the next [`Self::sync_once`] opens through the replacement.
+    /// Configured-route mirrors reject this operation because their route
+    /// selection remains owned by [`AukiPeerProtocols`].
+    pub fn rebind_exact_route(
+        &mut self,
+        replacement: Multiaddr,
+    ) -> Result<bool, ComponentProtocolError> {
+        let RemoteRoute::Exact { route, .. } = &mut self.route else {
+            return Err(ComponentProtocolError::InvalidRequest(
+                "only an exact-route mirror can be rebound to a discovered route".to_owned(),
+            ));
+        };
+        if *route == replacement {
+            return Ok(false);
+        }
+        *route = replacement;
+        self.observation_stream
+            .lock()
+            .expect("observation stream lock poisoned")
+            .take();
+        Ok(true)
+    }
+
     /// Fetch and append one bounded batch, preserving source sequence and time.
     pub async fn sync_once(&mut self) -> Result<RemoteProductSync, ComponentProtocolError> {
         let request = ObservationRequest {

@@ -8,11 +8,12 @@
 use std::sync::{Arc, Mutex};
 
 use auki_components::{
-    CameraPayloadContract, Component, ComponentBuildError, ComponentRuntime, ComponentSpec,
-    ConfiguredBufferInput, ConfiguredObservable, ConfiguredObservableSpec, ContractType,
-    CursorStart, Exposure, InputPort, ObservableContract, Observation, ObservationAccess,
-    PayloadContract, ProductForm, ProductInputContract, RetainedProduct, StructuredPayloadContract,
-    VideoFrame,
+    CameraPayloadContract, Component, ComponentBuildError, ComponentReference, ComponentRuntime,
+    ComponentSpec, ConfiguredBufferInput, ConfiguredObservable, ConfiguredObservableSpec,
+    ContractType, CursorStart, Exposure, InputPort, InvocationError, InvocationOrdering,
+    ObservableContract, Observation, ObservationAccess, Operable, OperableContract,
+    OutputReference, PayloadContract, ProductForm, ProductInputContract, ProductReference,
+    RetainedProduct, StructuredPayloadContract, VideoFrame,
 };
 use auki_datatypes::detection::DetectionFrame;
 use auki_registry::{Camera, DetectorBody, DetectorInput, Qr, RegistryRef, SensorBody};
@@ -45,6 +46,9 @@ pub struct RegisteredQrDetector {
     inner: RegisteredCameraDetector,
 }
 
+type QrProductResolver =
+    Arc<dyn Fn(&ProductReference) -> Option<RetainedProduct<VideoFrame>> + Send + Sync>;
+
 /// A live QR Detector Component bound directly to one typed camera Buffer
 /// Product.
 ///
@@ -55,7 +59,8 @@ pub struct QrDetectorComponent {
     component: Component,
     detections: ConfiguredObservable<QrDetections>,
     detector: Arc<Mutex<QrDetector>>,
-    input: ConfiguredBufferInput<VideoFrame>,
+    input: Arc<Mutex<ConfiguredBufferInput<VideoFrame>>>,
+    set_product: Option<Operable<SetQrDetectorProduct, AppliedQrDetectorProduct>>,
     errors: Arc<Mutex<Vec<String>>>,
 }
 
@@ -73,8 +78,17 @@ impl QrDetectorComponent {
     }
 
     /// The currently selected camera Buffer Product binding.
-    pub fn input(&self) -> &ConfiguredBufferInput<VideoFrame> {
-        &self.input
+    pub fn input(&self) -> std::sync::MutexGuard<'_, ConfiguredBufferInput<VideoFrame>> {
+        self.input.lock().unwrap()
+    }
+
+    /// Typed control for selecting this Detector Component's camera Buffer
+    /// Product. Present only when constructed with
+    /// [`QrDetector::bind_product_operable`].
+    pub fn set_product_operable(
+        &self,
+    ) -> Option<&Operable<SetQrDetectorProduct, AppliedQrDetectorProduct>> {
+        self.set_product.as_ref()
     }
 
     /// Terminal input or frame-contract errors reported by the detector's
@@ -86,7 +100,7 @@ impl QrDetectorComponent {
     /// Move this stable Detector Component to a replacement camera Buffer
     /// Product without creating a second webcam identity or Sensor Log.
     pub fn replace_product(
-        &mut self,
+        &self,
         product: &RetainedProduct<VideoFrame>,
     ) -> Result<(), QrDetectorError> {
         let camera = typed_camera_contract(product)?;
@@ -102,13 +116,14 @@ impl QrDetectorComponent {
             camera,
             Arc::clone(&self.errors),
         );
+        let mut current = self.input.lock().unwrap();
         let replacement = self.component.replace_configured_buffer_input(
-            &self.input,
+            &current,
             product,
             CursorStart::FromSequence(0),
             &input,
         )?;
-        self.input = replacement;
+        *current = replacement;
         Ok(())
     }
 }
@@ -204,6 +219,32 @@ pub const QR_DETECTIONS_DATATYPE: &str = "auki.qr-detections";
 
 /// Component schema emitted by [`QrDetectorComponent`].
 pub const QR_DETECTIONS_SCHEMA: &str = "auki.qr-detections/v1";
+
+/// Instruction selecting the exact camera Buffer Product consumed by a QR
+/// Detector Component.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SetQrDetectorProduct {
+    pub product: ProductReference,
+}
+
+impl ContractType for SetQrDetectorProduct {
+    const DATATYPE: &'static str = "auki.qr-detector.set-product/v1";
+}
+
+/// Result of applying a QR Detector Product selection.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct AppliedQrDetectorProduct {
+    pub changed: bool,
+    pub previous_product: ProductReference,
+    pub product: ProductReference,
+    pub producer: OutputReference,
+    pub detector: ComponentReference,
+    pub controller: ComponentReference,
+}
+
+impl ContractType for AppliedQrDetectorProduct {
+    const DATATYPE: &'static str = "auki.qr-detector.applied-product/v1";
+}
 
 /// Coordinates of one QR module-region corner in source-frame pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -329,24 +370,70 @@ impl QrDetector {
         output_id: impl Into<String>,
         product: &RetainedProduct<VideoFrame>,
     ) -> Result<QrDetectorComponent, QrDetectorError> {
+        self.bind_product_inner(runtime, component_id, output_id, product, None)
+    }
+
+    /// Construct and expose a typed Detector Component whose camera Product
+    /// input can be reconfigured through a declared `set_product` Operable.
+    ///
+    /// `resolve_product` is the host's typed Product registry. The Operable
+    /// resolves an exact [`ProductReference`], validates its immutable camera
+    /// contract, and atomically replaces the Component's configured `frames`
+    /// input. Only the supplied controller Component is authorized.
+    pub fn bind_product_operable(
+        self,
+        runtime: &ComponentRuntime,
+        component_id: impl Into<String>,
+        output_id: impl Into<String>,
+        product: &RetainedProduct<VideoFrame>,
+        controller: ComponentReference,
+        resolve_product: impl Fn(&ProductReference) -> Option<RetainedProduct<VideoFrame>>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Result<QrDetectorComponent, QrDetectorError> {
+        self.bind_product_inner(
+            runtime,
+            component_id,
+            output_id,
+            product,
+            Some((controller, Arc::new(resolve_product))),
+        )
+    }
+
+    fn bind_product_inner(
+        self,
+        runtime: &ComponentRuntime,
+        component_id: impl Into<String>,
+        output_id: impl Into<String>,
+        product: &RetainedProduct<VideoFrame>,
+        control: Option<(ComponentReference, QrProductResolver)>,
+    ) -> Result<QrDetectorComponent, QrDetectorError> {
         let camera = typed_camera_contract(product)?;
-        let component = runtime.component(
-            ComponentSpec::new(component_id)
-                .product_input(ProductInputContract {
-                    name: "frames".into(),
-                    form: ProductForm::Buffer,
-                    datatype: VideoFrame::DATATYPE.into(),
-                    schema: "auki.video-frame/v1".into(),
-                    exposure: Exposure::Cluster,
-                })
-                .observable(ObservableContract {
-                    name: "detections".into(),
-                    datatype: QrDetections::DATATYPE.into(),
-                    schema: QR_DETECTIONS_SCHEMA.into(),
-                    access: vec![ObservationAccess::FollowNew],
-                    exposure: Exposure::Cluster,
-                }),
-        )?;
+        let mut component_spec = ComponentSpec::new(component_id)
+            .product_input(ProductInputContract {
+                name: "frames".into(),
+                form: ProductForm::Buffer,
+                datatype: VideoFrame::DATATYPE.into(),
+                schema: "auki.video-frame/v1".into(),
+                exposure: Exposure::Cluster,
+            })
+            .observable(ObservableContract {
+                name: "detections".into(),
+                datatype: QrDetections::DATATYPE.into(),
+                schema: QR_DETECTIONS_SCHEMA.into(),
+                access: vec![ObservationAccess::FollowNew],
+                exposure: Exposure::Cluster,
+            });
+        if control.is_some() {
+            component_spec = component_spec.operable(OperableContract {
+                name: "set_product".into(),
+                instruction: SetQrDetectorProduct::DATATYPE.into(),
+                result: AppliedQrDetectorProduct::DATATYPE.into(),
+                exposure: Exposure::Cluster,
+            });
+        }
+        let component = runtime.component(component_spec)?;
         let mut output_spec = ConfiguredObservableSpec::new(
             "detections",
             output_id,
@@ -369,18 +456,88 @@ impl QrDetector {
             camera,
             Arc::clone(&errors),
         );
-        let input = component.configured_buffer_input(
+        let input = Arc::new(Mutex::new(component.configured_buffer_input(
             "frames",
             product,
             CursorStart::FromSequence(0),
             &input_port,
-        )?;
+        )?));
+        let set_product = if let Some((controller, resolve_product)) = control {
+            let authorizer = controller.clone();
+            let result_controller = controller;
+            let result_detector = component.reference().clone();
+            let operation_component = component.clone();
+            let operation_input = Arc::clone(&input);
+            let operation_detector = Arc::clone(&detector);
+            let operation_detections = detections.clone();
+            let operation_errors = Arc::clone(&errors);
+            Some(
+                component.operable_ordered::<SetQrDetectorProduct, AppliedQrDetectorProduct>(
+                    "set_product",
+                    InvocationOrdering::SerialInAcceptanceOrder,
+                    move |context| {
+                        context.caller_peer_id == authorizer.peer_id
+                            && context.caller_component_id == authorizer.component_id
+                    },
+                    move |_context, instruction| {
+                        let product = resolve_product(&instruction.product).ok_or_else(|| {
+                            InvocationError::Rejected(format!(
+                                "{}.{} is not an available compatible camera Buffer Product",
+                                instruction.product.peer_id, instruction.product.product_id
+                            ))
+                        })?;
+                        let camera = typed_camera_contract(&product)
+                            .map_err(|error| InvocationError::Rejected(error.to_string()))?;
+                        if product.producer.clock_id != operation_detections.manifest().clock_id {
+                            return Err(InvocationError::Rejected(
+                                QrDetectorError::ProductClockMismatch {
+                                    expected: operation_detections.manifest().clock_id.clone(),
+                                    actual: product.producer.clock_id.clone(),
+                                }
+                                .to_string(),
+                            ));
+                        }
+                        let mut current = operation_input.lock().unwrap();
+                        let previous_product = current.manifest().product.reference();
+                        let changed = previous_product != instruction.product;
+                        if changed {
+                            let replacement_port = qr_product_input(
+                                Arc::clone(&operation_detector),
+                                operation_detections.clone(),
+                                camera,
+                                Arc::clone(&operation_errors),
+                            );
+                            let replacement = operation_component
+                                .replace_configured_buffer_input(
+                                    &current,
+                                    &product,
+                                    CursorStart::FromSequence(0),
+                                    &replacement_port,
+                                )
+                                .map_err(|error| InvocationError::Rejected(error.to_string()))?;
+                            *current = replacement;
+                        }
+                        Ok(AppliedQrDetectorProduct {
+                            changed,
+                            previous_product,
+                            product: instruction.product,
+                            producer: product.manifest.producer,
+                            detector: result_detector.clone(),
+                            controller: result_controller.clone(),
+                        })
+                    },
+                )?,
+            )
+        } else {
+            None
+        };
         component.expose()?;
         Ok(QrDetectorComponent {
             component,
             detections,
             detector,
             input,
+            set_product,
             errors,
         })
     }
@@ -951,7 +1108,7 @@ mod tests {
                 |frame| frame.bytes.len(),
             )
             .unwrap();
-        let mut detector = QrDetector::default()
+        let detector = QrDetector::default()
             .bind_product(
                 &runtime,
                 "qr-detector",
@@ -1076,6 +1233,115 @@ mod tests {
         );
         assert_eq!(detector.input().stats().delivered, 1);
         assert!(detector.errors().is_empty());
+    }
+
+    #[test]
+    fn typed_set_product_operable_rebinds_the_cataloged_input() {
+        use auki_components::{
+            BufferLimits, ConfiguredObservableSpec, InvocationContext, ObservableContract,
+            ObservationAccess,
+        };
+        use std::collections::HashMap;
+
+        let runtime = ComponentRuntime::new("peer-a");
+        let controller = runtime
+            .component(ComponentSpec::new("operator-console"))
+            .unwrap();
+        controller.expose().unwrap();
+        let camera = runtime
+            .component(
+                ComponentSpec::new("webcam-capture").observable(ObservableContract {
+                    name: "frames".into(),
+                    datatype: VideoFrame::DATATYPE.into(),
+                    schema: "auki.video-frame/v1".into(),
+                    access: vec![ObservationAccess::FollowNew],
+                    exposure: Exposure::Cluster,
+                }),
+            )
+            .unwrap();
+        let first_output = camera
+            .configured_observable::<VideoFrame>(ConfiguredObservableSpec::new(
+                "frames",
+                "webcam-jpeg-output-1",
+                "monotonic-ns",
+                typed_jpeg_payload(64, 64, 10),
+            ))
+            .unwrap();
+        camera.expose().unwrap();
+        let first_capture = runtime
+            .capture_buffer(
+                "webcam-frame-history",
+                &first_output,
+                BufferLimits::entries(32),
+                |frame| frame.bytes.len(),
+            )
+            .unwrap();
+        let replacement = camera
+            .replace_configured_observable::<VideoFrame>(
+                &first_output,
+                ConfiguredObservableSpec::new(
+                    "frames",
+                    "webcam-jpeg-output-2",
+                    "monotonic-ns",
+                    typed_jpeg_payload(64, 64, 5),
+                ),
+                2,
+            )
+            .unwrap();
+        let second_capture = runtime
+            .capture_buffer(
+                "webcam-frame-history-2",
+                &replacement.replacement,
+                BufferLimits::entries(32),
+                |frame| frame.bytes.len(),
+            )
+            .unwrap();
+        let sources = Arc::new(Mutex::new(HashMap::from([
+            (first_capture.product().reference(), first_capture.product()),
+            (
+                second_capture.product().reference(),
+                second_capture.product(),
+            ),
+        ])));
+        let resolved_sources = Arc::clone(&sources);
+        let detector = QrDetector::default()
+            .bind_product_operable(
+                &runtime,
+                "qr-detector",
+                "qr-detections-output-1",
+                &first_capture.product(),
+                controller.reference().clone(),
+                move |reference| resolved_sources.lock().unwrap().get(reference).cloned(),
+            )
+            .unwrap();
+        let target = second_capture.product().reference();
+        let applied = detector
+            .set_product_operable()
+            .unwrap()
+            .invoke(
+                InvocationContext {
+                    invocation_id: "set-qr-source-1".into(),
+                    caller_peer_id: controller.reference().peer_id.clone(),
+                    caller_component_id: controller.reference().component_id.clone(),
+                },
+                SetQrDetectorProduct {
+                    product: target.clone(),
+                },
+            )
+            .unwrap();
+
+        assert!(applied.result.changed);
+        assert_eq!(applied.result.product, target);
+        assert_eq!(detector.input().manifest().product.reference(), target);
+        let cataloged = runtime.catalog().component("qr-detector").unwrap();
+        assert_eq!(
+            cataloged.current_product_inputs["frames"]
+                .manifest
+                .product
+                .reference(),
+            target
+        );
+        assert_eq!(cataloged.manifest.operables[0].name, "set_product");
     }
 
     #[test]

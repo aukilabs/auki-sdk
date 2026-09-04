@@ -15,8 +15,8 @@ they need both.
 ## Networking
 
 `auki_sdk::AukiPeer` is the networking facade. It owns one authenticated Peer
-ID in one selected DDS Domain, credential renewal, transport, relay booking,
-routes, protocol registration, fencing, and shutdown.
+ID in one selected DDS Domain, credential renewal, transport, optional relay
+booking and routes, protocol registration, fencing, and shutdown.
 
 An `AukiPeer` serves no application protocol by default. Enable only the
 `auki-protocols` families you need, then explicitly mount their `Endpoint`.

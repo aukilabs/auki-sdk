@@ -52,21 +52,43 @@ use crate::{
 };
 
 const RELAY_RETRY: Duration = Duration::from_secs(2);
+const AUTHORITY_RETRY: Duration = Duration::from_secs(2);
 const CLEANUP_STAGE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// One browser Peer with renewable DDS authority and mandatory relay reachability.
+/// One browser Peer with renewable DDS authority and optional relay reachability.
 pub struct AukiPeer {
     node: Rc<BrowserNode>,
     reachability: AukiPeerReachability,
     protocols: AukiPeerProtocols,
     discovery: Option<DdsDiscovery>,
     discovery_publisher: Option<BrowserDdsPublisher>,
-    relay: RelaySupervisor,
+    supervisor: BrowserSupervisor,
     closed: bool,
 }
 
-/// Confirmed TCP/WSS routes for reaching one browser Peer through one relay slot.
-pub type AukiPeerReachability = RelayCircuitRoutes;
+/// Whether a browser Peer owns public relay-backed reachability.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AukiPeerReachability {
+    /// The Peer can dial remote WSS relay routes but owns no booking or public route.
+    OutboundOnly,
+    /// The Peer owns one confirmed relay reservation and its TCP/WSS route pair.
+    RelayBacked(RelayCircuitRoutes),
+}
+
+impl AukiPeerReachability {
+    /// Confirmed relay routes, or `None` when this Peer is outbound-only.
+    pub fn relay_routes(&self) -> Option<&RelayCircuitRoutes> {
+        match self {
+            Self::OutboundOnly => None,
+            Self::RelayBacked(routes) => Some(routes),
+        }
+    }
+
+    /// Whether the Peer owns a relay booking and can publish an inbound route.
+    pub const fn is_relay_backed(&self) -> bool {
+        matches!(self, Self::RelayBacked(_))
+    }
+}
 
 /// Clone-only observation of one browser Peer's terminal lifecycle result.
 ///
@@ -78,19 +100,20 @@ pub struct AukiPeerLifecycle {
 }
 
 impl AukiPeerLifecycle {
-    /// Wait until the browser Peer and its relay supervisor have stopped.
+    /// Wait until the browser Peer and its lifecycle supervisor have stopped.
     pub async fn wait_stopped(&self) -> AukiPeerExit {
         peer_exit(wait_for_supervisor(self.stopped.clone()).await)
     }
 }
 
 impl AukiPeer {
-    /// Start one browser Peer after its WSS reservation and dual routes are publishable.
+    /// Start one browser Peer with its configured outbound-only or relay-backed reachability.
     pub async fn start(
         identity: Identity,
         prepared: PreparedPeer,
         config: AukiPeerConfig,
     ) -> Result<Self, AukiPeerError> {
+        validate_browser_configuration(&config)?;
         let identity_peer_id = identity.peer_id();
         if prepared.peer_id != identity_peer_id {
             return Err(AukiPeerError::IdentityMismatch {
@@ -127,91 +150,134 @@ impl AukiPeer {
                 expires_at: credential_expires_at,
             },
         ));
-        let relay_policy = config.relay().ok_or(AukiPeerError::RelayRequired)?;
-        let relay_client = RelayBookingClient::new(config.dms_base().clone(), authority.clone())?;
-        let acquisition_booking_id = Cell::new(None);
-        let ready = {
-            let acquisition =
-                acquire_ready_relay(&relay_client, &acquisition_booking_id, relay_policy).fuse();
-            let stopped = node.wait_stopped().fuse();
-            pin_mut!(acquisition, stopped);
-            match select(acquisition, stopped).await {
-                Either::Left((Ok(ready), _)) => ready,
-                Either::Left((Err(error), _)) => {
-                    cleanup_startup(
-                        &node,
-                        &relay_client,
-                        &authority,
-                        acquisition_booking_id.get(),
-                    )
-                    .await;
-                    return Err(error);
-                }
-                Either::Right((status, _)) => {
-                    cleanup_startup(
-                        &node,
-                        &relay_client,
-                        &authority,
-                        acquisition_booking_id.get(),
-                    )
-                    .await;
-                    return Err(AukiPeerError::NodeStoppedDuringStartup { status });
-                }
-            }
-        };
-        let reachability = match relay_routes(&ready, identity_peer_id) {
-            Ok(routes) => routes,
-            Err(error) => {
-                cleanup_startup(&node, &relay_client, &authority, Some(ready.booking_id)).await;
-                return Err(error);
-            }
-        };
-
-        let reservation = {
-            let reservation = node.reserve_relay(ready.provider.clone()).fuse();
-            let stopped = node.wait_stopped().fuse();
-            pin_mut!(reservation, stopped);
-            match select(reservation, stopped).await {
-                Either::Left((Ok(reservation), _)) => reservation,
-                Either::Left((Err(error), _)) => {
-                    cleanup_startup(&node, &relay_client, &authority, Some(ready.booking_id)).await;
-                    return Err(error.into());
-                }
-                Either::Right((status, _)) => {
-                    cleanup_startup(&node, &relay_client, &authority, Some(ready.booking_id)).await;
-                    return Err(AukiPeerError::NodeStoppedDuringStartup { status });
-                }
-            }
-        };
-        if reservation.publishable_route() != Some(reachability.wss()) {
-            cleanup_startup(&node, &relay_client, &authority, Some(ready.booking_id)).await;
-            return Err(AukiPeerError::RelayReservationMismatch);
-        }
-        let ready = {
-            let confirmation = confirm_ready_relay(&relay_client, &ready, relay_policy).fuse();
-            let stopped = node.wait_stopped().fuse();
-            pin_mut!(confirmation, stopped);
-            match select(confirmation, stopped).await {
-                Either::Left((Ok(ready), _)) => ready,
-                Either::Left((Err(error), _)) => {
-                    cleanup_startup(&node, &relay_client, &authority, Some(ready.booking_id)).await;
-                    return Err(error);
-                }
-                Either::Right((status, _)) => {
-                    cleanup_startup(&node, &relay_client, &authority, Some(ready.booking_id)).await;
-                    return Err(AukiPeerError::NodeStoppedDuringStartup { status });
-                }
-            }
-        };
         let protocols = AukiPeerProtocols::new(Rc::clone(&node), node.domain_id());
-        let relay = RelaySupervisor::start(
-            relay_client,
-            Arc::clone(&authority),
-            Rc::clone(&node),
-            protocols.clone(),
-            ready,
-            relay_policy,
-        );
+        let (reachability, supervisor) = match config.relay() {
+            Some(relay_policy) => {
+                let relay_client =
+                    RelayBookingClient::new(config.dms_base().clone(), authority.clone())?;
+                let acquisition_booking_id = Cell::new(None);
+                let ready = {
+                    let acquisition =
+                        acquire_ready_relay(&relay_client, &acquisition_booking_id, relay_policy)
+                            .fuse();
+                    let stopped = node.wait_stopped().fuse();
+                    pin_mut!(acquisition, stopped);
+                    match select(acquisition, stopped).await {
+                        Either::Left((Ok(ready), _)) => ready,
+                        Either::Left((Err(error), _)) => {
+                            cleanup_startup(
+                                &node,
+                                &relay_client,
+                                &authority,
+                                acquisition_booking_id.get(),
+                            )
+                            .await;
+                            return Err(error);
+                        }
+                        Either::Right((status, _)) => {
+                            cleanup_startup(
+                                &node,
+                                &relay_client,
+                                &authority,
+                                acquisition_booking_id.get(),
+                            )
+                            .await;
+                            return Err(AukiPeerError::NodeStoppedDuringStartup { status });
+                        }
+                    }
+                };
+                let routes = match relay_routes(&ready, identity_peer_id) {
+                    Ok(routes) => routes,
+                    Err(error) => {
+                        cleanup_startup(&node, &relay_client, &authority, Some(ready.booking_id))
+                            .await;
+                        return Err(error);
+                    }
+                };
+
+                let reservation = {
+                    let reservation = node.reserve_relay(ready.provider.clone()).fuse();
+                    let stopped = node.wait_stopped().fuse();
+                    pin_mut!(reservation, stopped);
+                    match select(reservation, stopped).await {
+                        Either::Left((Ok(reservation), _)) => reservation,
+                        Either::Left((Err(error), _)) => {
+                            cleanup_startup(
+                                &node,
+                                &relay_client,
+                                &authority,
+                                Some(ready.booking_id),
+                            )
+                            .await;
+                            return Err(error.into());
+                        }
+                        Either::Right((status, _)) => {
+                            cleanup_startup(
+                                &node,
+                                &relay_client,
+                                &authority,
+                                Some(ready.booking_id),
+                            )
+                            .await;
+                            return Err(AukiPeerError::NodeStoppedDuringStartup { status });
+                        }
+                    }
+                };
+                if reservation.publishable_route() != Some(routes.wss()) {
+                    cleanup_startup(&node, &relay_client, &authority, Some(ready.booking_id)).await;
+                    return Err(AukiPeerError::RelayReservationMismatch);
+                }
+                let ready = {
+                    let confirmation =
+                        confirm_ready_relay(&relay_client, &ready, relay_policy).fuse();
+                    let stopped = node.wait_stopped().fuse();
+                    pin_mut!(confirmation, stopped);
+                    match select(confirmation, stopped).await {
+                        Either::Left((Ok(ready), _)) => ready,
+                        Either::Left((Err(error), _)) => {
+                            cleanup_startup(
+                                &node,
+                                &relay_client,
+                                &authority,
+                                Some(ready.booking_id),
+                            )
+                            .await;
+                            return Err(error);
+                        }
+                        Either::Right((status, _)) => {
+                            cleanup_startup(
+                                &node,
+                                &relay_client,
+                                &authority,
+                                Some(ready.booking_id),
+                            )
+                            .await;
+                            return Err(AukiPeerError::NodeStoppedDuringStartup { status });
+                        }
+                    }
+                };
+                let relay = RelaySupervisor::start(
+                    relay_client,
+                    Arc::clone(&authority),
+                    Rc::clone(&node),
+                    protocols.clone(),
+                    ready,
+                    relay_policy,
+                );
+                (
+                    AukiPeerReachability::RelayBacked(routes),
+                    BrowserSupervisor::Relay(relay),
+                )
+            }
+            None => (
+                AukiPeerReachability::OutboundOnly,
+                BrowserSupervisor::Outbound(OutboundSupervisor::start(
+                    Arc::clone(&authority),
+                    Rc::clone(&node),
+                    protocols.clone(),
+                )),
+            ),
+        };
 
         let tracker = config.dds_tracker().cloned();
         let (discovery, discovery_publisher) = match tracker {
@@ -227,13 +293,18 @@ impl AukiPeer {
                     Ok(discovery) => discovery,
                     Err(error) => {
                         protocols.abort_all();
-                        let _ = relay.stop().await;
+                        let _ = supervisor.stop().await;
                         return Err(AukiPeerError::Discovery(error));
                     }
                 };
                 let publisher = if tracker.mode() == DdsTrackerMode::DiscoverAndAdvertise {
-                    let routes = vec![reachability.tcp().clone(), reachability.wss().clone()];
-                    let advertisement = relay.attach_advertisement();
+                    let relay_routes = reachability
+                        .relay_routes()
+                        .expect("browser configuration validation requires relay routes");
+                    let routes = vec![relay_routes.tcp().clone(), relay_routes.wss().clone()];
+                    let advertisement = supervisor
+                        .attach_advertisement()
+                        .expect("only relay-backed browser peers may advertise");
                     match discovery
                         .start_browser_publisher(
                             routes,
@@ -243,16 +314,16 @@ impl AukiPeer {
                         )
                         .await
                     {
-                        Ok(publisher) if !relay.advertisement_stopped() => Some(publisher),
+                        Ok(publisher) if !supervisor.advertisement_stopped() => Some(publisher),
                         Ok(publisher) => {
                             let _ = publisher.shutdown().await;
                             protocols.abort_all();
-                            let _ = relay.stop().await;
+                            let _ = supervisor.stop().await;
                             return Err(AukiPeerError::RelayStoppedDuringDiscoveryStartup);
                         }
                         Err(error) => {
                             protocols.abort_all();
-                            let _ = relay.stop().await;
+                            let _ = supervisor.stop().await;
                             return Err(AukiPeerError::Discovery(error));
                         }
                     }
@@ -270,7 +341,7 @@ impl AukiPeer {
             protocols,
             discovery,
             discovery_publisher,
-            relay,
+            supervisor,
             closed: false,
         })
     }
@@ -324,17 +395,17 @@ impl AukiPeer {
 
     /// Observe terminal lifecycle without retaining this Peer owner.
     pub fn lifecycle(&self) -> AukiPeerLifecycle {
-        self.relay.lifecycle()
+        self.supervisor.lifecycle()
     }
 
-    /// Wait until either the browser swarm or its authority/booking supervisor stops.
+    /// Wait until either the browser swarm or its lifecycle supervisor stops.
     pub async fn wait_stopped(&self) -> AukiPeerExit {
         self.lifecycle().wait_stopped().await
     }
 
-    /// Stop the node, delete the booking, and clear authority.
+    /// Stop the node, delete any booking, and clear authority.
     ///
-    /// Protocol handlers stop before the relay booking, authority, and browser
+    /// Protocol handlers stop before any relay booking, authority, and browser
     /// transport are torn down. The owner is consumed so successful return is
     /// the cleanup barrier. Calling this method fences new protocol work before
     /// it returns the cleanup future.
@@ -355,15 +426,15 @@ impl AukiPeer {
                 None => None,
             };
             let protocol_failure = self.protocols.shutdown_all().await.err();
-            let relay_failure = match self.relay.stop().await {
+            let supervisor_failure = match self.supervisor.stop().await {
                 SupervisorExit::Failed { reason, .. } => Some(reason),
                 SupervisorExit::Shutdown | SupervisorExit::OwnersDropped => None,
             };
             self.closed = true;
-            match (discovery_failure, protocol_failure, relay_failure) {
+            match (discovery_failure, protocol_failure, supervisor_failure) {
                 (None, None, None) => Ok(()),
-                (discovery, protocols, relay) => Err(AukiPeerError::Shutdown {
-                    details: shutdown_details(discovery, protocols, relay),
+                (discovery, protocols, supervisor) => Err(AukiPeerError::Shutdown {
+                    details: shutdown_details(discovery, protocols, supervisor),
                 }),
             }
         }
@@ -377,6 +448,17 @@ impl Drop for AukiPeer {
             self.protocols.abort_all();
         }
     }
+}
+
+fn validate_browser_configuration(config: &AukiPeerConfig) -> Result<(), AukiPeerError> {
+    if config.relay().is_none()
+        && config
+            .dds_tracker()
+            .is_some_and(|tracker| tracker.mode() == DdsTrackerMode::DiscoverAndAdvertise)
+    {
+        return Err(AukiPeerError::RelayRequiredForAdvertisement);
+    }
+    Ok(())
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -394,8 +476,8 @@ pub enum AukiPeerError {
     RelaySelection { reason: String },
     #[error("relay route construction failed: {0}")]
     RelayRoute(#[from] RelayReservationError),
-    #[error("browser peers require relay-backed reachability")]
-    RelayRequired,
+    #[error("DDS advertising requires relay-backed browser reachability")]
+    RelayRequiredForAdvertisement,
     #[error("confirmed relay reservation route differs from its selected provider")]
     RelayReservationMismatch,
     #[error("browser P2P node stopped during startup: {status:?}")]
@@ -418,7 +500,7 @@ pub type AukiPeerShutdownError = AukiPeerError;
 fn shutdown_details(
     discovery: Option<AukiDiscoveryError>,
     protocols: Option<AukiProtocolError>,
-    relay: Option<String>,
+    supervisor: Option<String>,
 ) -> String {
     let mut failures = Vec::new();
     if let Some(discovery) = discovery {
@@ -427,8 +509,8 @@ fn shutdown_details(
     if let Some(protocols) = protocols {
         failures.push(format!("protocol cleanup failed: {protocols}"));
     }
-    if let Some(relay) = relay {
-        failures.push(format!("relay cleanup failed: {relay}"));
+    if let Some(supervisor) = supervisor {
+        failures.push(format!("peer lifecycle cleanup failed: {supervisor}"));
     }
     debug_assert!(!failures.is_empty());
     failures.join("; ")
@@ -569,6 +651,13 @@ struct PendingAuthority {
     expires_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AuthorityMaintenance {
+    Current,
+    Renewed,
+    Retry,
+}
+
 impl AuthoritySupervisor {
     fn new(
         authority: BrowserAuthority,
@@ -587,23 +676,39 @@ impl AuthoritySupervisor {
         }
     }
 
-    async fn maintain(&self) -> Result<(), AuthoritySupervisorError> {
+    async fn maintain(&self) -> Result<AuthorityMaintenance, AuthoritySupervisorError> {
         let mut state = self.state.lock().await;
         if state.stopped {
             return Err(AuthoritySupervisorError::Stopped);
         }
         let now = Utc::now();
         if state.pending.is_none() && now < state.current.renew_at {
-            return Ok(());
+            return Ok(AuthorityMaintenance::Current);
         }
         match self.renew_locked(&mut state).await {
-            Ok(()) => Ok(()),
+            Ok(()) => Ok(AuthorityMaintenance::Renewed),
             Err(error) if state.current.expires_at > Utc::now() => {
                 warn!(error = %error, "browser authority renewal will retry before expiry");
-                Ok(())
+                Ok(AuthorityMaintenance::Retry)
             }
             Err(error) => Err(error),
         }
+    }
+
+    async fn maintenance_delay(&self) -> Result<Duration, AuthoritySupervisorError> {
+        let state = self.state.lock().await;
+        if state.stopped {
+            return Err(AuthoritySupervisorError::Stopped);
+        }
+        if state.pending.is_some() {
+            return Ok(Duration::ZERO);
+        }
+        Ok(state
+            .current
+            .renew_at
+            .signed_duration_since(Utc::now())
+            .to_std()
+            .unwrap_or_default())
     }
 
     async fn renew_after_unauthorized(
@@ -822,6 +927,91 @@ impl BrowserAdvertisementLifecycle {
     }
 }
 
+enum BrowserSupervisor {
+    Outbound(OutboundSupervisor),
+    Relay(RelaySupervisor),
+}
+
+impl BrowserSupervisor {
+    fn lifecycle(&self) -> AukiPeerLifecycle {
+        match self {
+            Self::Outbound(supervisor) => supervisor.lifecycle(),
+            Self::Relay(supervisor) => supervisor.lifecycle(),
+        }
+    }
+
+    fn attach_advertisement(&self) -> Option<BrowserAdvertisementTask> {
+        match self {
+            Self::Outbound(_) => None,
+            Self::Relay(supervisor) => Some(supervisor.attach_advertisement()),
+        }
+    }
+
+    fn advertisement_stopped(&self) -> bool {
+        match self {
+            Self::Outbound(_) => true,
+            Self::Relay(supervisor) => supervisor.advertisement_stopped(),
+        }
+    }
+
+    async fn stop(&self) -> SupervisorExit {
+        match self {
+            Self::Outbound(supervisor) => supervisor.stop().await,
+            Self::Relay(supervisor) => supervisor.stop().await,
+        }
+    }
+}
+
+struct OutboundSupervisor {
+    stop: async_channel::Sender<()>,
+    stopped: Shared<oneshot::Receiver<SupervisorExit>>,
+}
+
+impl OutboundSupervisor {
+    fn start(
+        authority: Arc<AuthoritySupervisor>,
+        node: Rc<BrowserNode>,
+        protocols: AukiPeerProtocols,
+    ) -> Self {
+        let (stop, stop_receiver) = async_channel::bounded(1);
+        let (stopped_sender, stopped_receiver) = oneshot::channel();
+        spawn_local(async move {
+            let end = supervise_outbound(&authority, Rc::clone(&node), stop_receiver).await;
+            if matches!(&end, SupervisionEnd::Node(_) | SupervisionEnd::Failed(_)) {
+                protocols.abort_all();
+            }
+            authority.cancel_renewal();
+            let status = finish_outbound_supervision(end, &authority, &node).await;
+            let _ = stopped_sender.send(status);
+        });
+        Self {
+            stop,
+            stopped: stopped_receiver.shared(),
+        }
+    }
+
+    fn lifecycle(&self) -> AukiPeerLifecycle {
+        AukiPeerLifecycle {
+            stopped: self.stopped.clone(),
+        }
+    }
+
+    async fn wait_stopped(&self) -> SupervisorExit {
+        wait_for_supervisor(self.stopped.clone()).await
+    }
+
+    async fn stop(&self) -> SupervisorExit {
+        let _ = self.stop.try_send(());
+        self.wait_stopped().await
+    }
+}
+
+impl Drop for OutboundSupervisor {
+    fn drop(&mut self) {
+        let _ = self.stop.try_send(());
+    }
+}
+
 struct RelaySupervisor {
     stop: async_channel::Sender<()>,
     stopped: Shared<oneshot::Receiver<SupervisorExit>>,
@@ -861,7 +1051,7 @@ impl RelaySupervisor {
             // Lease expiry remains the crash/panic fallback.
             let advertisement_failure = task_advertisement.stop_and_wait().await;
             task_authority.cancel_renewal();
-            let status = finish_supervision(
+            let status = finish_relay_supervision(
                 end,
                 &client,
                 &task_authority,
@@ -929,7 +1119,7 @@ fn peer_exit(exit: SupervisorExit) -> AukiPeerExit {
 async fn wait_for_supervisor(stopped: Shared<oneshot::Receiver<SupervisorExit>>) -> SupervisorExit {
     stopped.await.unwrap_or_else(|_| SupervisorExit::Failed {
         failure: AukiPeerFailure::Supervisor,
-        reason: "browser relay supervisor status channel dropped".into(),
+        reason: "browser peer supervisor status channel dropped".into(),
     })
 }
 
@@ -938,6 +1128,44 @@ enum SupervisionEnd {
     OwnersDropped,
     Node(BrowserNodeExit),
     Failed(SupervisorError),
+}
+
+async fn supervise_outbound(
+    authority: &AuthoritySupervisor,
+    node: Rc<BrowserNode>,
+    stop: async_channel::Receiver<()>,
+) -> SupervisionEnd {
+    loop {
+        let iteration = outbound_authority_iteration(authority).fuse();
+        let shutdown = stop.recv().fuse();
+        let node_stopped = node.wait_stopped().fuse();
+        pin_mut!(iteration, shutdown, node_stopped);
+        futures::select_biased! {
+            signal = shutdown => {
+                return if signal.is_ok() {
+                    SupervisionEnd::Shutdown
+                } else {
+                    SupervisionEnd::OwnersDropped
+                };
+            }
+            status = node_stopped => return SupervisionEnd::Node(status),
+            result = iteration => {
+                if let Err(error) = result {
+                    return SupervisionEnd::Failed(error);
+                }
+            }
+        }
+    }
+}
+
+async fn outbound_authority_iteration(
+    authority: &AuthoritySupervisor,
+) -> Result<(), SupervisorError> {
+    Delay::new(authority.maintenance_delay().await?).await;
+    if authority.maintain().await? == AuthorityMaintenance::Retry {
+        Delay::new(AUTHORITY_RETRY).await;
+    }
+    Ok(())
 }
 
 async fn supervise_relay(
@@ -1097,7 +1325,19 @@ fn relay_status_poll_at(
     ))
 }
 
-async fn finish_supervision(
+async fn finish_outbound_supervision(
+    end: SupervisionEnd,
+    authority: &AuthoritySupervisor,
+    node: &BrowserNode,
+) -> SupervisorExit {
+    let (success, root_failure, context) = classify_supervision_end(end);
+    let mut cleanup_failures = Vec::new();
+    cleanup_node(node, &mut cleanup_failures).await;
+    cleanup_authority(authority, &mut cleanup_failures).await;
+    complete_supervision(success, root_failure, context, cleanup_failures)
+}
+
+async fn finish_relay_supervision(
     end: SupervisionEnd,
     client: &RelayBookingClient,
     authority: &AuthoritySupervisor,
@@ -1105,7 +1345,31 @@ async fn finish_supervision(
     booking_id: Uuid,
     advertisement_failure: Option<String>,
 ) -> SupervisorExit {
-    let (success, root_failure, context) = match end {
+    let (success, root_failure, context) = classify_supervision_end(end);
+
+    let mut cleanup_failures = Vec::new();
+    if let Some(failure) = advertisement_failure {
+        cleanup_failures.push(failure);
+    }
+    cleanup_node(node, &mut cleanup_failures).await;
+    match cleanup_before_deadline(client.delete(booking_id), CLEANUP_STAGE_TIMEOUT).await {
+        Some(Ok(())) => {}
+        Some(Err(error)) if error.http_code() == Some(RelayErrorCode::NotFound) => {}
+        Some(Err(error)) => cleanup_failures.push(format!("booking cleanup failed: {error}")),
+        None => cleanup_failures.push("booking cleanup timed out".into()),
+    }
+    cleanup_authority(authority, &mut cleanup_failures).await;
+    complete_supervision(success, root_failure, context, cleanup_failures)
+}
+
+type SupervisionClassification = (
+    Option<SupervisorExit>,
+    Option<(AukiPeerFailure, String)>,
+    String,
+);
+
+fn classify_supervision_end(end: SupervisionEnd) -> SupervisionClassification {
+    match end {
         SupervisionEnd::Shutdown => (Some(SupervisorExit::Shutdown), None, "shutdown".to_owned()),
         SupervisionEnd::OwnersDropped => (
             Some(SupervisorExit::OwnersDropped),
@@ -1125,30 +1389,32 @@ async fn finish_supervision(
             let reason = error.to_string();
             (None, Some((failure, reason.clone())), reason)
         }
-    };
-
-    let mut cleanup_failures = Vec::new();
-    if let Some(failure) = advertisement_failure {
-        cleanup_failures.push(failure);
     }
+}
+
+async fn cleanup_node(node: &BrowserNode, cleanup_failures: &mut Vec<String>) {
     match cleanup_before_deadline(node.shutdown(), CLEANUP_STAGE_TIMEOUT).await {
         Some(Ok(())) | Some(Err(auki_p2p::Error::SwarmStopped)) => {}
         Some(Err(error)) => cleanup_failures.push(format!("node cleanup failed: {error}")),
         None => cleanup_failures.push("node cleanup timed out".into()),
     }
-    match cleanup_before_deadline(client.delete(booking_id), CLEANUP_STAGE_TIMEOUT).await {
-        Some(Ok(())) => {}
-        Some(Err(error)) if error.http_code() == Some(RelayErrorCode::NotFound) => {}
-        Some(Err(error)) => cleanup_failures.push(format!("booking cleanup failed: {error}")),
-        None => cleanup_failures.push("booking cleanup timed out".into()),
-    }
+}
+
+async fn cleanup_authority(authority: &AuthoritySupervisor, cleanup_failures: &mut Vec<String>) {
     if cleanup_before_deadline(authority.stop(), CLEANUP_STAGE_TIMEOUT)
         .await
         .is_none()
     {
         cleanup_failures.push("authority cleanup timed out".into());
     }
+}
 
+fn complete_supervision(
+    success: Option<SupervisorExit>,
+    root_failure: Option<(AukiPeerFailure, String)>,
+    context: String,
+    cleanup_failures: Vec<String>,
+) -> SupervisorExit {
     if let Some((failure, reason)) = root_failure {
         if cleanup_failures.is_empty() {
             SupervisorExit::Failed { failure, reason }
@@ -1226,6 +1492,32 @@ mod tests {
         fn drop(&mut self) {
             self.0.set(true);
         }
+    }
+
+    #[wasm_bindgen_test]
+    fn outbound_browser_configuration_allows_discovery_but_not_advertising() {
+        let discover_only = AukiPeerConfig::dev()
+            .without_relay()
+            .with_dds_tracker(crate::DdsTrackerConfig::dev(DdsTrackerMode::DiscoverOnly));
+        assert!(validate_browser_configuration(&discover_only).is_ok());
+
+        let advertising =
+            AukiPeerConfig::dev()
+                .without_relay()
+                .with_dds_tracker(crate::DdsTrackerConfig::dev(
+                    DdsTrackerMode::DiscoverAndAdvertise,
+                ));
+        assert!(matches!(
+            validate_browser_configuration(&advertising),
+            Err(AukiPeerError::RelayRequiredForAdvertisement)
+        ));
+    }
+
+    #[wasm_bindgen_test]
+    fn outbound_reachability_exposes_no_publishable_routes() {
+        let reachability = AukiPeerReachability::OutboundOnly;
+        assert!(!reachability.is_relay_backed());
+        assert!(reachability.relay_routes().is_none());
     }
 
     #[wasm_bindgen_test(async)]

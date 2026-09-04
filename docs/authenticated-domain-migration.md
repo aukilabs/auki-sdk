@@ -123,18 +123,28 @@ Do not duplicate relay allocation or route validation in the product runtime.
 ## Web migration
 
 The Web facade authenticates a User, lists accessible Domains, and starts an
-ephemeral Peer ID. Browser startup reserves one relay over WSS and requires the
-same provider slot's atomic TCP/WSS route pair.
+ephemeral Peer ID. Relay-backed startup reserves one relay over WSS and exposes
+the same provider slot's atomic TCP/WSS route pair. Outbound-only startup skips
+the booking and exposes no local route while retaining authenticated outbound
+dials to remote WSS relay routes.
 Protocol adapters remain Rust code compiled into the same Wasm module.
 
+Pass `AukiPeerReachabilityMode.OutboundOnly` as the optional final argument to
+`startPeer` or `startPeerWithDiscovery`; omitting it remains relay-backed. Web
+consumers must now handle `tcpRoute` and `wssRoute` as `string | undefined` and
+can inspect `relayBacked` before publishing a peer card.
+
 The browser does not accept App secrets or persist identity in the first
-iteration. A reload therefore produces a new Peer ID and route.
+iteration. A reload therefore produces a new Peer ID and, in relay-backed mode,
+a new route.
 
 ## Reachability and discovery
 
-Relay-backed reachability is the normal native mode and mandatory Web mode. A
-native application can explicitly choose direct-only operation. An inbound
-direct peer needs a listener and a dialable route that the application shares.
+Relay-backed reachability remains the default. Native applications can choose
+direct-only operation, and Web applications can choose outbound-only operation.
+An inbound direct peer needs a listener and a dialable route that the
+application shares; an outbound-only browser cannot advertise itself through
+DDS because it has no public route.
 
 The SDK can optionally publish and query short-lived DDS discovery records.
 Applications may still exchange Domain ID, Peer ID, supported protocols, and

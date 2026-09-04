@@ -310,10 +310,20 @@ impl AukiPeerConfig {
         Ok(self)
     }
 
-    /// Disable DMS relay allocation for this peer.
+    /// Disable DMS relay allocation for this peer on every target.
     ///
-    /// Relay-backed reachability is required by default. This is the sole
-    /// opt-out and guarantees the runtime makes no relay-booking DMS calls.
+    /// The peer may still dial a remote peer through that remote peer's relay;
+    /// this setting only removes the local booking and public relay routes.
+    /// Browser peers without a booking are not independently reachable.
+    pub fn without_relay(mut self) -> Self {
+        self.relay = None;
+        self
+    }
+
+    /// Native convenience alias for [`Self::without_relay`].
+    ///
+    /// Relay-backed reachability is configured by default. This alias
+    /// guarantees the runtime makes no relay-booking DMS calls.
     /// Zero listeners and advertised routes are valid for outbound-only
     /// operation. Accepting inbound direct connections requires a listener plus
     /// a dialable route distributed by the application. Configure an advertised
@@ -321,15 +331,13 @@ impl AukiPeerConfig {
     /// that distribution source. Call this before configuring a direct-route
     /// set that uses capacity otherwise reserved for the default relay.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn direct_only(mut self) -> Self {
-        self.relay = None;
-        self
+    pub fn direct_only(self) -> Self {
+        self.without_relay()
     }
 
     /// Require relay-backed reachability using an explicit validated policy.
     ///
-    /// On native targets this also re-enables relay allocation after opting
-    /// into direct-only operation. Browser peers always require one relay.
+    /// This also re-enables relay allocation after opting out.
     pub fn with_relay(mut self, relay: AukiRelayConfig) -> Result<Self, AukiPeerConfigError> {
         relay.validate()?;
         #[cfg(target_arch = "wasm32")]
@@ -343,6 +351,9 @@ impl AukiPeerConfig {
     }
 
     /// Enable the explicitly selected DDS discovery behavior.
+    ///
+    /// An outbound-only browser may use `DiscoverOnly`; browser startup
+    /// rejects `DiscoverAndAdvertise` when no relay route is configured.
     pub fn with_dds_tracker(mut self, tracker: crate::DdsTrackerConfig) -> Self {
         self.dds_tracker = Some(tracker);
         self
@@ -381,7 +392,7 @@ impl AukiPeerConfig {
         self.relay.is_some()
     }
 
-    /// Relay policy required at startup, or `None` for direct-only operation.
+    /// Relay policy requested at startup, or `None` for direct/outbound-only operation.
     pub fn relay(&self) -> Option<AukiRelayConfig> {
         self.relay
     }
@@ -766,6 +777,14 @@ mod tests {
         let config = AukiPeerConfig::dev().direct_only();
         assert!(!config.relay_required());
         assert_eq!(config.relay(), None);
+    }
+
+    #[test]
+    fn without_relay_is_cross_target_and_preserves_the_dms_origin() {
+        let config = AukiPeerConfig::dev().without_relay();
+        assert!(!config.relay_required());
+        assert_eq!(config.relay(), None);
+        assert_eq!(config.dms_base_url(), DEV_DMS_BASE_URL);
     }
 
     #[test]

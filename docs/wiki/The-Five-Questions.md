@@ -69,9 +69,10 @@ credentials + Domain selection + identity proof
        explicitly mounted Endpoint / Client
 ```
 
-`AukiPeer` owns renewable authority, authenticated transport, relay booking,
-routes, fencing, and ordered shutdown. It does not automatically choose product
-protocols, discover peers, publish routes, or decide robot capability policy.
+`AukiPeer` owns renewable authority, authenticated transport, optional relay
+booking and routes, fencing, and ordered shutdown. It does not automatically
+choose product protocols, discover peers, publish routes, or decide robot
+capability policy.
 
 Each `auki-protocols` family is compile-time opt-in. Mounting its `Endpoint` is
 the runtime opt-in for serving; the cloneable `Client` handles outbound calls.

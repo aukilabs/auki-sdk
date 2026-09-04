@@ -23,9 +23,13 @@
 
       <form id="start" hidden>
         <select id="domain" aria-label="Accessible Domain" required></select>
+        <select id="reachability-mode" aria-label="Peer reachability mode">
+          <option value="outbound_only" selected>Outbound only (no relay booking)</option>
+          <option value="relay_backed">Inbound + outbound (book relay)</option>
+        </select>
         <select id="discovery-mode" aria-label="DDS discovery mode">
-          <option value="discover_and_advertise" selected>Discover + advertise</option>
-          <option value="discover_only">Discover only (stay hidden)</option>
+          <option value="discover_only" selected>Discover only (stay hidden)</option>
+          <option value="discover_and_advertise">Discover + advertise</option>
         </select>
         <button id="start-button" type="submit">Start peer</button>
       </form>

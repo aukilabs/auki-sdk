@@ -133,15 +133,17 @@ same pattern around both client and serving modes.
 The `auki-portable-echo` crate owns its immutable protocol ID, bounded wire
 conversation, registration, deadlines, exact-route send, inbound events, and
 stream cleanup. `AukiPeerBootstrap` and `AukiPeer` own the API/DDS exchange,
-renewable authority, authenticated transport, relay booking, route validation,
-fencing, and peer shutdown.
+renewable authority, authenticated transport, optional relay booking, route
+validation, fencing, and peer shutdown.
 
 ## Use the same protocol from Web
 
 The Web host compiles the same `auki-portable-echo` crate into Wasm. JavaScript
-only logs in a User, selects a Domain, starts an ephemeral `AukiPeer`, constructs
-`AukiEcho`, and supplies the remote Peer ID plus WSS route. It closes
-`AukiEcho` before shutting down the peer.
+only logs in a User, selects a Domain and reachability mode, starts an ephemeral
+`AukiPeer`, and supplies the remote Peer ID plus WSS route. Relay-backed mode
+constructs the serving `AukiEcho`; outbound-only mode constructs
+`AukiEchoClient` and makes no local relay booking. It closes any mounted
+endpoint before shutting down the peer.
 
 Echo needs its small `AukiEcho` adapter because it is an application protocol.
 SDK-owned Info, Catalog, Registry, Blob, Message, and Stream bindings expose
@@ -149,8 +151,9 @@ both client and serving roles. Each is a thin host adapter over the same Rust
 protocol implementation.
 
 Run the [browser echo app](../../examples/portable-echo/web/README.md#run-the-web-app)
-to try that surface in two tabs. The protected four-direction smoke test drives
-that same page while keeping its test machinery out of the application.
+to try that surface in two tabs. The protected direction smoke test drives that
+same page, including an outbound-only third browser, while keeping its test
+machinery out of the application.
 
 ## Use the same protocol from Python
 
@@ -222,7 +225,7 @@ Everything else uses the same `AukiPeerBootstrap` and `AukiPeer` lifecycle.
 Never embed an App secret in a browser, mobile binary, public repository,
 container image, or log.
 
-## Disable relay booking on a native peer
+## Disable relay booking
 
 Relay booking and relay transport are separate responsibilities. The
 `auki-relay-booking` crate talks to DMS to create, renew, and delete a booking.
@@ -230,10 +233,21 @@ Relay booking and relay transport are separate responsibilities. The
 Circuit Relay v2 reservation, which `auki-p2p` establishes and monitors against
 the assigned relay provider.
 
-Native Rust applications can opt out of that entire path with
-`AukiPeerConfig::direct_only()`. Because `AukiPeerBootstrap::dev` supplies the
-default relay-backed configuration, construct the bootstrap with an explicit
-peer configuration instead:
+Native Rust applications can opt out of that entire path on an authenticated
+bootstrap:
+
+```rust
+use auki_sdk::{AukiPeerBootstrap, Credentials};
+
+let bootstrap = AukiPeerBootstrap::dev(
+    Credentials::user_password(email, password),
+)
+.await?
+.without_relay();
+```
+
+For lower-level or custom-environment composition,
+`AukiPeerConfig::direct_only()` is the native alias for `without_relay()`:
 
 ```rust
 use auki_sdk::{
@@ -268,16 +282,49 @@ explicit bootstrap configuration before applying `with_dds_tracker`. Its
 current peer-card output and protected four-peer matrix deliberately require a
 confirmed TCP/WSS relay-route pair, so those relay-specific assertions and the
 peer-card representation must also be adapted for a direct-only experiment.
-Browser peers always require a relay; the current Python and Swift facades also
-expose relay-backed startup only.
+The current Python and Swift facades expose relay-backed startup only.
 
-There is currently no equivalent Web code sample. A browser application that
-only initiates protocol calls would not inherently need its own inbound relay
-reservation, but the current Web `AukiPeer` contract always acquires one and
-exposes its required `tcpRoute` and `wssRoute`. In particular,
-`AukiDiscoveryMode.DiscoverOnly` disables DDS publication, not relay booking.
-Supporting a genuinely outbound-only browser peer therefore requires a new Web
-runtime/startup mode rather than a different invocation of the existing API.
+Web applications choose reachability separately from discovery. Omit the last
+argument to preserve relay-backed behavior, or explicitly start an outbound-only
+browser peer that never calls the DMS relay-booking endpoints:
+
+```ts
+import {
+  AukiDiscoveryMode,
+  AukiPeerReachabilityMode,
+} from "./auki_sdk_web.js";
+
+const peer = await session.startPeerWithDiscovery(
+  domainId,
+  AukiDiscoveryMode.DiscoverOnly,
+  AukiPeerReachabilityMode.OutboundOnly,
+);
+
+console.assert(!peer.relayBacked);
+console.assert(peer.wssRoute === undefined);
+console.assert(peer.tcpRoute === undefined);
+```
+
+The outbound peer can discover a relay-backed remote peer and dial that
+remote's WSS circuit route. It cannot accept unsolicited inbound connections,
+has no route to publish, and therefore cannot combine `OutboundOnly` with
+`DiscoverAndAdvertise`. Use a client adapter without mounting an endpoint; the
+[portable Echo Web example](../../examples/portable-echo/web/README.md) exposes
+this as `new AukiEchoClient(peer)`.
+
+The protected Echo browser smoke starts two relay-backed endpoints and a third
+outbound-only client. It proves the third peer can discover and call an endpoint
+while intercepting its network traffic and asserting zero requests whose path
+contains `/relay-bookings`:
+
+```sh
+cd examples/portable-echo/web
+npm run smoke:dev
+```
+
+`AukiDiscoveryMode.DiscoverOnly` by itself still controls DDS publication, not
+relay booking. Set both choices explicitly when an application needs the
+outbound-only combination.
 
 ## Relay and discovery are separate
 

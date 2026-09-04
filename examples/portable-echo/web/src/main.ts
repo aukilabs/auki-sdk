@@ -1,7 +1,9 @@
 import init, {
   AukiDiscoveryMode,
   AukiEcho,
+  AukiEchoClient,
   AukiPeer,
+  AukiPeerReachabilityMode,
   AukiUserSession,
 } from "../pkg-web/auki_portable_echo_web.js";
 
@@ -10,6 +12,8 @@ const input = (id: string): HTMLInputElement => get<HTMLInputElement>(id);
 const login = get<HTMLFormElement>("login");
 const start = get<HTMLFormElement>("start");
 const domain = get<HTMLSelectElement>("domain");
+const reachabilityMode = get<HTMLSelectElement>("reachability-mode");
+const discoveryMode = get<HTMLSelectElement>("discovery-mode");
 const local = get<HTMLElement>("local");
 const discovery = get<HTMLFieldSetElement>("discovery");
 const refreshButton = get<HTMLButtonElement>("refresh-button");
@@ -20,7 +24,8 @@ const stopButton = get<HTMLButtonElement>("stop-button");
 const log = get<HTMLElement>("log");
 let session: AukiUserSession | undefined;
 let peer: AukiPeer | undefined;
-let echo: AukiEcho | undefined;
+let echo: AukiEcho | AukiEchoClient | undefined;
+let echoEndpoint: AukiEcho | undefined;
 let receiving: Promise<void> | undefined;
 let sending: Promise<void> | undefined;
 let refreshing: Promise<void> | undefined;
@@ -41,6 +46,8 @@ refreshButton.onclick = () => {
 };
 candidates.onchange = () => { useCandidateButton.disabled = !selectedCandidate(); };
 useCandidateButton.onclick = () => { useSelectedCandidate(); };
+reachabilityMode.onchange = syncReachabilityControls;
+syncReachabilityControls();
 
 async function authenticate(): Promise<void> {
   const button = get<HTMLButtonElement>("login-button");
@@ -83,25 +90,40 @@ async function startPeer(): Promise<void> {
     const started = await authenticated.startPeerWithDiscovery(
       domain.value,
       selectedDiscoveryMode(),
+      selectedReachabilityMode(),
     );
-    let mounted: AukiEcho;
-    try { mounted = new AukiEcho(started); }
+    let adapter: AukiEcho | AukiEchoClient;
+    let mounted: AukiEcho | undefined;
+    try {
+      if (started.relayBacked) {
+        mounted = new AukiEcho(started);
+        adapter = mounted;
+      } else {
+        adapter = new AukiEchoClient(started);
+      }
+    }
     catch (error) { try { await started.shutdown(); } finally { started.free(); } throw error; }
     session = undefined;
     authenticated.free();
     peer = started;
-    echo = mounted;
+    echo = adapter;
+    echoEndpoint = mounted;
     local.dataset.peerId = started.peerId;
     local.dataset.domainId = started.domainId;
-    local.dataset.wssRoute = started.wssRoute;
-    local.dataset.tcpRoute = started.tcpRoute;
-    local.textContent = `Peer ID: ${started.peerId}\nWSS route: ${started.wssRoute}`
-      + `\nTCP route: ${started.tcpRoute}`;
+    local.dataset.relayBacked = String(started.relayBacked);
+    const wssRoute = started.wssRoute;
+    const tcpRoute = started.tcpRoute;
+    if (wssRoute) local.dataset.wssRoute = wssRoute;
+    if (tcpRoute) local.dataset.tcpRoute = tcpRoute;
+    local.textContent = started.relayBacked
+      ? `Peer ID: ${started.peerId}\nReachability: relay-backed`
+        + `\nWSS route: ${wssRoute}\nTCP route: ${tcpRoute}`
+      : `Peer ID: ${started.peerId}\nReachability: outbound only\nRelay booking: disabled`;
     start.hidden = true;
     discovery.hidden = false;
     refreshButton.disabled = false;
     sendButton.disabled = stopButton.disabled = false;
-    receiving = receiveEchoes(mounted);
+    if (mounted) receiving = receiveEchoes(mounted);
     void started.waitStopped().catch((error) => {
       if (peer === started) {
         write(error);
@@ -116,11 +138,11 @@ async function startPeer(): Promise<void> {
 
 async function refreshDiscovery(): Promise<void> {
   const running = peer;
-  const mounted = echo;
-  if (!running || !mounted) return;
+  const adapter = echo;
+  if (!running || !adapter) return;
   refreshButton.disabled = useCandidateButton.disabled = true;
   try {
-    const discovered = await running.discoverProtocol(mounted.protocol);
+    const discovered = await running.discoverProtocol(adapter.protocol);
     const options: HTMLOptionElement[] = [];
     const nextDiscoveredRoutes = new Map<string, string[]>();
     for (const candidate of discovered) {
@@ -185,8 +207,8 @@ function useSelectedCandidate(): void {
 }
 
 async function sendEcho(): Promise<void> {
-  const mounted = echo;
-  if (!mounted) return;
+  const adapter = echo;
+  if (!adapter) return;
   sendButton.disabled = stopButton.disabled = true;
   try {
     const peerId = input("remote-peer").value.trim();
@@ -196,7 +218,7 @@ async function sendEcho(): Promise<void> {
     const failures: string[] = [];
     for (const candidateRoute of routes) {
       try {
-        const receipt = await mounted.sendExact(
+        const receipt = await adapter.sendExact(
           peerId, candidateRoute, new TextEncoder().encode(input("message").value),
         );
         try {
@@ -211,36 +233,37 @@ async function sendEcho(): Promise<void> {
   } catch (error) {
     write(error);
   } finally {
-    if (echo === mounted) sendButton.disabled = stopButton.disabled = false;
+    if (echo === adapter) sendButton.disabled = stopButton.disabled = false;
   }
 }
 
 async function receiveEchoes(mounted: AukiEcho): Promise<void> {
-  while (echo === mounted) try {
+  while (echoEndpoint === mounted) try {
     const receipt = await mounted.nextServed();
     try { write(`received from ${receipt.remotePeerId}: ${new TextDecoder().decode(receipt.payload)}`); }
     finally { receipt.free(); }
   } catch (error) {
-    if (echo === mounted) write(error);
+    if (echoEndpoint === mounted) write(error);
     return;
   }
 }
 
 async function stopPeer(): Promise<void> {
   const running = peer;
-  const mounted = echo;
+  const adapter = echo;
+  const mounted = echoEndpoint;
   const pendingRefresh = refreshing;
   const pending = [sending, receiving];
-  peer = echo = undefined;
+  peer = echo = echoEndpoint = undefined;
   refreshing = receiving = undefined;
-  if (!running || !mounted) return;
+  if (!running || !adapter) return;
   sendButton.disabled = stopButton.disabled = true;
   let failure: unknown;
   if (pendingRefresh) await Promise.allSettled([pendingRefresh]);
-  try { await mounted.close(); } catch (error) { failure = error; }
+  if (mounted) try { await mounted.close(); } catch (error) { failure = error; }
   try { await running.shutdown(); } catch (error) { failure ??= error; }
   await Promise.allSettled(pending);
-  mounted.free();
+  adapter.free();
   running.free();
   local.textContent = "Not connected";
   for (const key of Object.keys(local.dataset)) delete local.dataset[key];
@@ -257,11 +280,28 @@ async function stopPeer(): Promise<void> {
 }
 
 function selectedDiscoveryMode(): AukiDiscoveryMode {
-  switch (input("discovery-mode").value) {
+  switch (discoveryMode.value) {
     case "discover_only": return AukiDiscoveryMode.DiscoverOnly;
     case "discover_and_advertise": return AukiDiscoveryMode.DiscoverAndAdvertise;
     default: throw new Error("Select an explicit DDS discovery mode");
   }
+}
+
+function selectedReachabilityMode(): AukiPeerReachabilityMode {
+  switch (reachabilityMode.value) {
+    case "outbound_only": return AukiPeerReachabilityMode.OutboundOnly;
+    case "relay_backed": return AukiPeerReachabilityMode.RelayBacked;
+    default: throw new Error("Select an explicit peer reachability mode");
+  }
+}
+
+function syncReachabilityControls(): void {
+  const advertise = discoveryMode.querySelector<HTMLOptionElement>(
+    'option[value="discover_and_advertise"]',
+  )!;
+  const outboundOnly = reachabilityMode.value === "outbound_only";
+  advertise.disabled = outboundOnly;
+  if (outboundOnly) discoveryMode.value = "discover_only";
 }
 
 function write(value: unknown): void {

@@ -50,6 +50,22 @@ mod facade {
         }
     }
 
+    /// Whether this browser peer should own a public inbound relay route.
+    #[wasm_bindgen]
+    #[derive(Clone, Copy)]
+    pub enum AukiPeerReachabilityMode {
+        /// Do not book a relay. The peer can still dial remote WSS relay routes.
+        OutboundOnly,
+        /// Book and maintain one relay so other peers can dial this browser peer.
+        RelayBacked,
+    }
+
+    impl Default for AukiPeerReachabilityMode {
+        fn default() -> Self {
+            Self::RelayBacked
+        }
+    }
+
     /// Authenticated User session used to inspect Domains and start peers.
     #[wasm_bindgen]
     pub struct AukiUserSession {
@@ -110,36 +126,53 @@ mod facade {
             Ok(domains)
         }
 
-        /// Authorize a fresh in-memory identity and start its mandatory relay.
+        /// Authorize a fresh in-memory identity and start one browser peer.
+        ///
+        /// Omitting `reachability` preserves the relay-backed default.
         #[wasm_bindgen(js_name = startPeer)]
-        pub async fn start_peer(&self, domain_id: String) -> Result<AukiPeer, JsValue> {
+        pub async fn start_peer(
+            &self,
+            domain_id: String,
+            reachability: Option<AukiPeerReachabilityMode>,
+        ) -> Result<AukiPeer, JsValue> {
             let domain_id =
                 Uuid::parse_str(&domain_id).map_err(|_| js_error("Domain ID must be a UUID"))?;
-            let peer = self
-                .bootstrap
+            let peer = configured_bootstrap(&self.bootstrap, reachability)
                 .start_ephemeral_peer(DomainSelection::new(domain_id))
                 .await
-                .map_err(|error| js_context("start relay-backed browser Peer", error))?;
+                .map_err(|error| js_context("start browser Peer", error))?;
             Ok(AukiPeer::new(peer))
         }
 
-        /// Start a peer with one explicit DDS discovery behavior.
+        /// Start a peer with explicit DDS discovery and optional reachability.
+        ///
+        /// Outbound-only peers may discover but cannot advertise because they
+        /// have no public route. Omitting `reachability` remains relay-backed.
         #[wasm_bindgen(js_name = startPeerWithDiscovery)]
         pub async fn start_peer_with_discovery(
             &self,
             domain_id: String,
             mode: AukiDiscoveryMode,
+            reachability: Option<AukiPeerReachabilityMode>,
         ) -> Result<AukiPeer, JsValue> {
             let domain_id =
                 Uuid::parse_str(&domain_id).map_err(|_| js_error("Domain ID must be a UUID"))?;
-            let peer = self
-                .bootstrap
-                .clone()
+            let peer = configured_bootstrap(&self.bootstrap, reachability)
                 .with_dds_tracker(mode.into())
                 .start_ephemeral_peer(DomainSelection::new(domain_id))
                 .await
-                .map_err(|error| js_context("start discoverable browser Peer", error))?;
+                .map_err(|error| js_context("start browser Peer with discovery", error))?;
             Ok(AukiPeer::new(peer))
+        }
+    }
+
+    fn configured_bootstrap(
+        bootstrap: &AukiPeerBootstrap,
+        reachability: Option<AukiPeerReachabilityMode>,
+    ) -> AukiPeerBootstrap {
+        match reachability.unwrap_or_default() {
+            AukiPeerReachabilityMode::OutboundOnly => bootstrap.clone().without_relay(),
+            AukiPeerReachabilityMode::RelayBacked => bootstrap.clone(),
         }
     }
 
@@ -238,7 +271,7 @@ mod facade {
         }
     }
 
-    /// One ephemeral relay-backed browser peer.
+    /// One ephemeral browser peer with optional relay-backed reachability.
     #[wasm_bindgen]
     pub struct AukiPeer {
         inner: RefCell<Option<SdkPeer>>,
@@ -246,19 +279,24 @@ mod facade {
         discovery: Option<SdkDiscovery>,
         peer_id: String,
         domain_id: String,
-        wss_route: String,
-        tcp_route: String,
+        wss_route: Option<String>,
+        tcp_route: Option<String>,
+        relay_backed: bool,
     }
 
     impl AukiPeer {
         fn new(peer: SdkPeer) -> Self {
             let discovery = peer.discovery_handle().ok();
+            let relay_routes = peer.reachability().relay_routes();
+            let wss_route = relay_routes.map(|routes| routes.wss().to_string());
+            let tcp_route = relay_routes.map(|routes| routes.tcp().to_string());
             Self {
                 lifecycle: peer.lifecycle(),
                 peer_id: peer.peer_id().to_string(),
                 domain_id: peer.domain_id().to_string(),
-                wss_route: peer.reachability().wss().to_string(),
-                tcp_route: peer.reachability().tcp().to_string(),
+                relay_backed: peer.reachability().is_relay_backed(),
+                wss_route,
+                tcp_route,
                 discovery,
                 inner: RefCell::new(Some(peer)),
             }
@@ -284,16 +322,22 @@ mod facade {
             self.domain_id.clone()
         }
 
-        /// Confirmed browser-compatible circuit route.
+        /// Confirmed browser-compatible circuit route, if relay-backed.
         #[wasm_bindgen(getter, js_name = wssRoute)]
-        pub fn wss_route(&self) -> String {
+        pub fn wss_route(&self) -> Option<String> {
             self.wss_route.clone()
         }
 
-        /// Confirmed native-compatible circuit route from the same relay slot.
+        /// Confirmed native-compatible circuit route, if relay-backed.
         #[wasm_bindgen(getter, js_name = tcpRoute)]
-        pub fn tcp_route(&self) -> String {
+        pub fn tcp_route(&self) -> Option<String> {
             self.tcp_route.clone()
+        }
+
+        /// Whether this peer owns and maintains an inbound relay booking.
+        #[wasm_bindgen(getter, js_name = relayBacked)]
+        pub fn relay_backed(&self) -> bool {
+            self.relay_backed
         }
 
         /// Fetch every fresh same-Domain DDS candidate.
@@ -323,7 +367,7 @@ mod facade {
             })
         }
 
-        /// Stop protocols, release the relay booking, and stop the transport.
+        /// Stop protocols, release any relay booking, and stop the transport.
         #[wasm_bindgen(unchecked_return_type = "Promise<void>")]
         pub fn shutdown(&self) -> Result<Promise, JsValue> {
             let peer = self
@@ -366,7 +410,8 @@ mod facade {
 
 #[cfg(target_arch = "wasm32")]
 pub use facade::{
-    AukiDiscoveryCandidate, AukiDiscoveryMode, AukiDomain, AukiPeer, AukiUserSession,
+    AukiDiscoveryCandidate, AukiDiscoveryMode, AukiDomain, AukiPeer, AukiPeerReachabilityMode,
+    AukiUserSession,
 };
 #[cfg(target_arch = "wasm32")]
 pub use protocols::*;

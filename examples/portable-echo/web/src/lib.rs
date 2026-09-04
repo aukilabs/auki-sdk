@@ -10,7 +10,8 @@ use auki_portable_echo::{
 };
 use auki_sdk::{Multiaddr, PeerId};
 pub use auki_sdk_web::{
-    AukiDiscoveryCandidate, AukiDiscoveryMode, AukiDomain, AukiPeer, AukiUserSession,
+    AukiDiscoveryCandidate, AukiDiscoveryMode, AukiDomain, AukiPeer, AukiPeerReachabilityMode,
+    AukiUserSession,
 };
 use js_sys::{Error as JsError, Promise};
 use wasm_bindgen::prelude::*;
@@ -38,6 +39,40 @@ pub struct AukiEcho {
     closing: CloseBarrier,
     client: EchoClient,
     events: EchoEventReceiver,
+}
+
+/// Outbound portable echo adapter with no inbound protocol registration.
+#[wasm_bindgen]
+pub struct AukiEchoClient {
+    client: EchoClient,
+}
+
+#[wasm_bindgen]
+impl AukiEchoClient {
+    #[wasm_bindgen(constructor)]
+    pub fn new(peer: &AukiPeer) -> Result<AukiEchoClient, JsValue> {
+        let protocols = peer
+            .protocols()
+            .ok_or_else(|| js_error("Auki peer is stopped"))?;
+        Ok(Self {
+            client: EchoClient::new(protocols),
+        })
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn protocol(&self) -> String {
+        PROTOCOL_ID.to_owned()
+    }
+
+    #[wasm_bindgen(js_name = sendExact)]
+    pub async fn send_exact(
+        &self,
+        remote_peer_id: String,
+        wss_route: String,
+        payload: Vec<u8>,
+    ) -> Result<EchoReceipt, JsValue> {
+        send_exact(&self.client, remote_peer_id, wss_route, payload).await
+    }
 }
 
 #[wasm_bindgen]
@@ -74,21 +109,7 @@ impl AukiEcho {
         if self.endpoint.borrow().is_none() {
             return Err(js_error("portable echo endpoint is stopped"));
         }
-        let peer_id = remote_peer_id
-            .parse::<PeerId>()
-            .map_err(|error| js_context("parse remote Peer ID", error))?;
-        let route = wss_route
-            .parse::<Multiaddr>()
-            .map_err(|error| js_context("parse remote WSS route", error))?;
-        let receipt = self
-            .client
-            .send_exact(peer_id, route, payload)
-            .await
-            .map_err(|error| js_context("run portable echo", error))?;
-        Ok(EchoReceipt {
-            remote_peer_id: receipt.remote_peer_id.to_string(),
-            payload: receipt.payload,
-        })
+        send_exact(&self.client, remote_peer_id, wss_route, payload).await
     }
 
     #[wasm_bindgen(js_name = nextServed)]
@@ -127,6 +148,28 @@ impl AukiEcho {
             })
         })
     }
+}
+
+async fn send_exact(
+    client: &EchoClient,
+    remote_peer_id: String,
+    wss_route: String,
+    payload: Vec<u8>,
+) -> Result<EchoReceipt, JsValue> {
+    let peer_id = remote_peer_id
+        .parse::<PeerId>()
+        .map_err(|error| js_context("parse remote Peer ID", error))?;
+    let route = wss_route
+        .parse::<Multiaddr>()
+        .map_err(|error| js_context("parse remote WSS route", error))?;
+    let receipt = client
+        .send_exact(peer_id, route, payload)
+        .await
+        .map_err(|error| js_context("run portable echo", error))?;
+    Ok(EchoReceipt {
+        remote_peer_id: receipt.remote_peer_id.to_string(),
+        payload: receipt.payload,
+    })
 }
 
 #[wasm_bindgen]

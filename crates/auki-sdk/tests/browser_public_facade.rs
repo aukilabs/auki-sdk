@@ -16,6 +16,7 @@ fn browser_facade_exposes_only_browser_runtime_configuration_and_lifecycle() {
     let _bootstrap_authenticate = AukiPeerBootstrap::authenticate;
     let _bootstrap_dev = AukiPeerBootstrap::dev;
     let _bootstrap_domains = AukiPeerBootstrap::accessible_domains;
+    let _bootstrap_without_relay = AukiPeerBootstrap::without_relay;
     let _bootstrap_start = AukiPeerBootstrap::start_peer;
     let _bootstrap_ephemeral = AukiPeerBootstrap::start_ephemeral_peer;
     let _auth_client: Option<AuthClient> = None;
@@ -28,6 +29,9 @@ fn browser_facade_exposes_only_browser_runtime_configuration_and_lifecycle() {
     let _wait_stopped = AukiPeer::wait_stopped;
     let _protocols: fn(&AukiPeer) -> AukiPeerProtocols = AukiPeer::protocols;
     let _reachability: fn(&AukiPeer) -> &AukiPeerReachability = AukiPeer::reachability;
+    let _relay_routes: fn(&AukiPeerReachability) -> Option<&RelayCircuitRoutes> =
+        AukiPeerReachability::relay_routes;
+    let _relay_backed: fn(&AukiPeerReachability) -> bool = AukiPeerReachability::is_relay_backed;
     let _tcp: fn(&RelayCircuitRoutes) -> &auki_sdk::Multiaddr = RelayCircuitRoutes::tcp;
     let _wss: fn(&RelayCircuitRoutes) -> &auki_sdk::Multiaddr = RelayCircuitRoutes::wss;
     let _lifecycle: fn(&AukiPeer) -> AukiPeerLifecycle = AukiPeer::lifecycle;
@@ -48,4 +52,8 @@ fn browser_facade_exposes_only_browser_runtime_configuration_and_lifecycle() {
     let config = AukiPeerConfig::dev().with_relay(relay).unwrap();
     assert!(config.relay_required());
     assert_eq!(config.relay(), Some(relay));
+
+    let outbound = AukiPeerConfig::dev().without_relay();
+    assert!(!outbound.relay_required());
+    assert_eq!(outbound.relay(), None);
 }

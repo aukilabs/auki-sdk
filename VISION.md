@@ -140,14 +140,15 @@ One Rust core now feeds thin platform hosts:
 | Platform | Direction |
 | --- | --- |
 | Native Rust | Complete `AukiPeer` and protocol surface |
-| Web/Wasm | Complete User-authenticated relay peer; Rust protocols bound into the same Wasm module |
+| Web/Wasm | Complete User-authenticated outbound-only or relay-backed peer; Rust protocols bound into the same Wasm module |
 | Python | Complete User/App-authenticated relay peer; standard Rust protocols bound into the same extension module |
 | Swift/iOS | Bind the canonical peer and selected protocol clients/endpoints; pending |
 
-Browser and mobile peers will normally be relay-backed. Persisting a browser
-Peer ID is not required for the first iteration; the current Web facade uses an
-ephemeral identity. App access secrets remain restricted to trusted native or
-backend processes.
+Browser clients that only initiate calls can be outbound-only; serving browsers
+and mobile peers will normally be relay-backed. Persisting a browser Peer ID is
+not required for the first iteration; the current Web facade uses an ephemeral
+identity. App access secrets remain restricted to trusted native or backend
+processes.
 
 ## What comes next
 

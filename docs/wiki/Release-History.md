@@ -21,15 +21,17 @@ and package publication are still pending.
 - `auki-auth` prepares renewable, Domain-scoped authority for User or trusted
   native App credentials. Robot and Compute hosts can supply externally
   managed authority through `AukiPeer::start_external`.
-- Relay-backed reachability is the native default and mandatory in browsers.
-  Native direct-only operation is explicit; one live runtime per persisted
-  Peer ID is supported.
+- Relay-backed reachability is the default. Native direct-only and browser
+  outbound-only operation are explicit and make no local relay booking; one
+  live runtime per persisted Peer ID is supported. Web `tcpRoute` and
+  `wssRoute` are now optional, with `relayBacked` exposing the selected result.
 - `auki-protocols` exposes compile-time opt-in wire families with explicit
   outbound Clients and inbound Endpoints. Current endpoints do not negotiate
   hidden legacy fallbacks; Catalog v2 remains only where its locked row shape
   is embedded by Catalog v3.
-- One portable echo protocol now proves browser/browser and both native/Web
-  directions without duplicating its Rust wire conversation.
+- One portable echo protocol now proves relay-backed and outbound-only browser
+  clients plus both native/Web directions without duplicating its Rust wire
+  conversation.
 - Python retains local data-model bindings and Swift retains a Wallet binding.
   Their canonical high-level `AukiPeer` facades remain follow-up work.
 - Discovery and remote-route publication remain application-owned. Relay

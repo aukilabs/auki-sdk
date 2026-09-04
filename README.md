@@ -85,7 +85,7 @@ model for its dataset protocol.
 | Platform | Authenticated peer facade |
 | --- | --- |
 | Native Rust | User/App authentication, persistent identity, default TCP reservation with TCP/WSS routes, exact protocols, ordered shutdown |
-| Web/Wasm | User authentication, ephemeral identity, mandatory WSS reservation with TCP/WSS routes, client and serving roles for all six standard protocols, ordered shutdown, and custom same-module Rust adapters |
+| Web/Wasm | User authentication, ephemeral identity, optional outbound-only or WSS relay-backed reachability, client and serving roles for all six standard protocols, ordered shutdown, and custom same-module Rust adapters |
 | Python | User/App authentication, persistent identity, default TCP reservation with TCP/WSS routes, client and serving roles for all six standard protocols, ordered shutdown, and custom same-module Rust adapters |
 | Swift/iOS | User authentication, ephemeral or application-persisted identity, default TCP reservation with TCP/WSS routes, client and serving roles for all six standard protocols, custom same-artifact Rust adapters, and ordered shutdown |
 

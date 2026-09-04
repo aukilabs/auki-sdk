@@ -1,6 +1,7 @@
 import {
   AukiDiscoveryMode,
   AukiPeer,
+  AukiPeerReachabilityMode,
   AukiStreamClient,
   AukiStreamEndpoint,
   AukiStreamSubscription,
@@ -109,7 +110,11 @@ interface CameraStreamData {
 }
 
 type Session = {
-  startPeerWithDiscovery(domainId: string, mode: AukiDiscoveryMode): Promise<AukiPeer>;
+  startPeerWithDiscovery(
+    domainId: string,
+    mode: AukiDiscoveryMode,
+    reachability?: AukiPeerReachabilityMode,
+  ): Promise<AukiPeer>;
 };
 
 export class CameraMesh {
@@ -155,7 +160,11 @@ export class CameraMesh {
     const mode = role === "publisher"
       ? AukiDiscoveryMode.DiscoverAndAdvertise
       : AukiDiscoveryMode.DiscoverOnly;
-    const peer = await session.startPeerWithDiscovery(domainId, mode);
+    const peer = await session.startPeerWithDiscovery(
+      domainId,
+      mode,
+      AukiPeerReachabilityMode.RelayBacked,
+    );
     const mesh = new CameraMesh(peer, role, displayName, hooks);
     try {
       await mesh.mountProtocols();
@@ -183,6 +192,11 @@ export class CameraMesh {
   }
 
   card(): CameraPeerCard {
+    const tcp = this.peer.tcpRoute;
+    const wss = this.peer.wssRoute;
+    if (tcp === undefined || wss === undefined) {
+      throw new Error("camera mesh requires relay-backed browser reachability");
+    }
     return {
       version: 1,
       runtime: "browser",
@@ -193,8 +207,8 @@ export class CameraMesh {
         ...(this.isPublishing ? [this.streamProtocol] : []),
       ],
       routes: {
-        tcp: this.peer.tcpRoute,
-        wss: this.peer.wssRoute,
+        tcp,
+        wss,
       },
     };
   }

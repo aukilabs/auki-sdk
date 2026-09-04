@@ -6,19 +6,24 @@ bindings with the small `AukiEcho` binding; it does not reimplement the echo
 wire format in TypeScript.
 
 The page logs in a User, fetches their accessible Domains, starts an ephemeral
-relay-backed browser peer in the selected Domain, and refreshes peers
-advertising the exact Echo protocol. A developer selects one untrusted
-candidate before the existing exact WSS operation tries its compatible routes
-and authenticates it. Rust/Wasm owns authentication, DDS
-authority, relay booking, libp2p, authenticated streams, protocol framing,
-deadlines, and cleanup. JavaScript only owns the form and lifecycle wiring.
+browser peer in the selected Domain, and refreshes peers advertising the exact
+Echo protocol. Reachability is explicit: **Outbound only** starts no relay
+booking and mounts `AukiEchoClient`, while **Inbound + outbound** books a relay
+and mounts the serving `AukiEcho` endpoint. A developer selects one untrusted
+candidate before the exact WSS operation tries its compatible routes and
+authenticates it. Rust/Wasm owns authentication, DDS authority, optional relay
+booking, libp2p, authenticated streams, protocol framing, deadlines, and
+cleanup. JavaScript only owns the form and lifecycle wiring.
 
 Browser identity is intentionally ephemeral in `0.1`: every start creates a new
-Peer ID and one atomic TCP/WSS relay-route pair. The page does not persist
-credentials or peer state.
-The app defaults to `DiscoverAndAdvertise`; choose **Discover only** before
-startup to find peers while remaining hidden. Manual Peer ID and route fields
-remain a clearly labeled fallback. See
+Peer ID. A relay-backed start also owns one atomic TCP/WSS route pair; an
+outbound-only start exposes neither route. The page does not persist credentials
+or peer state.
+
+The app defaults to **Outbound only** plus **Discover only**, which is the usual
+shape for a browser that only initiates calls. Choose **Inbound + outbound** to
+enable **Discover + advertise** and accept calls. Manual Peer ID and route
+fields remain a clearly labeled fallback. See
 [DDS discovery](../../../docs/p2p/discovery.md) for the trust boundary.
 
 Start with
@@ -53,17 +58,19 @@ npm ci
 npm run dev
 ```
 
-Open the printed root URL in two tabs. In each tab:
+Open the printed root URL in two tabs:
 
-1. Log in with the same or different User credentials.
-2. Select an accessible Domain, choose a discovery policy, and start the peer.
-3. Refresh Echo peers and select the other tab's Peer ID.
-4. Use the selected peer, enter a message, and send it.
+1. Log in to both tabs with the same or different User credentials.
+2. In tab A, select **Inbound + outbound** and **Discover + advertise**.
+3. In tab B, keep **Outbound only** and **Discover only**.
+4. Start both in the same Domain, then refresh tab B's Echo peers and select A.
+5. Use the selected peer, enter a message, and send it.
 
-Both peers must select the same Domain. The page always prints the same relay
-slot's TCP route so the native or Python example can reach the browser. Use
-**Stop peer** to close the echo endpoint before shutting down the peer and
-releasing its relay booking.
+An outbound-only peer is intentionally not a return target. To exercise both
+browser directions, start both tabs as **Inbound + outbound** plus **Discover +
+advertise**. Relay-backed mode prints the relay slot's TCP route so a native or
+Python example can reach the browser. Use **Stop peer** to close any echo
+endpoint before shutting down the peer and releasing any relay booking.
 
 The app is deliberately plain: [`index.html`](index.html) is the form and
 [`src/main.ts`](src/main.ts) is the complete host. Build standalone assets with:
@@ -75,16 +82,20 @@ npm run build
 ## Run the protected direction proof
 
 The smoke harness under `scripts/` drives the same root app; there is no hidden
-alternate UI. It starts two browser peers and one native peer, then proves:
+alternate UI. It starts two relay-backed browser endpoints, one outbound-only
+browser client, and one native peer, then proves:
 
 - browser A to browser B;
 - browser B to browser A;
+- outbound-only browser C to browser A;
 - native to browser A;
 - browser A to the same native peer.
 
 It polls DDS for exact Echo advertisements and never gives one runtime another
 runtime's route. It checks exact payloads, authenticated Peer IDs, TCP/WSS
-relay reachability, and ordered shutdown. Install Chromium once if needed:
+relay reachability, and ordered shutdown. It also intercepts browser C's traffic
+and asserts that startup, the Echo call, and shutdown make zero
+`/relay-bookings` requests. Install Chromium once if needed:
 
 ```sh
 npx playwright install chromium

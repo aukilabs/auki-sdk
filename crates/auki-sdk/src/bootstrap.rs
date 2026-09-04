@@ -56,6 +56,17 @@ impl AukiPeerBootstrap {
         self
     }
 
+    /// Disable the local DMS relay booking for peers started from this clone.
+    ///
+    /// The authenticated session remains reusable through other clones. A
+    /// browser peer started from this configuration can dial relay-backed
+    /// peers but has no public route of its own, so it may discover but cannot
+    /// advertise through DDS.
+    pub fn without_relay(mut self) -> Self {
+        self.peer_config = self.peer_config.without_relay();
+        self
+    }
+
     /// List the Domains the authenticated principal may explicitly select.
     ///
     /// Applications only need this operation when presenting a choice. Peer

@@ -405,7 +405,10 @@ export class CameraProtocols {
         reply = {
           target: {
             peerId: this.peer.peerId,
-            routes: [this.peer.tcpRoute, this.peer.wssRoute],
+            routes: [
+              required(this.peer.tcpRoute, "local relay TCP route"),
+              required(this.peer.wssRoute, "local relay WSS route"),
+            ],
           },
           channel: required(this.replyChannel, "snapshot reply channel"),
         };

@@ -27,8 +27,8 @@ application associates them with the same robot.
 ## `auki_sdk::AukiPeer`
 
 The authenticated networking runtime for one Peer ID in one DDS Domain. It
-owns renewable authority, transport, relay booking, routes, protocol
-registration, lifecycle fencing, and shutdown.
+owns renewable authority, transport, optional relay booking and routes,
+protocol registration, lifecycle fencing, and shutdown.
 
 An `AukiPeer` serves no product protocol by default. Applications explicitly
 mount the endpoints they support.

@@ -11,6 +11,7 @@ import {
   AukiMessageReceiver,
   AukiMessageSender,
   AukiPeer,
+  AukiPeerReachabilityMode,
   AukiUserSession,
   AukiRegistryClient,
   AukiRegistryEndpoint,
@@ -58,20 +59,44 @@ import {
 
 declare const peer: AukiPeer;
 declare const session: AukiUserSession;
-const browserRoute: string = peer.wssRoute;
-const nativeRoute: string = peer.tcpRoute;
+const browserRoute: string | undefined = peer.wssRoute;
+const nativeRoute: string | undefined = peer.tcpRoute;
+const relayBacked: boolean = peer.relayBacked;
+const defaultPeer: Promise<AukiPeer> = session.startPeer(
+  "00000000-0000-0000-0000-000000000001",
+);
+const defaultDiscoveryPeer: Promise<AukiPeer> = session.startPeerWithDiscovery(
+  "00000000-0000-0000-0000-000000000001",
+  AukiDiscoveryMode.DiscoverOnly,
+);
+const outboundPeer: Promise<AukiPeer> = session.startPeer(
+  "00000000-0000-0000-0000-000000000001",
+  AukiPeerReachabilityMode.OutboundOnly,
+);
 const discoverOnlyPeer: Promise<AukiPeer> = session.startPeerWithDiscovery(
   "00000000-0000-0000-0000-000000000001",
   AukiDiscoveryMode.DiscoverOnly,
+  AukiPeerReachabilityMode.OutboundOnly,
 );
 const advertisingPeer: Promise<AukiPeer> = session.startPeerWithDiscovery(
   "00000000-0000-0000-0000-000000000001",
   AukiDiscoveryMode.DiscoverAndAdvertise,
+  AukiPeerReachabilityMode.RelayBacked,
 );
 const discoveredPeers: Promise<AukiDiscoveryCandidate[]> = peer.discover();
 const discoveredEchoPeers: Promise<AukiDiscoveryCandidate[]> = peer.discoverProtocol(
   "/example/echo/1.0.0",
 );
+void [
+  browserRoute,
+  nativeRoute,
+  relayBacked,
+  defaultPeer,
+  defaultDiscoveryPeer,
+  outboundPeer,
+  discoverOnlyPeer,
+  advertisingPeer,
+];
 
 async function checkDiscoveryCandidate(): Promise<void> {
   const candidate = (await discoveredPeers)[0];

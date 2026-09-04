@@ -9,6 +9,7 @@ import {
   AukiMessageClient,
   AukiMessageEndpoint,
   AukiPeer,
+  AukiPeerReachabilityMode,
   AukiRegistryClient,
   AukiRegistryEndpoint,
   AukiStreamClient,
@@ -141,14 +142,22 @@ export class BrowserPlayground {
 
   static async start(
     session: {
-      startPeerWithDiscovery(domainId: string, mode: AukiDiscoveryMode): Promise<AukiPeer>;
+      startPeerWithDiscovery(
+        domainId: string,
+        mode: AukiDiscoveryMode,
+        reachability?: AukiPeerReachabilityMode,
+      ): Promise<AukiPeer>;
     },
     domainId: string,
     nodeName: string,
     discoveryMode: AukiDiscoveryMode,
     onEvent: (message: string) => void = () => undefined,
   ): Promise<BrowserPlayground> {
-    const peer = await session.startPeerWithDiscovery(domainId, discoveryMode);
+    const peer = await session.startPeerWithDiscovery(
+      domainId,
+      discoveryMode,
+      AukiPeerReachabilityMode.RelayBacked,
+    );
     const playground = new BrowserPlayground(peer, nodeName, onEvent);
     try {
       playground.mount();
@@ -253,13 +262,16 @@ export class BrowserPlayground {
   }
 
   card(): PeerCard {
+    const tcp = this.peer.tcpRoute;
+    const wss = this.peer.wssRoute;
+    assert(tcp !== undefined && wss !== undefined, "browser playground requires relay routes");
     return {
       version: 1,
       runtime: "browser",
       domainId: this.peer.domainId,
       peerId: this.peer.peerId,
       protocols: this.requiredProtocols(),
-      routes: { tcp: this.peer.tcpRoute, wss: this.peer.wssRoute },
+      routes: { tcp, wss },
     };
   }
 

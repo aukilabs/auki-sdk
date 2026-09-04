@@ -52,6 +52,11 @@ pub struct EchoClient {
 }
 
 impl EchoClient {
+    /// Create an outbound Echo client without registering an inbound handler.
+    pub fn new(protocols: AukiPeerProtocols) -> Self {
+        Self { protocols }
+    }
+
     /// Send one echo through the routes configured on the owning native Auki peer.
     #[cfg(not(target_arch = "wasm32"))]
     pub async fn send(
@@ -123,7 +128,7 @@ impl EchoEndpoint {
         })?;
 
         Ok(Self {
-            client: EchoClient { protocols },
+            client: EchoClient::new(protocols),
             registration,
             events,
         })

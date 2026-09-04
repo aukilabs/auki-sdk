@@ -87,9 +87,10 @@ User authentication and authority preparation compile to Wasm. The generic Web
 binding exposes them as `AukiUserSession`: JavaScript logs in a User, lists
 accessible Domains, and selects one before starting an `AukiPeer`.
 
-The Web `0.1` facade creates a fresh in-memory identity for each peer start and
-always acquires one confirmed WSS relay route. Reloading or starting again
-therefore creates a new Peer ID. It does not accept App credentials or persist
+The Web `0.1` facade creates a fresh in-memory identity for each peer start.
+Relay-backed mode acquires one confirmed WSS relay reservation; outbound-only
+mode skips the booking and exposes no local route. Reloading or starting again
+creates a new Peer ID. The facade does not accept App credentials or persist
 the User password or peer identity.
 
 See the

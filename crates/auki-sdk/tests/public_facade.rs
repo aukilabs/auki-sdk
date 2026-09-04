@@ -66,6 +66,7 @@ fn facade_reexports_the_complete_safe_custom_protocol_surface() {
     let _start = AukiPeer::start;
     let _bootstrap_authenticate = AukiPeerBootstrap::authenticate;
     let _bootstrap_dev = AukiPeerBootstrap::dev;
+    let _bootstrap_without_relay = AukiPeerBootstrap::without_relay;
     let _bootstrap_domains = AukiPeerBootstrap::accessible_domains;
     let _bootstrap_start = AukiPeerBootstrap::start_peer;
     let _bootstrap_ephemeral = AukiPeerBootstrap::start_ephemeral_peer;

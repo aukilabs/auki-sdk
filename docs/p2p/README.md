@@ -45,8 +45,10 @@ has valid authority, transport, and a confirmed relay-provider route pair.
 One booking requests `relay_count` provider slots; each slot owns one
 reservation and one atomic TCP/WSS pair. Native and Python reserve over TCP;
 Web reserves over WSS. The count adds redundant providers, not transports.
-Native `direct_only()` is an explicit alternative that makes no relay booking;
-an inbound direct peer must also publish a reachable listener route.
+Native `direct_only()` and cross-target `without_relay()` are explicit
+alternatives that make no local relay booking. An inbound native direct peer
+must also publish a reachable listener route; an outbound-only browser has no
+public route but can still dial a remote peer's WSS relay route.
 
 Robot and Compute hosts use `AukiPeer::start_external` when product
 infrastructure already manages authority. They do not need a second transport

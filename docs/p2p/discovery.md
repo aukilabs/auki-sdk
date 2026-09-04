@@ -68,7 +68,9 @@ asynchronously.
 
 Relay reachability is configured separately. A discover-only peer may still
 own a relay, but DDS does not reveal it. Conversely, an advertising peer may
-advertise explicit direct routes without owning a relay.
+advertise explicit direct routes without owning a relay on native targets. A
+Web `OutboundOnly` peer has no public route, so it supports `DiscoverOnly` but
+rejects `DiscoverAndAdvertise`.
 
 ## What DDS advertises
 

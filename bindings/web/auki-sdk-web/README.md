@@ -3,13 +3,14 @@
 Generic Rust/Wasm composition for authenticated Auki browser peers.
 
 JavaScript uses `AukiUserSession` to authenticate a User, list accessible
-Domains, and start an ephemeral `AukiPeer`. A browser peer always acquires a
-relay before startup completes and exposes a required TCP/WSS circuit-route
-pair from that one provider slot as public peer-card data. The browser reserves
-over WSS; its TCP route lets native and Python peers dial the same reservation.
-`AukiPeer.shutdown()` is the awaited
-cleanup barrier, while `AukiPeer.waitStopped()` reports unexpected terminal
-transport or relay failure to the application.
+Domains, and start an ephemeral `AukiPeer`. Relay-backed remains the compatible
+default and exposes a TCP/WSS circuit-route pair from one provider slot. The
+browser reserves over WSS; its TCP route lets native and Python peers dial the
+same reservation. `AukiPeerReachabilityMode.OutboundOnly` skips that booking
+and exposes neither route, while still allowing authenticated dials to a remote
+peer's WSS route. `AukiPeer.shutdown()` is the awaited cleanup barrier, while
+`AukiPeer.waitStopped()` reports unexpected terminal transport, authority, or
+relay failure to the application.
 
 The binding delegates authentication, explicit Domain authorization, ephemeral
 identity creation, and peer startup to Rust's `AukiPeerBootstrap`. This crate
@@ -21,6 +22,22 @@ fresh candidates without publishing. Select `DiscoverAndAdvertise` when the
 peer should also maintain a short-lived advertisement. `peer.discover()` and
 `peer.discoverProtocol(exactId)` return untrusted route hints; protocol dialing
 still verifies the expected Peer ID and Domain in Rust.
+
+Reachability is an optional final startup argument. Omitting it keeps the
+relay-backed default; pass `OutboundOnly` to opt out:
+
+```ts
+const peer = await session.startPeerWithDiscovery(
+  domainId,
+  AukiDiscoveryMode.DiscoverOnly,
+  AukiPeerReachabilityMode.OutboundOnly,
+);
+```
+
+For an outbound-only peer, `peer.relayBacked` is `false` and `peer.tcpRoute`
+and `peer.wssRoute` are `undefined`. `OutboundOnly` may be combined with no DDS
+tracker or `DiscoverOnly`; `DiscoverAndAdvertise` is rejected because there is
+no inbound route to publish.
 
 ## Built-in protocol bindings
 

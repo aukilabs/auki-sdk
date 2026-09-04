@@ -25,16 +25,20 @@ clearSensitiveEnvironment(process.env);
 const { chromium } = await import("playwright");
 const nativeMessage = "hello from one shared Rust protocol";
 const browserToNativeMessage = "hello back from browser A";
+const outboundBrowserMessage = "hello from outbound-only browser C";
 let staticServer;
 let browser;
 let browserContext;
 let firstPage;
 let secondPage;
+let outboundPage;
 let native;
 let nativeStateDir;
 let browserStartups = [];
 let firstPeerStarted = false;
 let secondPeerStarted = false;
+let outboundPeerStarted = false;
+let outboundBookingRequests = 0;
 
 try {
   await buildWebApp(childEnvironment);
@@ -52,28 +56,47 @@ try {
   browserContext = await browser.newContext();
   firstPage = await browserContext.newPage();
   secondPage = await browserContext.newPage();
+  outboundPage = await browserContext.newPage();
+  await outboundPage.route("**/*", async (route) => {
+    if (new URL(route.request().url()).pathname.includes("/relay-bookings")) {
+      outboundBookingRequests += 1;
+      await route.abort("blockedbyclient");
+      return;
+    }
+    await route.continue();
+  });
   await Promise.all([
     firstPage.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: "load" }),
     secondPage.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: "load" }),
+    outboundPage.goto(`http://127.0.0.1:${address.port}/`, { waitUntil: "load" }),
   ]);
   await Promise.all([
     firstPage.waitForFunction(() => !document.querySelector("#login-button")?.disabled),
     secondPage.waitForFunction(() => !document.querySelector("#login-button")?.disabled),
+    outboundPage.waitForFunction(() => !document.querySelector("#login-button")?.disabled),
   ]);
 
   browserStartups = [
     startBrowserPeer(firstPage, credentials, () => { firstPeerStarted = true; }),
     startBrowserPeer(secondPage, credentials, () => { secondPeerStarted = true; }),
+    startBrowserPeer(
+      outboundPage,
+      credentials,
+      () => { outboundPeerStarted = true; },
+      { reachability: "outbound_only", discovery: "discover_only" },
+    ),
   ];
   const startupResults = await withTimeout(
     Promise.allSettled(browserStartups),
     START_TIMEOUT_MS,
-    "starting two browser peers",
+    "starting three browser peers",
   );
-  const [firstPeer, secondPeer] = requireStartedPeers(startupResults);
-  assert.notEqual(firstPeer.peerId, secondPeer.peerId);
+  const [firstPeer, secondPeer, outboundPeer] = requireStartedPeers(startupResults);
+  assert.equal(new Set([firstPeer.peerId, secondPeer.peerId, outboundPeer.peerId]).size, 3);
   assertBrowserPeer(firstPeer, credentials.domainId);
   assertBrowserPeer(secondPeer, credentials.domainId);
+  assertOutboundBrowserPeer(outboundPeer, credentials.domainId);
+  assert.equal(outboundBookingRequests, 0, "outbound-only startup contacted relay booking");
 
   await proveBrowserEcho(
     firstPage,
@@ -89,6 +112,14 @@ try {
     firstPeer,
     "hello from browser B",
   );
+  await proveBrowserEcho(
+    outboundPage,
+    outboundPeer,
+    firstPage,
+    firstPeer,
+    outboundBrowserMessage,
+  );
+  assert.equal(outboundBookingRequests, 0, "outbound-only echo contacted relay booking");
 
   assert(firstPeer.tcpRoute, "the required relay TCP route is missing");
   assert(
@@ -147,15 +178,18 @@ try {
     Promise.all([
       stopBrowserPeer(firstPage),
       stopBrowserPeer(secondPage),
+      stopBrowserPeer(outboundPage),
     ]),
     START_TIMEOUT_MS,
     "shutting down the browser peers",
   );
   firstPeerStarted = false;
   secondPeerStarted = false;
+  outboundPeerStarted = false;
+  assert.equal(outboundBookingRequests, 0, "outbound-only shutdown contacted relay booking");
 
   console.log(
-    `PORTABLE_ECHO_MATRIX_OK browser_a=${firstPeer.peerId} browser_b=${secondPeer.peerId} native=${nativePeerId} exchange=dds-discovery directions=browser-a-to-browser-b,browser-b-to-browser-a,native-to-browser-a,browser-a-to-native`,
+    `PORTABLE_ECHO_MATRIX_OK browser_a=${firstPeer.peerId} browser_b=${secondPeer.peerId} browser_c_outbound=${outboundPeer.peerId} native=${nativePeerId} outbound_booking_requests=${outboundBookingRequests} exchange=dds-discovery directions=browser-a-to-browser-b,browser-b-to-browser-a,browser-c-to-browser-a,native-to-browser-a,browser-a-to-native`,
   );
 } catch (error) {
   throw redactError(error, credentials);
@@ -180,6 +214,13 @@ try {
       stopBrowserPeer(secondPage),
       CLEANUP_TIMEOUT_MS,
       "cleaning up browser peer B",
+    ).catch(() => {});
+  }
+  if (outboundPage && outboundPeerStarted) {
+    await withTimeout(
+      stopBrowserPeer(outboundPage),
+      CLEANUP_TIMEOUT_MS,
+      "cleaning up outbound-only browser peer C",
     ).catch(() => {});
   }
   if (browser) {
@@ -207,7 +248,12 @@ function requiredCredentials() {
   };
 }
 
-async function startBrowserPeer(page, input, peerStarted) {
+async function startBrowserPeer(
+  page,
+  input,
+  peerStarted,
+  { reachability = "relay_backed", discovery = "discover_and_advertise" } = {},
+) {
   await page.fill("#email", input.email);
   await page.fill("#password", input.password);
   await page.click("#login-button");
@@ -219,7 +265,8 @@ async function startBrowserPeer(page, input, peerStarted) {
     { timeout: START_TIMEOUT_MS },
   );
   await page.selectOption("#domain", input.domainId);
-  await page.selectOption("#discovery-mode", "discover_and_advertise");
+  await page.selectOption("#reachability-mode", reachability);
+  await page.selectOption("#discovery-mode", discovery);
   await page.click("#start-button");
   await page.waitForFunction(
     () => Boolean(document.querySelector("#local")?.dataset.peerId),
@@ -231,6 +278,7 @@ async function startBrowserPeer(page, input, peerStarted) {
     peerId: local.dataset.peerId,
     domainId: local.dataset.domainId,
     protocol: "/example/echo/1.0.0",
+    relayBacked: local.dataset.relayBacked === "true",
     wssRoute: local.dataset.wssRoute,
     tcpRoute: local.dataset.tcpRoute,
   }));
@@ -247,11 +295,20 @@ function requireStartedPeers(results) {
 function assertBrowserPeer(peer, expectedDomainId) {
   assert.equal(peer.domainId, expectedDomainId);
   assert.equal(peer.protocol, "/example/echo/1.0.0");
+  assert.equal(peer.relayBacked, true);
   assert(peer.wssRoute.includes("/wss/"));
   assert(
     peer.wssRoute.endsWith(`/p2p-circuit/p2p/${peer.peerId}`),
     "the browser WSS route does not target its Peer ID",
   );
+}
+
+function assertOutboundBrowserPeer(peer, expectedDomainId) {
+  assert.equal(peer.domainId, expectedDomainId);
+  assert.equal(peer.protocol, "/example/echo/1.0.0");
+  assert.equal(peer.relayBacked, false);
+  assert.equal(peer.wssRoute, undefined);
+  assert.equal(peer.tcpRoute, undefined);
 }
 
 async function proveBrowserEcho(senderPage, sender, receiverPage, receiver, message) {

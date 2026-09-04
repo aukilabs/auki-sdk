@@ -810,12 +810,42 @@ where
 
     /// Fetch and append one bounded batch, preserving source sequence and time.
     pub async fn sync_once(&mut self) -> Result<RemoteProductSync, ComponentProtocolError> {
-        let request = ObservationRequest {
-            product: self.product.reference(),
-            selection: ObservationSelection::FromSequence {
+        let batch = self
+            .exchange(ObservationSelection::FromSequence {
                 sequence: self.next_sequence,
                 max_observations: self.batch_size,
-            },
+            })
+            .await?;
+        self.finish_sync(batch, None)
+    }
+
+    /// Recover a latency-sensitive mirror at the remote live edge.
+    ///
+    /// This keeps the same imported Product and its already retained history,
+    /// but fetches only the newest available source observation. If retained
+    /// source observations were skipped, the returned [`RemoteProductSync`]
+    /// and [`Self::last_gap`] record that exact sequence gap.
+    pub async fn sync_latest_once(&mut self) -> Result<RemoteProductSync, ComponentProtocolError> {
+        let requested_sequence = self.next_sequence;
+        let batch = self.exchange(ObservationSelection::LatestExisting).await?;
+        let inferred_gap = batch
+            .observations
+            .first()
+            .filter(|observation| observation.sequence > requested_sequence)
+            .map(|observation| SourceGap {
+                requested_sequence,
+                available_from: observation.sequence,
+            });
+        self.finish_sync(batch, inferred_gap)
+    }
+
+    async fn exchange(
+        &mut self,
+        selection: ObservationSelection,
+    ) -> Result<RemoteObservations<T>, ComponentProtocolError> {
+        let request = ObservationRequest {
+            product: self.product.reference(),
+            selection,
         };
         let mut stream = self
             .observation_stream
@@ -841,7 +871,15 @@ where
                 return Err(error);
             }
         };
-        let gap = batch.gap;
+        Ok(batch)
+    }
+
+    fn finish_sync(
+        &mut self,
+        batch: RemoteObservations<T>,
+        inferred_gap: Option<SourceGap>,
+    ) -> Result<RemoteProductSync, ComponentProtocolError> {
+        let gap = batch.gap.or(inferred_gap);
         let accepted = batch.observations.len();
         self.ingest(batch.observations, gap)?;
         Ok(RemoteProductSync {

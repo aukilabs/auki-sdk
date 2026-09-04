@@ -131,6 +131,11 @@ final class CameraMeshModel: ObservableObject {
     case card(String)
   }
 
+  private struct RetriableConnection {
+    let attempt: ConnectionAttempt
+    let preferredQuality: CameraQuality
+  }
+
   private var identity: AukiPeerIdentity?
   private var session: AukiSession?
   private var viewer: CameraViewer?
@@ -142,7 +147,7 @@ final class CameraMeshModel: ObservableObject {
   private var provisionalCapture: CameraCapture?
   private var eventTask: Task<Void, Never>?
   private var frameTask: Task<Void, Never>?
-  private var retryAttempts: [String: ConnectionAttempt] = [:]
+  private var retryAttempts: [String: RetriableConnection] = [:]
   private var automationStarted = false
   private var snapshotAfterFirstFrame = false
   private var runAcceptanceFlow = false
@@ -512,21 +517,29 @@ final class CameraMeshModel: ObservableObject {
   }
 
   @discardableResult
-  func connectSelectedCamera() async -> Bool {
+  func connectSelectedCamera(preferredQuality: CameraQuality? = nil) async -> Bool {
     guard
       canConnectDiscovered,
       let candidate = discoveredCameras.first(where: { $0.peerID == selectedCameraPeerID })
     else { return false }
-    return await connect(using: .discovered(candidate), peerID: candidate.peerID)
+    return await connect(
+      using: .discovered(candidate),
+      peerID: candidate.peerID,
+      preferredQuality: preferredQuality
+    )
   }
 
   @discardableResult
-  func connectPastedCard() async -> Bool {
+  func connectPastedCard(preferredQuality: CameraQuality? = nil) async -> Bool {
     guard canConnectCard else { return false }
     let card = remoteCard.trimmingCharacters(in: .whitespacesAndNewlines)
     do {
       let target = try nativeCameraTarget(cardJSON: card, domainID: selectedDomainID)
-      return await connect(using: .card(card), peerID: target.peerId)
+      return await connect(
+        using: .card(card),
+        peerID: target.peerId,
+        preferredQuality: preferredQuality
+      )
     } catch {
       write(error)
       return false
@@ -534,9 +547,13 @@ final class CameraMeshModel: ObservableObject {
   }
 
   @discardableResult
-  func retryCamera(peerID: String) async -> Bool {
-    guard phase == .ready, let attempt = retryAttempts[peerID] else { return false }
-    return await connect(using: attempt, peerID: peerID)
+  func retryCamera(peerID: String, preferredQuality: CameraQuality? = nil) async -> Bool {
+    guard phase == .ready, let retry = retryAttempts[peerID] else { return false }
+    return await connect(
+      using: retry.attempt,
+      peerID: peerID,
+      preferredQuality: preferredQuality ?? retry.preferredQuality
+    )
   }
 
   @discardableResult
@@ -623,7 +640,7 @@ final class CameraMeshModel: ObservableObject {
     write("Removed camera \(peerID).")
   }
 
-  func discoverAndAddAllCameras() async {
+  func discoverAndAddAllCameras(preferredQuality: CameraQuality? = nil) async {
     guard phase == .ready, selectedRole == .viewer, !addingAllCameras else { return }
 
     if discoveredCameras.isEmpty {
@@ -638,7 +655,7 @@ final class CameraMeshModel: ObservableObject {
 
     addingAllCameras = true
     defer { addingAllCameras = false }
-    let quality = preferredViewerQuality
+    let quality = preferredQuality ?? preferredViewerQuality
     let tasks = candidates.map { candidate in
       Task { [weak self] in
         guard let self else { return false }
@@ -846,7 +863,10 @@ final class CameraMeshModel: ObservableObject {
 
     let operationGeneration = generation
     let quality = preferredQuality ?? preferredViewerQuality
-    retryAttempts[peerID] = attempt
+    retryAttempts[peerID] = RetriableConnection(
+      attempt: attempt,
+      preferredQuality: quality
+    )
     if tile(peerID: peerID) == nil {
       cameraTiles.append(
         CameraTile(

@@ -37,7 +37,9 @@ maximum of 16 peers on the wall.
 The discovery sheet's **Add all** control intentionally opens every discovered
 camera concurrently, capped by the 16-camera wall. It is a burst/stress path
 for validating SDK relay-dial backpressure; adding cameras individually is the
-paced operator flow.
+paced operator flow. Choose Low, Medium, or High at the top of the sheet before
+adding one camera, a pasted peer card, or the full discovered set. Retries keep
+the selected quality unless you explicitly choose another one in the sheet.
 
 The column selector changes density; it does not divide cameras into square
 pages. Two, three, and four columns keep every camera in one scrolling wall.
@@ -59,8 +61,9 @@ Swift viewer compatibility. A Web viewer selects Low, Medium, or High from the
 camera action menu. It verifies that the chosen Catalog resource, Registry
 metadata, Stream manifest, and every JPEG agree. Switching opens and validates
 the replacement stream before closing the current one, so the last decoded
-frame remains visible throughout the handoff. The wall initially chooses High
-for one column, Medium for two, and Low for denser layouts. Camera Mesh rejects
+frame remains visible throughout the handoff. The Add Camera sheet initially
+chooses High for one column, Medium for two, and Low for denser layouts, while
+still letting the operator override it before connecting. Camera Mesh rejects
 JPEG frames larger than 1 MiB.
 
 The application retains only the newest captured frame before each transport

@@ -103,10 +103,12 @@ On iPhone the wall uses two columns. Select **1** or tap a camera to focus a
 single feed, then use the arrow controls to move through the wall. Wider Apple
 devices expose one through four columns. Each tile's menu owns pause/resume,
 verified snapshot, Low/Medium/High quality, retry, focus, and removal for that
-camera only. New one-column feeds prefer High, two-column feeds prefer Medium,
-and denser walls prefer Low. Missing tiers fall back to the publisher's lowest
-available quality. Switching waits for the first replacement frame before it
-closes the working stream.
+camera only. The **Add camera** sheet selects Low, Medium, or High for both
+individual additions and **Add all**. Its initial choice follows the wall:
+one-column feeds prefer High, two-column feeds prefer Medium, and denser walls
+prefer Low. Missing tiers fall back to the publisher's lowest available
+quality. Switching waits for the first replacement frame before it closes the
+working stream.
 
 An unapproved connection returns `approval_required`. Compare the complete
 viewer Peer ID shown by the app with the publisher's pending request, approve

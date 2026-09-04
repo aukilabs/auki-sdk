@@ -709,10 +709,24 @@ private struct EmptyCameraTile: View {
 private struct AddCameraSheet: View {
   @ObservedObject var model: CameraMeshModel
   let dismiss: () -> Void
+  @State private var selectedQuality: CameraQuality = .medium
 
   var body: some View {
     NavigationStack {
       List {
+        Section {
+          Picker("Resolution", selection: $selectedQuality) {
+            ForEach(CameraQuality.allCases) { quality in
+              Text(quality.title).tag(quality)
+            }
+          }
+          .pickerStyle(.segmented)
+        } header: {
+          Text("New camera quality")
+        } footer: {
+          Text(CameraMeshContract.profile(selectedQuality).label)
+        }
+
         Section {
           HStack {
             Button {
@@ -726,7 +740,9 @@ private struct AddCameraSheet: View {
             Spacer()
 
             Button {
-              Task { await model.discoverAndAddAllCameras() }
+              Task {
+                await model.discoverAndAddAllCameras(preferredQuality: selectedQuality)
+              }
             } label: {
               if model.addingAllCameras {
                 ProgressView()
@@ -771,7 +787,12 @@ private struct AddCameraSheet: View {
                     || existing.status == .awaitingApproval
                   {
                     Button("Retry") {
-                      Task { await model.retryCamera(peerID: candidate.peerID) }
+                      Task {
+                        await model.retryCamera(
+                          peerID: candidate.peerID,
+                          preferredQuality: selectedQuality
+                        )
+                      }
                     }
                   } else {
                     Text(existing.status == .live ? "On wall" : "Adding…")
@@ -781,7 +802,9 @@ private struct AddCameraSheet: View {
                 } else {
                   Button("Add") {
                     model.selectedCameraPeerID = candidate.peerID
-                    Task { await model.connectSelectedCamera() }
+                    Task {
+                      await model.connectSelectedCamera(preferredQuality: selectedQuality)
+                    }
                   }
                   .disabled(model.remainingCameraSlots == 0)
                 }
@@ -797,13 +820,16 @@ private struct AddCameraSheet: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
           Button("Add pasted camera") {
-            Task { await model.connectPastedCard() }
+            Task { await model.connectPastedCard(preferredQuality: selectedQuality) }
           }
           .disabled(!model.canConnectCard)
         }
       }
       .navigationTitle("Add camera")
       .navigationBarTitleDisplayMode(.inline)
+      .onAppear {
+        selectedQuality = model.preferredViewerQuality
+      }
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
           Button("Done", action: dismiss)

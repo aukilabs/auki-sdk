@@ -172,6 +172,19 @@
           <button class="icon-button" id="close-add-camera-button" type="button" aria-label="Close add camera">×</button>
         </header>
         <div class="sheet-body">
+          <section class="add-quality" aria-labelledby="add-quality-title">
+            <div>
+              <h3 id="add-quality-title">New camera quality</h3>
+              <p>Used for one camera, a peer card, or the full discovered set.</p>
+            </div>
+            <label>Resolution
+              <select id="add-camera-quality">
+                <option value="low">Low · 480×270 @ 5 fps</option>
+                <option value="medium">Medium · 960×540 @ 15 fps</option>
+                <option value="high">High · 1920×1080 @ 30 fps</option>
+              </select>
+            </label>
+          </section>
           <div class="discovery-heading">
             <div>
               <h3>Available in this Domain</h3>

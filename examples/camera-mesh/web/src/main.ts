@@ -24,6 +24,7 @@ interface FrameDeliverySample {
 
 interface CameraTileState {
   readonly candidate: CameraCandidate;
+  preferredQuality: CameraQualityTier;
   status: CameraStatus;
   message: string;
   name: string;
@@ -99,6 +100,7 @@ const cameraActionsDialog = dialog("camera-actions-dialog");
 const cameraActionsTitle = get<HTMLElement>("camera-actions-title");
 const cameraResults = get<HTMLElement>("camera-results");
 const addAllCamerasButton = button("add-all-cameras-button");
+const addCameraQuality = get<HTMLSelectElement>("add-camera-quality");
 const manualCard = get<HTMLTextAreaElement>("manual-card");
 const addCameraError = get<HTMLElement>("add-camera-error");
 const diagnosticFps = get<HTMLOutputElement>("diagnostic-fps");
@@ -171,7 +173,7 @@ cameraResults.addEventListener("click", (event) => {
   const control = (event.target as Element).closest<HTMLButtonElement>("button[data-candidate-peer-id]");
   if (!control) return;
   const candidate = candidates.get(control.dataset.candidatePeerId ?? "");
-  if (candidate) void addCamera(candidate);
+  if (candidate) void addCamera(candidate, selectedAddQuality());
 });
 
 cameraGrid.addEventListener("click", (event) => {
@@ -401,6 +403,7 @@ function openAddCamera(): void {
     return;
   }
   clearInlineError(addCameraError);
+  addCameraQuality.value = preferredQualityForWall();
   renderCandidates();
   showModal(addDialog);
   void discover();
@@ -441,7 +444,7 @@ async function addManualCard(): Promise<void> {
     candidates.set(candidate.peerId, candidate);
     manualCard.value = "";
     record(`Loaded exact camera route for ${shortPeer(candidate.peerId)} from a peer card`);
-    await addCamera(candidate);
+    await addCamera(candidate, selectedAddQuality());
   } catch (error) {
     showInlineError(addCameraError, errorMessage(error));
     report(error, false);
@@ -454,15 +457,16 @@ async function addAllCameras(): Promise<void> {
   if (additions.length === 0) return;
 
   addingAllCameras = true;
+  const preferredQuality = selectedAddQuality();
   addAllCamerasButton.disabled = true;
   addAllCamerasButton.textContent = `Adding ${additions.length}…`;
   record(
-    `Burst-connecting ${additions.length} discovered camera(s) concurrently (stress path)`,
+    `Burst-connecting ${additions.length} discovered camera(s) at ${cameraQualityLabel(preferredQuality)} concurrently (stress path)`,
   );
   addDialog.close();
   try {
     const results = await Promise.allSettled(
-      additions.map((candidate) => addCamera(candidate)),
+      additions.map((candidate) => addCamera(candidate, preferredQuality)),
     );
     for (const result of results) {
       if (result.status === "rejected") report(result.reason, false);
@@ -494,10 +498,14 @@ function addableCandidates(): CameraCandidate[] {
     });
 }
 
-async function addCamera(candidate: CameraCandidate): Promise<void> {
+async function addCamera(
+  candidate: CameraCandidate,
+  requestedQuality?: CameraQualityTier,
+): Promise<void> {
   const running = mesh;
   if (!running || running.role !== "viewer") return;
   let state = cameras.get(candidate.peerId);
+  const preferredQuality = requestedQuality ?? state?.preferredQuality ?? preferredQualityForWall();
   const existing = state !== undefined;
   if (!state) {
     if (cameras.size >= MAX_CAMERAS) {
@@ -506,6 +514,7 @@ async function addCamera(candidate: CameraCandidate): Promise<void> {
     }
     state = {
       candidate,
+      preferredQuality,
       status: "connecting",
       message: "Verifying camera metadata and opening the Stream…",
       name: `Camera ${shortPeer(candidate.peerId)}`,
@@ -535,6 +544,7 @@ async function addCamera(candidate: CameraCandidate): Promise<void> {
   }
 
   const operation = ++state.operation;
+  state.preferredQuality = preferredQuality;
   state.status = "connecting";
   state.message = "Verifying camera metadata and opening the Stream…";
   resetStreamDiagnostics(state);
@@ -543,7 +553,7 @@ async function addCamera(candidate: CameraCandidate): Promise<void> {
   renderWall();
   addDialog.close();
   try {
-    const connection = await running.connectCamera(candidate, preferredQualityForWall());
+    const connection = await running.connectCamera(candidate, preferredQuality);
     if (cameras.get(candidate.peerId) !== state || state.operation !== operation) {
       await running.disconnectCamera(candidate.peerId);
       return;
@@ -577,7 +587,7 @@ async function handleTileAction(action: string, peerId: string): Promise<void> {
   if (action === "menu") {
     openCameraActions(peerId);
   } else if (action === "retry") {
-    await addCamera(state.candidate);
+    await addCamera(state.candidate, state.preferredQuality);
   } else if (action === "remove") {
     await removeCamera(peerId);
   } else if (action === "freeze") {
@@ -616,6 +626,7 @@ async function switchCameraQuality(
   renderWall();
   try {
     await running.switchCameraQuality(peerId, quality);
+    state.preferredQuality = quality;
     showToast(`${state.name} switched to ${cameraQualityLabel(quality)}`);
   } catch (error) {
     report(error);
@@ -1726,6 +1737,12 @@ function defaultName(): string {
 function preferredQualityForWall(): CameraQualityTier {
   const columns = effectiveColumnCount();
   return columns === 1 ? "high" : columns === 2 ? "medium" : "low";
+}
+
+function selectedAddQuality(): CameraQualityTier {
+  return isCameraQualityTier(addCameraQuality.value)
+    ? addCameraQuality.value
+    : preferredQualityForWall();
 }
 
 function capitalized(value: string): string {

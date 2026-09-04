@@ -11,6 +11,7 @@ public class AukiSdkExpoModule: Module {
   private var peers: [String: AukiPeer] = [:]
   private var identities: [String: AukiPeerIdentity] = [:]
   private var streams: [String: AukiStreamSubscription] = [:]
+  private var urdfModels: [String: AukiUrdfModel] = [:]
   #endif
 
   public func definition() -> ModuleDefinition {
@@ -143,18 +144,65 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("registryListExact") {
-      (_: String, _: [String: String], _: String) -> String in
-      throw unsupported("registryListExact is web-only in this slice")
+      (peerHandle: String, target: [String: String], kind: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let peer = try self.requirePeer(peerHandle)
+      let exact = try Self.exactTarget(target, domainId: peer.domainId())
+      let registryKind = try Self.registryKind(kind)
+      let entries = try await AukiRegistryClient(peer: peer).listExact(
+        target: exact,
+        kind: registryKind
+      )
+      let mapped: [[String: String]] = entries.map { entry in
+        ["id": entry.id, "hash": entry.hash]
+      }
+      return try Self.jsonString(mapped)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
     }
 
     AsyncFunction("registryFetchExact") {
-      (_: String, _: [String: String], _: String, _: String, _: String) -> String in
-      throw unsupported("registryFetchExact is web-only in this slice")
+      (
+        peerHandle: String,
+        target: [String: String],
+        kind: String,
+        id: String,
+        hash: String
+      ) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let peer = try self.requirePeer(peerHandle)
+      let exact = try Self.exactTarget(target, domainId: peer.domainId())
+      let registryKind = try Self.registryKind(kind)
+      return try await AukiRegistryClient(peer: peer).fetchExact(
+        target: exact,
+        kind: registryKind,
+        id: id,
+        hash: hash
+      )
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
     }
 
     AsyncFunction("blobFetchExact") {
-      (_: String, _: [String: String], _: String) -> String in
-      throw unsupported("blobFetchExact is web-only in this slice")
+      (peerHandle: String, target: [String: String], sha256: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let peer = try self.requirePeer(peerHandle)
+      let exact = try Self.exactTarget(target, domainId: peer.domainId())
+      let receipt = try await AukiBlobClient(peer: peer).fetchExact(
+        target: exact,
+        sha256: sha256
+      )
+      return try Self.jsonString([
+        "peerId": receipt.remotePeerId,
+        "sha256": receipt.sha256,
+        "relayed": receipt.relayed,
+        "bytesBase64": receipt.bytes.base64EncodedString(),
+      ] as [String: Any])
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
     }
 
     AsyncFunction("streamSubscribeExact") {
@@ -205,6 +253,52 @@ public class AukiSdkExpoModule: Module {
         return
       }
       try await subscription.cancel()
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("urdfModelFromXml") { (xml: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let model = try AukiUrdfModel.fromXml(xml: xml)
+      let id = self.newId("urdf")
+      self.urdfModels[id] = model
+      return id
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("urdfJointCount") { (handle: String) -> Int in
+      #if canImport(auki_sdk_swiftFFI)
+      return Int(try self.requireUrdf(handle).jointCount())
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("urdfResolve") { (handle: String, angles: [Double]) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let floats = angles.map { Float($0) }
+      let links = try self.requireUrdf(handle).resolve(angles: floats)
+      return try Self.encodeUrdfLinks(links)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("urdfResolveIdentity") { (handle: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let links = try self.requireUrdf(handle).resolveIdentityPose()
+      return try Self.encodeUrdfLinks(links)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("urdfModelFree") { (handle: String) in
+      #if canImport(auki_sdk_swiftFFI)
+      self.urdfModels.removeValue(forKey: handle)
       #else
       throw unsupported("AukiSDK XCFramework missing")
       #endif
@@ -262,6 +356,34 @@ public class AukiSdkExpoModule: Module {
     return peer
   }
 
+  private func requireUrdf(_ handle: String) throws -> AukiUrdfModel {
+    guard let model = urdfModels[handle] else {
+      throw unsupported("unknown urdf model: \(handle)")
+    }
+    return model
+  }
+
+  private static func encodeUrdfLinks(_ links: [AukiUrdfLinkTransform]) throws -> String {
+    let mapped: [[String: Any]] = links.map { link in
+      var entry: [String: Any] = [
+        "linkName": link.linkName,
+        "transform": link.transform.map { Double($0) },
+      ]
+      if let meshPath = link.meshPath {
+        entry["meshPath"] = meshPath
+      } else {
+        entry["meshPath"] = NSNull()
+      }
+      if let rgba = link.colorRgba {
+        entry["colorRgba"] = rgba.map { Double($0) }
+      } else {
+        entry["colorRgba"] = NSNull()
+      }
+      return entry
+    }
+    return try jsonString(mapped)
+  }
+
   private static func mapCandidate(_ candidate: AukiDiscoveryCandidate) -> [String: Any] {
     var mapped: [String: Any] = [
       "peerId": candidate.peerId,
@@ -291,6 +413,25 @@ public class AukiSdkExpoModule: Module {
       peerId: peerId,
       route: route
     )
+  }
+
+  private static func registryKind(_ raw: String) throws -> AukiRegistryKind {
+    switch raw {
+    case "device_model":
+      return .deviceModel
+    case "sensor":
+      return .sensor
+    case "clock":
+      return .clock
+    case "frame":
+      return .frame
+    case "detector":
+      return .detector
+    case "map":
+      return .map
+    default:
+      throw unsupported("unsupported registry kind: \(raw)")
+    }
   }
 
   private static func streamPayloadKind(_ raw: String) throws -> AukiStreamPayloadKind {
@@ -367,10 +508,10 @@ public class AukiSdkExpoModule: Module {
     }
   }
 
-  private static func jsonString(_ object: [String: Any]) throws -> String {
+  private static func jsonString(_ object: Any) throws -> String {
     let data = try JSONSerialization.data(withJSONObject: object)
     guard let string = String(data: data, encoding: .utf8) else {
-      throw unsupported("failed to encode stream next JSON")
+      throw unsupported("failed to encode JSON")
     }
     return string
   }

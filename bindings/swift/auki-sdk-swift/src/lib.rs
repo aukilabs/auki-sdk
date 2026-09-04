@@ -28,6 +28,7 @@ uniffi::setup_scaffolding!();
     feature = "blob",
     feature = "message",
     feature = "stream",
+    feature = "urdf-fk",
 ))]
 mod protocols;
 

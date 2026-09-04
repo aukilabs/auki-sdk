@@ -94,6 +94,26 @@ class AukiSdkExpoModule : Module() {
       throw AndroidUnsupportedException()
     }
 
+    AsyncFunction("urdfModelFromXml") { _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("urdfJointCount") { _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("urdfResolve") { _: String, _: List<Double> ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("urdfResolveIdentity") { _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("urdfModelFree") { _: String ->
+      throw AndroidUnsupportedException()
+    }
+
     AsyncFunction("shutdown") { _: String ->
       throw AndroidUnsupportedException()
     }

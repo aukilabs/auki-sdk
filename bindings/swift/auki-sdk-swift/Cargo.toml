@@ -48,8 +48,9 @@ stream = [
   "dep:prost",
   "auki-protocols/stream-endpoint",
 ]
+urdf-fk = ["dep:auki-urdf-fk"]
 finite-protocols = ["info", "catalog", "registry", "blob"]
-standard-protocols = ["finite-protocols", "message", "stream"]
+standard-protocols = ["finite-protocols", "message", "stream", "urdf-fk"]
 
 [dependencies]
 async-channel = { workspace = true, optional = true }
@@ -57,6 +58,7 @@ auki-datatypes = { path = "../../../crates/auki-datatypes", optional = true }
 auki-protocols = { path = "../../../crates/auki-protocols", optional = true }
 auki-registry = { path = "../../../crates/auki-registry", optional = true }
 auki-sdk-rs = { package = "auki-sdk", path = "../../../crates/auki-sdk" }
+auki-urdf-fk = { path = "../../../../auki-libs/crates/auki-urdf-fk", optional = true, default-features = false }
 futures = { workspace = true, optional = true }
 parking_lot.workspace = true
 prost = { version = "0.13", optional = true }

@@ -61,6 +61,11 @@ declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents
   ): Promise<string>;
   streamNext(subscriptionId: string): Promise<string | null>;
   streamCancel(subscriptionId: string): Promise<void>;
+  urdfModelFromXml(xml: string): Promise<string>;
+  urdfJointCount(handle: string): Promise<number>;
+  urdfResolve(handle: string, angles: number[]): Promise<string>;
+  urdfResolveIdentity(handle: string): Promise<string>;
+  urdfModelFree(handle: string): Promise<void>;
   shutdown(peerHandle: string): Promise<void>;
   waitStopped(peerHandle: string): Promise<void>;
 }

@@ -321,6 +321,26 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     this.streams.delete(subscriptionId);
   }
 
+  async urdfModelFromXml(_xml: string): Promise<string> {
+    throw new Error("urdfModelFromXml is native-only; use auki-urdf-fk wasm on web");
+  }
+
+  async urdfJointCount(_handle: string): Promise<number> {
+    throw new Error("urdfJointCount is native-only");
+  }
+
+  async urdfResolve(_handle: string, _angles: number[]): Promise<string> {
+    throw new Error("urdfResolve is native-only");
+  }
+
+  async urdfResolveIdentity(_handle: string): Promise<string> {
+    throw new Error("urdfResolveIdentity is native-only");
+  }
+
+  async urdfModelFree(_handle: string): Promise<void> {
+    throw new Error("urdfModelFree is native-only");
+  }
+
   async shutdown(peerHandle: string): Promise<void> {
     const peer = this.peers.get(peerHandle);
     if (!peer) {

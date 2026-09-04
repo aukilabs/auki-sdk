@@ -11,7 +11,7 @@ import re
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, NamedTuple
 import uuid
 
 import auki_sdk
@@ -20,6 +20,23 @@ import auki_sdk
 APP = "auki-camera-mesh"
 APP_VERSION = "0.1.0"
 CAMERA_RESOURCE_ID = "camera/main"
+CAMERA_MEDIUM_RESOURCE_ID = "camera/main/medium"
+CAMERA_HIGH_RESOURCE_ID = "camera/main/high"
+
+
+class CameraProfile(NamedTuple):
+    quality: str
+    resource_id: str
+    width: int
+    height: int
+    rate_hz: int
+
+
+CAMERA_PROFILES = (
+    CameraProfile("low", CAMERA_RESOURCE_ID, 480, 270, 5),
+    CameraProfile("medium", CAMERA_MEDIUM_RESOURCE_ID, 960, 540, 15),
+    CameraProfile("high", CAMERA_HIGH_RESOURCE_ID, 1_920, 1_080, 30),
+)
 CONTROL_RESOURCE_ID = "camera/control"
 REPLY_RESOURCE_ID = "camera/replies"
 CLOCK_ID = "camera/utc"
@@ -48,6 +65,21 @@ SYNTHETIC_JPEGS = tuple(
         Path(__file__).resolve().parents[1] / "assets/synthetic-frames.jpg.base64"
     ).read_text().split()
 )
+SYNTHETIC_JPEGS_BY_RESOURCE = {
+    CAMERA_RESOURCE_ID: SYNTHETIC_JPEGS,
+    CAMERA_MEDIUM_RESOURCE_ID: tuple(
+        base64.b64decode(frame)
+        for frame in (
+            Path(__file__).resolve().parents[1] / "assets/synthetic-frames-medium.jpg.base64"
+        ).read_text().split()
+    ),
+    CAMERA_HIGH_RESOURCE_ID: tuple(
+        base64.b64decode(frame)
+        for frame in (
+            Path(__file__).resolve().parents[1] / "assets/synthetic-frames-high.jpg.base64"
+        ).read_text().split()
+    ),
+}
 _OUTPUT_LOCK = threading.Lock()
 
 
@@ -235,90 +267,128 @@ class CameraMesh:
         }
         clock = auki_sdk.prepare_registry_entry("clock", clock_entry)
         clock_ref = registry_ref(self.peer_id, clock)
-        sensor_entry = {
-            "peer_id": self.peer_id,
-            "sensor_id": CAMERA_RESOURCE_ID,
-            "kind": "camera",
-            "type": "rgb",
-            "width": WIDTH,
-            "height": HEIGHT,
-            "frame_rate_hz": RATE_HZ,
-            "image_encoding": "jpeg",
-            "pixel_format": "rgb8",
-            "row_stride_bytes": 0,
-            "color_space": "srgb",
-            "intrinsics_model": "none",
-            "distortion_model": "none",
-            "frame": frame_ref,
-        }
-        sensor = auki_sdk.prepare_registry_entry("sensor", sensor_entry)
-        sensor_ref = registry_ref(self.peer_id, sensor)
-        self.entries = {
-            "sensor": (sensor_entry, sensor, sensor_ref),
-            "clock": (clock_entry, clock, clock_ref),
-            "frame": (frame_entry, frame, frame_ref),
-        }
         self.clock_ref = clock_ref
         self.control_channel = message_channel(self.peer_id, CONTROL_RESOURCE_ID, clock_ref)
         self.reply_channel = message_channel(self.peer_id, REPLY_RESOURCE_ID, clock_ref)
-        self.stream_manifest = {
-            "sensor_id": sensor["id"],
-            "sensor_hash": sensor["hash"],
-            "clock_peer_id": self.peer_id,
-            "clock_id": clock["id"],
-            "clock_hash": clock["hash"],
-            "frame_id": frame["id"],
-            "frame_hash": frame["hash"],
-            "resource_id": CAMERA_RESOURCE_ID,
-            "payload": "camera_frame",
-            "from_frame_id": "",
-            "from_frame_hash": "",
-            "to_frame_id": "",
-            "to_frame_hash": "",
-            "writer_mode": "live",
-            "expected_rate_hz": RATE_HZ,
-            "map_peer_id": "",
-            "map_id": "",
-            "map_hash": "",
+        self.renditions: dict[str, dict[str, Any]] = {}
+        catalog_resources: list[dict[str, Any]] = []
+        sensor_entries: list[tuple[dict[str, Any], dict[str, Any], dict[str, str]]] = []
+        for profile in CAMERA_PROFILES:
+            resource_id = profile.resource_id
+            sensor_entry = {
+                "peer_id": self.peer_id,
+                "sensor_id": resource_id,
+                "kind": "camera",
+                "type": "rgb",
+                "width": profile.width,
+                "height": profile.height,
+                "frame_rate_hz": profile.rate_hz,
+                "image_encoding": "jpeg",
+                "pixel_format": "rgb8",
+                "row_stride_bytes": 0,
+                "color_space": "srgb",
+                "intrinsics_model": "none",
+                "distortion_model": "none",
+                "frame": frame_ref,
+            }
+            sensor = auki_sdk.prepare_registry_entry("sensor", sensor_entry)
+            sensor_ref = registry_ref(self.peer_id, sensor)
+            source_jpegs = SYNTHETIC_JPEGS_BY_RESOURCE[resource_id]
+            require(
+                len(source_jpegs) >= 2,
+                f"synthetic {profile.quality} camera animation needs at least two frames",
+            )
+            require(
+                all(is_jpeg(frame) for frame in source_jpegs),
+                f"synthetic {profile.quality} camera frame is not a JPEG",
+            )
+            require(
+                len(set(source_jpegs)) == len(source_jpegs),
+                f"synthetic {profile.quality} camera frames must be distinct",
+            )
+            if self.frame_mode == "still":
+                source_jpegs = (
+                    (JPEG,) if resource_id == CAMERA_RESOURCE_ID else (source_jpegs[0],)
+                )
+            frame_payloads = tuple(
+                bytes(auki_sdk.encode_camera_frame_image(frame)) for frame in source_jpegs
+            )
+            require(
+                all(
+                    bytes(auki_sdk.decode_camera_frame_image(payload)) == frame
+                    for frame, payload in zip(source_jpegs, frame_payloads)
+                ),
+                f"{profile.quality} CameraFrame codec did not round-trip",
+            )
+            stream_manifest = {
+                "sensor_id": sensor["id"],
+                "sensor_hash": sensor["hash"],
+                "clock_peer_id": self.peer_id,
+                "clock_id": clock["id"],
+                "clock_hash": clock["hash"],
+                "frame_id": frame["id"],
+                "frame_hash": frame["hash"],
+                "resource_id": resource_id,
+                "payload": "camera_frame",
+                "from_frame_id": "",
+                "from_frame_hash": "",
+                "to_frame_id": "",
+                "to_frame_hash": "",
+                "writer_mode": "live",
+                "expected_rate_hz": profile.rate_hz,
+                "map_peer_id": "",
+                "map_id": "",
+                "map_hash": "",
+            }
+            self.renditions[resource_id] = {
+                "profile": profile,
+                "sensor_entry": sensor_entry,
+                "sensor": sensor,
+                "sensor_ref": sensor_ref,
+                "source_jpegs": source_jpegs,
+                "frame_payloads": frame_payloads,
+                "stream_manifest": stream_manifest,
+            }
+            sensor_entries.append((sensor_entry, sensor, sensor_ref))
+            catalog_resources.append(
+                {
+                    "variant": "sensor_log",
+                    "source_peer_id": self.peer_id,
+                    "writer_peer_id": self.peer_id,
+                    "resource_id": resource_id,
+                    "state": "live",
+                    "head": {
+                        "kind": "rolling",
+                        "retention_ns": 1_000_000_000 // profile.rate_hz,
+                    },
+                    "available": {"bytes": 0, "entries": 0, "duration_ns": 0},
+                    "sensor": {
+                        "kind": "camera",
+                        "type": "rgb",
+                        "sensor_id": sensor["id"],
+                        "sensor_hash": sensor["hash"],
+                    },
+                    "manifest": {"clock": clock_ref, "frame": frame_ref},
+                }
+            )
+
+        low = self.renditions[CAMERA_RESOURCE_ID]
+        self.entries = {
+            "sensor": sensor_entries[0],
+            "clock": (clock_entry, clock, clock_ref),
+            "frame": (frame_entry, frame, frame_ref),
         }
-        require(len(SYNTHETIC_JPEGS) >= 2, "synthetic camera animation needs at least two frames")
-        require(all(is_jpeg(frame) for frame in SYNTHETIC_JPEGS), "synthetic camera frame is not a JPEG")
-        require(len(set(SYNTHETIC_JPEGS)) == len(SYNTHETIC_JPEGS), "synthetic camera frames must be distinct")
-        self.source_jpegs = (JPEG,) if self.frame_mode == "still" else SYNTHETIC_JPEGS
-        self.frame_payloads = tuple(
-            bytes(auki_sdk.encode_camera_frame_image(frame))
-            for frame in self.source_jpegs
-        )
-        require(
-            all(
-                bytes(auki_sdk.decode_camera_frame_image(payload)) == frame
-                for frame, payload in zip(self.source_jpegs, self.frame_payloads)
-            ),
-            "CameraFrame codec did not round-trip",
-        )
+        self.registry_entries = {
+            "sensor": sensor_entries,
+            "clock": [self.entries["clock"]],
+            "frame": [self.entries["frame"]],
+        }
+        self.stream_manifest = low["stream_manifest"]
+        self.source_jpegs = low["source_jpegs"]
+        self.frame_payloads = low["frame_payloads"]
         self.frame_payload = self.frame_payloads[0]
         self.catalog_snapshot = auki_sdk.prepare_catalog_resources(
-            {
-                "resources": [
-                    {
-                        "variant": "sensor_log",
-                        "source_peer_id": self.peer_id,
-                        "writer_peer_id": self.peer_id,
-                        "resource_id": CAMERA_RESOURCE_ID,
-                        "state": "live",
-                        "head": {"kind": "rolling", "retention_ns": 1_000_000_000 // RATE_HZ},
-                        "available": {"bytes": 0, "entries": 0, "duration_ns": 0},
-                        "sensor": {
-                            "kind": "camera",
-                            "type": "rgb",
-                            "sensor_id": sensor["id"],
-                            "sensor_hash": sensor["hash"],
-                        },
-                        "manifest": {"clock": clock_ref, "frame": frame_ref},
-                    },
-                    self.control_channel,
-                ]
-            }
+            {"resources": [*catalog_resources, self.control_channel]}
         )
 
     @classmethod
@@ -433,20 +503,25 @@ class CameraMesh:
     ) -> dict[str, Any]:
         if not self.is_allowed(requester):
             return {"op": "error", "reason": "access_denied"}
-        selected = self.entries.get(request.get("kind"))
+        selected = self.registry_entries.get(request.get("kind"), [])
         if request.get("op") == "list":
             return {
                 "op": "list",
-                "entries": []
-                if selected is None
-                else [{"id": selected[1]["id"], "hash": selected[1]["hash"]}],
+                "entries": [
+                    {"id": entry[1]["id"], "hash": entry[1]["hash"]}
+                    for entry in selected
+                ],
             }
-        found = (
-            selected is not None
-            and request.get("id") == selected[1]["id"]
-            and request.get("hash") == selected[1]["hash"]
+        found = next(
+            (
+                entry
+                for entry in selected
+                if request.get("id") == entry[1]["id"]
+                and request.get("hash") == entry[1]["hash"]
+            ),
+            None,
         )
-        return {"op": "get", "entry": selected[1] if found else None}
+        return {"op": "get", "entry": found[1] if found is not None else None}
 
     async def blob_provider(
         self, requester: dict[str, Any], request: dict[str, Any]
@@ -473,32 +548,45 @@ class CameraMesh:
                 "kind": "decline",
                 "reason": {"kind": "other", "detail": "approval_required"},
             }
-        if request != {
-            "source_peer_id": self.peer_id,
-            "resource_id": CAMERA_RESOURCE_ID,
-            "from": {"kind": "latest"},
-        }:
+        resource_id = request.get("resource_id")
+        rendition = self.renditions.get(resource_id)
+        if (
+            request.get("source_peer_id") != self.peer_id
+            or request.get("from") != {"kind": "latest"}
+            or rendition is None
+        ):
             return {"kind": "decline", "reason": {"kind": "sensor_not_found"}}
         return {
             "kind": "accept",
             "payload_kind": "camera",
-            "manifest": self.stream_manifest,
-            "source": self.camera_source(),
+            "manifest": rendition["stream_manifest"],
+            "source": self.camera_source(resource_id),
         }
 
-    async def camera_source(self):
+    async def camera_source(self, resource_id: str = CAMERA_RESOURCE_ID):
+        rate_hz = self.renditions[resource_id]["profile"].rate_hz
+        period = 1 / rate_hz
+        deadline = time.monotonic()
         while not self.closing:
             await self.running.wait()
             if self.closing:
                 return
-            _jpeg, payload = self.current_synthetic_frame()
+            deadline = max(deadline, time.monotonic())
+            _jpeg, payload = self.current_synthetic_frame(resource_id)
             yield {"timestamp_ns": time.time_ns(), "payload": payload}
-            await asyncio.sleep(1 / RATE_HZ)
+            deadline += period
+            await asyncio.sleep(max(0, deadline - time.monotonic()))
 
-    def current_synthetic_frame(self) -> tuple[bytes, bytes]:
+    def current_synthetic_frame(
+        self, resource_id: str = CAMERA_RESOURCE_ID
+    ) -> tuple[bytes, bytes]:
+        rendition = self.renditions[resource_id]
+        rate_hz = rendition["profile"].rate_hz
+        source_jpegs = rendition["source_jpegs"]
+        frame_payloads = rendition["frame_payloads"]
         elapsed_ns = max(0, time.monotonic_ns() - self.synthetic_started_ns)
-        frame_index = (elapsed_ns * RATE_HZ // 1_000_000_000) % len(self.source_jpegs)
-        return self.source_jpegs[frame_index], self.frame_payloads[frame_index]
+        frame_index = (elapsed_ns * rate_hz // 1_000_000_000) % len(source_jpegs)
+        return source_jpegs[frame_index], frame_payloads[frame_index]
 
     def card(self) -> dict[str, Any]:
         routes = self.peer.routes

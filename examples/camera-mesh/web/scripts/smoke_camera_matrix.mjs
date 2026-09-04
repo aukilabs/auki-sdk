@@ -167,6 +167,13 @@ try {
       await runEdge(edge.id, publisher, viewer, deterministicSha256),
     );
   }
+  for (const edge of selectedEdges) {
+    if (edge.viewer !== "web" || edge.publisher === "web") continue;
+    const publisher = publishers.get(edge.publisher);
+    const viewer = viewers.get(edge.viewer);
+    assert(publisher && viewer);
+    await verifyWebRenditions(edge.id, publisher, viewer);
+  }
 
   if (!requestedEdgeId) {
     assert.equal(
@@ -268,7 +275,6 @@ async function runEdge(id, publisher, viewer, fixtureSha256) {
       `${id} did not decode the locked deterministic JPEG`,
     );
   }
-
   const [, pause] = await Promise.all([
     publisher.watchControl("pause", viewer.card.peerId, id),
     viewer.control("pause", publisher.card, `${id}-pause`),
@@ -300,10 +306,20 @@ async function runEdge(id, publisher, viewer, fixtureSha256) {
       `${id} snapshot differed from the deterministic publisher JPEG`,
     );
   }
-
   await viewer.disconnect();
   console.log(`CAMERA_EDGE_OK id=${id}`);
   return view;
+}
+
+async function verifyWebRenditions(id, publisher, viewer) {
+  console.log(`CAMERA_RENDITIONS_START id=${id}`);
+  const view = await viewer.view(publisher.card, `${id}-renditions`, 2, false);
+  assertViewReport(`${id}-renditions`, view, publisher.card.peerId);
+  for (const quality of ["medium", "high", "low"]) {
+    await viewer.switchQuality(publisher.card, quality);
+  }
+  await viewer.disconnect();
+  console.log(`CAMERA_RENDITIONS_OK id=${id}`);
 }
 
 function assertViewReport(id, report, targetPeerId) {
@@ -635,8 +651,17 @@ async function createBrowserPeer(browserInstance, url, label, role, input) {
         return { ok: false, error: "approval requested" };
       }
 
+      await waitFor(
+        async () => ["live", "awaiting", "error"].includes(
+          await tile.getAttribute("data-status") ?? "",
+        ),
+        OPERATION_TIMEOUT_MS,
+        `${label} camera ${target.peerId} to finish connecting`,
+      );
       if (await tile.getAttribute("data-status") !== "live") {
-        await tile.locator("button.tile-primary-action[data-action='retry']").click();
+        const retry = tile.locator("button.tile-primary-action[data-action='retry']");
+        await retry.waitFor({ state: "visible", timeout: OPERATION_TIMEOUT_MS });
+        await retry.click();
       }
       try {
         await waitFor(
@@ -649,6 +674,25 @@ async function createBrowserPeer(browserInstance, url, label, role, input) {
         assert(
           (await browserElementText(page, "#inspector-details")).includes(target.peerId),
           `${label} camera connection returned before protocol metadata was verified`,
+        );
+        if (await tile.getAttribute("data-quality") !== "low") {
+          await browserCameraMenuAction(page, target.peerId, "quality-low");
+          await waitFor(
+            async () => await tile.getAttribute("data-quality") === "low",
+            OPERATION_TIMEOUT_MS,
+            `${label} Low compatibility rendition`,
+          );
+        }
+        await waitFor(
+          async () => {
+            const lowFrame = await tile.locator("[data-role='remote-frame']")
+              .evaluate((surface) =>
+                !surface.hidden && surface.width === 480 && surface.height === 270);
+            const details = JSON.parse(await browserElementText(page, "#inspector-details"));
+            return lowFrame && details.catalog?.resource_id === "camera/main";
+          },
+          OPERATION_TIMEOUT_MS,
+          `${label} verified Low compatibility rendition`,
         );
         await waitFor(
           async () =>
@@ -675,6 +719,48 @@ async function createBrowserPeer(browserInstance, url, label, role, input) {
           `[data-camera-peer-id="${target.peerId}"] [data-role="remote-frame"]`,
         ),
       };
+    },
+    async switchQuality(target, quality) {
+      const expected = {
+        low: { resourceId: "camera/main", width: 480, height: 270, rateHz: 5 },
+        medium: { resourceId: "camera/main/medium", width: 960, height: 540, rateHz: 15 },
+        high: { resourceId: "camera/main/high", width: 1_920, height: 1_080, rateHz: 30 },
+      }[quality];
+      assert(expected, `unsupported matrix quality ${quality}`);
+      const tile = browserCameraTile(page, target.peerId);
+      const before = await receivedFrames(page, target.peerId);
+      await browserCameraMenuAction(page, target.peerId, `quality-${quality}`);
+      await waitFor(
+        async () => await tile.getAttribute("data-quality") === quality,
+        OPERATION_TIMEOUT_MS,
+        `${label} ${quality} quality selection`,
+      );
+      await waitFor(
+        () => tile.locator("[data-role='remote-frame']").evaluate(
+          (surface, dimensions) =>
+            !surface.hidden
+              && surface.width === dimensions.width
+              && surface.height === dimensions.height,
+          expected,
+        ),
+        OPERATION_TIMEOUT_MS,
+        `${label} first ${quality} frame`,
+      );
+      await waitFor(
+        async () => await receivedFrames(page, target.peerId) > before,
+        OPERATION_TIMEOUT_MS,
+        `${label} ${quality} stream progress`,
+      );
+      await tile.click({ position: { x: 10, y: 10 } });
+      const inspector = JSON.parse(await browserElementText(page, "#inspector-details"));
+      const sensor = inspector.registry?.sensor?.canonical;
+      assert.equal(inspector.catalog?.resource_id, expected.resourceId);
+      assert.equal(inspector.stream?.manifest?.resourceId, expected.resourceId);
+      assert.equal(inspector.stream?.manifest?.expectedRateHz, expected.rateHz);
+      assert.equal(sensor?.sensor_id, expected.resourceId);
+      assert.equal(sensor?.width, expected.width);
+      assert.equal(sensor?.height, expected.height);
+      assert.equal(sensor?.frame_rate_hz, expected.rateHz);
     },
     watchControl(control) {
       const phrase = control === "pause"

@@ -76,16 +76,54 @@ class CameraMeshTests(unittest.TestCase):
     def test_shared_still_and_animation_are_valid(self):
         self.assertEqual(
             app.JPEG_SHA256,
-            "9cb77ff8f8f6d6af10809750bba03a76a53d6b55c36515c20a688d8437689aa0",
+            "775f2d96e68916cc9958fa78e7fcf6ab457b4629543fbd890d772baf78cc16dc",
         )
         self.assertTrue(app.is_jpeg(app.JPEG))
-        self.assertEqual(len(app.SYNTHETIC_JPEGS), 16)
-        self.assertEqual(len(set(app.SYNTHETIC_JPEGS)), 16)
-        self.assertTrue(all(app.is_jpeg(frame) for frame in app.SYNTHETIC_JPEGS))
+        for profile in app.CAMERA_PROFILES:
+            frames = app.SYNTHETIC_JPEGS_BY_RESOURCE[profile.resource_id]
+            self.assertEqual(len(frames), 16)
+            self.assertEqual(len(set(frames)), 16)
+            self.assertTrue(all(app.is_jpeg(frame) for frame in frames))
         self.assertEqual(
             self.mesh().frame_payload,
             b"camera-frame:" + app.SYNTHETIC_JPEGS[0],
         )
+
+    def test_publisher_exposes_all_three_renditions(self):
+        mesh = self.mesh()
+        sensor_rows = [
+            row
+            for row in mesh.catalog_snapshot["resources"]
+            if row.get("variant") == "sensor_log"
+        ]
+        self.assertEqual(
+            [row["resource_id"] for row in sensor_rows],
+            [profile.resource_id for profile in app.CAMERA_PROFILES],
+        )
+        self.assertEqual(
+            [row["head"]["retention_ns"] for row in sensor_rows],
+            [1_000_000_000 // profile.rate_hz for profile in app.CAMERA_PROFILES],
+        )
+
+        requester = {"peer_id": "viewer", "domain_ids": ["domain"]}
+        mesh.allowed.add("viewer")
+        listed = mesh.registry_provider(requester, {"op": "list", "kind": "sensor"})
+        self.assertEqual(len(listed["entries"]), 3)
+        for profile in app.CAMERA_PROFILES:
+            resource_id = profile.resource_id
+            dispatch = mesh.stream_provider(
+                requester,
+                {
+                    "source_peer_id": mesh.peer_id,
+                    "resource_id": resource_id,
+                    "from": {"kind": "latest"},
+                },
+            )
+            self.assertEqual(dispatch["kind"], "accept")
+            self.assertEqual(dispatch["manifest"]["resource_id"], resource_id)
+            self.assertEqual(
+                dispatch["manifest"]["expected_rate_hz"], profile.rate_hz
+            )
 
     def test_synthetic_frame_advances_with_stream_age(self):
         mesh = self.mesh()

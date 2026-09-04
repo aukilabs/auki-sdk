@@ -29,6 +29,8 @@ use sha2::{Digest, Sha256};
 pub const APP: &str = "auki-camera-mesh";
 pub const APP_VERSION: &str = "0.1.0";
 pub const CAMERA_RESOURCE_ID: &str = "camera/main";
+pub const CAMERA_MEDIUM_RESOURCE_ID: &str = "camera/main/medium";
+pub const CAMERA_HIGH_RESOURCE_ID: &str = "camera/main/high";
 pub const CAMERA_CONTROL_RESOURCE_ID: &str = "camera/control";
 pub const CAMERA_REPLY_RESOURCE_ID: &str = "camera/replies";
 pub const CAMERA_CLOCK_ID: &str = "camera/utc";
@@ -41,6 +43,64 @@ pub const MAX_BLOB_BYTES: usize = 20 * 1024 * 1024;
 
 const DETERMINISTIC_JPEG_BASE64: &str = include_str!("../assets/deterministic-frame.jpg.base64");
 const SYNTHETIC_JPEGS_BASE64: &str = include_str!("../assets/synthetic-frames.jpg.base64");
+const SYNTHETIC_MEDIUM_JPEGS_BASE64: &str =
+    include_str!("../assets/synthetic-frames-medium.jpg.base64");
+const SYNTHETIC_HIGH_JPEGS_BASE64: &str =
+    include_str!("../assets/synthetic-frames-high.jpg.base64");
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum CameraQuality {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CameraProfile {
+    pub quality: CameraQuality,
+    pub resource_id: &'static str,
+    pub width: u32,
+    pub height: u32,
+    pub rate_hz: u32,
+}
+
+pub const CAMERA_PROFILES: [CameraProfile; 3] = [
+    CameraProfile {
+        quality: CameraQuality::Low,
+        resource_id: CAMERA_RESOURCE_ID,
+        width: CAMERA_WIDTH,
+        height: CAMERA_HEIGHT,
+        rate_hz: CAMERA_RATE_HZ,
+    },
+    CameraProfile {
+        quality: CameraQuality::Medium,
+        resource_id: CAMERA_MEDIUM_RESOURCE_ID,
+        width: 960,
+        height: 540,
+        rate_hz: 15,
+    },
+    CameraProfile {
+        quality: CameraQuality::High,
+        resource_id: CAMERA_HIGH_RESOURCE_ID,
+        width: 1_920,
+        height: 1_080,
+        rate_hz: 30,
+    },
+];
+
+pub const fn camera_profile(quality: CameraQuality) -> CameraProfile {
+    match quality {
+        CameraQuality::Low => CAMERA_PROFILES[0],
+        CameraQuality::Medium => CAMERA_PROFILES[1],
+        CameraQuality::High => CAMERA_PROFILES[2],
+    }
+}
+
+pub fn camera_profile_for_resource(resource_id: &str) -> Option<CameraProfile> {
+    CAMERA_PROFILES
+        .into_iter()
+        .find(|profile| profile.resource_id == resource_id)
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -109,6 +169,7 @@ impl PeerCard {
 
 #[derive(Clone, Debug)]
 pub struct CameraMetadata {
+    pub profile: CameraProfile,
     pub sensor: SensorRegistryEntry,
     pub clock: ClockRegistryEntry,
     pub frame: FrameRegistryEntry,
@@ -122,26 +183,7 @@ impl CameraMetadata {
         &self,
         request: &auki_protocols::registry::v3::RegistryRequest,
     ) -> auki_protocols::registry::v3::RegistryResponse {
-        use auki_protocols::registry::v3::{RegistryListEntry, RegistryRequest, RegistryResponse};
-
-        let entries = self.envelopes();
-        match request {
-            RegistryRequest::List { kind } => RegistryResponse::List {
-                entries: entries
-                    .iter()
-                    .filter(|entry| entry.kind == *kind)
-                    .map(|entry| RegistryListEntry {
-                        id: entry.id.clone(),
-                        hash: entry.hash.clone(),
-                    })
-                    .collect(),
-            },
-            RegistryRequest::Get { kind, id, hash } => RegistryResponse::Get {
-                entry: entries
-                    .into_iter()
-                    .find(|entry| entry.kind == *kind && entry.id == *id && entry.hash == *hash),
-            },
-        }
+        registry_response(std::slice::from_ref(self), request)
     }
 
     pub fn envelopes(&self) -> Vec<RegistryEntryEnvelope> {
@@ -168,7 +210,54 @@ impl CameraMetadata {
     }
 }
 
+pub fn registry_response(
+    renditions: &[CameraMetadata],
+    request: &auki_protocols::registry::v3::RegistryRequest,
+) -> auki_protocols::registry::v3::RegistryResponse {
+    use auki_protocols::registry::v3::{RegistryListEntry, RegistryRequest, RegistryResponse};
+
+    let mut seen = HashSet::new();
+    let entries = renditions
+        .iter()
+        .flat_map(CameraMetadata::envelopes)
+        .filter(|entry| seen.insert((entry.kind.as_str(), entry.id.clone(), entry.hash.clone())))
+        .collect::<Vec<_>>();
+    match request {
+        RegistryRequest::List { kind } => RegistryResponse::List {
+            entries: entries
+                .iter()
+                .filter(|entry| entry.kind == *kind)
+                .map(|entry| RegistryListEntry {
+                    id: entry.id.clone(),
+                    hash: entry.hash.clone(),
+                })
+                .collect(),
+        },
+        RegistryRequest::Get { kind, id, hash } => RegistryResponse::Get {
+            entry: entries
+                .into_iter()
+                .find(|entry| entry.kind == *kind && entry.id == *id && entry.hash == *hash),
+        },
+    }
+}
+
 pub fn metadata(peer_id: PeerId, session_id: impl Into<String>) -> CameraMetadata {
+    metadata_for_profile(peer_id, session_id, camera_profile(CameraQuality::Low))
+}
+
+pub fn rendition_metadata(peer_id: PeerId, session_id: impl Into<String>) -> Vec<CameraMetadata> {
+    let session_id = session_id.into();
+    CAMERA_PROFILES
+        .into_iter()
+        .map(|profile| metadata_for_profile(peer_id, session_id.clone(), profile))
+        .collect()
+}
+
+pub fn metadata_for_profile(
+    peer_id: PeerId,
+    session_id: impl Into<String>,
+    profile: CameraProfile,
+) -> CameraMetadata {
     let peer_id = peer_id.to_string();
     let frame = FrameRegistryEntry {
         peer_id: peer_id.clone(),
@@ -204,12 +293,12 @@ pub fn metadata(peer_id: PeerId, session_id: impl Into<String>) -> CameraMetadat
     };
     let sensor = SensorRegistryEntry {
         peer_id: peer_id.clone(),
-        sensor_id: CAMERA_RESOURCE_ID.into(),
+        sensor_id: profile.resource_id.into(),
         body: SensorBody::Camera(Camera {
             r#type: "rgb".into(),
-            width: CAMERA_WIDTH,
-            height: CAMERA_HEIGHT,
-            frame_rate_hz: CAMERA_RATE_HZ,
+            width: profile.width,
+            height: profile.height,
+            frame_rate_hz: profile.rate_hz,
             image_encoding: "jpeg".into(),
             pixel_format: "rgb8".into(),
             row_stride_bytes: 0,
@@ -226,6 +315,7 @@ pub fn metadata(peer_id: PeerId, session_id: impl Into<String>) -> CameraMetadat
         hash: sensor.hash(),
     };
     CameraMetadata {
+        profile,
         sensor,
         clock,
         frame,
@@ -236,16 +326,24 @@ pub fn metadata(peer_id: PeerId, session_id: impl Into<String>) -> CameraMetadat
 }
 
 pub fn camera_catalog(peer_id: PeerId, metadata: &CameraMetadata) -> catalog_v3::ResourcesResponse {
+    camera_catalog_for_renditions(peer_id, std::slice::from_ref(metadata))
+}
+
+pub fn camera_catalog_for_renditions(
+    peer_id: PeerId,
+    renditions: &[CameraMetadata],
+) -> catalog_v3::ResourcesResponse {
     let peer_id = peer_id.to_string();
-    catalog_v3::ResourcesResponse {
-        resources: vec![
+    let mut resources = renditions
+        .iter()
+        .map(|metadata| {
             ResourceEntry::V2(Box::new(V2ResourceEntry {
                 source_peer_id: peer_id.clone(),
-                writer_peer_id: peer_id,
-                resource_id: CAMERA_RESOURCE_ID.into(),
+                writer_peer_id: peer_id.clone(),
+                resource_id: metadata.profile.resource_id.into(),
                 state: "live".into(),
                 head: Some(Head::Rolling {
-                    retention_ns: 1_000_000_000_i64 / i64::from(CAMERA_RATE_HZ),
+                    retention_ns: 1_000_000_000_i64 / i64::from(metadata.profile.rate_hz),
                 }),
                 extent: None,
                 available: Available {
@@ -266,17 +364,20 @@ pub fn camera_catalog(peer_id: PeerId, metadata: &CameraMetadata) -> catalog_v3:
                         frame: Some(metadata.frame_ref.clone()),
                     },
                 },
-            })),
-            ResourceEntry::MessageChannel(control_channel(
-                metadata
-                    .sensor_ref
-                    .peer_id
-                    .parse()
-                    .expect("metadata owner is a PeerId"),
-                metadata,
-            )),
-        ],
+            }))
+        })
+        .collect::<Vec<_>>();
+    if let Some(metadata) = renditions.first() {
+        resources.push(ResourceEntry::MessageChannel(control_channel(
+            metadata
+                .sensor_ref
+                .peer_id
+                .parse()
+                .expect("metadata owner is a PeerId"),
+            metadata,
+        )));
     }
+    catalog_v3::ResourcesResponse { resources }
 }
 
 pub fn control_channel(peer_id: PeerId, metadata: &CameraMetadata) -> MessageChannelResource {
@@ -304,10 +405,10 @@ pub fn stream_manifest(metadata: &CameraMetadata) -> StreamManifest {
         clock_hash: metadata.clock_ref.hash.clone(),
         frame_id: metadata.frame_ref.id.clone(),
         frame_hash: metadata.frame_ref.hash.clone(),
-        resource_id: CAMERA_RESOURCE_ID.into(),
+        resource_id: metadata.profile.resource_id.into(),
         payload: "camera_frame".into(),
         writer_mode: "live".into(),
-        expected_rate_hz: CAMERA_RATE_HZ,
+        expected_rate_hz: metadata.profile.rate_hz,
         ..Default::default()
     }
 }
@@ -541,23 +642,37 @@ pub fn deterministic_jpeg() -> Result<Vec<u8>> {
 /// Keeping the JPEGs as fixtures means Rust and Python can publish a visibly
 /// live feed without a camera, platform image APIs, or runtime codec packages.
 pub fn synthetic_jpegs() -> Result<Vec<Vec<u8>>> {
-    let frames = SYNTHETIC_JPEGS_BASE64
+    synthetic_jpegs_for_profile(camera_profile(CameraQuality::Low))
+}
+
+pub fn synthetic_jpegs_for_profile(profile: CameraProfile) -> Result<Vec<Vec<u8>>> {
+    let encoded_frames = match profile.quality {
+        CameraQuality::Low => SYNTHETIC_JPEGS_BASE64,
+        CameraQuality::Medium => SYNTHETIC_MEDIUM_JPEGS_BASE64,
+        CameraQuality::High => SYNTHETIC_HIGH_JPEGS_BASE64,
+    };
+    let frames = encoded_frames
         .split_whitespace()
         .enumerate()
         .map(|(index, encoded)| {
-            let bytes = STANDARD
-                .decode(encoded)
-                .with_context(|| format!("decode synthetic Camera Mesh JPEG {index}"))?;
+            let bytes = STANDARD.decode(encoded).with_context(|| {
+                format!(
+                    "decode synthetic {:?} Camera Mesh JPEG {index}",
+                    profile.quality
+                )
+            })?;
             ensure!(
                 bytes.starts_with(&[0xff, 0xd8]) && bytes.ends_with(&[0xff, 0xd9]),
-                "synthetic Camera Mesh frame {index} is not a JPEG"
+                "synthetic {:?} Camera Mesh frame {index} is not a JPEG",
+                profile.quality
             );
             Ok(bytes)
         })
         .collect::<Result<Vec<_>>>()?;
     ensure!(
         frames.len() >= 2,
-        "synthetic Camera Mesh animation needs at least two frames"
+        "synthetic {:?} Camera Mesh animation needs at least two frames",
+        profile.quality
     );
     Ok(frames)
 }
@@ -642,6 +757,50 @@ mod tests {
         let catalog = camera_catalog(peer(), &metadata);
         assert_eq!(catalog.resources.len(), 2);
         assert_eq!(stream_manifest(&metadata).payload, "camera_frame");
+    }
+
+    #[test]
+    fn rendition_metadata_catalog_and_registry_expose_all_three_profiles() {
+        use auki_protocols::registry::v3::{RegistryRequest, RegistryResponse};
+
+        let renditions = rendition_metadata(peer(), "camera-test-session");
+        assert_eq!(
+            renditions
+                .iter()
+                .map(|metadata| metadata.profile)
+                .collect::<Vec<_>>(),
+            CAMERA_PROFILES
+        );
+        let catalog = camera_catalog_for_renditions(peer(), &renditions);
+        assert_eq!(catalog.resources.len(), 4);
+        assert_eq!(
+            renditions
+                .iter()
+                .map(|metadata| stream_manifest(metadata).resource_id)
+                .collect::<Vec<_>>(),
+            CAMERA_PROFILES
+                .iter()
+                .map(|profile| profile.resource_id.to_owned())
+                .collect::<Vec<_>>()
+        );
+
+        let RegistryResponse::List { entries } = registry_response(
+            &renditions,
+            &RegistryRequest::List {
+                kind: RegistryKind::Sensor,
+            },
+        ) else {
+            panic!("sensor Registry request must return a list")
+        };
+        assert_eq!(entries.len(), 3);
+        for kind in [RegistryKind::Clock, RegistryKind::Frame] {
+            let RegistryResponse::List { entries } =
+                registry_response(&renditions, &RegistryRequest::List { kind })
+            else {
+                panic!("shared Registry request must return a list")
+            };
+            assert_eq!(entries.len(), 1);
+        }
     }
 
     #[test]

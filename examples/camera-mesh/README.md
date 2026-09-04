@@ -16,11 +16,12 @@ Camera Mesh supports publisher and viewer roles in all four runtimes:
 
 The Rust and Python programs have a JSON Lines control surface so people and
 test runners can drive the same application flow without a UI. The browser has
-a responsive CCTV wall for up to 16 simultaneous feeds. A Web publisher offers
-Low (480×270 at 5 fps), Medium (960×540 at 15 fps), and High (1920×1080 at
-30 fps) renditions from one capture session; Web viewers can switch quality
-without blanking the current frame. The wall's density control uses one through
-four columns, with a single-camera focus mode and a two-column mobile wall.
+a responsive CCTV wall for up to 16 simultaneous feeds. Web, Native Rust, and
+Python publishers each offer Low (480×270 at 5 fps), Medium (960×540 at 15
+fps), and High (1920×1080 at 30 fps) renditions from one peer; Web viewers can
+switch quality without blanking the current frame. Swift/iOS currently
+publishes the Low rendition. The wall's density control uses one through four
+columns, with a single-camera focus mode and a two-column mobile wall.
 Protocol and live stream diagnostics stay in a drawer. Headless viewers
 validate the metadata and JPEG bytes, then report frame counts and hashes.
 
@@ -67,8 +68,9 @@ all publishers through DDS. Open the Web app with the same login and Domain;
 discovery can add them directly to the wall. Ctrl-C shuts down the batch and
 deletes its identities. The total is limited to 16 publishers.
 
-These unattended publishers cycle a checked-in 480×270 animation at 5 fps, so
-stalled feeds are visible immediately without cameras or image-codec packages.
+Each unattended publisher simultaneously cycles checked-in Low, Medium, and
+High animations, so quality switching and stalled feeds are visible without
+cameras or image-codec packages.
 Each CCTV tile shows the authenticated participant name, live duration, frame
 age, rate, and bandwidth. For demo convenience the batch publishers
 auto-approve any authenticated viewer in the selected Domain. Normal
@@ -156,8 +158,10 @@ Web    -> Rust      Web    -> Python
 ```
 
 Each edge proves rejection before approval, all camera metadata checks, two
-frames, pause/resume, and a verified snapshot. The matrix then shuts down all
-six peers and their temporary state. The separate browser smoke proves that one
+frames, pause/resume, and a verified snapshot. Rust → Web and Python → Web also
+switch through all three renditions and verify their Registry metadata, Stream
+manifest, dimensions, and continued frame delivery. The matrix then shuts down
+all six peers and their temporary state. The separate browser smoke proves that one
 browser viewer keeps multiple browser publishers independent while mixing DDS
 discovery and copied peer cards.
 

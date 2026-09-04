@@ -46,11 +46,16 @@ use uuid::Uuid;
 
 use crate::contract::{
     APP, APP_VERSION, CAMERA_CLOCK_ID, CAMERA_CONTROL_RESOURCE_ID, CAMERA_FRAME_ID, CAMERA_HEIGHT,
-    CAMERA_RATE_HZ, CAMERA_RESOURCE_ID, CAMERA_WIDTH, CameraMetadata, CameraRole, MAX_BLOB_BYTES,
-    PeerCard, PeerRoutes, camera_catalog, control_channel, decode_snapshot_ready,
+    CAMERA_PROFILES, CAMERA_RATE_HZ, CAMERA_RESOURCE_ID, CAMERA_WIDTH, CameraMetadata,
+    CameraProfile, CameraQuality, CameraRole, MAX_BLOB_BYTES, PeerCard, PeerRoutes,
+    camera_catalog_for_renditions, camera_profile, control_channel, decode_snapshot_ready,
     decode_snapshot_request, deterministic_jpeg, encode_snapshot_ready, encode_snapshot_request,
-    metadata, protocol_ids_for_role, reply_channel, sha256_hex, stream_manifest,
+    metadata_for_profile, protocol_ids_for_role, registry_response, reply_channel, sha256_hex,
+    stream_manifest, synthetic_jpegs_for_profile,
 };
+
+#[cfg(test)]
+use crate::contract::{camera_catalog, metadata};
 
 const MAX_STAGED_BLOBS: usize = 8;
 const MAX_PENDING_SNAPSHOTS: usize = 16;
@@ -59,6 +64,7 @@ const MAX_CAMERA_FRAME_BYTES: usize = 1024 * 1024;
 const MESSAGE_QUEUE_CAPACITY: usize = 16;
 const CAMERA_EVENT_QUEUE_CAPACITY: usize = 64;
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(45);
+#[cfg(test)]
 const FRAME_PERIOD: Duration = Duration::from_millis(1_000 / CAMERA_RATE_HZ as u64);
 const LIVE_EXERCISE_FRAME_TIMEOUT: Duration = Duration::from_secs(30);
 const LIVE_EXERCISE_CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -254,7 +260,7 @@ struct SharedState {
     pending_approvals: Mutex<HashSet<PeerId>>,
     blobs: Mutex<VecDeque<(String, Arc<[u8]>)>>,
     pending_snapshots: Mutex<HashMap<String, PendingSnapshot>>,
-    latest_frame: Mutex<LiveFrame>,
+    latest_frames: Mutex<HashMap<String, LiveFrame>>,
     paused_by: Mutex<Option<PeerId>>,
     camera_available: AtomicBool,
     events: mpsc::Sender<CameraEvent>,
@@ -355,12 +361,24 @@ impl SharedState {
     }
 
     fn latest_frame(&self) -> LiveFrame {
-        lock(&self.latest_frame).clone()
+        self.rendition_frame(CAMERA_RESOURCE_ID)
+            .expect("Low camera rendition is always mounted")
+    }
+
+    fn rendition_frame(&self, resource_id: &str) -> Option<LiveFrame> {
+        lock(&self.latest_frames).get(resource_id).cloned()
     }
 
     fn replace_frame(&self, bytes: Vec<u8>) -> Result<()> {
-        validate_camera_jpeg(&bytes)?;
-        let mut latest = lock(&self.latest_frame);
+        self.replace_rendition_frame(camera_profile(CameraQuality::Low), bytes)
+    }
+
+    fn replace_rendition_frame(&self, profile: CameraProfile, bytes: Vec<u8>) -> Result<()> {
+        validate_camera_jpeg_for_profile(&bytes, profile)?;
+        let mut frames = lock(&self.latest_frames);
+        let latest = frames
+            .get_mut(profile.resource_id)
+            .ok_or_else(|| anyhow!("camera rendition {} is not mounted", profile.resource_id))?;
         let generation = latest
             .generation
             .checked_add(1)
@@ -482,7 +500,26 @@ impl CameraProtocols {
     ) -> Result<(Self, mpsc::Receiver<CameraEvent>)> {
         let local_peer_id = peer.peer_id();
         let routes = peer_routes(peer)?;
-        Self::mount_context(
+        let profiles = if role == CameraRole::Publisher {
+            CAMERA_PROFILES.to_vec()
+        } else {
+            vec![camera_profile(CameraQuality::Low)]
+        };
+        let initial_frames = profiles
+            .into_iter()
+            .map(|profile| {
+                let frame = if profile.quality == CameraQuality::Low {
+                    deterministic_jpeg()?
+                } else {
+                    synthetic_jpegs_for_profile(profile)?
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| anyhow!("{} has no synthetic frame", profile.resource_id))?
+                };
+                Ok((profile, frame))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Self::mount_renditions_context(
             peer.protocols(),
             local_peer_id,
             peer.domain_id(),
@@ -490,7 +527,7 @@ impl CameraProtocols {
             role,
             display_name,
             "native",
-            deterministic_jpeg()?,
+            initial_frames,
         )
         .await
     }
@@ -511,7 +548,51 @@ impl CameraProtocols {
         runtime: impl Into<String>,
         initial_frame: Vec<u8>,
     ) -> Result<(Self, mpsc::Receiver<CameraEvent>)> {
-        validate_camera_jpeg(&initial_frame)?;
+        Self::mount_renditions_context(
+            protocols,
+            local_peer_id,
+            domain_id,
+            routes,
+            role,
+            display_name,
+            runtime,
+            vec![(camera_profile(CameraQuality::Low), initial_frame)],
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn mount_renditions_context(
+        protocols: AukiPeerProtocols,
+        local_peer_id: PeerId,
+        domain_id: Uuid,
+        routes: PeerRoutes,
+        role: CameraRole,
+        display_name: impl Into<String>,
+        runtime: impl Into<String>,
+        initial_frames: Vec<(CameraProfile, Vec<u8>)>,
+    ) -> Result<(Self, mpsc::Receiver<CameraEvent>)> {
+        ensure!(
+            !initial_frames.is_empty(),
+            "at least one camera rendition is required"
+        );
+        let mut seen = HashSet::new();
+        for (profile, frame) in &initial_frames {
+            ensure!(
+                *profile == camera_profile(profile.quality),
+                "camera rendition profile does not match its quality tier"
+            );
+            ensure!(
+                seen.insert(profile.resource_id),
+                "camera rendition {} is duplicated",
+                profile.resource_id
+            );
+            validate_camera_jpeg_for_profile(frame, *profile)?;
+        }
+        ensure!(
+            seen.contains(CAMERA_RESOURCE_ID),
+            "the backward-compatible Low camera rendition is required"
+        );
         ensure!(
             protocols.peer_id() == local_peer_id,
             "Camera Mesh Peer ID does not match the authenticated protocol context"
@@ -521,7 +602,15 @@ impl CameraProtocols {
             "Camera Mesh Domain does not match the authenticated protocol context"
         );
         let session_id = new_session_id();
-        let metadata = metadata(local_peer_id, &session_id);
+        let renditions = initial_frames
+            .iter()
+            .map(|(profile, _)| metadata_for_profile(local_peer_id, &session_id, *profile))
+            .collect::<Vec<_>>();
+        let metadata = renditions
+            .iter()
+            .find(|metadata| metadata.profile.quality == CameraQuality::Low)
+            .cloned()
+            .expect("Low rendition was checked above");
         let runtime = runtime.into();
         ensure!(!runtime.is_empty(), "camera runtime must not be empty");
         let card = PeerCard {
@@ -532,7 +621,20 @@ impl CameraProtocols {
             protocols: protocol_ids_for_role(role),
             routes,
         };
-        let initial_frame = Arc::<[u8]>::from(initial_frame);
+        let captured_at = utc_now_ns_i64();
+        let latest_frames = initial_frames
+            .into_iter()
+            .map(|(profile, frame)| {
+                (
+                    profile.resource_id.to_owned(),
+                    LiveFrame {
+                        bytes: Arc::from(frame),
+                        capture_timestamp_ns: captured_at,
+                        generation: 0,
+                    },
+                )
+            })
+            .collect();
         let (event_tx, event_rx) = mpsc::channel(CAMERA_EVENT_QUEUE_CAPACITY);
         let state = Arc::new(SharedState {
             role,
@@ -543,11 +645,7 @@ impl CameraProtocols {
             pending_approvals: Mutex::new(HashSet::new()),
             blobs: Mutex::new(VecDeque::new()),
             pending_snapshots: Mutex::new(HashMap::new()),
-            latest_frame: Mutex::new(LiveFrame {
-                bytes: Arc::clone(&initial_frame),
-                capture_timestamp_ns: utc_now_ns_i64(),
-                generation: 0,
-            }),
+            latest_frames: Mutex::new(latest_frames),
             paused_by: Mutex::new(None),
             camera_available: AtomicBool::new(role == CameraRole::Publisher),
             events: event_tx,
@@ -575,16 +673,16 @@ impl CameraProtocols {
             protocols.clone(),
             CameraCatalogProvider {
                 state: Arc::clone(&state),
-                resources: camera_catalog(local_peer_id, &metadata),
+                resources: camera_catalog_for_renditions(local_peer_id, &renditions),
             },
         )?;
         let registry_state = Arc::clone(&state);
-        let registry_metadata = metadata.clone();
+        let registry_renditions = renditions.clone();
         let registry = RegistryEndpoint::mount(
             protocols.clone(),
             move |requester: &AuthenticatedPeer, request: &RegistryRequest| {
                 if registry_state.allowed(requester) {
-                    registry_metadata.response(request)
+                    registry_response(&registry_renditions, request)
                 } else {
                     RegistryResponse::Error {
                         reason: "access_denied".into(),
@@ -606,11 +704,11 @@ impl CameraProtocols {
         let receiver = message.declare(channel, MESSAGE_QUEUE_CAPACITY)?;
         let stream = if role == CameraRole::Publisher {
             let stream_state = Arc::clone(&state);
-            let stream_metadata = metadata.clone();
+            let stream_renditions = renditions.clone();
             Some(StreamEndpoint::mount(
                 protocols.clone(),
                 move |requester: &AuthenticatedPeer, request: StreamRequest| {
-                    stream_dispatch(&stream_state, &stream_metadata, requester, request)
+                    stream_dispatch(&stream_state, &stream_renditions, requester, request)
                 },
             )?)
         } else {
@@ -699,6 +797,16 @@ impl CameraProtocols {
             "only a publisher accepts camera frames"
         );
         self.state.replace_frame(bytes)
+    }
+
+    /// Replace the newest bounded JPEG for one mounted quality tier.
+    pub fn replace_rendition_frame(&self, quality: CameraQuality, bytes: Vec<u8>) -> Result<()> {
+        ensure!(
+            self.role == CameraRole::Publisher,
+            "only a publisher accepts camera frames"
+        );
+        self.state
+            .replace_rendition_frame(camera_profile(quality), bytes)
     }
 
     pub fn paused(&self) -> bool {
@@ -1378,18 +1486,22 @@ async fn handle_viewer_message(
 
 fn stream_dispatch(
     state: &Arc<SharedState>,
-    metadata: &CameraMetadata,
+    renditions: &[CameraMetadata],
     requester: &AuthenticatedPeer,
     request: StreamRequest,
 ) -> StreamDispatch {
+    let metadata = renditions
+        .iter()
+        .find(|metadata| metadata.profile.resource_id == request.resource_id);
     if state.role != CameraRole::Publisher
         || request.source_peer_id != state.local_peer_id.to_string()
-        || request.resource_id != CAMERA_RESOURCE_ID
+        || metadata.is_none()
     {
         return StreamDispatch::Decline {
             reason: DeclineReason::sensor_not_found(),
         };
     }
+    let metadata = metadata.expect("checked above");
     if !state.allowed(requester) {
         state.request_approval(requester);
         return StreamDispatch::Decline {
@@ -1403,36 +1515,45 @@ fn stream_dispatch(
     }
     let stream_state = Arc::clone(state);
     let requester_peer_id = requester.peer_id;
-    let source = futures::stream::unfold(None, move |last_generation: Option<u64>| {
-        let state = Arc::clone(&stream_state);
-        async move {
-            loop {
-                tokio::time::sleep(FRAME_PERIOD).await;
+    let resource_id = metadata.profile.resource_id.to_owned();
+    let mut interval = tokio::time::interval(Duration::from_nanos(
+        1_000_000_000 / u64::from(metadata.profile.rate_hz),
+    ));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let source = futures::stream::unfold(
+        (interval, None),
+        move |(mut interval, last_generation): (_, Option<u64>)| {
+            let state = Arc::clone(&stream_state);
+            let resource_id = resource_id.clone();
+            async move {
+                loop {
+                    interval.tick().await;
+                    if !lock(&state.allowed).contains(&requester_peer_id) {
+                        return None;
+                    }
+                    if lock(&state.paused_by).is_none() {
+                        break;
+                    }
+                }
+                let frame = state.rendition_frame(&resource_id)?;
                 if !lock(&state.allowed).contains(&requester_peer_id) {
                     return None;
                 }
-                if lock(&state.paused_by).is_none() {
-                    break;
-                }
+                debug_assert!(last_generation.is_none_or(|last| frame.generation >= last));
+                let generation = frame.generation;
+                Some((
+                    Ok(StreamItem {
+                        timestamp_ns: frame.capture_timestamp_ns,
+                        payload: CameraFrame {
+                            dynamic_intrinsics: None,
+                            frame: frame.bytes.to_vec(),
+                        },
+                    }),
+                    (interval, Some(generation)),
+                ))
             }
-            let frame = state.latest_frame();
-            if !lock(&state.allowed).contains(&requester_peer_id) {
-                return None;
-            }
-            debug_assert!(last_generation.is_none_or(|last| frame.generation >= last));
-            let generation = frame.generation;
-            Some((
-                Ok(StreamItem {
-                    timestamp_ns: frame.capture_timestamp_ns,
-                    payload: CameraFrame {
-                        dynamic_intrinsics: None,
-                        frame: frame.bytes.to_vec(),
-                    },
-                }),
-                Some(generation),
-            ))
-        }
-    });
+        },
+    );
     StreamDispatch::AcceptCamera {
         manifest: stream_manifest(metadata),
         source: Box::pin(source),
@@ -1670,6 +1791,10 @@ fn validate_remote_manifest(
 }
 
 fn ensure_jpeg(bytes: &[u8]) -> Result<()> {
+    ensure_jpeg_dimensions(bytes, CAMERA_WIDTH, CAMERA_HEIGHT)
+}
+
+fn ensure_jpeg_dimensions(bytes: &[u8], expected_width: u32, expected_height: u32) -> Result<()> {
     ensure!(!bytes.is_empty(), "camera JPEG must not be empty");
     ensure!(
         bytes.len() <= MAX_CAMERA_FRAME_BYTES,
@@ -1681,8 +1806,8 @@ fn ensure_jpeg(bytes: &[u8]) -> Result<()> {
     );
     let (width, height) = jpeg_dimensions(bytes)?;
     ensure!(
-        width == CAMERA_WIDTH && height == CAMERA_HEIGHT,
-        "Camera JPEG dimensions must be {CAMERA_WIDTH}x{CAMERA_HEIGHT}, got {width}x{height}"
+        width == expected_width && height == expected_height,
+        "Camera JPEG dimensions must be {expected_width}x{expected_height}, got {width}x{height}"
     );
     Ok(())
 }
@@ -1831,8 +1956,13 @@ fn peer_routes(peer: &AukiPeer) -> Result<PeerRoutes> {
     })
 }
 
+#[cfg(test)]
 fn validate_camera_jpeg(bytes: &[u8]) -> Result<()> {
-    ensure_jpeg(bytes)
+    validate_camera_jpeg_for_profile(bytes, camera_profile(CameraQuality::Low))
+}
+
+fn validate_camera_jpeg_for_profile(bytes: &[u8], profile: CameraProfile) -> Result<()> {
+    ensure_jpeg_dimensions(bytes, profile.width, profile.height)
 }
 
 fn discovery_peer(candidate: AukiDiscoveryCandidate) -> DiscoveryPeer {
@@ -1926,11 +2056,14 @@ mod tests {
                 pending_approvals: Mutex::new(HashSet::new()),
                 blobs: Mutex::new(VecDeque::new()),
                 pending_snapshots: Mutex::new(HashMap::new()),
-                latest_frame: Mutex::new(LiveFrame {
-                    bytes: Arc::from(deterministic_jpeg().unwrap()),
-                    capture_timestamp_ns: 1,
-                    generation: 0,
-                }),
+                latest_frames: Mutex::new(HashMap::from([(
+                    CAMERA_RESOURCE_ID.to_owned(),
+                    LiveFrame {
+                        bytes: Arc::from(deterministic_jpeg().unwrap()),
+                        capture_timestamp_ns: 1,
+                        generation: 0,
+                    },
+                )])),
                 paused_by: Mutex::new(None),
                 camera_available: AtomicBool::new(role == CameraRole::Publisher),
                 events,
@@ -1973,12 +2106,15 @@ mod tests {
     }
 
     #[test]
-    fn synthetic_frames_pass_camera_guard_and_move() {
-        let frames = crate::contract::synthetic_jpegs().unwrap();
-        for frame in &frames {
-            validate_camera_jpeg(frame).unwrap();
+    fn synthetic_frames_pass_each_rendition_guard_and_move() {
+        for profile in CAMERA_PROFILES {
+            let frames = synthetic_jpegs_for_profile(profile).unwrap();
+            assert_eq!(frames.len(), 16);
+            for frame in &frames {
+                validate_camera_jpeg_for_profile(frame, profile).unwrap();
+            }
+            assert!(frames.windows(2).all(|pair| pair[0] != pair[1]));
         }
-        assert!(frames.windows(2).all(|pair| pair[0] != pair[1]));
     }
 
     #[test]
@@ -2160,7 +2296,7 @@ mod tests {
         let metadata = metadata(state.local_peer_id, "revocation-test");
         let dispatch = stream_dispatch(
             &state,
-            &metadata,
+            std::slice::from_ref(&metadata),
             &requester,
             StreamRequest {
                 source_peer_id: state.local_peer_id.to_string(),

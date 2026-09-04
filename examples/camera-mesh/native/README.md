@@ -1,9 +1,10 @@
 # Native Rust Camera Mesh
 
-This headless peer can publish a checked-in animated 480×270 test feed or
-consume another Camera Mesh publisher. It composes the application in Rust and
-uses one JSON object per line on stdin and stdout. The animation needs no camera
-or runtime image codec.
+This headless peer can simultaneously publish checked-in Low (480×270 at 5
+fps), Medium (960×540 at 15 fps), and High (1920×1080 at 30 fps) test feeds, or
+consume the backward-compatible Low rendition from another Camera Mesh
+publisher. It composes the application in Rust and uses one JSON object per
+line on stdin and stdout. The animations need no camera or runtime image codec.
 
 From the SDK root, configure either User credentials:
 

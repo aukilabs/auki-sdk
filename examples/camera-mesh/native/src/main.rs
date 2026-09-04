@@ -7,8 +7,8 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use auki_camera_mesh::{
-    CAMERA_RATE_HZ, CameraEvent, CameraProtocols, CameraRole, PeerCard, deterministic_jpeg,
-    synthetic_jpegs,
+    CAMERA_PROFILES, CameraEvent, CameraProfile, CameraProtocols, CameraQuality, CameraRole,
+    PeerCard, camera_profile, deterministic_jpeg, synthetic_jpegs_for_profile,
 };
 use auki_sdk::{
     AukiDiscovery, AukiPeerBootstrap, Credentials, DdsTrackerMode, DomainSelection, PeerId,
@@ -122,17 +122,28 @@ async fn command_loop(
     mut events: tokio::sync::mpsc::Receiver<CameraEvent>,
 ) -> Result<()> {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
-    let frames = camera_frames(protocols.role())?;
-    let mut frame_index = 0;
-    let mut frame_tick = tokio::time::interval(std::time::Duration::from_millis(
-        1_000 / u64::from(CAMERA_RATE_HZ),
+    let mut renditions = camera_frames(protocols.role())?;
+    let high_rate_hz = camera_profile(CameraQuality::High).rate_hz;
+    let mut tick_index = 0_u64;
+    let mut frame_tick = tokio::time::interval(std::time::Duration::from_nanos(
+        1_000_000_000 / u64::from(high_rate_hz),
     ));
     frame_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
-            _ = frame_tick.tick(), if !frames.is_empty() => {
-                protocols.replace_frame(frames[frame_index].clone())?;
-                frame_index = (frame_index + 1) % frames.len();
+            _ = frame_tick.tick(), if !renditions.is_empty() => {
+                for rendition in &mut renditions {
+                    let divisor = u64::from(high_rate_hz / rendition.profile.rate_hz);
+                    if tick_index.is_multiple_of(divisor) {
+                        protocols.replace_rendition_frame(
+                            rendition.profile.quality,
+                            rendition.frames[rendition.frame_index].clone(),
+                        )?;
+                        rendition.frame_index =
+                            (rendition.frame_index + 1) % rendition.frames.len();
+                    }
+                }
+                tick_index = tick_index.wrapping_add(1);
             }
             event = events.recv() => {
                 if let Some(event) = event {
@@ -158,7 +169,13 @@ async fn command_loop(
     }
 }
 
-fn camera_frames(role: CameraRole) -> Result<Vec<Vec<u8>>> {
+struct RenditionFrames {
+    profile: CameraProfile,
+    frames: Vec<Vec<u8>>,
+    frame_index: usize,
+}
+
+fn camera_frames(role: CameraRole) -> Result<Vec<RenditionFrames>> {
     if role != CameraRole::Publisher {
         return Ok(Vec::new());
     }
@@ -167,11 +184,36 @@ fn camera_frames(role: CameraRole) -> Result<Vec<Vec<u8>>> {
         Err(env::VarError::NotPresent) => "animated".into(),
         Err(error) => return Err(error).context("read AUKI_CAMERA_FRAME_MODE"),
     };
-    match mode.as_str() {
-        "still" => Ok(vec![deterministic_jpeg()?]),
-        "animated" => synthetic_jpegs(),
-        value => bail!("AUKI_CAMERA_FRAME_MODE must be animated or still, got {value:?}"),
+    camera_frames_for_mode(role, &mode)
+}
+
+fn camera_frames_for_mode(role: CameraRole, mode: &str) -> Result<Vec<RenditionFrames>> {
+    if role != CameraRole::Publisher {
+        return Ok(Vec::new());
     }
+    CAMERA_PROFILES
+        .into_iter()
+        .map(|profile| {
+            let frames = match mode {
+                "still" if profile.quality == CameraQuality::Low => vec![deterministic_jpeg()?],
+                "still" => vec![
+                    synthetic_jpegs_for_profile(profile)?
+                        .into_iter()
+                        .next()
+                        .expect("synthetic rendition has at least two frames"),
+                ],
+                "animated" => synthetic_jpegs_for_profile(profile)?,
+                value => {
+                    bail!("AUKI_CAMERA_FRAME_MODE must be animated or still, got {value:?}")
+                }
+            };
+            Ok(RenditionFrames {
+                profile,
+                frames,
+                frame_index: 0,
+            })
+        })
+        .collect()
 }
 
 async fn handle_command(
@@ -453,5 +495,27 @@ mod tests {
         assert!(!parse_env_flag("FLAG", "0").unwrap());
         assert!(!parse_env_flag("FLAG", "false").unwrap());
         assert!(parse_env_flag("FLAG", "yes").is_err());
+    }
+
+    #[test]
+    fn publisher_loads_all_three_rendition_animations() {
+        let renditions = camera_frames_for_mode(CameraRole::Publisher, "animated").unwrap();
+        assert_eq!(
+            renditions
+                .iter()
+                .map(|rendition| rendition.profile)
+                .collect::<Vec<_>>(),
+            CAMERA_PROFILES
+        );
+        assert!(
+            renditions
+                .iter()
+                .all(|rendition| rendition.frames.len() == 16)
+        );
+        assert!(
+            camera_frames_for_mode(CameraRole::Viewer, "animated")
+                .unwrap()
+                .is_empty()
+        );
     }
 }

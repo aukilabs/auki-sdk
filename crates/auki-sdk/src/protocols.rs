@@ -42,40 +42,13 @@ impl AukiPeerProtocols {
             inner: Arc::new(ProtocolRuntime {
                 node,
                 domain_id,
-                routes: Mutex::new(routes.into_iter().collect()),
+                routes: routes.into_iter().collect(),
                 lifecycle,
                 registrations: Mutex::new(HashMap::new()),
                 next_generation: AtomicU64::new(1),
                 served_protocols: ServedProtocolSnapshots::new(),
             }),
         }
-    }
-
-    /// Atomically replace dial candidates for one expected peer.
-    ///
-    /// Empty `routes` removes the peer. Used by product phonebooks / control
-    /// planes after `AukiPeer` start (initial routes alone are not enough).
-    pub fn replace_peer_routes(
-        &self,
-        expected_peer: PeerId,
-        routes: impl IntoIterator<Item = Multiaddr>,
-    ) -> Result<(), AukiProtocolError> {
-        let _running = self
-            .inner
-            .lifecycle
-            .enter()
-            .ok_or(AukiProtocolError::Stopped)?;
-        let mut candidates = Vec::new();
-        for route in routes {
-            candidates.push(canonicalize_candidate(expected_peer, route)?);
-        }
-        let mut map = self.inner.routes.lock();
-        if candidates.is_empty() {
-            map.remove(&expected_peer);
-        } else {
-            map.insert(expected_peer, candidates);
-        }
-        Ok(())
     }
 
     /// Stable local libp2p Peer ID shared by every mounted protocol.
@@ -174,7 +147,6 @@ impl AukiPeerProtocols {
                 .ok_or(AukiProtocolError::Stopped)?;
             self.inner
                 .routes
-                .lock()
                 .get(&expected_peer)
                 .cloned()
                 .unwrap_or_default()
@@ -313,7 +285,7 @@ async fn cleanup_before_deadline<T>(
 struct ProtocolRuntime {
     node: Node,
     domain_id: uuid::Uuid,
-    routes: Mutex<BTreeMap<PeerId, Vec<Multiaddr>>>,
+    routes: BTreeMap<PeerId, Vec<Multiaddr>>,
     lifecycle: ContextLifecycle,
     registrations: Mutex<HashMap<String, Arc<ProtocolEntry>>>,
     next_generation: AtomicU64,

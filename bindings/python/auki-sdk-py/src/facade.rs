@@ -701,20 +701,6 @@ impl PyAukiPeer {
         )
     }
 
-    /// Install dial candidates for one peer (Discovery phonebook apply).
-    fn replace_peer_routes(&self, peer_id: String, addresses: Vec<String>) -> PyResult<()> {
-        let peer = parse_peer_id(&peer_id)?;
-        let parsed = addresses
-            .into_iter()
-            .map(|s| parse_multiaddr(&s))
-            .collect::<PyResult<Vec<_>>>()?;
-        self.owner.with_peer(|runtime| {
-            runtime
-                .replace_peer_routes(peer, parsed)
-                .map_err(|error| runtime_error("replace_peer_routes", error))
-        })?
-    }
-
     fn known_peer_ids(&self) -> PyResult<Vec<String>> {
         self.owner.with_peer(|runtime| {
             runtime

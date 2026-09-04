@@ -505,6 +505,47 @@ async function assertColumnLayout(page, expected, label) {
       .getAttribute("aria-pressed");
     return tracks === expected && selected === "true";
   }, timeout, label);
+  await assertCameraGridGeometry(page, label);
+}
+
+async function assertCameraGridGeometry(page, label) {
+  const geometry = await page.locator("#camera-grid").evaluate((grid) => {
+    const styles = getComputedStyle(grid);
+    const columns = Number(grid.dataset.columnCount);
+    const expectedRowGap = Number.parseFloat(styles.rowGap);
+    const items = [...grid.children].map((item) => {
+      const bounds = item.getBoundingClientRect();
+      return {
+        top: bounds.top,
+        bottom: bounds.bottom,
+        width: bounds.width,
+        height: bounds.height,
+      };
+    });
+    const issues = [];
+
+    if (columns > 1) {
+      for (const [index, item] of items.entries()) {
+        const ratio = item.width / item.height;
+        if (Math.abs(ratio - (16 / 9)) > 0.02) {
+          issues.push(`tile ${index + 1} has aspect ratio ${ratio.toFixed(3)}`);
+        }
+        if (index < columns) continue;
+        const previousRowItem = items[index - columns];
+        const actualRowGap = item.top - previousRowItem.bottom;
+        if (Math.abs(actualRowGap - expectedRowGap) > 1) {
+          issues.push(
+            `tile ${index + 1} row gap is ${actualRowGap.toFixed(2)}px, expected ${expectedRowGap}px`,
+          );
+        }
+      }
+    }
+
+    return { columns, itemCount: items.length, issues };
+  });
+  if (geometry.issues.length > 0) {
+    throw new Error(`${label} has invalid camera-grid geometry: ${JSON.stringify(geometry)}`);
+  }
 }
 
 async function cameraMenuAction(page, peerId, action) {

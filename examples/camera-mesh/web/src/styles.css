@@ -233,7 +233,9 @@ textarea { min-height: 8rem; resize: vertical; font-family: ui-monospace, SFMono
   --column-count: 2;
   display: grid;
   grid-template-columns: repeat(var(--column-count), minmax(0, 1fr));
-  grid-auto-rows: auto;
+  /* Keep implicit tracks as tall as their 16:9 tiles. `auto` tracks are
+     compressed against the fixed wall height and let the tiles overlap. */
+  grid-auto-rows: max-content;
   align-content: start;
   gap: 5px;
   padding: 5px;
@@ -259,6 +261,7 @@ textarea { min-height: 8rem; resize: vertical; font-family: ui-monospace, SFMono
   border-radius: 5px;
   background: #090d10;
 }
+.camera-tile { container-type: size; }
 .camera-tile[data-status="live"] { border-color: #283a34; }
 .camera-tile.selected { box-shadow: inset 0 0 0 1px rgb(89 227 173 / 35%); }
 .camera-tile[data-status="awaiting"] { border-color: rgb(246 189 91 / 45%); }
@@ -268,14 +271,14 @@ textarea { min-height: 8rem; resize: vertical; font-family: ui-monospace, SFMono
 .tile-shade { position: absolute; z-index: 1; inset: 0; pointer-events: none; background: linear-gradient(to bottom, rgb(0 0 0 / 62%), transparent 24%, transparent 66%, rgb(0 0 0 / 76%)); }
 .tile-topline { position: absolute; z-index: 2; top: .55rem; right: .6rem; left: .6rem; display: flex; align-items: center; justify-content: space-between; gap: .75rem; pointer-events: none; }
 .camera-identity { display: flex; min-width: 0; align-items: center; gap: .45rem; }
-.camera-number { color: var(--faint); font: .62rem ui-monospace, monospace; }
+.camera-number { flex: 0 0 auto; color: var(--faint); font: .62rem ui-monospace, monospace; white-space: nowrap; }
 .camera-name { overflow: hidden; color: #f5f8f9; font-size: .73rem; font-weight: 760; text-overflow: ellipsis; white-space: nowrap; text-shadow: 0 1px 4px #000; }
-.feed-status { display: inline-flex; align-items: center; gap: .35rem; color: #d8e3e0; font: .61rem ui-monospace, monospace; letter-spacing: .06em; text-transform: uppercase; }
+.feed-status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: .35rem; color: #d8e3e0; font: .61rem ui-monospace, monospace; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
 .feed-status::before { width: .4rem; height: .4rem; border-radius: 50%; background: var(--faint); content: ""; }
 .camera-tile[data-status="live"] .feed-status::before { background: var(--live); box-shadow: 0 0 0 3px rgb(89 227 173 / 10%); }
 .camera-tile[data-status="awaiting"] .feed-status::before, .camera-tile[data-status="connecting"] .feed-status::before { background: var(--warning); }
 .camera-tile[data-status="error"] .feed-status::before, .camera-tile[data-status="ended"] .feed-status::before { background: var(--danger); }
-.tile-center { position: absolute; z-index: 2; inset: 2.4rem 1rem 3.2rem; display: grid; place-items: center; pointer-events: none; }
+.tile-center { position: absolute; z-index: 2; inset: 2.4rem 1rem 3.2rem; display: grid; overflow: hidden; place-items: center; pointer-events: none; }
 .tile-message { max-width: 32ch; margin: 0; color: #b8c2c8; font-size: .72rem; text-align: center; text-shadow: 0 1px 5px #000; }
 .tile-message strong { display: block; margin-bottom: .3rem; color: var(--text); font-size: .8rem; }
 .tile-primary-action { position: relative; z-index: 1; min-width: 5.5rem; margin-top: .75rem; pointer-events: auto; }
@@ -377,6 +380,16 @@ dialog::backdrop { background: rgb(1 3 5 / 68%); backdrop-filter: blur(4px); }
 .quality-picker button[aria-pressed="true"] { border-color: var(--live); background: rgb(89 227 173 / 12%); color: var(--live); }
 .toast { position: fixed; z-index: 80; right: 1rem; bottom: calc(1rem + env(safe-area-inset-bottom)); max-width: min(26rem, calc(100% - 2rem)); border: 1px solid var(--line-hi); border-radius: 8px; padding: .72rem .85rem; background: #182128; color: var(--text); box-shadow: 0 14px 40px rgb(0 0 0 / 45%); font-size: .75rem; }
 .toast.error { border-color: rgb(255 127 133 / 45%); color: #ffc2c5; }
+
+@container (max-height: 9.5rem) {
+  .tile-message > span,
+  .tile-primary-action { display: none; }
+  .tile-message strong { margin-bottom: 0; }
+}
+
+@container (max-height: 7.25rem) {
+  .tile-center { display: none; }
+}
 
 @keyframes spin { to { rotate: 360deg; } }
 

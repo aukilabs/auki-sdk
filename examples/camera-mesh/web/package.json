@@ -10,7 +10,7 @@
     "build:wasm": "cd ../../../bindings/web/auki-sdk-web && wasm-pack build . --target web --out-dir ../../../examples/camera-mesh/web/pkg-web --dev --features finite-protocols,message,stream --locked",
     "check": "npm run build:wasm && tsc --noEmit",
     "build": "npm run build:wasm && tsc --noEmit && vite build",
-    "dev": "npm run build:wasm && vite --host 127.0.0.1",
+    "dev": "npm run build:wasm && vite --host 0.0.0.0",
     "smoke": "node scripts/smoke_browser_camera.mjs",
     "smoke:matrix": "node scripts/smoke_camera_matrix.mjs"
   },

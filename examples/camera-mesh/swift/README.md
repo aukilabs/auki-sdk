@@ -110,6 +110,11 @@ prefer Low. Missing tiers fall back to the publisher's lowest available
 quality. Switching waits for the first replacement frame before it closes the
 working stream.
 
+Every tile keeps compact rolling diagnostics visible at every density: network
+receive (`RX fps`), SwiftUI render (`render fps`), received KiB/s, and displayed
+frame age. The session sheet can disconnect and remove every camera while the
+local Viewer Peer remains online.
+
 An unapproved connection returns `approval_required`. Compare the complete
 viewer Peer ID shown by the app with the publisher's pending request, approve
 that exact ID, then retry its tile. Verify advancing JPEGs, pause, resume, and a

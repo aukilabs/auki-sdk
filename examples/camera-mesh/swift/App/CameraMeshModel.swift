@@ -47,8 +47,26 @@ enum CameraTileStatus: String, Sendable {
   case error
 }
 
+struct CameraTileDiagnostics: Equatable, Sendable {
+  var receiveFPS: Double?
+  var renderFPS: Double?
+  var kibPerSecond: Double?
+  var frameAgeMilliseconds: Double?
+
+  static let empty = CameraTileDiagnostics()
+}
+
 @MainActor
 final class CameraTile: ObservableObject {
+  private struct ReceiveSample {
+    let time: TimeInterval
+    let bytes: Int
+  }
+
+  private static let diagnosticWindow: TimeInterval = 5
+  private static let diagnosticUpdateInterval: TimeInterval = 0.2
+  private static let maximumDiagnosticSamples = 512
+
   let peerID: String
   @Published var connectionID: CameraViewerConnectionID?
   @Published var connection: CameraViewerConnection?
@@ -61,10 +79,16 @@ final class CameraTile: ObservableObject {
   @Published var frameCount: UInt64 = 0
   @Published var latestSequence: UInt64?
   @Published var latestFrameAt: Date?
+  @Published private(set) var diagnostics = CameraTileDiagnostics.empty
   @Published var paused = false
   @Published var snapshotPending = false
   @Published var controlPending = false
   @Published var switchingQuality: CameraQuality?
+  fileprivate(set) var latestFrameTimestampNs: Int64?
+  private var receiveSamples: [ReceiveSample] = []
+  private var renderSamples: [TimeInterval] = []
+  private var lastRenderedFrameCount: UInt64?
+  private var lastDiagnosticsPublishedAt: TimeInterval?
 
   init(
     peerID: String,
@@ -86,6 +110,68 @@ final class CameraTile: ObservableObject {
   var runtime: String { connection?.runtime ?? "remote" }
   var quality: CameraQuality? { connection?.quality }
   var availableQualities: [CameraQuality] { connection?.availableQualities ?? [] }
+
+  func recordReceivedFrame(
+    bytes: Int,
+    at time: TimeInterval = ProcessInfo.processInfo.systemUptime
+  ) {
+    receiveSamples.append(ReceiveSample(time: time, bytes: bytes))
+    let cutoff = time - Self.diagnosticWindow
+    while receiveSamples.count > 2, receiveSamples[1].time < cutoff {
+      receiveSamples.removeFirst()
+    }
+    if receiveSamples.count > Self.maximumDiagnosticSamples {
+      receiveSamples.removeFirst(receiveSamples.count - Self.maximumDiagnosticSamples)
+    }
+  }
+
+  func recordRenderedFrame(
+    frameCount: UInt64,
+    timestampNs: Int64,
+    at time: TimeInterval = ProcessInfo.processInfo.systemUptime,
+    wallClock: TimeInterval = Date().timeIntervalSince1970
+  ) {
+    guard lastRenderedFrameCount != frameCount else { return }
+    lastRenderedFrameCount = frameCount
+    renderSamples.append(time)
+    let cutoff = time - Self.diagnosticWindow
+    while renderSamples.count > 2, renderSamples[1] < cutoff {
+      renderSamples.removeFirst()
+    }
+    if renderSamples.count > Self.maximumDiagnosticSamples {
+      renderSamples.removeFirst(renderSamples.count - Self.maximumDiagnosticSamples)
+    }
+
+    guard lastDiagnosticsPublishedAt.map({ time - $0 >= Self.diagnosticUpdateInterval }) ?? true
+    else { return }
+    lastDiagnosticsPublishedAt = time
+
+    var next = CameraTileDiagnostics.empty
+    if let first = receiveSamples.first, let last = receiveSamples.last,
+      receiveSamples.count > 1
+    {
+      let elapsed = max(0.001, last.time - first.time)
+      next.receiveFPS = Double(receiveSamples.count - 1) / elapsed
+      let deliveredBytes = receiveSamples.dropFirst().reduce(0) { $0 + $1.bytes }
+      next.kibPerSecond = Double(deliveredBytes) / elapsed / 1_024
+    }
+    if let first = renderSamples.first, let last = renderSamples.last,
+      renderSamples.count > 1
+    {
+      next.renderFPS = Double(renderSamples.count - 1) / max(0.001, last - first)
+    }
+    next.frameAgeMilliseconds = wallClock * 1_000 - Double(timestampNs) / 1_000_000
+    diagnostics = next
+  }
+
+  func resetDiagnostics() {
+    receiveSamples = []
+    renderSamples = []
+    lastRenderedFrameCount = nil
+    lastDiagnosticsPublishedAt = nil
+    latestFrameTimestampNs = nil
+    diagnostics = .empty
+  }
 }
 
 func isCameraApprovalRequired(_ message: String) -> Bool {
@@ -111,6 +197,7 @@ final class CameraMeshModel: ObservableObject {
   @Published private(set) var cameraTiles: [CameraTile] = []
   @Published private(set) var liveCameraCount = 0
   @Published private(set) var addingAllCameras = false
+  @Published private(set) var removingAllCameras = false
   @Published var focusedCameraPeerID: String?
   @Published private(set) var latestFrameImage: UIImage?
   @Published private(set) var snapshotImage: UIImage?
@@ -169,13 +256,13 @@ final class CameraMeshModel: ObservableObject {
   }
 
   var canConnectDiscovered: Bool {
-    selectedRole == .viewer && phase == .ready
+    selectedRole == .viewer && phase == .ready && !removingAllCameras
       && cameraTiles.count < CameraMeshContract.maximumViewerConnections
       && discoveredCameras.contains(where: { $0.peerID == selectedCameraPeerID })
   }
 
   var canConnectCard: Bool {
-    selectedRole == .viewer && phase == .ready
+    selectedRole == .viewer && phase == .ready && !removingAllCameras
       && cameraTiles.count < CameraMeshContract.maximumViewerConnections
       && !remoteCard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
   }
@@ -185,9 +272,14 @@ final class CameraMeshModel: ObservableObject {
   }
 
   var canAddAllCameras: Bool {
-    guard selectedRole == .viewer, phase == .ready, !addingAllCameras else { return false }
+    guard selectedRole == .viewer, phase == .ready, !addingAllCameras, !removingAllCameras
+    else { return false }
     if discoveredCameras.isEmpty { return true }
     return !addAllCandidates().isEmpty
+  }
+
+  var canRemoveAllCameras: Bool {
+    selectedRole == .viewer && phase == .ready && !removingAllCameras && !cameraTiles.isEmpty
   }
 
   var awaitingApproval: Bool {
@@ -627,7 +719,7 @@ final class CameraMeshModel: ObservableObject {
   }
 
   func removeCamera(peerID: String) async {
-    guard selectedRole == .viewer else { return }
+    guard selectedRole == .viewer, !removingAllCameras else { return }
     let operationGeneration = generation
     let connectionID = tile(peerID: peerID)?.connectionID
     cameraTiles.removeAll { $0.peerID == peerID }
@@ -640,8 +732,36 @@ final class CameraMeshModel: ObservableObject {
     write("Removed camera \(peerID).")
   }
 
+  func removeAllCameras() async {
+    guard canRemoveAllCameras, let viewer else { return }
+    let operationGeneration = generation
+    let removed = cameraTiles
+    let connectionIDs = removed.compactMap(\.connectionID)
+    removingAllCameras = true
+    cameraTiles = []
+    refreshLiveCameraCount()
+    retryAttempts = [:]
+    focusedCameraPeerID = nil
+    latestFrameImage = nil
+    frameCount = 0
+    latestSequence = nil
+
+    await withTaskGroup(of: Void.self) { group in
+      for connectionID in connectionIDs {
+        group.addTask {
+          await viewer.disconnect(connectionID: connectionID, reason: "Removed by operator")
+        }
+      }
+    }
+
+    guard generation == operationGeneration, self.viewer === viewer else { return }
+    removingAllCameras = false
+    write("Disconnected and removed \(removed.count) camera(s).")
+  }
+
   func discoverAndAddAllCameras(preferredQuality: CameraQuality? = nil) async {
-    guard phase == .ready, selectedRole == .viewer, !addingAllCameras else { return }
+    guard phase == .ready, selectedRole == .viewer, !addingAllCameras, !removingAllCameras
+    else { return }
 
     if discoveredCameras.isEmpty {
       guard await discover() else { return }
@@ -850,7 +970,7 @@ final class CameraMeshModel: ObservableObject {
     peerID: String,
     preferredQuality: CameraQuality? = nil
   ) async -> Bool {
-    guard phase == .ready, let viewer else { return false }
+    guard phase == .ready, !removingAllCameras, let viewer else { return false }
     if let existing = tile(peerID: peerID),
       existing.status == .connecting || existing.status == .waiting || existing.status == .live
     {
@@ -885,6 +1005,7 @@ final class CameraMeshModel: ObservableObject {
         $0.snapshotPending = false
         $0.controlPending = false
         $0.switchingQuality = nil
+        $0.resetDiagnostics()
       }
     }
 
@@ -1174,7 +1295,11 @@ final class CameraMeshModel: ObservableObject {
 
     case .connected(let connectionID, let connected):
       guard phase == .ready else { return }
+      let previousQuality = tile(peerID: connected.peerID)?.quality
       updateTile(peerID: connected.peerID) {
+        if previousQuality != nil, previousQuality != connected.quality {
+          $0.resetDiagnostics()
+        }
         $0.connectionID = connectionID
         $0.connection = connected
         $0.status = .waiting
@@ -1190,13 +1315,16 @@ final class CameraMeshModel: ObservableObject {
       )
 
     case .frame(let connectionID, let frame):
-      guard let peerID = tile(connectionID: connectionID)?.peerID else { return }
+      guard let receivedTile = tile(connectionID: connectionID) else { return }
+      let peerID = receivedTile.peerID
+      receivedTile.recordReceivedFrame(bytes: frame.jpeg.count)
       guard let image = UIImage(data: frame.jpeg) else {
         write("UIKit could not decode camera JPEG sequence \(frame.sequence).")
         return
       }
       let firstFrame = tile(peerID: peerID)?.frameCount == 0
       updateTile(peerID: peerID) {
+        $0.latestFrameTimestampNs = frame.timestampNs
         $0.image = image
         $0.frameCount &+= 1
         $0.latestSequence = frame.sequence
@@ -1290,6 +1418,7 @@ final class CameraMeshModel: ObservableObject {
     retryAttempts = [:]
     focusedCameraPeerID = nil
     addingAllCameras = false
+    removingAllCameras = false
     latestFrameImage = nil
     frameCount = 0
     latestSequence = nil

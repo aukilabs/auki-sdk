@@ -497,6 +497,10 @@ private struct CameraTileView: View {
     }
     .accessibilityElement(children: .contain)
     .accessibilityLabel("\(tile.name), \(statusLabel)")
+    .onChange(of: tile.frameCount) { _, frameCount in
+      guard frameCount > 0, let timestampNs = tile.latestFrameTimestampNs else { return }
+      tile.recordRenderedFrame(frameCount: frameCount, timestampNs: timestampNs)
+    }
   }
 
   private var tileHeader: some View {
@@ -555,17 +559,32 @@ private struct CameraTileView: View {
 
   private var tileFooter: some View {
     HStack(alignment: .bottom, spacing: 8) {
-      if focused || !compact {
-        VStack(alignment: .leading, spacing: 2) {
+      VStack(alignment: .leading, spacing: 2) {
+        if focused || !compact {
           TimelineView(.periodic(from: .now, by: 1)) { context in
             Text(frameAge(at: context.date))
           }
           Text("\(tile.frameCount) frames · \(shortCameraPeerID(tile.peerID))")
             .lineLimit(1)
         }
-        .font(.system(size: focused ? 11 : 8, design: .monospaced))
-        .foregroundStyle(CameraMeshStyle.muted)
+
+        Text(streamDiagnosticsText)
+          .font(
+            .system(
+              size: focused ? 11 : 8,
+              weight: .semibold,
+              design: .monospaced
+            )
+          )
+          .foregroundStyle(CameraMeshStyle.text.opacity(0.92))
+          .lineLimit(2)
+          .minimumScaleFactor(0.72)
+          .fixedSize(horizontal: false, vertical: true)
+          .shadow(color: .black.opacity(0.95), radius: 4, y: 1)
+          .accessibilityLabel(streamDiagnosticsAccessibilityLabel)
       }
+      .font(.system(size: focused ? 11 : 8, design: .monospaced))
+      .foregroundStyle(CameraMeshStyle.muted)
       Spacer(minLength: 0)
       Menu {
         if tile.connectionID != nil {
@@ -620,6 +639,28 @@ private struct CameraTileView: View {
 
   private var canRetry: Bool {
     tile.status == .awaitingApproval || tile.status == .ended || tile.status == .error
+  }
+
+  private var streamDiagnosticsText: String {
+    let diagnostics = tile.diagnostics
+    return "\(decimal(diagnostics.receiveFPS)) RX fps  \(decimal(diagnostics.renderFPS)) render fps\n"
+      + "\(decimal(diagnostics.kibPerSecond)) KiB/s  \(milliseconds(diagnostics.frameAgeMilliseconds)) ms"
+  }
+
+  private var streamDiagnosticsAccessibilityLabel: String {
+    let diagnostics = tile.diagnostics
+    return "Network receive rate \(decimal(diagnostics.receiveFPS)) frames per second, "
+      + "render rate \(decimal(diagnostics.renderFPS)) frames per second, "
+      + "receive bandwidth \(decimal(diagnostics.kibPerSecond)) kibibytes per second, "
+      + "displayed frame age \(milliseconds(diagnostics.frameAgeMilliseconds)) milliseconds"
+  }
+
+  private func decimal(_ value: Double?) -> String {
+    value.map { String(format: "%.1f", $0) } ?? "—"
+  }
+
+  private func milliseconds(_ value: Double?) -> String {
+    value.map { String(Int($0.rounded())) } ?? "—"
   }
 
   private var statusLabel: String {
@@ -870,6 +911,30 @@ private struct CameraSessionSheet: View {
           Text(model.log.isEmpty ? "Ready" : model.log)
             .font(.caption.monospaced())
             .textSelection(.enabled)
+        }
+
+        Section {
+          Button(role: .destructive) {
+            Task {
+              await model.removeAllCameras()
+              dismiss()
+            }
+          } label: {
+            if model.removingAllCameras {
+              HStack {
+                ProgressView()
+                Text("Disconnecting cameras…")
+              }
+            } else {
+              Label(
+                "Disconnect and remove all cameras (\(model.cameraTiles.count))",
+                systemImage: "rectangle.stack.badge.minus"
+              )
+            }
+          }
+          .disabled(!model.canRemoveAllCameras)
+        } footer: {
+          Text("Closes every camera subscription and clears the wall without stopping this Viewer Peer.")
         }
 
         Section {

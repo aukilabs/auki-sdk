@@ -33,4 +33,52 @@ final class CameraMeshModelTests: XCTestCase {
     XCTAssertEqual(preferredCameraQuality(forColumnCount: 3), .low)
     XCTAssertEqual(preferredCameraQuality(forColumnCount: 4), .low)
   }
+
+  @MainActor
+  func testCameraTileReportsReceiveRenderBandwidthAndAge() {
+    let tile = CameraTile(
+      peerID: "camera-peer",
+      status: .live,
+      message: "Live feed"
+    )
+
+    for index in 0...4 {
+      let time = Double(index) * 0.2
+      tile.recordReceivedFrame(bytes: 1_024, at: time)
+      if index.isMultiple(of: 2) {
+        tile.recordRenderedFrame(
+          frameCount: UInt64(index + 1),
+          timestampNs: 1_000_000_000,
+          at: time,
+          wallClock: 1.123
+        )
+      }
+    }
+
+    XCTAssertEqual(tile.diagnostics.receiveFPS ?? 0, 5, accuracy: 0.001)
+    XCTAssertEqual(tile.diagnostics.renderFPS ?? 0, 2.5, accuracy: 0.001)
+    XCTAssertEqual(tile.diagnostics.kibPerSecond ?? 0, 5, accuracy: 0.001)
+    XCTAssertEqual(tile.diagnostics.frameAgeMilliseconds ?? 0, 123, accuracy: 0.001)
+  }
+
+  @MainActor
+  func testCameraTileResetClearsRollingDiagnostics() {
+    let tile = CameraTile(
+      peerID: "camera-peer",
+      status: .live,
+      message: "Live feed"
+    )
+    tile.recordReceivedFrame(bytes: 1_024, at: 0)
+    tile.recordReceivedFrame(bytes: 1_024, at: 0.2)
+    tile.recordRenderedFrame(
+      frameCount: 1,
+      timestampNs: 1_000_000_000,
+      at: 0.2,
+      wallClock: 1.05
+    )
+
+    tile.resetDiagnostics()
+
+    XCTAssertEqual(tile.diagnostics, .empty)
+  }
 }

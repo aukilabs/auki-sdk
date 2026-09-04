@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android", "web"],
+  "apple": {
+    "modules": ["AukiSdkExpoModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.aukisdkexpo.AukiSdkExpoModule"]
+  }
+}

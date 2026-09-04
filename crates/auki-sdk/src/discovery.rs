@@ -138,6 +138,10 @@ pub struct AukiDiscoveryCandidate {
     served_protocols: Vec<String>,
     expires_at: DateTime<Utc>,
     source: AukiDiscoverySource,
+    /// DDS subject UUID when the advertisement names one (e.g. enrolled robot id).
+    subject_id: Option<Uuid>,
+    /// DDS peer classification when present (`robot`, `user`, …).
+    peer_type: Option<String>,
 }
 
 /// Cloneable Rust-owned discovery capability for one configured peer.
@@ -193,6 +197,16 @@ impl AukiDiscoveryCandidate {
     /// Provider that produced this process-local observation.
     pub fn source(&self) -> AukiDiscoverySource {
         self.source
+    }
+
+    /// DDS subject UUID when the advertisement includes one.
+    pub fn subject_id(&self) -> Option<Uuid> {
+        self.subject_id
+    }
+
+    /// DDS peer classification when the advertisement includes one.
+    pub fn peer_type(&self) -> Option<&str> {
+        self.peer_type.as_deref()
     }
 }
 
@@ -1071,6 +1085,10 @@ struct WireAdvertisement {
     routes: Vec<String>,
     protocols: Vec<String>,
     expires_at: DateTime<Utc>,
+    #[serde(default)]
+    subject_id: Option<String>,
+    #[serde(default)]
+    peer_type: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1108,12 +1126,24 @@ fn validate_advertisement(
     if wire.expires_at <= Utc::now() {
         return Ok(None);
     }
+    let subject_id = wire
+        .subject_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| Uuid::parse_str(value).ok());
+    let peer_type = wire
+        .peer_type
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
     Ok(Some(AukiDiscoveryCandidate {
         peer_id,
         routes,
         served_protocols,
         expires_at: wire.expires_at,
         source: AukiDiscoverySource::DdsTracker,
+        subject_id,
+        peer_type,
     }))
 }
 

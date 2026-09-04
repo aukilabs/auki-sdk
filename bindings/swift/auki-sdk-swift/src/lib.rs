@@ -28,6 +28,7 @@ uniffi::setup_scaffolding!();
     feature = "blob",
     feature = "message",
     feature = "stream",
+    feature = "urdf-fk",
 ))]
 mod protocols;
 
@@ -179,6 +180,8 @@ pub struct AukiDiscoveryCandidate {
     pub served_protocols: Vec<String>,
     pub expires_at: String,
     pub source: AukiDiscoverySource,
+    pub subject_id: Option<String>,
+    pub peer_type: Option<String>,
 }
 
 impl From<RustAukiDiscoveryCandidate> for AukiDiscoveryCandidate {
@@ -191,6 +194,8 @@ impl From<RustAukiDiscoveryCandidate> for AukiDiscoveryCandidate {
             source: match candidate.source() {
                 RustAukiDiscoverySource::DdsTracker => AukiDiscoverySource::DdsTracker,
             },
+            subject_id: candidate.subject_id().map(|id| id.to_string()),
+            peer_type: candidate.peer_type().map(str::to_owned),
         }
     }
 }

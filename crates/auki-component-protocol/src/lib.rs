@@ -11,7 +11,8 @@ mod wire;
 
 pub use endpoint::{
     ComponentProtocolClient, ComponentProtocolEndpoint, ComponentProtocolError,
-    ComponentProtocolOperation, RemoteObservations, RemoteProductMirror, RemoteProductSync,
+    ComponentProtocolOperation, RemoteMirrorStart, RemoteObservations, RemoteProductMirror,
+    RemoteProductSync,
 };
 pub use wire::{
     CATALOG_PROTOCOL_ID, CatalogRequest, CatalogResponse, MAX_CONTROL_FRAME_BYTES,

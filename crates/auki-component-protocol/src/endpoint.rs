@@ -504,15 +504,40 @@ impl ComponentProtocolClient {
     where
         T: DeserializeOwned + Send + Sync + 'static,
     {
+        self.mirror_product_with_start(
+            remote_peer_id,
+            product,
+            RemoteMirrorStart::EarliestRetained,
+            limits,
+            retained_size,
+        )
+        .await
+    }
+
+    /// Create a typed local mirror with an explicit initial cursor policy.
+    ///
+    /// [`RemoteMirrorStart::LatestExisting`] is intended for latency-sensitive
+    /// live media: the mirror starts at the remote live edge and retains new
+    /// observations locally from that point onward. It does not download the
+    /// remote Product's pre-existing history.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn mirror_product_with_start<T>(
+        &self,
+        remote_peer_id: PeerId,
+        product: ProductReference,
+        start: RemoteMirrorStart,
+        limits: BufferLimits,
+        retained_size: impl Fn(&T) -> usize + Send + Sync + 'static,
+    ) -> Result<RemoteProductMirror<T>, ComponentProtocolError>
+    where
+        T: DeserializeOwned + Send + Sync + 'static,
+    {
         let initial = self
             .observations(
                 remote_peer_id,
                 ObservationRequest {
                     product,
-                    selection: ObservationSelection::FromSequence {
-                        sequence: 0,
-                        max_observations: 1,
-                    },
+                    selection: start.initial_selection(),
                 },
             )
             .await?;
@@ -537,16 +562,38 @@ impl ComponentProtocolClient {
     where
         T: DeserializeOwned + Send + Sync + 'static,
     {
+        self.mirror_product_exact_with_start(
+            remote_peer_id,
+            route,
+            product,
+            RemoteMirrorStart::EarliestRetained,
+            limits,
+            retained_size,
+        )
+        .await
+    }
+
+    /// Create a portable typed mirror through one exact advertised route with
+    /// an explicit initial cursor policy.
+    pub async fn mirror_product_exact_with_start<T>(
+        &self,
+        remote_peer_id: PeerId,
+        route: Multiaddr,
+        product: ProductReference,
+        start: RemoteMirrorStart,
+        limits: BufferLimits,
+        retained_size: impl Fn(&T) -> usize + Send + Sync + 'static,
+    ) -> Result<RemoteProductMirror<T>, ComponentProtocolError>
+    where
+        T: DeserializeOwned + Send + Sync + 'static,
+    {
         let initial = self
             .observations_exact(
                 remote_peer_id,
                 route.clone(),
                 ObservationRequest {
                     product,
-                    selection: ObservationSelection::FromSequence {
-                        sequence: 0,
-                        max_observations: 1,
-                    },
+                    selection: start.initial_selection(),
                 },
             )
             .await?;
@@ -623,6 +670,28 @@ impl ComponentProtocolClient {
                 .open_exact(remote_peer_id, route, OPERATIONS_PROTOCOL_ID),
         )
         .await
+    }
+}
+
+/// Selects which part of an existing remote Buffer seeds a new local mirror.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RemoteMirrorStart {
+    /// Start at the oldest observation the remote Buffer still retains.
+    #[default]
+    EarliestRetained,
+    /// Start at the current live edge and retain subsequent observations.
+    LatestExisting,
+}
+
+impl RemoteMirrorStart {
+    fn initial_selection(self) -> ObservationSelection {
+        match self {
+            Self::EarliestRetained => ObservationSelection::FromSequence {
+                sequence: 0,
+                max_observations: 1,
+            },
+            Self::LatestExisting => ObservationSelection::LatestExisting,
+        }
     }
 }
 

@@ -158,4 +158,4 @@ path and the discovery flow. Its Web viewer also opts into an inbound relay so
 the cross-runtime snapshot callback remains covered.
 
 See the [Camera Mesh guide](../README.md) for the shared JSONL contract and the
-complete Phase 2 gate.
+complete cross-runtime gate.

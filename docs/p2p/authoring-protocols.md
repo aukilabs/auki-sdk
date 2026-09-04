@@ -7,6 +7,10 @@ crate; platform code should not reimplement the conversation.
 [`examples/portable-echo`](../../examples/portable-echo/README.md) is the
 smallest complete reference.
 
+If the protocol already exists, use
+[Build with an existing protocol](getting-started.md) instead. This guide is
+only for defining a new wire contract.
+
 ## Recommended shape
 
 ```text

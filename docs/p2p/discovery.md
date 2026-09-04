@@ -1,14 +1,16 @@
 # Discover peers
 
-Discovery finds peers in the same Domain without copying peer cards. V0 uses
-one provider: the DDS tracker.
+Discovery answers: “Which peers might I be able to reach?” It returns
+short-lived candidates. It does not authenticate a peer, grant product
+permission, or establish a connection.
 
-## Quick start
+The SDK currently provides one discovery mechanism: the DDS tracker.
 
-Enable the tracker when starting the peer:
+## Enable DDS discovery
 
-```rust,ignore
-use auki_protocols::info::{InfoClient, v1::ID as INFO_PROTOCOL_ID};
+Choose the policy when building the peer:
+
+~~~rust,ignore
 use auki_sdk::{
     AukiPeerBootstrap, Credentials, DdsTrackerMode, DomainSelection,
 };
@@ -22,11 +24,29 @@ let bootstrap = AukiPeerBootstrap::dev(
 let peer = bootstrap
     .start_persistent_peer(DomainSelection::new(domain_id), identity_file)
     .await?;
-```
+~~~
 
-Find peers serving one exact protocol and use the existing protocol client:
+The two modes are explicit:
 
-```rust,ignore
+| Mode | Local peer is listed | Can query DDS |
+| --- | --- | --- |
+| `DiscoverOnly` | No | Yes |
+| `DiscoverAndAdvertise` | Yes | Yes |
+
+Use `DiscoverOnly` for controllers and monitoring interfaces. Use
+`DiscoverAndAdvertise` for robots, cameras, compute nodes, and services that
+accept inbound connections.
+
+Discovery is disabled when `with_dds_tracker` is omitted. Manual routes and
+product control planes continue to work.
+
+## Find a protocol
+
+Filter by the complete, versioned protocol ID:
+
+~~~rust,ignore
+use auki_protocols::info::{InfoClient, v1::ID as INFO_PROTOCOL_ID};
+
 let info = InfoClient::new(peer.protocols());
 
 for candidate in peer.discover_protocol(INFO_PROTOCOL_ID).await? {
@@ -40,130 +60,85 @@ for candidate in peer.discover_protocol(INFO_PROTOCOL_ID).await? {
         }
     }
 }
-```
+~~~
 
-Use `peer.discover().await?` when the application wants every current
-candidate rather than one protocol.
+Use `peer.discover()` when the application wants every current candidate.
+Protocol matching is exact: the tracker does not infer prefixes, version
+ranges, or compatibility.
 
-Protocol filtering matches the complete versioned ID. V0 does not infer
-prefixes, version ranges, or compatibility.
+## What a candidate contains
 
-## Choose whether to advertise
+Each unexpired DDS entry contains:
 
-DDS discovery has two explicit modes:
+- the advertised Peer ID;
+- current direct or relay routes;
+- exact mounted inbound protocol IDs; and
+- the advertisement expiry.
 
-| Mode | Behavior |
-| --- | --- |
-| `DiscoverOnly` | Can query DDS but never publishes the local peer |
-| `DiscoverAndAdvertise` | Can query DDS and maintains a local advertisement |
+The SDK derives protocol IDs from endpoints that are actually mounted.
+Applications do not maintain a second list. Mounting or closing an endpoint
+updates the advertisement.
 
-`DiscoverOnly` is useful for controllers and operator interfaces. It performs
-no tracker request during peer startup and runs no publication, renewal, or
-withdrawal task. Tracker errors are returned only when the application calls
-`discover()`.
+The tracker contract is forward-compatible: required fields are validated,
+while unknown JSON fields are ignored. A service may therefore add metadata
+without breaking older SDK clients.
 
-`DiscoverAndAdvertise` is useful for robots, compute nodes, and services. Its
-first advertisement is a startup requirement; later changes are published
-asynchronously.
+An advertised protocol is only a filtering hint. It does not prove that the
+peer is still online, the route works, the handler will accept this caller, or
+the peer owns a particular camera or robot capability. Query Info, Catalog,
+Registry, or a product protocol after connecting.
 
-Relay reachability is configured separately. A discover-only peer may still
-own a relay, but DDS does not reveal it. Conversely, an advertising peer may
-advertise explicit direct routes without owning a relay on native targets. A
-Web `OutboundOnly` peer has no public route, so it supports `DiscoverOnly` but
-rejects `DiscoverAndAdvertise`.
+## Reachability is separate
 
-## What DDS advertises
+Advertising requires at least one route another peer can dial:
 
-Each short-lived advertisement contains:
+- a relay-backed peer advertises its confirmed relay routes;
+- a native direct peer may advertise an application-supplied direct route; and
+- an outbound-only Web peer has no inbound route, so it can discover but cannot
+  advertise.
 
-| Field | Meaning |
-| --- | --- |
-| Peer ID | The identity bound to the publisher's DDS P2P credential |
-| Routes | Current direct and relay routes supplied by the peer |
-| Served protocols | Exact inbound protocol IDs currently mounted on the peer |
-| Expiry | The end of the DDS-issued advertisement lease |
-
-The SDK derives served protocols from successful endpoint mounts. Applications
-do not maintain a second protocol list. Mounting or closing an endpoint updates
-the DDS advertisement automatically across Rust, Web, Python, and Swift.
-
-Every peer with a valid DDS P2P credential for the Domain can list these fields
-for every unexpired advertisement in that Domain. V0 has no private protocol
-advertisements or per-peer visibility rules. Discover-only peers are absent
-from that list.
-
-Because endpoints mount after peer startup, the first advertisement may have
-an empty protocol list. It is replaced as soon as endpoints mount.
-
-## What a protocol advertisement means
-
-An advertised protocol is a filtering hint. It means the peer recently claimed
-to have an inbound handler for that exact protocol ID.
-
-It does **not** prove that:
-
-- the peer is still online;
-- a route currently works;
-- the handler is still mounted;
-- the peer will accept this requester; or
-- the peer owns a particular camera, robot capability, or resource.
-
-For example, advertising the Stream protocol means the peer speaks the Stream
-wire contract. It does not mean the peer has a camera or offers a particular
-stream. Use Info, Catalog, Registry, or the selected application protocol for
-that richer information after connecting.
+A discover-only peer may still own a relay; DDS simply does not publish it.
 
 ## Trust boundary
 
-```text
+~~~text
 DDS candidate
-    -> exact-route protocol dial
-    -> Noise verifies the expected Peer ID
+    -> exact Peer ID + route dial
+    -> Noise verifies the Peer ID
     -> Auki authentication verifies the Domain
-    -> known_peers() observes the live connection
-```
+    -> product policy decides what the peer may do
+~~~
 
-A discovered candidate is never authorization and is never inserted directly
-into `known_peers()`. The existing exact-route protocol operation remains the
-security boundary.
+Discovery never inserts a candidate into `known_peers()`. That collection
+contains observations from authenticated connections, not a Domain roster and
+not an authorization list.
 
-## How the DDS provider behaves
+All peers with a valid DDS P2P credential for a Domain can currently list every
+unexpired advertisement in that Domain. The first version has no private
+advertisements or per-peer visibility rules.
 
-In `DiscoverAndAdvertise`, the SDK runs a publisher that:
+## Publication lifecycle
 
-1. publishes its current routes and mounted inbound protocols;
-2. renews the short DDS lease;
-3. replaces the advertisement when routes or protocols change;
-4. attempts withdrawal during ordered peer shutdown.
+In `DiscoverAndAdvertise` mode, `AukiPeer`:
 
-In either mode, `discover()` and `discover_protocol()` perform a same-Domain
-lookup only when the application calls them.
+1. publishes current routes and mounted protocols;
+2. renews the short lease;
+3. replaces the entry when routes or protocols change; and
+4. attempts withdrawal during ordered shutdown.
 
-If a peer crashes or cannot renew, its advertisement expires. A tracker outage
-does not terminate existing authenticated connections.
+If a process crashes, its entry disappears when the lease expires. A tracker
+outage does not terminate existing authenticated connections.
 
-DDS discovery is explicit. Without DDS tracker configuration, manual exact
-routes continue to work as before.
-
-`AukiPeerBootstrap::with_dds_tracker` is the normal configuration path and
-uses the same trusted DDS origin that authenticated the session. Low-level
-external-authority integrations may use
-`DdsTrackerConfig::for_trusted_dds`; its endpoint receives the renewable DDS
-P2P bearer and must therefore be controlled and trusted by the application.
-
-The DDS tracker is the only Discovery v0 provider. It is an HTTP tracker, not
-the libp2p Rendezvous protocol. Its bootstrap seed is the configured DDS URL;
-mDNS, Rendezvous, and Kademlia remain future options.
-
-See [Choose a discovery provider](discovery-providers.md) for how DDS differs
-from mDNS, Rendezvous, and Kademlia and how to prototype another source without
-weakening the authentication boundary.
+The DDS tracker is an HTTP directory, not the libp2p Rendezvous protocol. See
+[Discovery providers](discovery-providers.md) for mDNS, Rendezvous, Kademlia,
+and the difference between discovery and bootstrap.
 
 ## Try it
 
 - [Portable Echo](../../examples/portable-echo/README.md) is the smallest
   advertise, discover, select, and exact-call example.
-- [Standard protocol playground](../../examples/standard-protocols/README.md)
-  mounts all six SDK protocol families and probes DDS-discovered peers across
-  native Rust, Python, and two browser tabs. Its Swift app exposes the same
-  discovery flow for simulator and device testing.
+- [Standard Protocol Playground](../../examples/standard-protocols/README.md)
+  filters discovery by all six SDK protocol families across Rust, Web, Python,
+  and Swift.
+- [Camera Mesh](../../examples/camera-mesh/README.md) discovers publishers but
+  keeps camera access behind explicit Peer ID approval.

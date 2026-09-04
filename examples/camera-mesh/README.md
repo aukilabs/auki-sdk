@@ -89,8 +89,10 @@ never include login credentials.
 
 Publishers default to DDS `discover_and_advertise`; viewers default to
 `discover_only`. Headless Rust and Python peers can override either default
-with `AUKI_DISCOVERY_MODE`. Every runtime gets both TCP and WSS relay routes,
-then selects the route it can use when dialing another peer.
+with `AUKI_DISCOVERY_MODE`. Relay-backed peers receive both TCP and WSS routes,
+then callers select the route supported by their runtime. Web monitoring is
+outbound-only by default and therefore skips its own relay booking; enable its
+optional inbound relay only when testing verified snapshot callbacks.
 
 ## Native and Python JSONL contract
 
@@ -130,7 +132,7 @@ omit it when you want the headless peer to generate a UUID.
 | Viewer | `snapshot` | `snapshot_result`; publisher emits `snapshot_staged` |
 | Each peer | `shutdown` | `shutdown_ack`, then process exit |
 
-## Phase 2 acceptance gates
+## Web, Rust, and Python interoperability
 
 The two gates cover different network paths and both must pass. Prerequisites
 are Rust with `wasm32-unknown-unknown`, `wasm-pack`, Node.js/npm, Python,
@@ -172,11 +174,11 @@ Each edge proves rejection before approval, all camera metadata checks, two
 frames, pause/resume, and a verified snapshot. Rust → Web and Python → Web also
 switch through all three renditions and verify their Registry metadata, Stream
 manifest, dimensions, and continued frame delivery. The matrix then shuts down
-all six peers and their temporary state. The separate browser smoke proves that one
-browser viewer keeps multiple browser publishers independent while mixing DDS
-discovery and copied peer cards.
+all six peers and their temporary state. The separate browser smoke proves that
+one browser viewer keeps multiple browser publishers independent while mixing
+DDS discovery and copied peer cards.
 
-## Swift/iOS gates
+## Swift/iOS interoperability
 
 The [Swift/iOS app](swift/README.md) uses an ephemeral identity, explicit Domain
 selection, and ordered foreground lifecycle cleanup. Its viewer discovers and
@@ -186,7 +188,8 @@ fps) renditions from one bounded foreground capture path. Approval, protocol
 serving, controls, and snapshots remain in the shared Rust Camera Mesh
 application.
 
-Phase 3 proves Web/native publisher to iPhone viewer. Phase 4 reverses the
-direction: a physical iPhone publisher must reject an unapproved viewer, then
-serve live frames, pause/resume, and a verified snapshot to Web and native
-viewers. The Swift guide contains the physical-device sequence.
+The physical-device checks cover both directions: Web or native publisher to
+iPhone viewer, then iPhone publisher to Web or native viewer. In the reverse
+direction, the phone must reject an unapproved viewer before serving live
+frames, pause/resume controls, and a verified snapshot. The Swift guide
+contains the complete sequence.

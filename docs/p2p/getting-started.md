@@ -1,354 +1,192 @@
 # Build with an existing Auki protocol
 
-This quickstart consumes the existing `auki-portable-echo` protocol crate. The
-application does not implement framing, libp2p, authentication, relay booking,
-or protocol cleanup.
+This quickstart runs the existing Portable Echo protocol between two native
+Rust peers. The application chooses credentials, a Domain, an identity,
+discovery policy, and which protocol to mount. The SDK owns authentication,
+relay booking, transport, exact-peer verification, and shutdown.
 
-By the end, two native peers will have distinct persistent Peer IDs, authority
-for the same Domain, confirmed TCP/WSS relay-route pairs, and one authenticated
-echo exchange. The same protocol crate also powers the tiny Web, Python, and
-Swift/iOS hosts.
-
-To exercise the SDK-owned Info, Catalog, Registry, Blob, Message, and Stream
-families instead, use the
-[standard protocol playground](../../examples/standard-protocols/README.md).
+For the six SDK protocols—Info, Catalog, Registry, Blob, Message, and
+Stream—use the [Standard Protocol Playground](../../examples/standard-protocols/README.md).
 
 ## Prerequisites
 
-- Rust `1.89.0` or newer
+- Rust 1.89.0 or newer
 - this SDK checkout
-- an Auki User account with access to a DDS Domain
+- an Auki User with access to a dev Domain
 - that Domain's UUID
 - two terminals
 
-The copyable native host is
+The complete application is
 [`examples/portable-echo/native/src/main.rs`](../../examples/portable-echo/native/src/main.rs).
-Its protocol dependency is the single
-[`auki-portable-echo`](../../examples/portable-echo/README.md) crate.
 
-## 1. Start the serving peer
+## Run two peers
 
-From the SDK repository root, configure terminal A:
+Both terminals use the same User and Domain, but each process must own a
+different identity file.
 
-```sh
+In terminal A:
+
+~~~sh
 export AUKI_EMAIL='you@example.com'
 export AUKI_PASSWORD='...'
 export AUKI_DOMAIN_ID='00000000-0000-0000-0000-000000000000'
 export AUKI_IDENTITY_FILE='/tmp/auki-echo-a/peer.identity'
+
 cargo run --locked -p auki-portable-echo-native
-```
+~~~
 
-Replace the UUID with an accessible Domain. `Identity::load_or_create` creates
-the identity file's parent directory and reuses the same Peer ID on later
-launches.
+Terminal A starts a relay-backed peer, mounts `/example/echo/1.0.0`, advertises
+the mounted protocol through DDS, and prints its Peer ID. Keep it running.
 
-Startup returns only after authority, transport, and one relay reservation are
-ready. That one provider slot supplies both TCP and WSS circuit routes; the
-native host uses and prints its TCP route. The host then mounts
-`/example/echo/1.0.0`:
+In terminal B, use another identity file and select A by the Peer ID it printed:
 
-```text
-peer: 12D3KooW...
-route: /dns4/relay.dev.aukiverse.com/tcp/443/p2p/.../p2p-circuit/p2p/12D3KooW...
-serving; press Ctrl-C to stop
-```
-
-Keep it running and copy the complete `peer` and `route` values.
-
-## 2. Dial it from a second peer
-
-In terminal B, use a different identity file and pass A's printed values:
-
-```sh
+~~~sh
 export AUKI_EMAIL='you@example.com'
 export AUKI_PASSWORD='...'
 export AUKI_DOMAIN_ID='00000000-0000-0000-0000-000000000000'
 export AUKI_IDENTITY_FILE='/tmp/auki-echo-b/peer.identity'
+
 cargo run --locked -p auki-portable-echo-native -- \
-  '<PEER_ID from terminal A>' \
-  '<complete route from terminal A>'
-```
+  --discover '<PEER_ID printed by terminal A>'
+~~~
 
-Using the same User is fine; the separate identity files create distinct Peer
-IDs. Terminal B authenticates A's expected Peer ID and Domain through the
-supplied route, then prints:
+Terminal B queries DDS for that exact Peer ID and protocol, chooses a compatible
+route, authenticates the remote Peer ID and Domain, and prints:
 
-```text
+~~~text
 echo: hello from Auki
-```
+~~~
 
-It closes the echo endpoint and peer in order. Press Ctrl-C in terminal A to do
-the same and release its relay booking.
+Using the same User is fine; the separate identity files produce separate Peer
+IDs. Stop terminal A with Ctrl-C. Both applications close the Echo endpoint
+before shutting down the peer and releasing its relay booking.
 
-Environment variables are convenient for this experiment, not a production
-secret-management strategy.
+The positional `PEER_ID EXACT_ROUTE` form remains available as a manual fallback
+when testing without discovery.
 
-## The application code
+## What the application owns
 
-An application imports the endpoint from the existing protocol crate:
+The native host is intentionally small. Its setup is equivalent to:
 
-```rust
+~~~rust,ignore
 use auki_portable_echo::EchoEndpoint;
-use auki_sdk::{AukiPeerBootstrap, Credentials, DomainSelection};
-```
-
-It then chooses credentials, Domain, native identity path, whether to mount the
-protocol, and the remote peer information. Rust's bootstrap facade owns the
-mechanical authentication, identity proof, authority preparation, and peer
-startup sequence. The failure-safe lifecycle is:
-
-```rust
-let bootstrap = AukiPeerBootstrap::dev(
-    Credentials::user_password(email, password),
-)
-.await?;
-let peer = bootstrap
-    .start_persistent_peer(DomainSelection::new(domain_id), identity_file)
-    .await?;
-
-let operation = async {
-    let echo = EchoEndpoint::mount(peer.protocols())?;
-    let exchange = echo
-        .send_exact(remote_peer_id, remote_route, b"hello from Auki")
-        .await;
-    let endpoint_cleanup = echo.close().await;
-
-    let receipt = exchange?;
-    endpoint_cleanup?;
-    Ok::<_, anyhow::Error>(receipt)
-}
-.await;
-
-let peer_cleanup = peer.shutdown().await;
-let receipt = operation?;
-peer_cleanup?;
-```
-
-The result is captured before cleanup, so an exchange failure still attempts
-endpoint close and every outcome still attempts peer shutdown. Endpoint close
-always precedes peer shutdown. The
-[native reference](../../examples/portable-echo/native/src/main.rs) uses this
-same pattern around both client and serving modes.
-
-The `auki-portable-echo` crate owns its immutable protocol ID, bounded wire
-conversation, registration, deadlines, exact-route send, inbound events, and
-stream cleanup. `AukiPeerBootstrap` and `AukiPeer` own the API/DDS exchange,
-renewable authority, authenticated transport, optional relay booking, route
-validation, fencing, and peer shutdown.
-
-## Use the same protocol from Web
-
-The Web host compiles the same `auki-portable-echo` crate into Wasm. JavaScript
-only logs in a User, selects a Domain and reachability mode, starts an ephemeral
-`AukiPeer`, and supplies the remote Peer ID plus WSS route. Relay-backed mode
-constructs the serving `AukiEcho`; outbound-only mode constructs
-`AukiEchoClient` and makes no local relay booking. It closes any mounted
-endpoint before shutting down the peer.
-
-Echo needs its small `AukiEcho` adapter because it is an application protocol.
-SDK-owned Info, Catalog, Registry, Blob, Message, and Stream bindings expose
-both client and serving roles. Each is a thin host adapter over the same Rust
-protocol implementation.
-
-Run the [browser echo app](../../examples/portable-echo/web/README.md#run-the-web-app)
-to try that surface in two tabs. The protected direction smoke test drives that
-same page, including an outbound-only third browser, while keeping its test
-machinery out of the application.
-
-## Use the same protocol from Python
-
-The Python extension statically links the generic native peer facade with the
-same `auki-portable-echo` crate. Live Rust handles never cross separately
-loaded extension modules, and Python does not manage Tokio or raw streams.
-
-The application flow stays small:
-
-```python
-session = await AukiSession.login_dev(email, password)
-peer = await session.start_peer(domain_id, identity_file)
-try:
-    echo = await AukiEcho.mount(peer)
-    try:
-        receipt = await echo.send_exact(remote_peer_id, remote_route, payload)
-    finally:
-        await echo.close()
-finally:
-    await peer.shutdown()
-```
-
-Run the [Python echo app](../../examples/portable-echo/python/README.md) to try
-Python-to-Python or either Python/native direction through exact relay routes.
-
-## Use the same protocol from Swift/iOS
-
-The Apple artifact statically links the generic peer facade and the same Rust
-echo endpoint. Swift does not implement authentication, relay booking,
-libp2p, or protocol framing:
-
-```swift
-let session = try await AukiSession.loginDev(email: email, password: password)
-let peer = try await session.startPeer(
-    domainId: domainId,
-    identity: AukiPeerIdentity.generate()
-)
-let echo = try await AukiEcho.mount(peer: peer)
-
-let card = try peerCardFromJson(json: remoteCard)
-let receipt = try await echo.sendExact(
-    target: nativeTarget(card: card),
-    payload: Data("hello from Swift".utf8)
-)
-
-try await echo.close()
-try await peer.shutdown()
-```
-
-The example identity is ephemeral. An application that requires a stable Peer
-ID may store `AukiPeerIdentity.encoded()` and restore it with `fromEncoded`.
-Run the [Swift/iOS echo app](../../examples/portable-echo/swift/README.md) for
-the generated-project commands and simulator test.
-
-To consume the built-in protocols instead, run the
-[Swift/iOS standard playground](../../examples/standard-protocols/swift/README.md).
-It mounts all six families through `AukiStandardProtocols` and keeps endpoint
-shutdown ahead of peer shutdown.
-
-## App credentials
-
-A trusted native or headless process can replace User credentials with:
-
-```rust
-Credentials::app(app_access_key, app_secret)
-```
-
-Everything else uses the same `AukiPeerBootstrap` and `AukiPeer` lifecycle.
-Never embed an App secret in a browser, mobile binary, public repository,
-container image, or log.
-
-## Disable relay booking
-
-Relay booking and relay transport are separate responsibilities. The
-`auki-relay-booking` crate talks to DMS to create, renew, and delete a booking.
-`AukiPeer` in `auki-sdk` coordinates that booking with the corresponding
-Circuit Relay v2 reservation, which `auki-p2p` establishes and monitors against
-the assigned relay provider.
-
-Native Rust applications can opt out of that entire path on an authenticated
-bootstrap:
-
-```rust
-use auki_sdk::{AukiPeerBootstrap, Credentials};
+use auki_sdk::{
+    AukiPeerBootstrap, Credentials, DdsTrackerMode, DomainSelection,
+};
 
 let bootstrap = AukiPeerBootstrap::dev(
     Credentials::user_password(email, password),
 )
 .await?
-.without_relay();
-```
+.with_dds_tracker(DdsTrackerMode::DiscoverAndAdvertise);
 
-For lower-level or custom-environment composition,
-`AukiPeerConfig::direct_only()` is the native alias for `without_relay()`:
+let peer = bootstrap
+    .start_persistent_peer(DomainSelection::new(domain_id), identity_file)
+    .await?;
 
-```rust
-use auki_sdk::{
-    AuthClient, AuthEnvironment, AukiPeerBootstrap, AukiPeerConfig, Credentials,
-};
+let echo = EchoEndpoint::mount(peer.protocols())?;
+~~~
 
-let bootstrap = AukiPeerBootstrap::authenticate(
-    AuthClient::new(AuthEnvironment::dev())?,
-    Credentials::user_password(email, password),
-    AukiPeerConfig::dev().direct_only(),
-)
-.await?;
-```
+The application then discovers or otherwise obtains a remote Peer ID and route,
+and calls the existing protocol API:
 
-This guarantees that the peer makes no relay-booking DMS calls and does not
-open a relay reservation. With no listener or advertised direct route, the
-result is an outbound-only peer. To accept inbound connections, also configure
-`with_listen_addresses` and a dialable `with_advertised_direct_routes` address,
-then distribute that route directly or publish it through DDS.
+~~~rust,ignore
+let receipt = echo
+    .send_exact(remote_peer_id, remote_route, b"hello from Auki")
+    .await?;
+~~~
 
-The repository compile-checks the public bootstrap construction and separately
-starts a direct-only runtime against an intentionally unreachable DMS address.
-Run both regression tests locally with:
+`send_exact` treats the route as a hint. The operation succeeds only after the
+running peer verifies the expected remote Peer ID and Domain.
 
-```sh
-cargo test --locked -p auki-sdk direct_only
-```
+Cleanup follows ownership order and is attempted even after an operation fails:
 
-For the native [standard protocol
-playground](../../examples/standard-protocols/native/src/main.rs), use the same
-explicit bootstrap configuration before applying `with_dds_tracker`. Its
-current peer-card output and protected four-peer matrix deliberately require a
-confirmed TCP/WSS relay-route pair, so those relay-specific assertions and the
-peer-card representation must also be adapted for a direct-only experiment.
-The current Python and Swift facades expose relay-backed startup only.
+~~~rust,ignore
+let operation = run_application(&peer, &echo).await;
+let endpoint_cleanup = echo.close().await;
+let peer_cleanup = peer.shutdown().await;
 
-Web applications choose reachability separately from discovery. Omit the last
-argument to preserve relay-backed behavior, or explicitly start an outbound-only
-browser peer that never calls the DMS relay-booking endpoints:
+operation?;
+endpoint_cleanup?;
+peer_cleanup?;
+~~~
 
-```ts
-import {
-  AukiDiscoveryMode,
-  AukiPeerReachabilityMode,
-} from "./auki_sdk_web.js";
+For a peer that only calls Echo, construct `EchoClient` instead of mounting
+`EchoEndpoint`. Mounting is the explicit choice to accept inbound requests.
 
-const peer = await session.startPeerWithDiscovery(
-  domainId,
-  AukiDiscoveryMode.DiscoverOnly,
-  AukiPeerReachabilityMode.OutboundOnly,
-);
+## Choices to make explicitly
 
-console.assert(!peer.relayBacked);
-console.assert(peer.wssRoute === undefined);
-console.assert(peer.tcpRoute === undefined);
-```
+### Credentials
 
-The outbound peer can discover a relay-backed remote peer and dial that
-remote's WSS circuit route. It cannot accept unsolicited inbound connections,
-has no route to publish, and therefore cannot combine `OutboundOnly` with
-`DiscoverAndAdvertise`. Use a client adapter without mounting an endpoint; the
-[portable Echo Web example](../../examples/portable-echo/web/README.md) exposes
-this as `new AukiEchoClient(peer)`.
+Use User credentials for interactive applications:
 
-The protected Echo browser smoke starts two relay-backed endpoints and a third
-outbound-only client. It proves the third peer can discover and call an endpoint
-while intercepting its network traffic and asserting zero requests whose path
-contains `/relay-bookings`:
+~~~rust,ignore
+Credentials::user_password(email, password)
+~~~
 
-```sh
-cd examples/portable-echo/web
-npm run smoke:dev
-```
+A trusted native or headless service may use:
 
-`AukiDiscoveryMode.DiscoverOnly` by itself still controls DDS publication, not
-relay booking. Set both choices explicitly when an application needs the
-outbound-only combination.
+~~~rust,ignore
+Credentials::app(app_access_key, app_secret)
+~~~
 
-## Relay and discovery are separate
+Never embed an App secret in a browser, mobile binary, public repository,
+container image, or log.
 
-Relay allocation makes A reachable. The optional DDS tracker lets B find A's
-short-lived Peer ID, routes, and exact mounted protocols without copying a peer
-card. Enable it explicitly with
-`with_dds_tracker(DdsTrackerMode::DiscoverOnly)` or
-`with_dds_tracker(DdsTrackerMode::DiscoverAndAdvertise)`; it remains disabled
-by default.
+Robot and Compute products whose infrastructure already manages renewable
+machine authority use `AukiPeer::start_external` rather than creating a second
+authentication or transport stack.
 
-Applications may still obtain Peer IDs and complete routes from configuration,
-a product control plane, or a manually shared record. See
-[Discover peers](discovery.md) for the small lookup flow and trust boundary.
+### Identity
 
-The route remains an untrusted hint. An exchange succeeds only after the SDK
-authenticates the expected remote Peer ID in the selected Domain.
+Native Rust and Python applications normally persist an identity and run one
+live process or pod for that Peer ID. Web identity is currently ephemeral.
+Swift exposes encoded identity bytes and leaves persistence to the application.
 
-## Continue
+### Reachability
 
-- [Author one portable protocol crate](authoring-protocols.md).
-- Run the [Python echo host](../../examples/portable-echo/python/README.md).
-- Run the [Swift/iOS echo host](../../examples/portable-echo/swift/README.md).
-- Run the [standard protocol matrix](../../examples/standard-protocols/README.md#protected-four-peer-matrix)
-  for all six SDK protocol families across Native, Python, and two distinct
-  Browser peers, including browser-to-browser in both directions.
-- Use [`auki-p2p`](../../crates/auki-p2p/README.md) directly only when building a
-  custom runtime or transport integration.
+Relay-backed peers accept inbound connections and receive one TCP/WSS route
+pair. A browser controller that only initiates calls can start
+`AukiPeerReachabilityMode.OutboundOnly`, which skips relay booking and exposes
+no inbound route.
+
+Native applications can opt out of relay booking with:
+
+~~~rust,ignore
+let bootstrap = bootstrap.without_relay();
+~~~
+
+Without a listener and advertised direct route, that native peer is also
+outbound-only. Direct inbound operation requires an application-supplied,
+dialable route.
+
+### Discovery
+
+DDS discovery is opt-in:
+
+- `DiscoverOnly` queries DDS but does not publish the local peer.
+- `DiscoverAndAdvertise` queries DDS and maintains a short-lived advertisement
+  containing current routes and mounted protocol IDs.
+
+Reachability and discovery are separate. A relay-backed peer may remain private,
+and an outbound-only peer may discover and call others. An outbound-only Web
+peer cannot advertise because it has no route for another peer to dial.
+
+Read [Discover peers](discovery.md) for the lookup API and trust boundary.
+
+## Use the same protocol elsewhere
+
+Portable Echo implements its wire contract once in Rust and uses thin host
+adapters:
+
+| Runtime | Run |
+| --- | --- |
+| Web/Wasm | [Open two browser tabs](../../examples/portable-echo/web/README.md) |
+| Python | [Run two Python peers](../../examples/portable-echo/python/README.md) |
+| Swift/iOS | [Build the iOS app](../../examples/portable-echo/swift/README.md) |
+
+The host language owns UI and lifecycle wiring. Rust continues to own protocol
+framing, limits, authentication, and transport.
+
+Next, read [Author a portable protocol](authoring-protocols.md) to create a
+product protocol with the same shape.

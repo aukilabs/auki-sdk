@@ -10,6 +10,7 @@ Start here:
 - [Build a P2P application](docs/p2p/README.md)
 - [Run the native echo example](docs/p2p/getting-started.md)
 - [Author a portable protocol](docs/p2p/authoring-protocols.md)
+- [Choose a runnable example](examples/README.md)
 - [Understand the longer-term direction](VISION.md)
 - [Look up terminology](GLOSSARY.md)
 
@@ -127,7 +128,10 @@ facade. Swift exposes the native peer lifecycle through one generated Apple
 artifact; application protocols compile their Rust adapter into that same
 artifact.
 
-## Example
+## Examples
+
+The [examples index](examples/README.md) orders the runnable applications from
+one portable protocol through the complete multi-runtime Camera Mesh demo.
 
 [`examples/portable-echo`](examples/portable-echo) demonstrates one bounded
 Rust protocol shared by native, Web, Python, and Swift applications. Its hosts
@@ -139,6 +143,10 @@ Swift/iOS. Its protected matrix proves the same Rust wire implementations across
 Native, Python, Browser A, and Browser B. A separate physical-iPhone/native gate
 proves all six families in both directions; portable echo remains the small
 custom-protocol authoring example.
+
+[`examples/camera-mesh`](examples/camera-mesh) combines those foundations into
+one product-shaped application with discovery, explicit camera authorization,
+controls, snapshots, and concurrent Low/Medium/High video feeds.
 
 ## Release status
 

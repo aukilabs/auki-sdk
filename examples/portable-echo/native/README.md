@@ -86,9 +86,10 @@ export AUKI_DOMAIN_ID='00000000-0000-0000-0000-000000000000'
 npm run smoke:dev
 ```
 
-That proof covers browser-to-browser in both directions, native-to-browser, and
-browser-to-native using each remote peer's exact advertised route. Peers do not
-need to receive reservations on the same relay.
+That proof covers browser-to-browser in both directions, an outbound-only
+browser calling a serving browser, native-to-browser, and browser-to-native
+using each remote peer's exact advertised route. Peers do not need to receive
+reservations on the same relay.
 
 The protected proof now polls [DDS discovery](../../../docs/p2p/discovery.md)
 for the exact mounted Echo protocol and selects candidates before every dial;

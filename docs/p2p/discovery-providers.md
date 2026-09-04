@@ -1,120 +1,102 @@
-# Choose a discovery provider
+# Choose a discovery mechanism
 
-[DDS discovery](discovery.md) is the only discovery provider integrated into
-the SDK today. This guide explains when another mechanism may fit better and
-the contract an application-owned prototype should preserve.
+[DDS discovery](discovery.md) is the only discovery mechanism integrated into
+the SDK today. Add another one only when it solves a concrete product boundary,
+such as offline local operation.
 
-The SDK does not yet expose a public discovery-provider trait. We will define
-one after a second provider gives us two real lifecycles to generalize from.
+## The shared result
 
-## One discovery boundary
-
-A discovery mechanism produces bounded, untrusted observations:
+Every discovery source should produce a bounded, untrusted observation:
 
 - a Peer ID;
-- one or more canonical routes the current runtime can dial;
-- optional exact served-protocol hints;
-- a validity period; and
-- local provenance identifying the source.
+- one or more routes the current runtime can dial;
+- optional exact protocol hints;
+- an expiry or local validity deadline; and
+- a simple source label, such as `dds` or `mdns`.
 
-```text
-discovery observation
-    -> exact-route protocol dial
-    -> Noise verifies the expected Peer ID
-    -> Auki authentication verifies the Domain
-    -> the application decides what the peer may do
-```
+Every source crosses the same trust boundary:
 
-Discovery does not authenticate a peer, make it reachable, allocate a relay,
-or insert it into `known_peers()`. It should not advertise product resources
-such as cameras or robot capabilities either; query those through an
-authenticated application protocol after connecting.
+~~~text
+candidate -> exact route dial -> Peer ID verification
+          -> Domain authentication -> product authorization
+~~~
 
-## Choose the smallest mechanism
+Discovery does not allocate a relay, make a peer reachable, or prove what the
+peer is allowed to do.
 
-| Mechanism | Best fit | Initial seed | Main cost |
+## Compare the options
+
+| Mechanism | Best fit | First contact | Trade-off |
 | --- | --- | --- | --- |
-| DDS tracker | Same-Domain peers across the internet | DDS URL | Depends on the Auki control plane |
-| mDNS | Devices on one local network | None | Does not normally cross network boundaries |
-| Rendezvous | Application namespaces across routed networks | Reachable Rendezvous peer | Registration, polling, and point availability |
-| Kademlia | Larger decentralized overlays | Reachable bootstrap peers | More state, traffic, and operational complexity |
+| DDS tracker | Same-Domain peers over the internet | DDS URL | Depends on the Auki control plane |
+| mDNS | Peers on one local network | None | Usually stops at router or subnet boundaries |
+| Rendezvous | Application namespaces over routed networks | Known Rendezvous peer | Operate a leased directory point |
+| Kademlia | Decentralized overlays | Known bootstrap peers | More state, traffic, validation, and abuse controls |
 
-Start with DDS when it meets the product need. Add another source only when it
-solves a concrete boundary such as offline local operation or independence
-from the control plane.
+Start with DDS when it meets the need.
 
 ## DDS tracker
 
-DDS is the currently supported provider. It returns short-lived, same-Domain
-entries and can filter by exact Auki protocol ID. Authentication, publication
-renewal, and withdrawal are handled by `AukiPeer` when explicitly enabled.
+DDS is a small HTTP directory for authenticated Domain members. It stores
+short-lived Peer ID, route, and exact mounted-protocol hints. `AukiPeer` owns
+publication, renewal, withdrawal, and same-Domain queries when the application
+opts in.
 
-Use DDS for the common case: a robot, compute node, controller, or application
-that already authenticates with Auki and needs to find peers over the internet.
-See [Discover peers](discovery.md) for the API.
+Use DDS for the ordinary internet-connected robot, compute node, camera, or
+controller. See [Discover peers](discovery.md).
 
 ## mDNS
 
 [libp2p mDNS](https://github.com/libp2p/specs/blob/master/discovery/mdns.md)
-uses multicast DNS so peers on the same local network can find each other
-without a server or configured peer.
+uses multicast DNS to find peers on the same local network without a server.
 
-It fits local robot labs, development networks, and offline colocated devices.
-It normally does not cross routers, subnets, VPN boundaries, or networks that
-block multicast. Ordinary browser pages cannot directly participate in mDNS.
+It fits robot labs, development networks, and offline colocated devices. It
+normally does not cross routers, subnets, VPN boundaries, or networks that
+block multicast. Ordinary browser pages cannot participate directly.
 
-mDNS supplies peer and route candidates, not exact Auki protocol metadata.
-Only retain routes supported by the Auki runtime, then authenticate the peer
-normally.
+mDNS usually supplies peer and route candidates, not Auki protocol metadata.
+Connect and query the peer when richer information is needed.
 
 ## Rendezvous
 
 The [libp2p Rendezvous protocol](https://github.com/libp2p/specs/blob/master/rendezvous/README.md)
-lets peers register themselves under an application namespace and lets other
-peers query that namespace through a known Rendezvous peer. Registrations are
-leased and must be refreshed.
+lets peers register under a namespace and query that namespace through a known
+Rendezvous peer. Registrations are leased and refreshed.
 
-Rendezvous fits application-scoped discovery when operating a small, known
-set of Rendezvous points is acceptable. The point is a directory, not a Domain
-authority, and its results remain untrusted until the normal Auki handshake.
+Rendezvous is useful when an application can operate a small set of directory
+peers independently of DDS. The directory is not a Domain authority, and its
+results remain untrusted.
 
-The route to the first Rendezvous peer is bootstrap configuration. Rendezvous
-may then help find other peers, but Rendezvous and bootstrap are not synonyms.
-The DDS HTTP tracker is rendezvous-like in purpose, but it does not implement
-the libp2p Rendezvous wire protocol.
+**Bootstrap and Rendezvous are different.** Bootstrap is how a new peer learns
+its first reachable contact. Rendezvous is a protocol used through that contact
+to find more peers. The DDS tracker is rendezvous-like in purpose, but it does
+not implement the libp2p Rendezvous wire protocol.
 
 ## Kademlia
 
-The [libp2p Kademlia DHT](https://libp2p.io/docs/kademlia-dht/)
-routes peer, value, and content-provider lookups through a distributed overlay.
-A new node still needs at least one reachable bootstrap peer before it can
-populate and maintain its routing table.
+The [libp2p Kademlia DHT](https://libp2p.io/docs/kademlia-dht/) distributes
+peer, value, and content-provider lookups across an overlay. A new node still
+needs reachable bootstrap peers before it can populate its routing table.
 
-Kademlia can fit a larger network that needs decentralized routing and can
-operate enough stable, reachable participants. It introduces substantially
-more lifecycle, privacy, validation, and abuse-control work than the other
-choices, so it should follow a demonstrated need.
+Kademlia can fit a larger decentralized network with enough stable
+participants. It does not solve NAT traversal, relay allocation, Domain
+authentication, or product authorization.
 
-A Kademlia provider record means “a peer provides this DHT key.” It is not
-automatically an Auki served-protocol advertisement. Kademlia also does not
-solve NAT traversal or relay allocation.
+## Prototype another source
 
-## Prototype another mechanism
+The SDK intentionally has no public discovery-provider trait yet. We will
+generalize that boundary after a second real provider gives us two lifecycles
+to compare.
 
-Until the SDK exposes a provider trait, keep a new mechanism at the application
-edge:
+Until then, keep another source at the application edge:
 
-1. discover a bounded set of Peer IDs and routes;
-2. discard malformed, expired, and unsupported routes;
-3. retain the source and a local validity deadline;
-4. deduplicate observations without treating agreement as authorization; and
-5. pass the expected Peer ID and route to an exact Auki protocol operation.
+1. collect a bounded number of Peer IDs and routes;
+2. reject malformed, expired, and unsupported routes;
+3. retain a source label and local deadline;
+4. deduplicate observations; and
+5. pass the expected Peer ID and route into an exact Auki protocol operation.
 
-Protocol awareness is provider-dependent. DDS has an exact protocol index;
-other mechanisms may require connecting first and querying Info, Catalog, or
-another application protocol. Do not overload discovery with large capability
-documents.
-
-Applications may combine providers and choose discovery-only or
-discover-and-advertise policy independently for each one. A candidate from any
-source crosses the same exact-dial and Domain-authentication boundary.
+DDS can filter by exact mounted protocol. Another source may require connecting
+first and querying Info, Catalog, or a product protocol. Do not turn discovery
+into a large capability document, and never treat agreement between discovery
+sources as authorization.

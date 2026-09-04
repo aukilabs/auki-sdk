@@ -7,7 +7,7 @@ in Rust and using it from native, Web, Python, and Swift Auki peers.
 src/wire.rs     author-owned ID, wire format, validation, and conversation
 src/endpoint.rs author-owned AukiPeer mount, deadlines, cleanup, and events
 native/         small Rust app plus a separate protected-interop binary
-web/            small browser app plus a protected four-direction smoke proof
+web/            small browser app plus a protected interoperability smoke
 python/         small Python app plus its same-module PyO3 adapter
 swift/          small iOS app plus its same-artifact UniFFI adapter
 ```
@@ -41,7 +41,7 @@ cargo check --locked \
 The [native README](native/README.md) runs the small two-terminal Rust app and
 keeps protected interop output in a separate executable. The
 [Web README](web/README.md) runs the copyable root app in two tabs and keeps the
-four-direction protected smoke test as separate test machinery. The
+protected cross-runtime smoke test as separate test machinery. The
 [Python README](python/README.md) runs the same endpoint Python-to-Python or in
 either Python/native direction.
 The [Swift/iOS README](swift/README.md) builds the umbrella XCFramework and
@@ -51,5 +51,6 @@ Each host enables DDS discovery at the application boundary. The portable
 protocol crate remains discovery-agnostic: a host refreshes candidates for the
 exact Echo protocol, a developer selects one, and the existing exact-route
 operation authenticates the expected Peer ID and Domain before bytes flow.
-`DiscoverAndAdvertise` is the example default; every host also exposes
-`DiscoverOnly`, and manual exact targets remain an explicit fallback.
+Native, Python, and Swift default to `DiscoverAndAdvertise`. Web defaults to an
+outbound-only `DiscoverOnly` client and can opt into relay-backed serving and
+advertising. Manual exact targets remain an explicit fallback everywhere.

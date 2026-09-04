@@ -115,6 +115,11 @@ receive (`RX fps`), SwiftUI render (`render fps`), received KiB/s, and displayed
 frame age. The session sheet can disconnect and remove every camera while the
 local Viewer Peer remains online.
 
+Select **Record stats** in the wall toolbar to sample every camera once per
+second. Stopping opens a report that can be copied as JSON or shared/saved as a
+file. It uses the same versioned schema as the Web viewer and retains the final
+sample for cameras removed during the recording.
+
 An unapproved connection returns `approval_required`. Compare the complete
 viewer Peer ID shown by the app with the publisher's pending request, approve
 that exact ID, then retry its tile. Verify advancing JPEGs, pause, resume, and a

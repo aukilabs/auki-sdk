@@ -85,6 +85,9 @@ final class CameraTile: ObservableObject {
   @Published var controlPending = false
   @Published var switchingQuality: CameraQuality?
   fileprivate(set) var latestFrameTimestampNs: Int64?
+  private(set) var totalReceivedFrames: UInt64 = 0
+  private(set) var totalRenderedFrames: UInt64 = 0
+  private(set) var totalReceivedBytes: UInt64 = 0
   private var receiveSamples: [ReceiveSample] = []
   private var renderSamples: [TimeInterval] = []
   private var lastRenderedFrameCount: UInt64?
@@ -115,6 +118,8 @@ final class CameraTile: ObservableObject {
     bytes: Int,
     at time: TimeInterval = ProcessInfo.processInfo.systemUptime
   ) {
+    totalReceivedFrames &+= 1
+    totalReceivedBytes &+= UInt64(bytes)
     receiveSamples.append(ReceiveSample(time: time, bytes: bytes))
     let cutoff = time - Self.diagnosticWindow
     while receiveSamples.count > 2, receiveSamples[1].time < cutoff {
@@ -133,6 +138,7 @@ final class CameraTile: ObservableObject {
   ) {
     guard lastRenderedFrameCount != frameCount else { return }
     lastRenderedFrameCount = frameCount
+    totalRenderedFrames &+= 1
     renderSamples.append(time)
     let cutoff = time - Self.diagnosticWindow
     while renderSamples.count > 2, renderSamples[1] < cutoff {
@@ -198,6 +204,11 @@ final class CameraMeshModel: ObservableObject {
   @Published private(set) var liveCameraCount = 0
   @Published private(set) var addingAllCameras = false
   @Published private(set) var removingAllCameras = false
+  @Published private(set) var performanceRecording = false
+  @Published private(set) var performanceRecordingElapsedSeconds = 0
+  @Published private(set) var completedPerformanceReport: CameraPerformanceReport?
+  @Published private(set) var performanceReportJSON = ""
+  @Published private(set) var performanceReportURL: URL?
   @Published var focusedCameraPeerID: String?
   @Published private(set) var latestFrameImage: UIImage?
   @Published private(set) var snapshotImage: UIImage?
@@ -234,6 +245,9 @@ final class CameraMeshModel: ObservableObject {
   private var provisionalCapture: CameraCapture?
   private var eventTask: Task<Void, Never>?
   private var frameTask: Task<Void, Never>?
+  private var performanceCapture: CameraPerformanceCapture?
+  private var performanceCaptureTask: Task<Void, Never>?
+  private var viewerColumnCount = 2
   private var retryAttempts: [String: RetriableConnection] = [:]
   private var automationStarted = false
   private var snapshotAfterFirstFrame = false
@@ -280,6 +294,20 @@ final class CameraMeshModel: ObservableObject {
 
   var canRemoveAllCameras: Bool {
     selectedRole == .viewer && phase == .ready && !removingAllCameras && !cameraTiles.isEmpty
+  }
+
+  var performanceReportSummary: String {
+    guard let report = completedPerformanceReport else { return "No performance recording yet." }
+    let sampleCount = report.peers.reduce(0) { $0 + $1.summary.sampleCount }
+    let received = report.peers.reduce(UInt64(0)) { $0 + $1.summary.receivedFrames }
+    let rendered = report.peers.reduce(UInt64(0)) { $0 + $1.summary.renderedFrames }
+    let renderedPercent =
+      received > 0
+      ? String(format: "%.1f%% rendered", Double(rendered) / Double(received) * 100)
+      : "no frames"
+    return
+      "\(report.peers.count) camera(s) · \(String(format: "%.1f", Double(report.durationMs) / 1_000)) seconds · \(sampleCount) samples\n"
+      + "\(received) received frames · \(rendered) rendered frames · \(renderedPercent)"
   }
 
   var awaitingApproval: Bool {
@@ -721,7 +749,9 @@ final class CameraMeshModel: ObservableObject {
   func removeCamera(peerID: String) async {
     guard selectedRole == .viewer, !removingAllCameras else { return }
     let operationGeneration = generation
-    let connectionID = tile(peerID: peerID)?.connectionID
+    let removedTile = tile(peerID: peerID)
+    let connectionID = removedTile?.connectionID
+    if let removedTile { samplePerformance([removedTile]) }
     cameraTiles.removeAll { $0.peerID == peerID }
     refreshLiveCameraCount()
     retryAttempts.removeValue(forKey: peerID)
@@ -738,6 +768,7 @@ final class CameraMeshModel: ObservableObject {
     let removed = cameraTiles
     let connectionIDs = removed.compactMap(\.connectionID)
     removingAllCameras = true
+    samplePerformance(removed)
     cameraTiles = []
     refreshLiveCameraCount()
     retryAttempts = [:]
@@ -812,7 +843,107 @@ final class CameraMeshModel: ObservableObject {
   }
 
   func setPreferredViewerQuality(forColumnCount columns: Int) {
+    viewerColumnCount = columns
     preferredViewerQuality = preferredCameraQuality(forColumnCount: columns)
+  }
+
+  func startPerformanceRecording() {
+    guard
+      selectedRole == .viewer,
+      phase == .ready,
+      !performanceRecording
+    else { return }
+
+    completedPerformanceReport = nil
+    performanceReportJSON = ""
+    performanceReportURL = nil
+    let capture = CameraPerformanceCapture(
+      context: CameraPerformanceContext(
+        runtime: "ios",
+        platform: "\(UIDevice.current.model) · iOS \(UIDevice.current.systemVersion)",
+        domainID: selectedDomainID,
+        localPeerID: localPeerID,
+        columnCount: viewerColumnCount
+      ))
+    performanceCapture = capture
+    performanceRecording = true
+    performanceRecordingElapsedSeconds = 0
+    samplePerformance()
+    write("Performance recording started for \(cameraTiles.count) camera(s).")
+
+    performanceCaptureTask = Task { [weak self] in
+      while !Task.isCancelled {
+        do {
+          try await Task.sleep(for: .seconds(cameraPerformanceSampleInterval))
+        } catch {
+          return
+        }
+        guard let self, !Task.isCancelled, self.performanceCapture === capture else { return }
+        self.samplePerformance()
+        self.performanceRecordingElapsedSeconds = max(
+          0,
+          Int(ProcessInfo.processInfo.systemUptime - capture.startedAtMonotonic)
+        )
+      }
+    }
+  }
+
+  func stopPerformanceRecording() {
+    guard let capture = performanceCapture else { return }
+    capture.recordEvent("Performance recording stopped")
+    let report = capture.finish(
+      snapshots: performanceSnapshots(cameraTiles),
+      finalColumnCount: viewerColumnCount
+    )
+    performanceCaptureTask?.cancel()
+    performanceCaptureTask = nil
+    performanceCapture = nil
+    performanceRecording = false
+    performanceRecordingElapsedSeconds = max(0, report.durationMs / 1_000)
+    completedPerformanceReport = report
+
+    do {
+      let json = try report.json()
+      let url = FileManager.default.temporaryDirectory.appendingPathComponent(report.filename)
+      try Data(json.utf8).write(to: url, options: .atomic)
+      performanceReportJSON = json
+      performanceReportURL = url
+      write("Performance report ready with \(report.peers.count) camera(s).")
+    } catch {
+      performanceReportJSON = ""
+      performanceReportURL = nil
+      write("Could not encode the performance report: \(error.localizedDescription)")
+    }
+  }
+
+  private func samplePerformance(_ tiles: [CameraTile]? = nil) {
+    performanceCapture?.sample(
+      performanceSnapshots(tiles ?? cameraTiles),
+      columnCount: viewerColumnCount
+    )
+  }
+
+  private func performanceSnapshots(_ tiles: [CameraTile]) -> [CameraPerformanceSnapshot] {
+    tiles.map { tile in
+      let profile = tile.quality.map(CameraMeshContract.profile)
+      return CameraPerformanceSnapshot(
+        peerID: tile.peerID,
+        name: tile.name,
+        runtime: tile.runtime,
+        status: tile.paused ? "paused" : tile.status.rawValue,
+        quality: profile?.quality.rawValue,
+        width: profile?.width,
+        height: profile?.height,
+        targetFPS: profile?.rateHz,
+        totalReceivedFrames: tile.totalReceivedFrames,
+        totalRenderedFrames: tile.totalRenderedFrames,
+        totalReceivedBytes: tile.totalReceivedBytes,
+        receiveFPS: tile.diagnostics.receiveFPS,
+        renderFPS: tile.diagnostics.renderFPS,
+        kibPerSecond: tile.diagnostics.kibPerSecond,
+        frameAgeMilliseconds: tile.diagnostics.frameAgeMilliseconds
+      )
+    }
   }
 
   @discardableResult
@@ -868,6 +999,7 @@ final class CameraMeshModel: ObservableObject {
 
   func stop(reason: String = "Camera Mesh stopped") async {
     guard canStop else { return }
+    if performanceRecording { stopPerformanceRecording() }
     phase = .stopping
     generation += 1
 
@@ -994,6 +1126,7 @@ final class CameraMeshModel: ObservableObject {
           status: .connecting,
           message: "Authenticating camera…"
         ))
+      if let addedTile = tile(peerID: peerID) { samplePerformance([addedTile]) }
       if focusedCameraPeerID == nil { focusedCameraPeerID = peerID }
     } else {
       updateTile(peerID: peerID) {
@@ -1476,6 +1609,7 @@ final class CameraMeshModel: ObservableObject {
   }
 
   private func write(_ value: some StringProtocol) {
+    performanceCapture?.recordEvent(String(value))
     log = String("\(log)\(value)\n".suffix(12_288))
   }
 

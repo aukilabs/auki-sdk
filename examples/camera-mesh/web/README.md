@@ -88,6 +88,12 @@ Frame age includes clock offset between different devices. It is exact enough
 for two tabs or processes on one machine; compare changes over time when the
 publisher and viewer have independently synchronized clocks.
 
+To capture a performance session for the entire wall, select **Record stats**,
+reproduce the slowdown, and select **Stop**. The report sheet can copy or
+download the resulting JSON. Sampling runs once per second outside the frame
+decode path, and the report retains cameras that disconnect or are removed
+during the session.
+
 ## Browser-to-browser smoke
 
 Keep the development server running, then run in another terminal:
@@ -104,7 +110,7 @@ Domain is selected. The test starts two browser publishers and one browser
 viewer by default. It proves simultaneous independent feeds, DDS discovery,
 peer-card fallback, approval, Low → High → Medium make-before-break switching,
 source pause/resume, diagnostics, snapshot, layout changes, removal,
-reconnection, and responsive mobile layout. Set `AUKI_CAMERA_WALL_COUNT` from
+reconnection, performance-report export, and responsive mobile layout. Set `AUKI_CAMERA_WALL_COUNT` from
 `2` through `16` to increase the publisher count.
 
 ## Rust, Python, and Web matrix

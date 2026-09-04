@@ -77,6 +77,14 @@ age, rate, and bandwidth. For demo convenience the batch publishers
 auto-approve any authenticated viewer in the selected Domain. Normal
 publishers retain exact-Peer-ID approval by default.
 
+Web and iOS viewers can record wall performance without recording video.
+Select **Record stats**, reproduce the behavior you want to inspect, then stop
+and copy, download, or share the JSON report. Both runtimes use the versioned
+`auki.camera-mesh.performance` schema and sample every camera once per second.
+Reports include receive/render rates, bytes, frame age, active quality and
+layout, cumulative frame totals, summary percentiles, and runtime events; they
+never include login credentials.
+
 Publishers default to DDS `discover_and_advertise`; viewers default to
 `discover_only`. Headless Rust and Python peers can override either default
 with `AUKI_DISCOVERY_MODE`. Every runtime gets both TCP and WSS relay routes,

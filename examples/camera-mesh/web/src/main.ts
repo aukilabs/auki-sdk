@@ -14,6 +14,14 @@ import {
   isCameraQualityTier,
   type CameraQualityTier,
 } from "./profile.js";
+import {
+  CAMERA_PERFORMANCE_SAMPLE_INTERVAL_MS,
+  CameraPerformanceCapture,
+  cameraPerformanceReportFilename,
+  serializeCameraPerformanceReport,
+  type CameraPerformanceReport,
+  type CameraPerformanceSnapshot,
+} from "./performance-report.js";
 
 type CameraStatus = "connecting" | "awaiting" | "live" | "ended" | "error";
 
@@ -40,6 +48,9 @@ interface CameraTileState {
   renderingFrame: boolean;
   received: number;
   bytes: number;
+  totalReceivedFrames: number;
+  totalRenderedFrames: number;
+  totalReceivedBytes: number;
   frameSamples: FrameDeliverySample[];
   displaySamples: number[];
   displayedFrameAgeMs?: number;
@@ -95,6 +106,7 @@ const cameraSpec = get<HTMLElement>("camera-spec");
 const previewEmpty = get<HTMLElement>("preview-empty");
 const addDialog = dialog("add-camera-dialog");
 const diagnosticsDialog = dialog("diagnostics-dialog");
+const performanceReportDialog = dialog("performance-report-dialog");
 const snapshotDialog = dialog("snapshot-dialog");
 const cameraActionsDialog = dialog("camera-actions-dialog");
 const cameraActionsTitle = get<HTMLElement>("camera-actions-title");
@@ -121,6 +133,10 @@ const snapshotTitle = get<HTMLElement>("snapshot-title");
 const toast = get<HTMLElement>("toast");
 const focusControls = get<HTMLElement>("focus-controls");
 const focusLabel = get<HTMLElement>("focus-label");
+const recordPerformanceButton = button("record-performance-button");
+const recordPerformanceLabel = get<HTMLElement>("record-performance-label");
+const openPerformanceReportButton = button("open-performance-report-button");
+const performanceReportSummary = get<HTMLElement>("performance-report-summary");
 
 let session: AukiUserSession | undefined;
 let mesh: CameraMesh | undefined;
@@ -136,6 +152,9 @@ let snapshotObjectUrl: string | undefined;
 let toastTimer: number | undefined;
 let addingAllCameras = false;
 let removingAllCameras = false;
+let performanceCapture: CameraPerformanceCapture | undefined;
+let performanceCaptureTimer: number | undefined;
+let completedPerformanceReport: CameraPerformanceReport | undefined;
 const publisherDiagnostics = new Map<CameraQualityTier, CaptureDiagnostics>();
 const timelineRows: string[] = [];
 const eventRows: string[] = [];
@@ -159,6 +178,11 @@ button("add-camera-button").addEventListener("click", openAddCamera);
 button("discover-button").addEventListener("click", () => void discover());
 addAllCamerasButton.addEventListener("click", () => void addAllCameras());
 removeAllCamerasButton.addEventListener("click", () => void removeAllCameras());
+recordPerformanceButton.addEventListener("click", togglePerformanceRecording);
+openPerformanceReportButton.addEventListener("click", openPerformanceReport);
+button("close-performance-report-button").addEventListener("click", () => performanceReportDialog.close());
+button("copy-performance-report-button").addEventListener("click", () => void copyPerformanceReport());
+button("download-performance-report-button").addEventListener("click", downloadPerformanceReport);
 button("add-card-button").addEventListener("click", () => void addManualCard());
 button("close-add-camera-button").addEventListener("click", () => addDialog.close());
 button("close-diagnostics-button").addEventListener("click", () => diagnosticsDialog.close());
@@ -524,6 +548,9 @@ async function addCamera(
       operation: 0,
       received: 0,
       bytes: 0,
+      totalReceivedFrames: 0,
+      totalRenderedFrames: 0,
+      totalReceivedBytes: 0,
       frameSamples: [],
       displaySamples: [],
       frameSurface: document.createElement("canvas"),
@@ -538,6 +565,7 @@ async function addCamera(
     };
     cameras.set(candidate.peerId, state);
     cameraOrder.push(candidate.peerId);
+    samplePerformance([state]);
   }
   if (existing && (state.status === "live" || state.status === "connecting")) {
     selectedPeerId = candidate.peerId;
@@ -644,6 +672,7 @@ async function removeCamera(peerId: string): Promise<void> {
   const running = mesh;
   const state = cameras.get(peerId);
   if (!running || !state) return;
+  samplePerformance([state]);
   state.operation += 1;
   cameras.delete(peerId);
   cameraOrder = cameraOrder.filter((candidate) => candidate !== peerId);
@@ -670,6 +699,7 @@ async function removeAllCameras(): Promise<void> {
 
   removingAllCameras = true;
   const removed = [...cameras.values()];
+  samplePerformance(removed);
   for (const state of removed) {
     state.operation += 1;
     clearCameraSurface(state);
@@ -1051,6 +1081,8 @@ function showRemoteFrame(frame: RemoteFrame): void {
   state.frameRevision += 1;
   state.received = frame.received;
   state.bytes = frame.bytes;
+  state.totalReceivedFrames += 1;
+  state.totalReceivedBytes += frame.jpeg.byteLength;
   state.timestampNs = frame.timestampNs;
   recordFrameDelivery(state, frame.jpeg.byteLength);
   state.status = "live";
@@ -1511,6 +1543,7 @@ function revokeAfterPaint(frameUrl: string): void {
 
 function recordFrameDisplay(state: CameraTileState): void {
   const displayedAt = performance.now();
+  state.totalRenderedFrames += 1;
   state.displaySamples.push(displayedAt);
   const cutoff = displayedAt - DIAGNOSTIC_WINDOW_MS;
   while (state.displaySamples.length > 2 && state.displaySamples[1]! < cutoff) {
@@ -1557,9 +1590,164 @@ function cameraElement(peerId: string): HTMLElement | null {
   );
 }
 
+function togglePerformanceRecording(): void {
+  if (performanceCapture) {
+    stopPerformanceRecording();
+  } else {
+    startPerformanceRecording();
+  }
+}
+
+function startPerformanceRecording(): void {
+  const running = mesh;
+  if (!running || running.role !== "viewer" || performanceCapture) return;
+  completedPerformanceReport = undefined;
+  performanceCapture = new CameraPerformanceCapture({
+    runtime: "web",
+    platform: navigator.userAgent,
+    domainId: running.domainId,
+    localPeerId: running.peerId,
+    columnCount: effectiveColumnCount(),
+  });
+  samplePerformance();
+  performanceCaptureTimer = window.setInterval(() => {
+    samplePerformance();
+    renderPerformanceControls();
+  }, CAMERA_PERFORMANCE_SAMPLE_INTERVAL_MS);
+  record(`Performance recording started for ${cameras.size} camera(s)`);
+  renderPerformanceControls();
+}
+
+function stopPerformanceRecording(openReport = true): void {
+  const capture = performanceCapture;
+  if (!capture) return;
+  capture.recordEvent("Performance recording stopped");
+  completedPerformanceReport = capture.finish(
+    performanceSnapshots([...cameras.values()]),
+    effectiveColumnCount(),
+  );
+  performanceCapture = undefined;
+  if (performanceCaptureTimer !== undefined) window.clearInterval(performanceCaptureTimer);
+  performanceCaptureTimer = undefined;
+  renderPerformanceControls();
+  renderPerformanceReport();
+  record(
+    `Performance report ready with ${completedPerformanceReport.peers.length} camera(s)`,
+  );
+  if (openReport) showModal(performanceReportDialog);
+}
+
+function samplePerformance(states = [...cameras.values()]): void {
+  performanceCapture?.sample(
+    performanceSnapshots(states),
+    effectiveColumnCount(),
+  );
+}
+
+function performanceSnapshots(
+  states: readonly CameraTileState[],
+): CameraPerformanceSnapshot[] {
+  return states.map((state) => {
+    const diagnostics = streamDiagnostics(state);
+    const profile = state.connection?.metadata.profile;
+    return {
+      peerId: state.candidate.peerId,
+      name: state.name,
+      runtime: state.connection?.metadata.info.appInstance ?? "unknown",
+      status: state.sourcePaused ? "paused" : state.status,
+      quality: profile?.quality,
+      width: profile?.width,
+      height: profile?.height,
+      targetFps: profile?.rateHz,
+      totalReceivedFrames: state.totalReceivedFrames,
+      totalRenderedFrames: state.totalRenderedFrames,
+      totalReceivedBytes: state.totalReceivedBytes,
+      receiveFps: diagnostics.fps,
+      renderFps: diagnostics.displayFps,
+      kibPerSecond: diagnostics.kibPerSecond,
+      frameAgeMs: diagnostics.frameAgeMs,
+    };
+  });
+}
+
+function renderPerformanceControls(): void {
+  const capture = performanceCapture;
+  recordPerformanceButton.classList.toggle("recording", capture !== undefined);
+  recordPerformanceButton.setAttribute("aria-pressed", String(capture !== undefined));
+  if (capture) {
+    const seconds = Math.max(
+      0,
+      Math.floor((performance.now() - capture.startedAtMonotonicMs) / 1_000),
+    );
+    recordPerformanceLabel.textContent = `Stop · ${formatRecordingElapsed(seconds)}`;
+    recordPerformanceButton.setAttribute(
+      "aria-label",
+      `Stop performance recording after ${seconds} seconds`,
+    );
+  } else {
+    recordPerformanceLabel.textContent = "Record stats";
+    recordPerformanceButton.setAttribute("aria-label", "Record performance statistics");
+  }
+  openPerformanceReportButton.hidden = completedPerformanceReport === undefined;
+}
+
+function openPerformanceReport(): void {
+  if (!completedPerformanceReport) return;
+  renderPerformanceReport();
+  showModal(performanceReportDialog);
+}
+
+function renderPerformanceReport(): void {
+  const report = completedPerformanceReport;
+  if (!report) {
+    performanceReportSummary.textContent = "No performance recording yet.";
+    return;
+  }
+  const samples = report.peers.reduce((total, peer) => total + peer.summary.sampleCount, 0);
+  const received = report.peers.reduce((total, peer) => total + peer.summary.receivedFrames, 0);
+  const rendered = report.peers.reduce((total, peer) => total + peer.summary.renderedFrames, 0);
+  const ratio = received > 0 ? `${(rendered / received * 100).toFixed(1)}% rendered` : "no frames";
+  performanceReportSummary.textContent = [
+    `${report.peers.length} camera(s) · ${(report.durationMs / 1_000).toFixed(1)} seconds · ${samples} samples`,
+    `${received} received frames · ${rendered} rendered frames · ${ratio}`,
+  ].join("\n");
+}
+
+async function copyPerformanceReport(): Promise<void> {
+  const performanceReport = completedPerformanceReport;
+  if (!performanceReport) return;
+  try {
+    await navigator.clipboard.writeText(serializeCameraPerformanceReport(performanceReport));
+    showToast("Performance report copied");
+  } catch (error) {
+    report(error);
+  }
+}
+
+function downloadPerformanceReport(): void {
+  const report = completedPerformanceReport;
+  if (!report) return;
+  const url = URL.createObjectURL(new Blob(
+    [serializeCameraPerformanceReport(report)],
+    { type: "application/json" },
+  ));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = cameraPerformanceReportFilename(report);
+  link.click();
+  revokeAfterPaint(url);
+  showToast("Performance report downloaded");
+}
+
+function formatRecordingElapsed(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
 async function stopPeer(): Promise<void> {
   const running = mesh;
   if (!running) return;
+  if (performanceCapture) stopPerformanceRecording(false);
   mesh = undefined;
   publisherDiagnostics.clear();
   generation += 1;
@@ -1580,7 +1768,13 @@ async function stopPeer(): Promise<void> {
     viewerToolbar.hidden = true;
     publisherPanel.hidden = true;
     viewerPanel.hidden = true;
-    for (const candidate of [addDialog, diagnosticsDialog, snapshotDialog, cameraActionsDialog]) {
+    for (const candidate of [
+      addDialog,
+      diagnosticsDialog,
+      snapshotDialog,
+      cameraActionsDialog,
+      performanceReportDialog,
+    ]) {
       if (candidate.open) candidate.close();
     }
   }
@@ -1659,6 +1853,7 @@ function stringify(value: unknown): string {
 }
 
 function record(message: string): void {
+  performanceCapture?.recordEvent(message);
   const stamp = new Date().toLocaleTimeString();
   timelineRows.push(`${stamp}  ${message}`);
   if (timelineRows.length > 80) timelineRows.splice(0, timelineRows.length - 80);

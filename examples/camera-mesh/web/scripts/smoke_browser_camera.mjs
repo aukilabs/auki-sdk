@@ -1,4 +1,5 @@
 import { chromium } from "playwright";
+import { readFile } from "node:fs/promises";
 
 const url = process.argv[2] ?? process.env.CAMERA_MESH_URL ?? "http://127.0.0.1:5173/";
 const email = process.env.AUKI_EMAIL;
@@ -92,6 +93,8 @@ try {
       + `Camera 1 viewer: ${JSON.stringify(stressMetrics)}\n`,
   );
   await assertStableFrameSurface(viewer, cardA.peerId);
+  await viewer.locator("#record-performance-button").click();
+  await waitForText(viewer, "#record-performance-label", "Stop", timeout);
   await assertQualitySwitch(viewer, cardA.peerId, "high");
   await assertProfile(viewer, cardA.peerId, "high");
   await assertQualitySwitch(viewer, cardA.peerId, "medium");
@@ -139,6 +142,17 @@ try {
     waitForFrames(viewer, cardB.peerId, (await receivedFrames(viewer, cardB.peerId)) + 1),
   ]);
   await assertResponsiveViewer(viewer, cardA.peerId, cardB.peerId);
+  await delay(1_100);
+  await viewer.locator("#record-performance-button").click();
+  await viewer.locator("#performance-report-dialog").waitFor({ state: "visible", timeout });
+  const reportDownload = viewer.waitForEvent("download");
+  await viewer.locator("#download-performance-report-button").click();
+  const downloaded = await reportDownload;
+  const reportPath = await downloaded.path();
+  if (!reportPath) throw new Error("performance report download has no local path");
+  const performanceReport = JSON.parse(await readFile(reportPath, "utf8"));
+  assertPerformanceReport(performanceReport, viewerDomain, viewerCard.peerId, cameraCount);
+  await viewer.locator("#close-performance-report-button").click();
 
   const beforeRemove = await receivedFrames(viewer, cardA.peerId);
   await cameraMenuAction(viewer, cardB.peerId, "remove");
@@ -218,6 +232,33 @@ async function newPeerPage() {
   await context.grantPermissions(["camera"], { origin: new URL(url).origin });
   contexts.push(context);
   return context.newPage();
+}
+
+function assertPerformanceReport(report, domainId, localPeerId, expectedPeers) {
+  if (
+    report.schemaVersion !== 1
+    || report.kind !== "auki.camera-mesh.performance"
+    || report.runtime !== "web"
+    || report.domainId !== domainId
+    || report.localPeerId !== localPeerId
+    || report.sampleIntervalMs !== 1_000
+    || !Array.isArray(report.peers)
+    || report.peers.length !== expectedPeers
+  ) {
+    throw new Error(`performance report envelope is invalid: ${JSON.stringify(report)}`);
+  }
+  for (const peer of report.peers) {
+    if (
+      peer.summary?.sampleCount < 2
+      || peer.summary?.receivedFrames < 1
+      || peer.summary?.renderedFrames < 1
+      || !(peer.summary?.receivedBytes > 0)
+      || !Array.isArray(peer.samples)
+      || peer.samples.length !== peer.summary.sampleCount
+    ) {
+      throw new Error(`performance report peer summary is invalid: ${JSON.stringify(peer)}`);
+    }
+  }
 }
 
 async function loginAndStart(page, peerRole, label) {

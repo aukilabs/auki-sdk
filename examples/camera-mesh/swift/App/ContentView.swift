@@ -191,12 +191,14 @@ private struct CameraMonitorView: View {
     case addCamera
     case session
     case snapshot(String)
+    case performanceReport
 
     var id: String {
       switch self {
       case .addCamera: "add-camera"
       case .session: "session"
       case .snapshot(let peerID): "snapshot-\(peerID)"
+      case .performanceReport: "performance-report"
       }
     }
   }
@@ -229,6 +231,8 @@ private struct CameraMonitorView: View {
         if let tile = model.cameraTiles.first(where: { $0.peerID == peerID }) {
           CameraSnapshotSheet(tile: tile) { presentedSheet = nil }
         }
+      case .performanceReport:
+        CameraPerformanceReportSheet(model: model) { presentedSheet = nil }
       }
     }
   }
@@ -326,6 +330,59 @@ private struct CameraMonitorView: View {
           }
         }
         .buttonStyle(.plain)
+      }
+
+      Button {
+        if model.performanceRecording {
+          model.stopPerformanceRecording()
+          presentedSheet = .performanceReport
+        } else {
+          model.startPerformanceRecording()
+        }
+      } label: {
+        HStack(spacing: 5) {
+          Image(systemName: model.performanceRecording ? "stop.fill" : "record.circle")
+            .foregroundStyle(CameraMeshStyle.danger)
+          if model.performanceRecording || !compact {
+            Text(
+              model.performanceRecording
+                ? "Stop \(recordingDuration)"
+                : "Record stats"
+            )
+            .font(.caption.monospacedDigit().weight(.bold))
+          }
+        }
+        .frame(minWidth: 44, minHeight: 44)
+        .padding(.horizontal, model.performanceRecording || !compact ? 8 : 0)
+        .background(model.performanceRecording ? CameraMeshStyle.danger.opacity(0.12) : .clear)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+          RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .stroke(
+              model.performanceRecording
+                ? CameraMeshStyle.danger.opacity(0.55) : CameraMeshStyle.line)
+        }
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel(
+        model.performanceRecording
+          ? "Stop performance recording after \(model.performanceRecordingElapsedSeconds) seconds"
+          : "Record performance statistics"
+      )
+
+      if model.completedPerformanceReport != nil, !model.performanceRecording {
+        Button {
+          presentedSheet = .performanceReport
+        } label: {
+          Image(systemName: "doc.text.magnifyingglass")
+            .frame(width: 44, height: 44)
+            .overlay {
+              RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(CameraMeshStyle.line)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open performance report")
       }
 
       Button {
@@ -437,6 +494,11 @@ private struct CameraMonitorView: View {
   private var selectedDomainName: String {
     model.domains.first(where: { $0.id == model.selectedDomainID })?.name
       ?? shortCameraPeerID(model.selectedDomainID)
+  }
+
+  private var recordingDuration: String {
+    let seconds = model.performanceRecordingElapsedSeconds
+    return "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
   }
 }
 
@@ -643,7 +705,8 @@ private struct CameraTileView: View {
 
   private var streamDiagnosticsText: String {
     let diagnostics = tile.diagnostics
-    return "\(decimal(diagnostics.receiveFPS)) RX fps  \(decimal(diagnostics.renderFPS)) render fps\n"
+    return
+      "\(decimal(diagnostics.receiveFPS)) RX fps  \(decimal(diagnostics.renderFPS)) render fps\n"
       + "\(decimal(diagnostics.kibPerSecond)) KiB/s  \(milliseconds(diagnostics.frameAgeMilliseconds)) ms"
   }
 
@@ -934,7 +997,9 @@ private struct CameraSessionSheet: View {
           }
           .disabled(!model.canRemoveAllCameras)
         } footer: {
-          Text("Closes every camera subscription and clears the wall without stopping this Viewer Peer.")
+          Text(
+            "Closes every camera subscription and clears the wall without stopping this Viewer Peer."
+          )
         }
 
         Section {
@@ -945,6 +1010,57 @@ private struct CameraSessionSheet: View {
         }
       }
       .navigationTitle("Camera Mesh")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Done", action: dismiss)
+        }
+      }
+    }
+  }
+}
+
+private struct CameraPerformanceReportSheet: View {
+  @ObservedObject var model: CameraMeshModel
+  let dismiss: () -> Void
+  @State private var copied = false
+
+  var body: some View {
+    NavigationStack {
+      List {
+        Section("Camera wall measurements") {
+          Text(model.performanceReportSummary)
+            .font(.callout.monospacedDigit())
+          if let report = model.completedPerformanceReport {
+            LabeledContent("Runtime", value: report.runtime)
+            LabeledContent("Samples every", value: "\(report.sampleIntervalMs / 1_000)s")
+            LabeledContent("Columns", value: "\(report.initialColumns) → \(report.finalColumns)")
+          }
+        }
+
+        Section {
+          Button {
+            UIPasteboard.general.string = model.performanceReportJSON
+            copied = true
+          } label: {
+            Label(
+              copied ? "JSON copied" : "Copy JSON", systemImage: copied ? "checkmark" : "doc.on.doc"
+            )
+          }
+          .disabled(model.performanceReportJSON.isEmpty)
+
+          if let reportURL = model.performanceReportURL {
+            ShareLink(item: reportURL) {
+              Label("Share or save JSON", systemImage: "square.and.arrow.up")
+            }
+          }
+        } footer: {
+          Text(
+            "The report contains stream rates, bytes, frame age, quality changes, and runtime events. It never includes credentials."
+          )
+        }
+      }
+      .navigationTitle("Performance report")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {

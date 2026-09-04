@@ -59,6 +59,9 @@ final class CameraMeshModelTests: XCTestCase {
     XCTAssertEqual(tile.diagnostics.renderFPS ?? 0, 2.5, accuracy: 0.001)
     XCTAssertEqual(tile.diagnostics.kibPerSecond ?? 0, 5, accuracy: 0.001)
     XCTAssertEqual(tile.diagnostics.frameAgeMilliseconds ?? 0, 123, accuracy: 0.001)
+    XCTAssertEqual(tile.totalReceivedFrames, 5)
+    XCTAssertEqual(tile.totalRenderedFrames, 3)
+    XCTAssertEqual(tile.totalReceivedBytes, 5_120)
   }
 
   @MainActor
@@ -80,5 +83,89 @@ final class CameraMeshModelTests: XCTestCase {
     tile.resetDiagnostics()
 
     XCTAssertEqual(tile.diagnostics, .empty)
+    XCTAssertEqual(tile.totalReceivedFrames, 2)
+    XCTAssertEqual(tile.totalRenderedFrames, 1)
+    XCTAssertEqual(tile.totalReceivedBytes, 2_048)
   }
+
+  func testPerformanceReportUsesWindowCountersAndPortableJSONKeys() throws {
+    let capture = CameraPerformanceCapture(
+      context: CameraPerformanceContext(
+        runtime: "ios",
+        platform: "iPhone test",
+        domainID: "domain-1",
+        localPeerID: "viewer-1",
+        columnCount: 2
+      ),
+      startedAt: Date(timeIntervalSince1970: 1_000),
+      startedAtMonotonic: 10
+    )
+
+    capture.sample(
+      [performanceSnapshot(received: 10, rendered: 5, bytes: 10_000, receiveFPS: 10)],
+      columnCount: 2,
+      nowMonotonic: 10
+    )
+    capture.recordEvent("Switched to High", nowMonotonic: 10.5)
+    capture.sample(
+      [performanceSnapshot(received: 15, rendered: 7, bytes: 16_000, receiveFPS: 12)],
+      columnCount: 4,
+      nowMonotonic: 11
+    )
+    let report = capture.finish(
+      snapshots: [
+        performanceSnapshot(received: 18, rendered: 9, bytes: 20_000, receiveFPS: 14)
+      ],
+      finalColumnCount: 4,
+      endedAt: Date(timeIntervalSince1970: 1_002),
+      endedAtMonotonic: 12
+    )
+
+    XCTAssertEqual(report.schemaVersion, 1)
+    XCTAssertEqual(report.kind, cameraPerformanceReportKind)
+    XCTAssertEqual(report.durationMs, 2_000)
+    XCTAssertEqual(report.initialColumns, 2)
+    XCTAssertEqual(report.finalColumns, 4)
+    XCTAssertEqual(
+      report.events, [CameraPerformanceEvent(elapsedMs: 500, message: "Switched to High")])
+    XCTAssertEqual(report.peers.count, 1)
+    XCTAssertEqual(report.peers[0].summary.receivedFrames, 8)
+    XCTAssertEqual(report.peers[0].summary.renderedFrames, 4)
+    XCTAssertEqual(report.peers[0].summary.receivedBytes, 10_000)
+    XCTAssertEqual(report.peers[0].summary.renderToReceiveRatio, 0.5)
+    XCTAssertEqual(report.peers[0].summary.receiveFps?.p95, 14)
+
+    let json = try report.json()
+    let decoded = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
+    )
+    XCTAssertEqual(decoded["domainId"] as? String, "domain-1")
+    XCTAssertEqual(decoded["localPeerId"] as? String, "viewer-1")
+    XCTAssertNil(decoded["domainID"])
+  }
+}
+
+private func performanceSnapshot(
+  received: UInt64,
+  rendered: UInt64,
+  bytes: UInt64,
+  receiveFPS: Double
+) -> CameraPerformanceSnapshot {
+  CameraPerformanceSnapshot(
+    peerID: "camera-1",
+    name: "Lab camera",
+    runtime: "native",
+    status: "live",
+    quality: "high",
+    width: 1_920,
+    height: 1_080,
+    targetFPS: 30,
+    totalReceivedFrames: received,
+    totalRenderedFrames: rendered,
+    totalReceivedBytes: bytes,
+    receiveFPS: receiveFPS,
+    renderFPS: receiveFPS - 2,
+    kibPerSecond: 1_000,
+    frameAgeMilliseconds: 80
+  )
 }

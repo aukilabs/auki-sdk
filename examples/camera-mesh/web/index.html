@@ -94,6 +94,14 @@
             <span id="focus-label">1 / 1</span>
             <button id="next-camera-button" class="icon-button" type="button" aria-label="Next camera">›</button>
           </div>
+          <button id="record-performance-button" class="secondary performance-button" type="button" aria-label="Record performance statistics">
+            <span class="performance-symbol" aria-hidden="true">●</span>
+            <span id="record-performance-label">Record stats</span>
+          </button>
+          <button id="open-performance-report-button" class="secondary performance-button" type="button" aria-label="Open performance report" hidden>
+            <span aria-hidden="true">⇩</span>
+            <span>Report</span>
+          </button>
           <button id="add-camera-button" class="primary add-camera" type="button"><span aria-hidden="true">＋</span> Add camera</button>
         </div>
 
@@ -324,6 +332,26 @@
           <button type="button" data-camera-action="retry">Retry connection</button>
           <button type="button" data-camera-action="details">Connection details</button>
           <button class="danger" type="button" data-camera-action="remove">Disconnect and remove</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog class="sheet performance-sheet" id="performance-report-dialog" aria-labelledby="performance-report-title">
+      <div class="sheet-shell">
+        <header class="sheet-header">
+          <div>
+            <p class="eyebrow">Camera wall measurements</p>
+            <h2 id="performance-report-title">Performance report</h2>
+          </div>
+          <button class="icon-button" id="close-performance-report-button" type="button" aria-label="Close performance report">×</button>
+        </header>
+        <div class="sheet-body performance-report-body">
+          <p id="performance-report-summary">No performance recording yet.</p>
+          <div class="performance-report-actions">
+            <button id="copy-performance-report-button" class="secondary" type="button">Copy JSON</button>
+            <button id="download-performance-report-button" class="primary" type="button">Download JSON</button>
+          </div>
+          <p class="performance-report-note">The report contains stream rates, bytes, frame age, quality changes, and runtime events. It never includes credentials.</p>
         </div>
       </div>
     </dialog>

@@ -336,6 +336,24 @@ async fn catalog_products_and_operables_cross_two_authenticated_peers() {
         Some(5)
     );
 
+    output.publish(70, Arc::new(30.0)).unwrap();
+    output.publish(80, Arc::new(32.0)).unwrap();
+    let live_edge_sync = live_mirror.sync_latest_once().await.unwrap();
+    assert_eq!(live_edge_sync.accepted, 1);
+    assert_eq!(live_edge_sync.next_sequence, 8);
+    assert_eq!(
+        live_edge_sync.gap,
+        Some(auki_component_protocol::SourceGap {
+            requested_sequence: 6,
+            available_from: 7,
+        })
+    );
+    assert_eq!(live_mirror.last_gap(), live_edge_sync.gap);
+    assert_eq!(
+        live_mirror.product().buffer().range().last_sequence,
+        Some(7)
+    );
+
     let invocation = client
         .invoke_exact::<u64, u64>(
             server_peer.peer_id(),

@@ -1270,19 +1270,24 @@ function streamDiagnostics(state: CameraTileState): {
 }
 
 function setTileDiagnostics(element: HTMLElement, state: CameraTileState): void {
-  if (state.received === 0) {
-    element.textContent = "Waiting for frames";
-    element.title = "Rolling five-second stream diagnostics";
-    return;
-  }
   const diagnostics = streamDiagnostics(state);
+  const receiveFps = diagnostics.fps?.toFixed(1) ?? "—";
+  const renderFps = diagnostics.displayFps?.toFixed(1) ?? "—";
+  const bandwidth = diagnostics.kibPerSecond === undefined
+    ? "— KiB/s"
+    : `${diagnostics.kibPerSecond.toFixed(1)} KiB/s`;
+  const frameAge = formatCompactFrameAge(diagnostics.frameAgeMs);
   element.textContent = [
-    `receive ${formatRate(diagnostics.fps)}`,
-    `display ${formatRate(diagnostics.displayFps)}`,
-    formatBandwidth(diagnostics.kibPerSecond),
-    formatFrameAge(diagnostics.frameAgeMs),
+    `${receiveFps}\u00a0RX\u00a0fps`,
+    `${renderFps}\u00a0render\u00a0fps`,
+    bandwidth.replaceAll(" ", "\u00a0"),
+    frameAge.replaceAll(" ", "\u00a0"),
   ].join(" · ");
-  element.title = `${formatFrameSize(diagnostics.averageFrameKib)} · rolling five-second receive window`;
+  element.setAttribute(
+    "aria-label",
+    `Network receive rate ${formatRate(diagnostics.fps)}; render rate ${formatRate(diagnostics.displayFps)}; receive bandwidth ${formatBandwidth(diagnostics.kibPerSecond)}; displayed frame age ${frameAge}`,
+  );
+  element.title = `RX = network receive rate · render = frames drawn · ${formatFrameSize(diagnostics.averageFrameKib)} · rolling five-second window`;
 }
 
 function setTileDiagnosticAttributes(tile: HTMLElement, state: CameraTileState): void {
@@ -1702,6 +1707,12 @@ function formatFrameAge(value: number | undefined): string {
   if (value === undefined) return "Age —";
   const rounded = Math.round(value);
   return `${rounded >= 0 ? rounded : `−${Math.abs(rounded)}`} ms age`;
+}
+
+function formatCompactFrameAge(value: number | undefined): string {
+  if (value === undefined) return "— ms";
+  const rounded = Math.round(value);
+  return `${rounded >= 0 ? rounded : `−${Math.abs(rounded)}`} ms`;
 }
 
 function formatDuration(value: number | undefined): string {

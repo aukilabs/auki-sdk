@@ -382,8 +382,11 @@ async function assertStreamDiagnostics(page, peerId) {
   const summary = await cameraTile(page, peerId)
     .locator("[data-role='stream-diagnostics']")
     .textContent();
-  if (!summary?.includes("fps") || !summary.includes("KiB/s") || !summary.includes("ms age")) {
-    throw new Error(`camera ${peerId} does not render all three diagnostics: ${summary}`);
+  if (!summary?.includes("RX\u00a0fps")
+    || !summary.includes("render\u00a0fps")
+    || !summary.includes("KiB/s")
+    || !summary.includes("ms")) {
+    throw new Error(`camera ${peerId} does not render all four diagnostics: ${summary}`);
   }
 }
 

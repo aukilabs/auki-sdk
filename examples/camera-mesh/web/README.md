@@ -77,7 +77,8 @@ diagnostics separate those stages.
 The Diagnostics drawer exposes:
 
 - publisher capture/encode FPS, encode p50/p95, and missed capture deadlines;
-- received and displayed frames per second over the latest five-second window;
+- network receive (`RX fps`) and rendered (`render fps`) frames per second over
+  the latest five-second window;
 - received KiB/s, with average JPEG size in the tooltip and Diagnostics drawer;
 - frame age from the publisher's capture timestamp until the image renders.
 

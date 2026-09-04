@@ -828,7 +828,11 @@ private struct AddCameraSheet: View {
         } header: {
           Text("New camera quality")
         } footer: {
-          Text(CameraMeshContract.profile(selectedQuality).label)
+          Text(
+            CameraMeshContract.profile(selectedQuality).label
+              + " · Add all connects up to "
+              + "\(CameraMeshContract.addAllLimit(for: selectedQuality))"
+          )
         }
 
         Section {
@@ -852,12 +856,15 @@ private struct AddCameraSheet: View {
                 ProgressView()
                   .frame(minWidth: 72)
               } else {
-                Label("Add all", systemImage: "rectangle.stack.badge.plus")
+                Label(
+                  "Add all (\(CameraMeshContract.addAllLimit(for: selectedQuality)))",
+                  systemImage: "rectangle.stack.badge.plus"
+                )
               }
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.regular)
-            .disabled(!model.canAddAllCameras)
+            .disabled(!model.canAddAllCameras(preferredQuality: selectedQuality))
           }
         } header: {
           Text("Discover publishers")

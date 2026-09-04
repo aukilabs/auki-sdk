@@ -19,12 +19,23 @@ const PROFILES: Readonly<Record<CameraQualityTier, CameraStreamProfile>> = {
   high: Object.freeze({ quality: "high", width: 1_920, height: 1_080, rateHz: 30 }),
 };
 
+const ADD_ALL_LIMITS: Readonly<Record<CameraQualityTier, number>> = {
+  low: 16,
+  medium: 8,
+  high: 1,
+};
+
 export const DEFAULT_CAMERA_PROFILE = PROFILES.low;
 
 export function cameraStreamProfile(
   quality: CameraQualityTier,
 ): CameraStreamProfile {
   return PROFILES[quality];
+}
+
+/** Conservative batch size for the Camera Mesh demo's measured relay path. */
+export function cameraAddAllLimit(quality: CameraQualityTier): number {
+  return ADD_ALL_LIMITS[quality];
 }
 
 export function verifiedCameraProfile(

@@ -112,6 +112,15 @@ public enum CameraMeshContract {
     profiles.first(where: { $0.quality == quality })!
   }
 
+  /// Conservative batch size for the Camera Mesh demo's measured relay path.
+  public static func addAllLimit(for quality: CameraQuality) -> Int {
+    switch quality {
+    case .low: 16
+    case .medium: 8
+    case .high: 1
+    }
+  }
+
   public static func profile(resourceID: String) -> CameraStreamProfile? {
     profiles.first(where: { $0.resourceID == resourceID })
   }

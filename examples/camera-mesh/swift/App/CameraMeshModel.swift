@@ -285,11 +285,12 @@ final class CameraMeshModel: ObservableObject {
     max(0, CameraMeshContract.maximumViewerConnections - cameraTiles.count)
   }
 
-  var canAddAllCameras: Bool {
+  func canAddAllCameras(preferredQuality: CameraQuality) -> Bool {
     guard selectedRole == .viewer, phase == .ready, !addingAllCameras, !removingAllCameras
     else { return false }
+    guard remainingAddAllTargetSlots(for: preferredQuality) > 0 else { return false }
     if discoveredCameras.isEmpty { return true }
-    return !addAllCandidates().isEmpty
+    return addAllCandidateCount(preferredQuality: preferredQuality) > 0
   }
 
   var canRemoveAllCameras: Bool {
@@ -798,15 +799,21 @@ final class CameraMeshModel: ObservableObject {
       guard await discover() else { return }
     }
 
-    let candidates = addAllCandidates()
+    let quality = preferredQuality ?? preferredViewerQuality
+    let limit = CameraMeshContract.addAllLimit(for: quality)
+    let available = addAllCandidates()
+    let candidates = Array(available.prefix(remainingAddAllTargetSlots(for: quality)))
     guard !candidates.isEmpty else {
-      write("Every discovered camera is already on the wall.")
+      write("The \(quality.title) Add all target of \(limit) active camera(s) is already met.")
       return
     }
 
     addingAllCameras = true
     defer { addingAllCameras = false }
-    let quality = preferredQuality ?? preferredViewerQuality
+    write(
+      "Connecting \(candidates.count) of \(available.count) discovered camera(s) at "
+        + "\(quality.title) quality (batch target \(limit))."
+    )
     let tasks = candidates.map { candidate in
       Task { [weak self] in
         guard let self else { return false }
@@ -835,6 +842,17 @@ final class CameraMeshModel: ObservableObject {
         return false
       }
     }
+  }
+
+  func addAllCandidateCount(preferredQuality: CameraQuality) -> Int {
+    min(addAllCandidates().count, remainingAddAllTargetSlots(for: preferredQuality))
+  }
+
+  private func remainingAddAllTargetSlots(for quality: CameraQuality) -> Int {
+    let active = cameraTiles.filter {
+      $0.status == .connecting || $0.status == .waiting || $0.status == .live
+    }.count
+    return max(0, CameraMeshContract.addAllLimit(for: quality) - active)
   }
 
   func focusCamera(peerID: String) {

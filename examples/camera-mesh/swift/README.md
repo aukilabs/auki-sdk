@@ -97,7 +97,9 @@ xcrun devicectl device process launch \
 Log in, choose the publishers' Domain, select **Viewer**, and start. The viewer
 uses DDS discovery without advertising itself; complete peer cards remain the
 fallback. Open **Add camera** to add publishers individually or concurrently
-with **Add all**. The wall is capped at 16 cameras.
+with **Add all**. The measured relay-path batch targets are 16 Low, 8 Medium,
+or 1 High camera; manual additions can intentionally go beyond those targets.
+The wall remains capped at 16 cameras.
 
 On iPhone the wall uses two columns. Select **1** or tap a camera to focus a
 single feed, then use the arrow controls to move through the wall. Wider Apple

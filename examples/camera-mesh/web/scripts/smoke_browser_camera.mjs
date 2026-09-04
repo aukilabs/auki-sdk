@@ -253,8 +253,17 @@ function assertPerformanceReport(report, domainId, localPeerId, expectedPeers) {
       || peer.summary?.receivedFrames < 1
       || peer.summary?.renderedFrames < 1
       || !(peer.summary?.receivedBytes > 0)
+      || !(peer.summary?.queueMs?.average >= 0)
+      || !(peer.summary?.decodeMs?.average >= 0)
+      || !(peer.summary?.presentMs?.average >= 0)
+      || !(peer.summary?.sourceGapP95Ms?.average >= 0)
+      || !(peer.summary?.eventLoopDelayP95Ms?.average >= 0)
       || !Array.isArray(peer.samples)
       || peer.samples.length !== peer.summary.sampleCount
+      || !peer.samples.some((sample) =>
+        ["bitmaprenderer", "2d"].includes(sample.renderer)
+          && sample.displayWidth > 1
+          && sample.displayHeight > 1)
     ) {
       throw new Error(`performance report peer summary is invalid: ${JSON.stringify(peer)}`);
     }
@@ -408,8 +417,12 @@ async function assertQualitySwitch(page, peerId, quality) {
   await waitFor(
     () => cameraTile(page, peerId).locator("[data-role='remote-frame']")
       .evaluate((surface, dimensions) =>
-        surface.width === dimensions[0]
-          && surface.height === dimensions[1]
+        Number(surface.dataset.sourceWidth) === dimensions[0]
+          && Number(surface.dataset.sourceHeight) === dimensions[1]
+          && surface.width > 1
+          && surface.width <= dimensions[0]
+          && surface.height > 1
+          && surface.height <= dimensions[1]
           && !surface.hidden,
       expectedDimensions),
     timeout,
@@ -431,13 +444,25 @@ async function assertStreamDiagnostics(page, peerId) {
       bandwidth: Number(tile.dataset.kibPerSecond),
       frameSize: Number(tile.dataset.averageFrameKib),
       frameAge: Number(tile.dataset.frameAgeMs),
+      queueMs: Number(tile.dataset.queueMs),
+      decodeMs: Number(tile.dataset.decodeMs),
+      presentMs: Number(tile.dataset.presentMs),
+      displayWidth: Number(tile.dataset.displayWidth),
+      displayHeight: Number(tile.dataset.displayHeight),
+      renderer: tile.dataset.renderer,
     }));
     return values.fps > 0
       && values.displayFps > 0
       && values.bandwidth > 0
       && values.frameSize > 0
       && Number.isFinite(values.frameAge)
-      && Math.abs(values.frameAge) < 60_000;
+      && Math.abs(values.frameAge) < 60_000
+      && values.queueMs >= 0
+      && values.decodeMs >= 0
+      && values.presentMs >= 0
+      && values.displayWidth > 1
+      && values.displayHeight > 1
+      && ["bitmaprenderer", "2d"].includes(values.renderer);
   }, timeout, `rolling Stream diagnostics for ${peerId}`);
 
   const summary = await cameraTile(page, peerId)
@@ -462,16 +487,28 @@ async function monitorBlankFrameSamples(page, peerId, samples) {
   return cameraTile(page, peerId)
     .locator("[data-role='remote-frame']")
     .evaluate(async (surface, sampleCount) => {
+      const probe = document.createElement("canvas");
+      probe.width = 1;
+      probe.height = 1;
+      const context = probe.getContext("2d");
       let blanks = 0;
       for (let sample = 0; sample < sampleCount; sample += 1) {
         await new Promise((resolve) => requestAnimationFrame(resolve));
-        const context = surface.getContext("2d");
-        const center = context?.getImageData(
-          Math.floor(surface.width / 2),
-          Math.floor(surface.height / 2),
-          1,
-          1,
-        ).data;
+        context?.clearRect(0, 0, 1, 1);
+        if (surface.width > 1 && surface.height > 1) {
+          context?.drawImage(
+            surface,
+            Math.floor(surface.width / 2),
+            Math.floor(surface.height / 2),
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+          );
+        }
+        const center = context?.getImageData(0, 0, 1, 1).data;
         if (
           surface.hidden
           || surface.width <= 1

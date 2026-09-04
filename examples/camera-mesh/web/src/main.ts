@@ -9,7 +9,13 @@ import {
 } from "./camera-mesh.js";
 import type { CaptureDiagnostics, CaptureMode } from "./capture.js";
 import {
+  LatestJpegRenderer,
+  type CameraFrameSurface,
+  type JpegPresentation,
+} from "./jpeg-renderer.js";
+import {
   CAMERA_QUALITY_TIERS,
+  cameraAddAllLimit,
   cameraQualityLabel,
   isCameraQualityTier,
   type CameraQualityTier,
@@ -28,6 +34,12 @@ type CameraStatus = "connecting" | "awaiting" | "live" | "ended" | "error";
 interface FrameDeliverySample {
   readonly receivedAt: number;
   readonly bytes: number;
+  readonly sourceTimestampNs: bigint;
+}
+
+interface EventLoopDelaySample {
+  readonly observedAt: number;
+  readonly delayMs: number;
 }
 
 interface CameraTileState {
@@ -38,14 +50,11 @@ interface CameraTileState {
   name: string;
   operation: number;
   connection?: RemoteConnection;
-  latestJpeg?: Uint8Array;
-  readonly frameSurface: HTMLCanvasElement;
-  frameUrl?: string;
+  readonly frameSurface: CameraFrameSurface;
+  readonly frameRenderer: LatestJpegRenderer;
   hasRenderedFrame: boolean;
   frameRevision: number;
-  renderedRevision: number;
-  displayGeneration: number;
-  renderingFrame: boolean;
+  renderVisible: boolean;
   received: number;
   bytes: number;
   totalReceivedFrames: number;
@@ -53,7 +62,7 @@ interface CameraTileState {
   totalReceivedBytes: number;
   frameSamples: FrameDeliverySample[];
   displaySamples: number[];
-  displayedFrameAgeMs?: number;
+  displayedTimestampNs?: bigint;
   streamStartedAtMs?: number;
   timestampNs?: bigint;
   frozen: boolean;
@@ -63,9 +72,49 @@ interface CameraTileState {
   switchingQuality?: CameraQualityTier;
 }
 
+interface StreamDiagnostics {
+  fps?: number;
+  displayFps?: number;
+  kibPerSecond?: number;
+  averageFrameKib?: number;
+  frameAgeMs?: number;
+  sourceGapP95Ms?: number;
+  sourceGapMaxMs?: number;
+  receiveGapP95Ms?: number;
+  receiveGapMaxMs?: number;
+  renderGapP95Ms?: number;
+  renderGapMaxMs?: number;
+  queueMs?: number;
+  queueP95Ms?: number;
+  queueMaxMs?: number;
+  decodeMs?: number;
+  decodeP50Ms?: number;
+  decodeP95Ms?: number;
+  decodeMaxMs?: number;
+  presentMs?: number;
+  displayWidth?: number;
+  displayHeight?: number;
+  renderer?: string;
+  rendererEnabled: boolean;
+  decodeInFlight: boolean;
+  pendingFrames: number;
+  activeDecodes: number;
+  queuedRenderers: number;
+  maximumActiveDecodes: number;
+  supersededFrames: number;
+  queueOverflowFrames: number;
+}
+
+interface GapStatistics {
+  readonly p95: number;
+  readonly maximum: number;
+}
+
 const MAX_CAMERAS = 16;
 const DIAGNOSTIC_WINDOW_MS = 5_000;
 const MAX_DIAGNOSTIC_SAMPLES = 512;
+const EVENT_LOOP_PROBE_INTERVAL_MS = 50;
+const LIVE_TELEMETRY_INTERVAL_MS = 250;
 const COLUMN_STORAGE_KEY = "auki-camera-mesh-columns";
 const mobileLayout = matchMedia("(max-width: 720px)");
 
@@ -154,10 +203,16 @@ let addingAllCameras = false;
 let removingAllCameras = false;
 let performanceCapture: CameraPerformanceCapture | undefined;
 let performanceCaptureTimer: number | undefined;
+let eventLoopProbeTimer: number | undefined;
+let eventLoopDelaySamples: EventLoopDelaySample[] = [];
+let liveTelemetryTimer: number | undefined;
 let completedPerformanceReport: CameraPerformanceReport | undefined;
 const publisherDiagnostics = new Map<CameraQualityTier, CaptureDiagnostics>();
 const timelineRows: string[] = [];
 const eventRows: string[] = [];
+const cameraVisibilityObserver = typeof IntersectionObserver === "undefined"
+  ? undefined
+  : new IntersectionObserver(handleCameraVisibility);
 
 await init();
 loginButton.disabled = false;
@@ -177,6 +232,7 @@ button("stop-publish-button").addEventListener("click", () => void stopPublishin
 button("add-camera-button").addEventListener("click", openAddCamera);
 button("discover-button").addEventListener("click", () => void discover());
 addAllCamerasButton.addEventListener("click", () => void addAllCameras());
+addCameraQuality.addEventListener("change", renderCandidates);
 removeAllCamerasButton.addEventListener("click", () => void removeAllCameras());
 recordPerformanceButton.addEventListener("click", togglePerformanceRecording);
 openPerformanceReportButton.addEventListener("click", openPerformanceReport);
@@ -195,6 +251,10 @@ for (const control of document.querySelectorAll<HTMLButtonElement>("[data-column
   control.addEventListener("click", () => setColumnCount(Number(control.dataset.columnCount)));
 }
 mobileLayout.addEventListener("change", () => renderWall());
+document.addEventListener("visibilitychange", () => {
+  performanceCapture?.recordEvent(`Page visibility changed to ${document.visibilityState}`);
+  refreshCameraVisibility();
+});
 
 cameraResults.addEventListener("click", (event) => {
   const control = (event.target as Element).closest<HTMLButtonElement>("button[data-candidate-peer-id]");
@@ -480,15 +540,17 @@ async function addManualCard(): Promise<void> {
 
 async function addAllCameras(): Promise<void> {
   if (addingAllCameras) return;
-  const additions = addableCandidates();
+  const preferredQuality = selectedAddQuality();
+  const available = addableCandidates();
+  const limit = cameraAddAllLimit(preferredQuality);
+  const additions = addAllCandidates(preferredQuality, available);
   if (additions.length === 0) return;
 
   addingAllCameras = true;
-  const preferredQuality = selectedAddQuality();
   addAllCamerasButton.disabled = true;
   addAllCamerasButton.textContent = `Adding ${additions.length}…`;
   record(
-    `Burst-connecting ${additions.length} discovered camera(s) at ${cameraQualityLabel(preferredQuality)} concurrently (stress path)`,
+    `Connecting ${additions.length} of ${available.length} discovered camera(s) at ${cameraQualityLabel(preferredQuality)} (batch target ${limit})`,
   );
   addDialog.close();
   try {
@@ -525,6 +587,17 @@ function addableCandidates(): CameraCandidate[] {
     });
 }
 
+function addAllCandidates(
+  quality: CameraQualityTier,
+  available = addableCandidates(),
+): CameraCandidate[] {
+  const active = [...cameras.values()].filter(
+    (state) => state.status === "connecting" || state.status === "live",
+  ).length;
+  const remainingTargetSlots = Math.max(0, cameraAddAllLimit(quality) - active);
+  return available.slice(0, remainingTargetSlots);
+}
+
 async function addCamera(
   candidate: CameraCandidate,
   requestedQuality?: CameraQualityTier,
@@ -539,30 +612,7 @@ async function addCamera(
       showInlineError(addCameraError, "The camera wall already contains 16 cameras");
       return;
     }
-    state = {
-      candidate,
-      preferredQuality,
-      status: "connecting",
-      message: "Verifying camera metadata and opening the Stream…",
-      name: `Camera ${shortPeer(candidate.peerId)}`,
-      operation: 0,
-      received: 0,
-      bytes: 0,
-      totalReceivedFrames: 0,
-      totalRenderedFrames: 0,
-      totalReceivedBytes: 0,
-      frameSamples: [],
-      displaySamples: [],
-      frameSurface: document.createElement("canvas"),
-      hasRenderedFrame: false,
-      frameRevision: 0,
-      renderedRevision: 0,
-      displayGeneration: 0,
-      renderingFrame: false,
-      frozen: false,
-      sourcePaused: false,
-      snapshotPending: false,
-    };
+    state = createCameraTileState(candidate, preferredQuality);
     cameras.set(candidate.peerId, state);
     cameraOrder.push(candidate.peerId);
     samplePerformance([state]);
@@ -610,6 +660,45 @@ async function addCamera(
     }
     renderWall();
   }
+}
+
+function createCameraTileState(
+  candidate: CameraCandidate,
+  preferredQuality: CameraQualityTier,
+): CameraTileState {
+  const frameSurface = document.createElement("canvas") as CameraFrameSurface;
+  let state!: CameraTileState;
+  const frameRenderer = new LatestJpegRenderer(frameSurface, {
+    presented: (presentation) => showPresentedFrame(state, presentation),
+    failed: (error) => {
+      record(`Frame decode failed for ${shortPeer(candidate.peerId)}: ${errorMessage(error)}`);
+    },
+  });
+  state = {
+    candidate,
+    preferredQuality,
+    status: "connecting",
+    message: "Verifying camera metadata and opening the Stream…",
+    name: `Camera ${shortPeer(candidate.peerId)}`,
+    operation: 0,
+    received: 0,
+    bytes: 0,
+    totalReceivedFrames: 0,
+    totalRenderedFrames: 0,
+    totalReceivedBytes: 0,
+    frameSamples: [],
+    displaySamples: [],
+    displayedTimestampNs: undefined,
+    frameSurface,
+    frameRenderer,
+    hasRenderedFrame: false,
+    frameRevision: 0,
+    renderVisible: false,
+    frozen: false,
+    sourcePaused: false,
+    snapshotPending: false,
+  };
+  return state;
 }
 
 async function handleTileAction(action: string, peerId: string): Promise<void> {
@@ -788,13 +877,16 @@ async function openFullscreen(peerId: string): Promise<void> {
 }
 
 function renderCandidates(): void {
-  const addable = addableCandidates();
+  const quality = selectedAddQuality();
+  const limit = cameraAddAllLimit(quality);
+  const addable = addAllCandidates(quality);
   addAllCamerasButton.disabled = addingAllCameras || removingAllCameras || addable.length === 0;
   addAllCamerasButton.textContent = addingAllCameras
     ? "Adding…"
     : addable.length > 0
       ? `Add all (${addable.length})`
       : "Add all";
+  addAllCamerasButton.title = `Connect to up to ${limit} discovered camera${limit === 1 ? "" : "s"} at ${cameraQualityLabel(quality)}`;
   if (candidates.size === 0) {
     const empty = document.createElement("p");
     empty.className = "empty-message";
@@ -837,6 +929,7 @@ function renderCandidates(): void {
 }
 
 function renderWall(): void {
+  cameraVisibilityObserver?.disconnect();
   if (selectedPeerId && !cameras.has(selectedPeerId)) selectedPeerId = undefined;
   selectedPeerId ??= cameraOrder[0];
   const renderedColumns = effectiveColumnCount();
@@ -846,7 +939,10 @@ function renderWall(): void {
     : [...cameraOrder];
   const visible = new Set(visiblePeerIds);
   for (const [peerId, state] of cameras) {
-    if (!visible.has(peerId)) clearCameraSurface(state);
+    if (!visible.has(peerId)) {
+      state.renderVisible = false;
+      clearCameraSurface(state);
+    }
   }
 
   cameraGrid.dataset.columnCount = String(renderedColumns);
@@ -859,10 +955,7 @@ function renderWall(): void {
     children.push(renderEmptyTile());
   }
   cameraGrid.replaceChildren(...children);
-  for (const peerId of visiblePeerIds) {
-    const state = cameras.get(peerId);
-    if (state) scheduleFrameDisplay(state);
-  }
+  refreshCameraVisibility();
 
   for (const control of document.querySelectorAll<HTMLButtonElement>("[data-column-count]")) {
     control.setAttribute(
@@ -887,6 +980,39 @@ function renderWall(): void {
       : "Disconnect and remove all cameras";
   updateWallStatus();
   updateAggregateMetrics();
+}
+
+function handleCameraVisibility(entries: readonly IntersectionObserverEntry[]): void {
+  for (const entry of entries) {
+    const tile = entry.target as HTMLElement;
+    const peerId = tile.dataset.cameraPeerId;
+    if (!peerId) continue;
+    const state = cameras.get(peerId);
+    if (!state || cameraElement(peerId) !== tile) continue;
+    state.renderVisible = entry.isIntersecting && entry.intersectionRatio > 0;
+    state.frameRenderer.setEnabled(
+      document.visibilityState === "visible" && state.renderVisible && !state.frozen,
+    );
+  }
+}
+
+function refreshCameraVisibility(): void {
+  cameraVisibilityObserver?.disconnect();
+  for (const peerId of cameraOrder) {
+    const state = cameras.get(peerId);
+    const tile = cameraElement(peerId);
+    if (!state || !tile) continue;
+    const bounds = tile.getBoundingClientRect();
+    state.renderVisible = document.visibilityState === "visible"
+      && bounds.width > 0
+      && bounds.height > 0
+      && bounds.bottom > 0
+      && bounds.right > 0
+      && bounds.top < window.innerHeight
+      && bounds.left < window.innerWidth;
+    state.frameRenderer.setEnabled(state.renderVisible && !state.frozen);
+    cameraVisibilityObserver?.observe(tile);
+  }
 }
 
 function renderCameraTile(state: CameraTileState): HTMLElement {
@@ -1077,17 +1203,23 @@ function showRemoteFrame(frame: RemoteFrame): void {
   if (!state) return;
   const becameLive = state.status !== "live";
   state.streamStartedAtMs ??= Date.now();
-  state.latestJpeg = frame.jpeg.slice();
   state.frameRevision += 1;
   state.received = frame.received;
   state.bytes = frame.bytes;
   state.totalReceivedFrames += 1;
   state.totalReceivedBytes += frame.jpeg.byteLength;
   state.timestampNs = frame.timestampNs;
-  recordFrameDelivery(state, frame.jpeg.byteLength);
+  recordFrameDelivery(state, frame.jpeg.byteLength, frame.timestampNs);
   state.status = "live";
   state.message = "";
-  scheduleFrameDisplay(state);
+  state.frameRenderer.submit({
+    jpeg: frame.jpeg,
+    revision: state.frameRevision,
+    timestampNs: frame.timestampNs,
+    sourceWidth: frame.profile.width,
+    sourceHeight: frame.profile.height,
+    rateHz: frame.profile.rateHz,
+  });
   // Keep the receive loop mechanical. DOM/diagnostic work happens when the
   // browser finishes decoding a frame, not for frames the newest-only renderer
   // will intentionally skip.
@@ -1099,6 +1231,7 @@ function showRemoteConnection(connection: RemoteConnection): void {
   if (!state) return;
   const previousQuality = state.connection?.metadata.profile.quality;
   if (previousQuality !== undefined && previousQuality !== connection.metadata.profile.quality) {
+    state.frameRenderer.invalidate();
     resetStreamDiagnostics(state);
   }
   state.connection = connection;
@@ -1228,6 +1361,7 @@ function renderDiagnostics(): void {
       stream: {
         route: connection.target.route,
         manifest: connection.streamManifest,
+        browserRenderer: state.frameRenderer.metrics(),
       },
     });
   } else if (state) {
@@ -1315,13 +1449,18 @@ function resetStreamDiagnostics(state: CameraTileState): void {
   state.bytes = 0;
   state.frameSamples = [];
   state.displaySamples = [];
-  state.displayedFrameAgeMs = undefined;
+  state.displayedTimestampNs = undefined;
   state.streamStartedAtMs = undefined;
+  state.frameRenderer.resetMeasurements();
 }
 
-function recordFrameDelivery(state: CameraTileState, bytes: number): void {
+function recordFrameDelivery(
+  state: CameraTileState,
+  bytes: number,
+  sourceTimestampNs: bigint,
+): void {
   const receivedAt = performance.now();
-  state.frameSamples.push({ receivedAt, bytes });
+  state.frameSamples.push({ receivedAt, bytes, sourceTimestampNs });
   const cutoff = receivedAt - DIAGNOSTIC_WINDOW_MS;
   while (
     state.frameSamples.length > 2
@@ -1334,36 +1473,132 @@ function recordFrameDelivery(state: CameraTileState, bytes: number): void {
   }
 }
 
-function streamDiagnostics(state: CameraTileState): {
-  fps?: number;
-  displayFps?: number;
-  kibPerSecond?: number;
-  averageFrameKib?: number;
-  frameAgeMs?: number;
-} {
-  const samples = state.frameSamples;
-  const displayFps = sampleRate(state.displaySamples);
-  if (samples.length === 0) return { displayFps, frameAgeMs: state.displayedFrameAgeMs };
+function streamDiagnostics(state: CameraTileState, detailed = false): StreamDiagnostics {
+  const now = performance.now();
+  const renderer = state.frameRenderer.metrics(now, detailed);
+  const samples = windowedFrameSamples(state.frameSamples, now);
+  const displaySamples = windowedTimestamps(state.displaySamples, now);
+  const displayFps = sampleRate(displaySamples, now);
+  const sourceGaps = detailed ? sourceGapStatistics(samples) : undefined;
+  const receiveGaps = detailed
+    ? gapStatistics(samples.map((sample) => sample.receivedAt), now)
+    : undefined;
+  const renderGaps = detailed ? gapStatistics(displaySamples, now) : undefined;
+  const renderDiagnostics = {
+    sourceGapP95Ms: sourceGaps?.p95,
+    sourceGapMaxMs: sourceGaps?.maximum,
+    receiveGapP95Ms: receiveGaps?.p95,
+    receiveGapMaxMs: receiveGaps?.maximum,
+    renderGapP95Ms: renderGaps?.p95,
+    renderGapMaxMs: renderGaps?.maximum,
+    queueMs: renderer.queueMs,
+    queueP95Ms: renderer.queueP95Ms,
+    queueMaxMs: renderer.queueMaxMs,
+    decodeMs: renderer.decodeMs,
+    decodeP50Ms: renderer.decodeP50Ms,
+    decodeP95Ms: renderer.decodeP95Ms,
+    decodeMaxMs: renderer.decodeMaxMs,
+    presentMs: renderer.presentMs,
+    displayWidth: renderer.displayWidth,
+    displayHeight: renderer.displayHeight,
+    renderer: renderer.backend,
+    rendererEnabled: renderer.enabled,
+    decodeInFlight: renderer.decodeInFlight,
+    pendingFrames: renderer.pendingFrames,
+    activeDecodes: renderer.activeDecodes,
+    queuedRenderers: renderer.queuedRenderers,
+    maximumActiveDecodes: renderer.maximumActiveDecodes,
+    supersededFrames: renderer.totalSupersededFrames,
+    queueOverflowFrames: renderer.totalQueueOverflowFrames,
+  };
+  const frameAgeMs = displayedFrameAge(state);
+  if (samples.length === 0) {
+    return {
+      displayFps,
+      frameAgeMs,
+      ...renderDiagnostics,
+    };
+  }
   const totalBytes = samples.reduce((total, sample) => total + sample.bytes, 0);
   const averageFrameKib = totalBytes / samples.length / 1_024;
   if (samples.length === 1) {
-    return { displayFps, averageFrameKib, frameAgeMs: state.displayedFrameAgeMs };
+    return {
+      displayFps,
+      averageFrameKib,
+      frameAgeMs,
+      ...renderDiagnostics,
+    };
   }
   const first = samples[0]!;
-  const last = samples[samples.length - 1]!;
-  const elapsedSeconds = Math.max(0.001, (last.receivedAt - first.receivedAt) / 1_000);
+  const elapsedSeconds = Math.max(0.001, (now - first.receivedAt) / 1_000);
   const deliveredBytes = totalBytes - first.bytes;
   return {
     fps: (samples.length - 1) / elapsedSeconds,
     displayFps,
     kibPerSecond: deliveredBytes / elapsedSeconds / 1_024,
     averageFrameKib,
-    frameAgeMs: state.displayedFrameAgeMs,
+    frameAgeMs,
+    ...renderDiagnostics,
   };
 }
 
-function setTileDiagnostics(element: HTMLElement, state: CameraTileState): void {
-  const diagnostics = streamDiagnostics(state);
+function displayedFrameAge(state: CameraTileState): number | undefined {
+  return state.displayedTimestampNs === undefined
+    ? undefined
+    : Date.now() - Number(state.displayedTimestampNs / 1_000_000n);
+}
+
+function windowedFrameSamples(
+  samples: readonly FrameDeliverySample[],
+  now: number,
+): readonly FrameDeliverySample[] {
+  const cutoff = now - DIAGNOSTIC_WINDOW_MS;
+  let start = 0;
+  while (start + 1 < samples.length && samples[start + 1]!.receivedAt < cutoff) start += 1;
+  return samples.slice(start);
+}
+
+function windowedTimestamps(samples: readonly number[], now: number): readonly number[] {
+  const cutoff = now - DIAGNOSTIC_WINDOW_MS;
+  let start = 0;
+  while (start + 1 < samples.length && samples[start + 1]! < cutoff) start += 1;
+  return samples.slice(start);
+}
+
+function gapStatistics(samples: readonly number[], now: number): GapStatistics | undefined {
+  if (samples.length === 0) return undefined;
+  const gaps = samples.slice(1).map((sample, index) => sample - samples[index]!);
+  gaps.push(Math.max(0, now - samples.at(-1)!));
+  return summarizeGaps(gaps);
+}
+
+function sourceGapStatistics(
+  samples: readonly FrameDeliverySample[],
+): GapStatistics | undefined {
+  const gaps: number[] = [];
+  for (let index = 1; index < samples.length; index += 1) {
+    const gap = Number(
+      samples[index]!.sourceTimestampNs - samples[index - 1]!.sourceTimestampNs,
+    ) / 1_000_000;
+    if (Number.isFinite(gap) && gap >= 0) gaps.push(gap);
+  }
+  return summarizeGaps(gaps);
+}
+
+function summarizeGaps(gaps: number[]): GapStatistics | undefined {
+  if (gaps.length === 0) return undefined;
+  const sorted = gaps.sort((left, right) => left - right);
+  return {
+    p95: sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * 0.95) - 1))]!,
+    maximum: sorted.at(-1)!,
+  };
+}
+
+function setTileDiagnostics(
+  element: HTMLElement,
+  state: CameraTileState,
+  diagnostics = streamDiagnostics(state),
+): void {
   const receiveFps = diagnostics.fps?.toFixed(1) ?? "—";
   const renderFps = diagnostics.displayFps?.toFixed(1) ?? "—";
   const bandwidth = diagnostics.kibPerSecond === undefined
@@ -1380,21 +1615,50 @@ function setTileDiagnostics(element: HTMLElement, state: CameraTileState): void 
     "aria-label",
     `Network receive rate ${formatRate(diagnostics.fps)}; render rate ${formatRate(diagnostics.displayFps)}; receive bandwidth ${formatBandwidth(diagnostics.kibPerSecond)}; displayed frame age ${frameAge}`,
   );
-  element.title = `RX = network receive rate · render = frames drawn · ${formatFrameSize(diagnostics.averageFrameKib)} · rolling five-second window`;
+  const renderSize = diagnostics.displayWidth && diagnostics.displayHeight
+    ? ` · display ${diagnostics.displayWidth}×${diagnostics.displayHeight}`
+    : "";
+  const renderCost = diagnostics.decodeMs === undefined
+    ? ""
+    : ` · queue ${formatDuration(diagnostics.queueMs)} · decode ${formatDuration(diagnostics.decodeMs)} · present ${formatDuration(diagnostics.presentMs)}`;
+  element.title = `RX = network receive rate · render = frames drawn · ${formatFrameSize(diagnostics.averageFrameKib)}${renderSize}${renderCost} · ${diagnostics.supersededFrames} superseded (${diagnostics.queueOverflowFrames} queue overflow) · rolling five-second window`;
 }
 
-function setTileDiagnosticAttributes(tile: HTMLElement, state: CameraTileState): void {
-  const diagnostics = streamDiagnostics(state);
+function setTileDiagnosticAttributes(
+  tile: HTMLElement,
+  state: CameraTileState,
+  diagnostics = streamDiagnostics(state),
+): void {
   setFiniteDataset(tile, "streamFps", diagnostics.fps);
   setFiniteDataset(tile, "displayFps", diagnostics.displayFps);
   setFiniteDataset(tile, "kibPerSecond", diagnostics.kibPerSecond);
   setFiniteDataset(tile, "averageFrameKib", diagnostics.averageFrameKib);
   setFiniteDataset(tile, "frameAgeMs", diagnostics.frameAgeMs);
+  setFiniteDataset(tile, "queueMs", diagnostics.queueMs);
+  setFiniteDataset(tile, "decodeMs", diagnostics.decodeMs);
+  setFiniteDataset(tile, "presentMs", diagnostics.presentMs);
+  setFiniteDataset(tile, "displayWidth", diagnostics.displayWidth);
+  setFiniteDataset(tile, "displayHeight", diagnostics.displayHeight);
+  setFiniteDataset(tile, "supersededFrames", diagnostics.supersededFrames);
+  setFiniteDataset(tile, "queueOverflowFrames", diagnostics.queueOverflowFrames);
+  if (diagnostics.renderer) tile.dataset.renderer = diagnostics.renderer;
+  else delete tile.dataset.renderer;
 }
 
 function setFiniteDataset(
   element: HTMLElement,
-  name: "streamFps" | "displayFps" | "kibPerSecond" | "averageFrameKib" | "frameAgeMs",
+  name: "streamFps"
+    | "displayFps"
+    | "kibPerSecond"
+    | "averageFrameKib"
+    | "frameAgeMs"
+    | "queueMs"
+    | "decodeMs"
+    | "presentMs"
+    | "displayWidth"
+    | "displayHeight"
+    | "supersededFrames"
+    | "queueOverflowFrames",
   value: number | undefined,
 ): void {
   if (value === undefined || !Number.isFinite(value)) {
@@ -1441,100 +1705,71 @@ function updateLiveDiagnostics(state: CameraTileState | undefined): void {
   diagnosticFps.textContent = formatRate(diagnostics.fps);
   diagnosticDisplayFps.textContent = formatRate(diagnostics.displayFps);
   diagnosticBandwidth.textContent = formatBandwidth(diagnostics.kibPerSecond);
-  diagnosticFrameSize.textContent = formatFrameSize(diagnostics.averageFrameKib);
+  const displaySize = diagnostics.displayWidth && diagnostics.displayHeight
+    ? ` · display ${diagnostics.displayWidth}×${diagnostics.displayHeight}`
+    : "";
+  const renderCost = diagnostics.decodeMs === undefined
+    ? ""
+    : ` · queue ${formatDuration(diagnostics.queueMs)} · decode ${formatDuration(diagnostics.decodeMs)} · present ${formatDuration(diagnostics.presentMs)}`;
+  diagnosticFrameSize.textContent = `${formatFrameSize(diagnostics.averageFrameKib)}${displaySize}${renderCost}`;
   diagnosticFrameAge.textContent = formatFrameAge(diagnostics.frameAgeMs);
 }
 
-function scheduleFrameDisplay(state: CameraTileState): void {
-  if (
-    state.renderingFrame
-    || state.frozen
-    || !state.latestJpeg
-    || state.timestampNs === undefined
-    || (state.hasRenderedFrame && state.renderedRevision >= state.frameRevision)
-    || !cameraElement(state.candidate.peerId)
-  ) return;
-  state.renderingFrame = true;
-  void decodeAndDisplayLatest(state);
-}
+function showPresentedFrame(
+  state: CameraTileState,
+  presentation: JpegPresentation,
+): void {
+  if (cameras.get(state.candidate.peerId) !== state) return;
+  const tile = cameraElement(state.candidate.peerId);
+  const surface = state.frameSurface;
+  const firstPresentation = !state.hasRenderedFrame;
+  state.hasRenderedFrame = true;
+  state.displayedTimestampNs = presentation.timestampNs;
+  surface.hidden = false;
+  surface.classList.toggle("dimmed", state.status !== "live");
+  recordFrameDisplay(state);
 
-async function decodeAndDisplayLatest(state: CameraTileState): Promise<void> {
-  const revision = state.frameRevision;
-  const generation = state.displayGeneration;
-  const jpeg = state.latestJpeg;
-  const timestampNs = state.timestampNs;
-  if (!jpeg || timestampNs === undefined) {
-    state.renderingFrame = false;
-    return;
-  }
-
-  const blob = new Blob([jpeg.slice().buffer], { type: "image/jpeg" });
-  let bitmap: ImageBitmap | undefined;
-  let frameUrl: string | undefined;
-  let adoptedUrl = false;
-  try {
-    bitmap = await createImageBitmap(blob);
-    const tile = cameraElement(state.candidate.peerId);
-    if (
-      cameras.get(state.candidate.peerId) !== state
-      || state.displayGeneration !== generation
-      || state.frozen
-      || !tile
-    ) return;
-
-    const surface = state.frameSurface;
-    if (!tile.contains(surface)) return;
-    if (surface.width !== bitmap.width || surface.height !== bitmap.height) {
-      surface.width = bitmap.width;
-      surface.height = bitmap.height;
-    }
-    const context = surface.getContext("2d", { alpha: false });
-    if (!context) throw new Error("browser could not create the camera canvas");
-    context.drawImage(bitmap, 0, 0, surface.width, surface.height);
-
-    // Keep the compressed frame available for interoperability smoke hashing.
-    // The visible feed is the persistent canvas and never consumes this URL.
-    frameUrl = URL.createObjectURL(blob);
-    const previous = state.frameUrl;
-    state.frameUrl = frameUrl;
-    surface.dataset.frameUrl = frameUrl;
-    surface.dataset.renderedRevision = String(revision);
-    state.hasRenderedFrame = true;
-    state.renderedRevision = revision;
-    state.displayedFrameAgeMs = Date.now() - Number(timestampNs / 1_000_000n);
-    adoptedUrl = true;
+  if (tile?.contains(surface)) {
     tile.dataset.status = state.status;
     tile.dataset.frameCount = String(state.received);
-    surface.hidden = false;
-    surface.classList.toggle("dimmed", state.status !== "live");
-    // A frame decode can finish after the stream has ended. Keep the offline
-    // message and Retry action rendered by markCameraEnded in that race.
+    // A decode can finish after the Stream ended. Keep the offline message and
+    // Retry action rendered by markCameraEnded in that race.
     if (state.status === "live") {
       tile.querySelector<HTMLElement>(".tile-center")?.replaceChildren();
     }
-    recordFrameDisplay(state);
+  }
+  scheduleLiveTelemetryRefresh(firstPresentation ? 0 : LIVE_TELEMETRY_INTERVAL_MS);
+}
 
+function scheduleLiveTelemetryRefresh(delayMs: number): void {
+  if (liveTelemetryTimer !== undefined) return;
+  liveTelemetryTimer = window.setTimeout(() => {
+    liveTelemetryTimer = undefined;
+    refreshLiveTelemetry();
+  }, delayMs);
+}
+
+function refreshLiveTelemetry(): void {
+  for (const state of cameras.values()) {
+    if (!state.hasRenderedFrame) continue;
+    const tile = cameraElement(state.candidate.peerId);
+    if (!tile?.contains(state.frameSurface)) continue;
+    const diagnostics = streamDiagnostics(state);
+    tile.dataset.status = state.status;
+    tile.dataset.frameCount = String(state.received);
     const time = tile.querySelector<HTMLElement>("[data-role='frame-time']");
-    if (time) time.textContent = formatFrameTime(timestampNs);
+    if (time && state.displayedTimestampNs !== undefined) {
+      time.textContent = formatFrameTime(state.displayedTimestampNs);
+    }
     const metrics = tile.querySelector<HTMLElement>("[data-role='stream-diagnostics']");
-    if (metrics) setTileDiagnostics(metrics, state);
+    if (metrics) setTileDiagnostics(metrics, state, diagnostics);
     const status = tile.querySelector<HTMLElement>(".feed-status");
     if (status) status.textContent = statusLabel(state);
-    setTileDiagnosticAttributes(tile, state);
-    if (selectedPeerId === state.candidate.peerId) {
-      updateAggregateMetrics();
-      updateLiveDiagnostics(state);
-    }
-    if (previous) revokeAfterPaint(previous);
-  } catch (error) {
-    state.renderedRevision = Math.max(state.renderedRevision, revision);
-    record(`Frame decode failed for ${shortPeer(state.candidate.peerId)}: ${errorMessage(error)}`);
-  } finally {
-    bitmap?.close();
-    if (frameUrl && !adoptedUrl) URL.revokeObjectURL(frameUrl);
-    state.renderingFrame = false;
-    if (state.renderedRevision < state.frameRevision) scheduleFrameDisplay(state);
+    setTileDiagnosticAttributes(tile, state, diagnostics);
   }
+  updateAggregateMetrics();
+  const selected = selectedPeerId ? cameras.get(selectedPeerId) : undefined;
+  if (selected) updateLiveDiagnostics(selected);
 }
 
 function revokeAfterPaint(frameUrl: string): void {
@@ -1554,23 +1789,15 @@ function recordFrameDisplay(state: CameraTileState): void {
   }
 }
 
-function sampleRate(samples: readonly number[]): number | undefined {
+function sampleRate(samples: readonly number[], now: number): number | undefined {
   if (samples.length < 2) return undefined;
   const first = samples[0]!;
-  const last = samples[samples.length - 1]!;
-  return (samples.length - 1) / Math.max(0.001, (last - first) / 1_000);
+  return (samples.length - 1) / Math.max(0.001, (now - first) / 1_000);
 }
 
 function clearCameraSurface(state: CameraTileState): void {
-  state.displayGeneration += 1;
-  if (state.frameUrl) URL.revokeObjectURL(state.frameUrl);
-  state.frameUrl = undefined;
   state.hasRenderedFrame = false;
-  delete state.frameSurface.dataset.frameUrl;
-  delete state.frameSurface.dataset.renderedRevision;
-  state.frameSurface.hidden = true;
-  state.frameSurface.width = 1;
-  state.frameSurface.height = 1;
+  state.frameRenderer.clear();
 }
 
 function clearAllCameraSurfaces(): void {
@@ -1602,6 +1829,7 @@ function startPerformanceRecording(): void {
   const running = mesh;
   if (!running || running.role !== "viewer" || performanceCapture) return;
   completedPerformanceReport = undefined;
+  startEventLoopProbe();
   performanceCapture = new CameraPerformanceCapture({
     runtime: "web",
     platform: navigator.userAgent,
@@ -1629,6 +1857,7 @@ function stopPerformanceRecording(openReport = true): void {
   performanceCapture = undefined;
   if (performanceCaptureTimer !== undefined) window.clearInterval(performanceCaptureTimer);
   performanceCaptureTimer = undefined;
+  stopEventLoopProbe();
   renderPerformanceControls();
   renderPerformanceReport();
   record(
@@ -1647,8 +1876,9 @@ function samplePerformance(states = [...cameras.values()]): void {
 function performanceSnapshots(
   states: readonly CameraTileState[],
 ): CameraPerformanceSnapshot[] {
+  const eventLoop = eventLoopDelayStatistics();
   return states.map((state) => {
-    const diagnostics = streamDiagnostics(state);
+    const diagnostics = streamDiagnostics(state, true);
     const profile = state.connection?.metadata.profile;
     return {
       peerId: state.candidate.peerId,
@@ -1666,8 +1896,82 @@ function performanceSnapshots(
       renderFps: diagnostics.displayFps,
       kibPerSecond: diagnostics.kibPerSecond,
       frameAgeMs: diagnostics.frameAgeMs,
+      sourceGapP95Ms: diagnostics.sourceGapP95Ms,
+      sourceGapMaxMs: diagnostics.sourceGapMaxMs,
+      receiveGapP95Ms: diagnostics.receiveGapP95Ms,
+      receiveGapMaxMs: diagnostics.receiveGapMaxMs,
+      renderGapP95Ms: diagnostics.renderGapP95Ms,
+      renderGapMaxMs: diagnostics.renderGapMaxMs,
+      renderer: diagnostics.renderer,
+      pageVisibility: document.visibilityState,
+      renderVisible: state.renderVisible,
+      rendererEnabled: diagnostics.rendererEnabled,
+      decodeInFlight: diagnostics.decodeInFlight,
+      pendingFrames: diagnostics.pendingFrames,
+      activeDecodes: diagnostics.activeDecodes,
+      queuedRenderers: diagnostics.queuedRenderers,
+      maximumActiveDecodes: diagnostics.maximumActiveDecodes,
+      displayWidth: diagnostics.displayWidth,
+      displayHeight: diagnostics.displayHeight,
+      queueMs: diagnostics.queueMs,
+      queueP95Ms: diagnostics.queueP95Ms,
+      queueMaxMs: diagnostics.queueMaxMs,
+      decodeMs: diagnostics.decodeMs,
+      decodeP50Ms: diagnostics.decodeP50Ms,
+      decodeP95Ms: diagnostics.decodeP95Ms,
+      decodeMaxMs: diagnostics.decodeMaxMs,
+      presentMs: diagnostics.presentMs,
+      totalSupersededFrames: diagnostics.supersededFrames,
+      totalQueueOverflowFrames: diagnostics.queueOverflowFrames,
+      eventLoopDelayP95Ms: eventLoop?.p95,
+      eventLoopDelayMaxMs: eventLoop?.maximum,
     };
   });
+}
+
+function startEventLoopProbe(): void {
+  stopEventLoopProbe();
+  eventLoopDelaySamples = [];
+  scheduleEventLoopProbe();
+}
+
+function scheduleEventLoopProbe(): void {
+  const expectedAt = performance.now() + EVENT_LOOP_PROBE_INTERVAL_MS;
+  eventLoopProbeTimer = window.setTimeout(() => {
+    const observedAt = performance.now();
+    eventLoopDelaySamples.push({
+      observedAt,
+      delayMs: Math.max(0, observedAt - expectedAt),
+    });
+    pruneEventLoopDelaySamples(observedAt);
+    scheduleEventLoopProbe();
+  }, EVENT_LOOP_PROBE_INTERVAL_MS);
+}
+
+function stopEventLoopProbe(): void {
+  if (eventLoopProbeTimer !== undefined) window.clearTimeout(eventLoopProbeTimer);
+  eventLoopProbeTimer = undefined;
+}
+
+function eventLoopDelayStatistics(now = performance.now()): GapStatistics | undefined {
+  pruneEventLoopDelaySamples(now);
+  return summarizeGaps(eventLoopDelaySamples.map((sample) => sample.delayMs));
+}
+
+function pruneEventLoopDelaySamples(now: number): void {
+  const cutoff = now - DIAGNOSTIC_WINDOW_MS;
+  while (
+    eventLoopDelaySamples.length > 1
+    && eventLoopDelaySamples[0]!.observedAt < cutoff
+  ) {
+    eventLoopDelaySamples.shift();
+  }
+  if (eventLoopDelaySamples.length > MAX_DIAGNOSTIC_SAMPLES) {
+    eventLoopDelaySamples.splice(
+      0,
+      eventLoopDelaySamples.length - MAX_DIAGNOSTIC_SAMPLES,
+    );
+  }
 }
 
 function renderPerformanceControls(): void {
@@ -1706,10 +2010,18 @@ function renderPerformanceReport(): void {
   const samples = report.peers.reduce((total, peer) => total + peer.summary.sampleCount, 0);
   const received = report.peers.reduce((total, peer) => total + peer.summary.receivedFrames, 0);
   const rendered = report.peers.reduce((total, peer) => total + peer.summary.renderedFrames, 0);
+  const superseded = report.peers.reduce(
+    (total, peer) => total + (peer.summary.supersededFrames ?? 0),
+    0,
+  );
+  const queueOverflow = report.peers.reduce(
+    (total, peer) => total + (peer.summary.queueOverflowFrames ?? 0),
+    0,
+  );
   const ratio = received > 0 ? `${(rendered / received * 100).toFixed(1)}% rendered` : "no frames";
   performanceReportSummary.textContent = [
     `${report.peers.length} camera(s) · ${(report.durationMs / 1_000).toFixed(1)} seconds · ${samples} samples`,
-    `${received} received frames · ${rendered} rendered frames · ${ratio}`,
+    `${received} received · ${rendered} rendered · ${superseded} superseded (${queueOverflow} queue overflow) · ${ratio}`,
   ].join("\n");
 }
 

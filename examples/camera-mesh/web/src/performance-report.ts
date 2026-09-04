@@ -26,6 +26,35 @@ export interface CameraPerformanceSnapshot {
   readonly renderFps?: number;
   readonly kibPerSecond?: number;
   readonly frameAgeMs?: number;
+  readonly sourceGapP95Ms?: number;
+  readonly sourceGapMaxMs?: number;
+  readonly receiveGapP95Ms?: number;
+  readonly receiveGapMaxMs?: number;
+  readonly renderGapP95Ms?: number;
+  readonly renderGapMaxMs?: number;
+  readonly renderer?: string;
+  readonly pageVisibility?: string;
+  readonly renderVisible?: boolean;
+  readonly rendererEnabled?: boolean;
+  readonly decodeInFlight?: boolean;
+  readonly pendingFrames?: number;
+  readonly activeDecodes?: number;
+  readonly queuedRenderers?: number;
+  readonly maximumActiveDecodes?: number;
+  readonly displayWidth?: number;
+  readonly displayHeight?: number;
+  readonly queueMs?: number;
+  readonly queueP95Ms?: number;
+  readonly queueMaxMs?: number;
+  readonly decodeMs?: number;
+  readonly decodeP50Ms?: number;
+  readonly decodeP95Ms?: number;
+  readonly decodeMaxMs?: number;
+  readonly presentMs?: number;
+  readonly totalSupersededFrames?: number;
+  readonly totalQueueOverflowFrames?: number;
+  readonly eventLoopDelayP95Ms?: number;
+  readonly eventLoopDelayMaxMs?: number;
 }
 
 export interface CameraPerformanceEvent {
@@ -48,6 +77,35 @@ export interface CameraPerformanceSample {
   readonly renderFps?: number;
   readonly kibPerSecond?: number;
   readonly frameAgeMs?: number;
+  readonly sourceGapP95Ms?: number;
+  readonly sourceGapMaxMs?: number;
+  readonly receiveGapP95Ms?: number;
+  readonly receiveGapMaxMs?: number;
+  readonly renderGapP95Ms?: number;
+  readonly renderGapMaxMs?: number;
+  readonly renderer?: string;
+  readonly pageVisibility?: string;
+  readonly renderVisible?: boolean;
+  readonly rendererEnabled?: boolean;
+  readonly decodeInFlight?: boolean;
+  readonly pendingFrames?: number;
+  readonly activeDecodes?: number;
+  readonly queuedRenderers?: number;
+  readonly maximumActiveDecodes?: number;
+  readonly displayWidth?: number;
+  readonly displayHeight?: number;
+  readonly queueMs?: number;
+  readonly queueP95Ms?: number;
+  readonly queueMaxMs?: number;
+  readonly decodeMs?: number;
+  readonly decodeP50Ms?: number;
+  readonly decodeP95Ms?: number;
+  readonly decodeMaxMs?: number;
+  readonly presentMs?: number;
+  readonly supersededFrames?: number;
+  readonly queueOverflowFrames?: number;
+  readonly eventLoopDelayP95Ms?: number;
+  readonly eventLoopDelayMaxMs?: number;
 }
 
 export interface CameraPerformanceNumberSummary {
@@ -63,11 +121,32 @@ export interface CameraPerformancePeerSummary {
   readonly receivedFrames: number;
   readonly renderedFrames: number;
   readonly receivedBytes: number;
+  readonly supersededFrames?: number;
+  readonly queueOverflowFrames?: number;
   readonly renderToReceiveRatio?: number;
   readonly receiveFps?: CameraPerformanceNumberSummary;
   readonly renderFps?: CameraPerformanceNumberSummary;
   readonly kibPerSecond?: CameraPerformanceNumberSummary;
   readonly frameAgeMs?: CameraPerformanceNumberSummary;
+  readonly sourceGapP95Ms?: CameraPerformanceNumberSummary;
+  readonly sourceGapMaxMs?: CameraPerformanceNumberSummary;
+  readonly receiveGapP95Ms?: CameraPerformanceNumberSummary;
+  readonly receiveGapMaxMs?: CameraPerformanceNumberSummary;
+  readonly renderGapP95Ms?: CameraPerformanceNumberSummary;
+  readonly renderGapMaxMs?: CameraPerformanceNumberSummary;
+  readonly pendingFrames?: CameraPerformanceNumberSummary;
+  readonly activeDecodes?: CameraPerformanceNumberSummary;
+  readonly queuedRenderers?: CameraPerformanceNumberSummary;
+  readonly queueMs?: CameraPerformanceNumberSummary;
+  readonly queueP95Ms?: CameraPerformanceNumberSummary;
+  readonly queueMaxMs?: CameraPerformanceNumberSummary;
+  readonly decodeMs?: CameraPerformanceNumberSummary;
+  readonly decodeP50Ms?: CameraPerformanceNumberSummary;
+  readonly decodeP95Ms?: CameraPerformanceNumberSummary;
+  readonly decodeMaxMs?: CameraPerformanceNumberSummary;
+  readonly presentMs?: CameraPerformanceNumberSummary;
+  readonly eventLoopDelayP95Ms?: CameraPerformanceNumberSummary;
+  readonly eventLoopDelayMaxMs?: CameraPerformanceNumberSummary;
 }
 
 export interface CameraPerformancePeerReport {
@@ -101,9 +180,13 @@ interface PeerAccumulator {
   lastReceivedFrames?: number;
   lastRenderedFrames?: number;
   lastReceivedBytes?: number;
+  lastSupersededFrames?: number;
+  lastQueueOverflowFrames?: number;
   receivedFrames: number;
   renderedFrames: number;
   receivedBytes: number;
+  supersededFrames: number;
+  queueOverflowFrames: number;
   samples: CameraPerformanceSample[];
 }
 
@@ -139,6 +222,8 @@ export class CameraPerformanceCapture {
           receivedFrames: 0,
           renderedFrames: 0,
           receivedBytes: 0,
+          supersededFrames: 0,
+          queueOverflowFrames: 0,
           samples: [],
         };
         this.peers.set(snapshot.peerId, peer);
@@ -158,9 +243,19 @@ export class CameraPerformanceCapture {
         snapshot.totalReceivedBytes,
         peer.lastReceivedBytes,
       );
+      peer.supersededFrames += counterDelta(
+        snapshot.totalSupersededFrames ?? 0,
+        peer.lastSupersededFrames,
+      );
+      peer.queueOverflowFrames += counterDelta(
+        snapshot.totalQueueOverflowFrames ?? 0,
+        peer.lastQueueOverflowFrames,
+      );
       peer.lastReceivedFrames = snapshot.totalReceivedFrames;
       peer.lastRenderedFrames = snapshot.totalRenderedFrames;
       peer.lastReceivedBytes = snapshot.totalReceivedBytes;
+      peer.lastSupersededFrames = snapshot.totalSupersededFrames ?? 0;
+      peer.lastQueueOverflowFrames = snapshot.totalQueueOverflowFrames ?? 0;
 
       const next: CameraPerformanceSample = compactNumbers({
         elapsedMs,
@@ -177,6 +272,35 @@ export class CameraPerformanceCapture {
         renderFps: snapshot.renderFps,
         kibPerSecond: snapshot.kibPerSecond,
         frameAgeMs: snapshot.frameAgeMs,
+        sourceGapP95Ms: snapshot.sourceGapP95Ms,
+        sourceGapMaxMs: snapshot.sourceGapMaxMs,
+        receiveGapP95Ms: snapshot.receiveGapP95Ms,
+        receiveGapMaxMs: snapshot.receiveGapMaxMs,
+        renderGapP95Ms: snapshot.renderGapP95Ms,
+        renderGapMaxMs: snapshot.renderGapMaxMs,
+        renderer: snapshot.renderer,
+        pageVisibility: snapshot.pageVisibility,
+        renderVisible: snapshot.renderVisible,
+        rendererEnabled: snapshot.rendererEnabled,
+        decodeInFlight: snapshot.decodeInFlight,
+        pendingFrames: snapshot.pendingFrames,
+        activeDecodes: snapshot.activeDecodes,
+        queuedRenderers: snapshot.queuedRenderers,
+        maximumActiveDecodes: snapshot.maximumActiveDecodes,
+        displayWidth: snapshot.displayWidth,
+        displayHeight: snapshot.displayHeight,
+        queueMs: snapshot.queueMs,
+        queueP95Ms: snapshot.queueP95Ms,
+        queueMaxMs: snapshot.queueMaxMs,
+        decodeMs: snapshot.decodeMs,
+        decodeP50Ms: snapshot.decodeP50Ms,
+        decodeP95Ms: snapshot.decodeP95Ms,
+        decodeMaxMs: snapshot.decodeMaxMs,
+        presentMs: snapshot.presentMs,
+        supersededFrames: peer.supersededFrames,
+        queueOverflowFrames: peer.queueOverflowFrames,
+        eventLoopDelayP95Ms: snapshot.eventLoopDelayP95Ms,
+        eventLoopDelayMaxMs: snapshot.eventLoopDelayMaxMs,
       });
       const previous = peer.samples.at(-1);
       if (previous && previous.elapsedMs === elapsedMs) {
@@ -247,11 +371,36 @@ function summarizePeer(peer: PeerAccumulator): CameraPerformancePeerSummary {
     receivedFrames: peer.receivedFrames,
     renderedFrames: peer.renderedFrames,
     receivedBytes: peer.receivedBytes,
+    supersededFrames: peer.supersededFrames,
+    queueOverflowFrames: peer.queueOverflowFrames,
     renderToReceiveRatio,
     receiveFps: summarize(peer.samples.flatMap((sample) => finite(sample.receiveFps))),
     renderFps: summarize(peer.samples.flatMap((sample) => finite(sample.renderFps))),
     kibPerSecond: summarize(peer.samples.flatMap((sample) => finite(sample.kibPerSecond))),
     frameAgeMs: summarize(peer.samples.flatMap((sample) => finite(sample.frameAgeMs))),
+    sourceGapP95Ms: summarize(peer.samples.flatMap((sample) => finite(sample.sourceGapP95Ms))),
+    sourceGapMaxMs: summarize(peer.samples.flatMap((sample) => finite(sample.sourceGapMaxMs))),
+    receiveGapP95Ms: summarize(peer.samples.flatMap((sample) => finite(sample.receiveGapP95Ms))),
+    receiveGapMaxMs: summarize(peer.samples.flatMap((sample) => finite(sample.receiveGapMaxMs))),
+    renderGapP95Ms: summarize(peer.samples.flatMap((sample) => finite(sample.renderGapP95Ms))),
+    renderGapMaxMs: summarize(peer.samples.flatMap((sample) => finite(sample.renderGapMaxMs))),
+    pendingFrames: summarize(peer.samples.flatMap((sample) => finite(sample.pendingFrames))),
+    activeDecodes: summarize(peer.samples.flatMap((sample) => finite(sample.activeDecodes))),
+    queuedRenderers: summarize(peer.samples.flatMap((sample) => finite(sample.queuedRenderers))),
+    queueMs: summarize(peer.samples.flatMap((sample) => finite(sample.queueMs))),
+    queueP95Ms: summarize(peer.samples.flatMap((sample) => finite(sample.queueP95Ms))),
+    queueMaxMs: summarize(peer.samples.flatMap((sample) => finite(sample.queueMaxMs))),
+    decodeMs: summarize(peer.samples.flatMap((sample) => finite(sample.decodeMs))),
+    decodeP50Ms: summarize(peer.samples.flatMap((sample) => finite(sample.decodeP50Ms))),
+    decodeP95Ms: summarize(peer.samples.flatMap((sample) => finite(sample.decodeP95Ms))),
+    decodeMaxMs: summarize(peer.samples.flatMap((sample) => finite(sample.decodeMaxMs))),
+    presentMs: summarize(peer.samples.flatMap((sample) => finite(sample.presentMs))),
+    eventLoopDelayP95Ms: summarize(
+      peer.samples.flatMap((sample) => finite(sample.eventLoopDelayP95Ms)),
+    ),
+    eventLoopDelayMaxMs: summarize(
+      peer.samples.flatMap((sample) => finite(sample.eventLoopDelayMaxMs)),
+    ),
   };
 }
 
@@ -295,6 +444,22 @@ function compactNumbers(sample: CameraPerformanceSample): CameraPerformanceSampl
     renderFps: optionalRound(sample.renderFps),
     kibPerSecond: optionalRound(sample.kibPerSecond),
     frameAgeMs: optionalRound(sample.frameAgeMs),
+    sourceGapP95Ms: optionalRound(sample.sourceGapP95Ms),
+    sourceGapMaxMs: optionalRound(sample.sourceGapMaxMs),
+    receiveGapP95Ms: optionalRound(sample.receiveGapP95Ms),
+    receiveGapMaxMs: optionalRound(sample.receiveGapMaxMs),
+    renderGapP95Ms: optionalRound(sample.renderGapP95Ms),
+    renderGapMaxMs: optionalRound(sample.renderGapMaxMs),
+    queueMs: optionalRound(sample.queueMs),
+    queueP95Ms: optionalRound(sample.queueP95Ms),
+    queueMaxMs: optionalRound(sample.queueMaxMs),
+    decodeMs: optionalRound(sample.decodeMs),
+    decodeP50Ms: optionalRound(sample.decodeP50Ms),
+    decodeP95Ms: optionalRound(sample.decodeP95Ms),
+    decodeMaxMs: optionalRound(sample.decodeMaxMs),
+    presentMs: optionalRound(sample.presentMs),
+    eventLoopDelayP95Ms: optionalRound(sample.eventLoopDelayP95Ms),
+    eventLoopDelayMaxMs: optionalRound(sample.eventLoopDelayMaxMs),
   };
 }
 

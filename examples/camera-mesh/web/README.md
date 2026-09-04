@@ -34,12 +34,12 @@ paste it under **Add camera → Connect with a peer card**. Add more publisher
 tabs to exercise the one- through four-column wall layouts. Camera Mesh keeps a
 maximum of 16 peers on the wall.
 
-The discovery sheet's **Add all** control intentionally opens every discovered
-camera concurrently, capped by the 16-camera wall. It is a burst/stress path
-for validating SDK relay-dial backpressure; adding cameras individually is the
-paced operator flow. Choose Low, Medium, or High at the top of the sheet before
-adding one camera, a pasted peer card, or the full discovered set. Retries keep
-the selected quality unless you explicitly choose another one in the sheet.
+The discovery sheet's **Add all** control uses conservative batch targets for
+the measured relay path: 16 Low, 8 Medium, or 1 High camera. Manual additions
+remain available when deliberately testing beyond those targets. Choose Low,
+Medium, or High at the top of the sheet before adding one camera, a pasted peer
+card, or the capped discovered set. Retries keep the selected quality unless
+you explicitly choose another one in the sheet.
 
 The column selector changes density; it does not divide cameras into square
 pages. Two, three, and four columns keep every camera in one scrolling wall.
@@ -69,11 +69,20 @@ still letting the operator override it before connecting. Camera Mesh rejects
 JPEG frames larger than 1 MiB.
 
 The application retains only the newest captured frame before each transport
-write. On the viewer, one JPEG is decoded at a time into a persistent canvas;
-the previous completed frame stays visible until its replacement is ready.
-Superseded pending frames are dropped instead of flashing an empty image. The
-Stream itself remains reliable and ordered, so sustained capture, network, or
-rendering pressure can still reduce throughput or increase frame age; the
+write. The Web viewer keeps at most two compressed frames behind each active
+decode and shares a bounded, fair decode scheduler across the wall. This small
+queue absorbs short delivery bursts without allowing latency or memory to grow
+without bound. It decodes JPEGs to
+the pixels the current tile can display, hands the resulting bitmap directly
+to the canvas compositor when the browser supports it, and stops decoding
+off-screen or background-tab cameras. Fullscreen naturally requests a larger
+decode on the next frame. Pending compressed frames are coalesced before decode,
+but every completed decode is presented even when a newer frame has arrived.
+The previous complete canvas stays visible until its replacement is ready, so
+the surface never flashes empty between frames.
+
+The Stream itself remains reliable and ordered, so sustained capture, network,
+or rendering pressure can still reduce throughput or increase frame age; the
 diagnostics separate those stages.
 
 The Diagnostics drawer exposes:
@@ -82,7 +91,11 @@ The Diagnostics drawer exposes:
 - network receive (`RX fps`) and rendered (`render fps`) frames per second over
   the latest five-second window;
 - received KiB/s, with average JPEG size in the tooltip and Diagnostics drawer;
-- frame age from the publisher's capture timestamp until the image renders.
+- frame age from the publisher's capture timestamp until the image renders;
+- browser renderer queue and JPEG decode average, p50, p95, and maximum timing;
+- receive and presentation-gap p95/max, per-camera queue depth, global decoder
+  occupancy, page/tile visibility, display dimensions, and renderer backend;
+- separate superseded and queue-overflow frame counts.
 
 Frame age includes clock offset between different devices. It is exact enough
 for two tabs or processes on one machine; compare changes over time when the

@@ -687,7 +687,13 @@ async function createBrowserPeer(browserInstance, url, label, role, input) {
           async () => {
             const lowFrame = await tile.locator("[data-role='remote-frame']")
               .evaluate((surface) =>
-                !surface.hidden && surface.width === 480 && surface.height === 270);
+                !surface.hidden
+                  && Number(surface.dataset.sourceWidth) === 480
+                  && Number(surface.dataset.sourceHeight) === 270
+                  && surface.width > 1
+                  && surface.width <= 480
+                  && surface.height > 1
+                  && surface.height <= 270);
             const details = JSON.parse(await browserElementText(page, "#inspector-details"));
             return lowFrame && details.catalog?.resource_id === "camera/main";
           },
@@ -739,8 +745,12 @@ async function createBrowserPeer(browserInstance, url, label, role, input) {
         () => tile.locator("[data-role='remote-frame']").evaluate(
           (surface, dimensions) =>
             !surface.hidden
-              && surface.width === dimensions.width
-              && surface.height === dimensions.height,
+              && Number(surface.dataset.sourceWidth) === dimensions.width
+              && Number(surface.dataset.sourceHeight) === dimensions.height
+              && surface.width > 1
+              && surface.width <= dimensions.width
+              && surface.height > 1
+              && surface.height <= dimensions.height,
           expected,
         ),
         OPERATION_TIMEOUT_MS,
@@ -934,9 +944,10 @@ function browserInspectorChecks(inspector, targetPeerId) {
 
 async function browserImageSha256(page, selector) {
   return page.locator(selector).evaluate(async (surface) => {
-    const frameUrl = surface.dataset.frameUrl;
-    if (!frameUrl) throw new Error("camera canvas has no retained source frame");
-    const bytes = await (await fetch(frameUrl)).arrayBuffer();
+    const bytes = surface.aukiLatestJpeg;
+    if (!(bytes instanceof Uint8Array)) {
+      throw new Error("camera canvas has no retained source frame");
+    }
     const digest = await crypto.subtle.digest("SHA-256", bytes);
     return [...new Uint8Array(digest)]
       .map((byte) => byte.toString(16).padStart(2, "0"))

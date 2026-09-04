@@ -41,7 +41,7 @@ use auki_sdk::{
 };
 use futures::StreamExt;
 use serde::Serialize;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
 use crate::contract::{
@@ -261,6 +261,7 @@ struct SharedState {
     blobs: Mutex<VecDeque<(String, Arc<[u8]>)>>,
     pending_snapshots: Mutex<HashMap<String, PendingSnapshot>>,
     latest_frames: Mutex<HashMap<String, LiveFrame>>,
+    frame_updates: HashMap<String, watch::Sender<()>>,
     paused_by: Mutex<Option<PeerId>>,
     camera_available: AtomicBool,
     events: mpsc::Sender<CameraEvent>,
@@ -321,6 +322,7 @@ impl SharedState {
         drop(paused_by);
         drop(allowed);
         lock(&self.pending_approvals).remove(&peer_id);
+        self.wake_streams();
     }
 
     fn set_paused_if_allowed(&self, peer: &AuthenticatedPeer, paused: bool) -> bool {
@@ -333,6 +335,9 @@ impl SharedState {
         }
         let mut paused_by = lock(&self.paused_by);
         *paused_by = paused.then_some(peer.peer_id);
+        drop(paused_by);
+        drop(allowed);
+        self.wake_streams();
         true
     }
 
@@ -369,30 +374,48 @@ impl SharedState {
         lock(&self.latest_frames).get(resource_id).cloned()
     }
 
+    fn subscribe_to_rendition(&self, resource_id: &str) -> Option<watch::Receiver<()>> {
+        self.frame_updates
+            .get(resource_id)
+            .map(watch::Sender::subscribe)
+    }
+
+    fn wake_streams(&self) {
+        for updates in self.frame_updates.values() {
+            updates.send_replace(());
+        }
+    }
+
     fn replace_frame(&self, bytes: Vec<u8>) -> Result<()> {
         self.replace_rendition_frame(camera_profile(CameraQuality::Low), bytes)
     }
 
     fn replace_rendition_frame(&self, profile: CameraProfile, bytes: Vec<u8>) -> Result<()> {
         validate_camera_jpeg_for_profile(&bytes, profile)?;
-        let mut frames = lock(&self.latest_frames);
-        let latest = frames
-            .get_mut(profile.resource_id)
-            .ok_or_else(|| anyhow!("camera rendition {} is not mounted", profile.resource_id))?;
-        let generation = latest
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| anyhow!("camera frame generation exhausted"))?;
-        let next_timestamp = latest
-            .capture_timestamp_ns
-            .checked_add(1)
-            .ok_or_else(|| anyhow!("camera capture timestamp exhausted"))?;
-        let capture_timestamp_ns = utc_now_ns_i64().max(next_timestamp);
-        *latest = LiveFrame {
-            bytes: Arc::from(bytes),
-            capture_timestamp_ns,
-            generation,
-        };
+        {
+            let mut frames = lock(&self.latest_frames);
+            let latest = frames.get_mut(profile.resource_id).ok_or_else(|| {
+                anyhow!("camera rendition {} is not mounted", profile.resource_id)
+            })?;
+            let generation = latest
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("camera frame generation exhausted"))?;
+            let next_timestamp = latest
+                .capture_timestamp_ns
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("camera capture timestamp exhausted"))?;
+            let capture_timestamp_ns = utc_now_ns_i64().max(next_timestamp);
+            *latest = LiveFrame {
+                bytes: Arc::from(bytes),
+                capture_timestamp_ns,
+                generation,
+            };
+        }
+        self.frame_updates
+            .get(profile.resource_id)
+            .expect("mounted rendition has an update channel")
+            .send_replace(());
         self.camera_available.store(true, Ordering::SeqCst);
         Ok(())
     }
@@ -628,6 +651,13 @@ impl CameraProtocols {
             routes,
         };
         let captured_at = utc_now_ns_i64();
+        let frame_updates = initial_frames
+            .iter()
+            .map(|(profile, _)| {
+                let (updates, _receiver) = watch::channel(());
+                (profile.resource_id.to_owned(), updates)
+            })
+            .collect();
         let latest_frames = initial_frames
             .into_iter()
             .map(|(profile, frame)| {
@@ -652,6 +682,7 @@ impl CameraProtocols {
             blobs: Mutex::new(VecDeque::new()),
             pending_snapshots: Mutex::new(HashMap::new()),
             latest_frames: Mutex::new(latest_frames),
+            frame_updates,
             paused_by: Mutex::new(None),
             camera_available: AtomicBool::new(role == CameraRole::Publisher),
             events: event_tx,
@@ -1522,41 +1553,45 @@ fn stream_dispatch(
     let stream_state = Arc::clone(state);
     let requester_peer_id = requester.peer_id;
     let resource_id = metadata.profile.resource_id.to_owned();
-    let mut interval = tokio::time::interval(Duration::from_nanos(
-        1_000_000_000 / u64::from(metadata.profile.rate_hz),
-    ));
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let Some(updates) = state.subscribe_to_rendition(&resource_id) else {
+        return StreamDispatch::Decline {
+            reason: DeclineReason::sensor_not_found(),
+        };
+    };
     let source = futures::stream::unfold(
-        (interval, None),
-        move |(mut interval, last_generation): (_, Option<u64>)| {
+        (updates, None, false),
+        move |(mut updates, last_generation, mut wait_for_update): (
+            watch::Receiver<()>,
+            Option<u64>,
+            bool,
+        )| {
             let state = Arc::clone(&stream_state);
             let resource_id = resource_id.clone();
             async move {
                 loop {
-                    interval.tick().await;
+                    if wait_for_update && updates.changed().await.is_err() {
+                        return None;
+                    }
+                    wait_for_update = true;
                     if !lock(&state.allowed).contains(&requester_peer_id) {
                         return None;
                     }
-                    if lock(&state.paused_by).is_none() {
-                        break;
+                    let frame = state.rendition_frame(&resource_id)?;
+                    if lock(&state.paused_by).is_some() || last_generation == Some(frame.generation)
+                    {
+                        continue;
                     }
+                    return Some((
+                        Ok(StreamItem {
+                            timestamp_ns: frame.capture_timestamp_ns,
+                            payload: CameraFrame {
+                                dynamic_intrinsics: None,
+                                frame: frame.bytes.to_vec(),
+                            },
+                        }),
+                        (updates, Some(frame.generation), true),
+                    ));
                 }
-                let frame = state.rendition_frame(&resource_id)?;
-                if !lock(&state.allowed).contains(&requester_peer_id) {
-                    return None;
-                }
-                debug_assert!(last_generation.is_none_or(|last| frame.generation >= last));
-                let generation = frame.generation;
-                Some((
-                    Ok(StreamItem {
-                        timestamp_ns: frame.capture_timestamp_ns,
-                        payload: CameraFrame {
-                            dynamic_intrinsics: None,
-                            frame: frame.bytes.to_vec(),
-                        },
-                    }),
-                    (interval, Some(generation)),
-                ))
             }
         },
     );
@@ -2070,6 +2105,10 @@ mod tests {
                         generation: 0,
                     },
                 )])),
+                frame_updates: HashMap::from([(
+                    CAMERA_RESOURCE_ID.to_owned(),
+                    watch::channel(()).0,
+                )]),
                 paused_by: Mutex::new(None),
                 camera_available: AtomicBool::new(role == CameraRole::Publisher),
                 events,
@@ -2292,6 +2331,109 @@ mod tests {
         other_domain.domain_ids = vec![Uuid::new_v4()];
         assert!(!state.allowed(&other_domain));
         assert!(!lock(&state.allowed).contains(&other_domain.peer_id));
+    }
+
+    #[tokio::test]
+    async fn camera_stream_emits_only_new_frame_generations_and_coalesces_backlog() {
+        let (state, _events) = fixture_state_for_role(CameraRole::Publisher);
+        let requester = authenticated_peer(generated_peer());
+        lock(&state.allowed).insert(requester.peer_id);
+        let metadata = metadata(state.local_peer_id, "frame-update-test");
+        let dispatch = stream_dispatch(
+            &state,
+            std::slice::from_ref(&metadata),
+            &requester,
+            StreamRequest {
+                source_peer_id: state.local_peer_id.to_string(),
+                resource_id: CAMERA_RESOURCE_ID.into(),
+                from: ReadFrom::Latest,
+            },
+        );
+        let StreamDispatch::AcceptCamera { mut source, .. } = dispatch else {
+            panic!("approved requester must receive a Camera Stream")
+        };
+
+        let initial = source
+            .next()
+            .await
+            .expect("Camera Stream must emit its initial frame")
+            .expect("initial Camera frame must be valid");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), source.next())
+                .await
+                .is_err(),
+            "a static latest frame must not be emitted periodically"
+        );
+
+        let replacement = deterministic_jpeg().unwrap();
+        state.replace_frame(replacement.clone()).unwrap();
+        let next = tokio::time::timeout(FRAME_PERIOD * 2, source.next())
+            .await
+            .expect("new Camera frame notification timed out")
+            .expect("Camera Stream ended before the replacement")
+            .expect("replacement Camera frame must be valid");
+        assert!(next.timestamp_ns > initial.timestamp_ns);
+
+        state.replace_frame(replacement.clone()).unwrap();
+        state.replace_frame(replacement).unwrap();
+        let expected = state.latest_frame();
+        let newest = tokio::time::timeout(FRAME_PERIOD * 2, source.next())
+            .await
+            .expect("coalesced Camera frame notification timed out")
+            .expect("Camera Stream ended before the newest replacement")
+            .expect("newest Camera frame must be valid");
+        assert_eq!(newest.timestamp_ns, expected.capture_timestamp_ns);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), source.next())
+                .await
+                .is_err(),
+            "coalesced stale frames must not remain queued"
+        );
+    }
+
+    #[tokio::test]
+    async fn paused_camera_stream_resumes_with_the_newest_frame() {
+        let (state, _events) = fixture_state_for_role(CameraRole::Publisher);
+        let requester = authenticated_peer(generated_peer());
+        lock(&state.allowed).insert(requester.peer_id);
+        assert!(state.set_paused_if_allowed(&requester, true));
+        let metadata = metadata(state.local_peer_id, "paused-update-test");
+        let dispatch = stream_dispatch(
+            &state,
+            std::slice::from_ref(&metadata),
+            &requester,
+            StreamRequest {
+                source_peer_id: state.local_peer_id.to_string(),
+                resource_id: CAMERA_RESOURCE_ID.into(),
+                from: ReadFrom::Latest,
+            },
+        );
+        let StreamDispatch::AcceptCamera { mut source, .. } = dispatch else {
+            panic!("approved requester must receive a Camera Stream")
+        };
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), source.next())
+                .await
+                .is_err(),
+            "a paused Camera Stream must remain quiet"
+        );
+        state.replace_frame(deterministic_jpeg().unwrap()).unwrap();
+        let expected = state.latest_frame();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), source.next())
+                .await
+                .is_err(),
+            "frame updates must not escape while the Camera Stream is paused"
+        );
+
+        assert!(state.set_paused_if_allowed(&requester, false));
+        let resumed = tokio::time::timeout(FRAME_PERIOD * 2, source.next())
+            .await
+            .expect("resumed Camera Stream notification timed out")
+            .expect("Camera Stream ended during resume")
+            .expect("resumed Camera frame must be valid");
+        assert_eq!(resumed.timestamp_ns, expected.capture_timestamp_ns);
     }
 
     #[tokio::test]

@@ -58,6 +58,7 @@ export interface CameraPeerCard {
 export interface RemoteFrame {
   readonly peerId: string;
   readonly jpeg: Uint8Array;
+  readonly profile: CameraStreamProfile;
   readonly sequence: bigint;
   readonly timestampNs: bigint;
   readonly received: number;
@@ -385,7 +386,13 @@ export class CameraMesh {
         this.remotes.set(candidate.peerId, remote);
         adopted = true;
         this.hooks.remoteConnected(connection);
-        this.emitRemoteFrame(candidate.peerId, firstFrame, 1, firstFrame.jpeg.byteLength);
+        this.emitRemoteFrame(
+          candidate.peerId,
+          firstFrame,
+          metadata.profile,
+          1,
+          firstFrame.jpeg.byteLength,
+        );
         remote.task = this.consume(
           candidate.peerId,
           remote,
@@ -662,6 +669,7 @@ export class CameraMesh {
     try {
       while (this.remotes.get(peerId) === remote) {
         const next = await subscription.next();
+        if (this.remotes.get(peerId) !== remote) break;
         if (!next) {
           terminalReason = `Camera ${peerId} closed the Stream`;
           break;
@@ -673,7 +681,13 @@ export class CameraMesh {
         const frame = decodeStreamFrame(next, remote.connection.metadata);
         received += 1;
         bytes += frame.jpeg.byteLength;
-        this.emitRemoteFrame(peerId, frame, received, bytes);
+        this.emitRemoteFrame(
+          peerId,
+          frame,
+          remote.connection.metadata.profile,
+          received,
+          bytes,
+        );
       }
     } catch (error) {
       if (this.remotes.get(peerId) === remote && !this.closing) {
@@ -691,10 +705,11 @@ export class CameraMesh {
   private emitRemoteFrame(
     peerId: string,
     frame: DecodedStreamFrame,
+    profile: CameraStreamProfile,
     received: number,
     bytes: number,
   ): void {
-    this.hooks.remoteFrame({ peerId, ...frame, received, bytes });
+    this.hooks.remoteFrame({ peerId, ...frame, profile, received, bytes });
   }
 
   private async stopDetachedRemote(remote: RemoteSession): Promise<void> {

@@ -11,6 +11,12 @@ final class CameraContractTests: XCTestCase {
     XCTAssertEqual(CameraMeshContract.maximumViewerConnections, 16)
   }
 
+  func testAddAllUsesMeasuredNetworkTargets() {
+    XCTAssertEqual(CameraMeshContract.addAllLimit(for: .low), 16)
+    XCTAssertEqual(CameraMeshContract.addAllLimit(for: .medium), 8)
+    XCTAssertEqual(CameraMeshContract.addAllLimit(for: .high), 1)
+  }
+
   func testDiscoveryChoosesCircuitTCPAndRejectsIncompletePublisher() throws {
     let peerID = AukiPeerIdentity.generate().peerId()
     let relayID = AukiPeerIdentity.generate().peerId()

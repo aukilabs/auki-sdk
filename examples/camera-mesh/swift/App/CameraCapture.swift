@@ -10,6 +10,7 @@ enum CameraCaptureError: LocalizedError, Sendable {
   case unavailable
   case cannotAddInput
   case cannotAddOutput
+  case unsupportedFrameRate
   case unsupportedLandscapeRotation
   case failedToStart
   case alreadyStopped
@@ -28,6 +29,8 @@ enum CameraCaptureError: LocalizedError, Sendable {
       "The back camera could not be added to the capture session."
     case .cannotAddOutput:
       "Video frames could not be added to the capture session."
+    case .unsupportedFrameRate:
+      "The back camera cannot capture the 30 fps Camera Mesh source."
     case .unsupportedLandscapeRotation:
       "The back camera cannot produce the fixed landscape Camera Mesh feed."
     case .failedToStart:
@@ -46,13 +49,31 @@ enum CameraCaptureError: LocalizedError, Sendable {
   }
 }
 
+struct CameraCaptureBatch: Sendable {
+  let renditions: [CameraQuality: Data]
+
+  subscript(_ quality: CameraQuality) -> Data? {
+    renditions[quality]
+  }
+
+  var initialRenditions: CameraRenditionJPEGs? {
+    guard
+      let low = self[.low],
+      let medium = self[.medium],
+      let high = self[.high]
+    else { return nil }
+    return CameraRenditionJPEGs(low: low, medium: medium, high: high)
+  }
+}
+
 /// A foreground, single-use source of bounded Camera Mesh JPEG frames.
 ///
 /// Session state and `AVCaptureVideoDataOutput` callbacks share one serial
-/// queue. The stream retains only its newest frame, so a slow consumer cannot
-/// build an unbounded queue of JPEGs.
+/// queue. The stream retains only two newest rendition batches, while Rust
+/// retains one JPEG per quality tier, so a slow consumer cannot build an
+/// unbounded queue.
 final class CameraCapture: NSObject, @unchecked Sendable {
-  let frames: AsyncThrowingStream<Data, any Error>
+  let frames: AsyncThrowingStream<CameraCaptureBatch, any Error>
 
   private enum State: Equatable {
     case idle
@@ -60,12 +81,9 @@ final class CameraCapture: NSObject, @unchecked Sendable {
     case stopped
   }
 
-  private static let targetWidth = CGFloat(CameraMeshContract.width)
-  private static let targetHeight = CGFloat(CameraMeshContract.height)
-  private static let frameIntervalNanoseconds =
-    UInt64(1_000_000_000 / CameraMeshContract.rateHz)
+  private static let sourceRateHz = CameraMeshContract.profile(.high).rateHz
   private static let watchdogTimeoutNanoseconds = UInt64(3_000_000_000)
-  private let frameContinuation: AsyncThrowingStream<Data, any Error>.Continuation
+  private let frameContinuation: AsyncThrowingStream<CameraCaptureBatch, any Error>.Continuation
   private let captureQueue = DispatchQueue(
     label: "com.aukilabs.examples.camera-mesh.capture",
     qos: .userInitiated
@@ -78,15 +96,15 @@ final class CameraCapture: NSObject, @unchecked Sendable {
   // Accessed only on captureQueue.
   private var state = State.idle
   private var configured = false
-  private var lastFrameUptimeNanoseconds: UInt64?
+  private var captureFrameIndex: UInt64 = 0
   private var watchdogStartedUptimeNanoseconds: UInt64?
   private var lastSuccessfulJPEGUptimeNanoseconds: UInt64?
   private var frameWatchdog: DispatchSourceTimer?
   private var notificationObservers: [NSObjectProtocol] = []
 
   override init() {
-    let pair = AsyncThrowingStream<Data, any Error>.makeStream(
-      bufferingPolicy: .bufferingNewest(1)
+    let pair = AsyncThrowingStream<CameraCaptureBatch, any Error>.makeStream(
+      bufferingPolicy: .bufferingNewest(2)
     )
     frames = pair.stream
     frameContinuation = pair.continuation
@@ -186,12 +204,8 @@ final class CameraCapture: NSObject, @unchecked Sendable {
     session.beginConfiguration()
     defer { session.commitConfiguration() }
 
-    if session.canSetSessionPreset(.iFrame960x540) {
-      session.sessionPreset = .iFrame960x540
-    } else if session.canSetSessionPreset(.hd1280x720) {
-      session.sessionPreset = .hd1280x720
-    } else {
-      session.sessionPreset = .high
+    if session.canSetSessionPreset(.inputPriority) {
+      session.sessionPreset = .inputPriority
     }
 
     guard session.canAddInput(input) else {
@@ -203,6 +217,7 @@ final class CameraCapture: NSObject, @unchecked Sendable {
 
     session.addInput(input)
     session.addOutput(videoOutput)
+    try configureDeviceFormat(device)
     configured = true
 
     guard
@@ -218,6 +233,40 @@ final class CameraCapture: NSObject, @unchecked Sendable {
 
     videoOutput.setSampleBufferDelegate(self, queue: captureQueue)
     installNotificationObserversOnCaptureQueue()
+  }
+
+  private func configureDeviceFormat(_ device: AVCaptureDevice) throws {
+    let high = CameraMeshContract.profile(.high)
+    let targetRate = Double(Self.sourceRateHz)
+    let candidates = device.formats.filter { format in
+      let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+      return dimensions.width >= high.width
+        && dimensions.height >= high.height
+        && format.videoSupportedFrameRateRanges.contains { range in
+          range.minFrameRate <= targetRate && range.maxFrameRate >= targetRate
+        }
+    }
+    guard
+      let format = candidates.min(by: { left, right in
+        let leftDimensions = CMVideoFormatDescriptionGetDimensions(left.formatDescription)
+        let rightDimensions = CMVideoFormatDescriptionGetDimensions(right.formatDescription)
+        let leftPixels = Int64(leftDimensions.width) * Int64(leftDimensions.height)
+        let rightPixels = Int64(rightDimensions.width) * Int64(rightDimensions.height)
+        if leftPixels != rightPixels { return leftPixels < rightPixels }
+        let leftMaximumRate = left.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
+        let rightMaximumRate = right.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
+        return leftMaximumRate < rightMaximumRate
+      })
+    else {
+      throw CameraCaptureError.unsupportedFrameRate
+    }
+
+    try device.lockForConfiguration()
+    defer { device.unlockForConfiguration() }
+    device.activeFormat = format
+    let duration = CMTime(value: 1, timescale: CMTimeScale(Self.sourceRateHz))
+    device.activeVideoMinFrameDuration = duration
+    device.activeVideoMaxFrameDuration = duration
   }
 
   private func installNotificationObserversOnCaptureQueue() {
@@ -357,7 +406,7 @@ final class CameraCapture: NSObject, @unchecked Sendable {
       session.commitConfiguration()
       configured = false
     }
-    lastFrameUptimeNanoseconds = nil
+    captureFrameIndex = 0
     if let terminalError {
       frameContinuation.finish(throwing: terminalError)
     } else {
@@ -365,13 +414,26 @@ final class CameraCapture: NSObject, @unchecked Sendable {
     }
   }
 
-  private func makeJPEG(from sampleBuffer: CMSampleBuffer) -> Data? {
-    guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return nil }
+  private func dueProfiles() -> [CameraStreamProfile] {
+    let frameIndex = captureFrameIndex
+    captureFrameIndex &+= 1
+    return CameraMeshContract.profiles.filter { profile in
+      let divisor = UInt64(Self.sourceRateHz / profile.rateHz)
+      return frameIndex.isMultiple(of: divisor)
+    }
+  }
+
+  private func makeJPEGs(
+    from sampleBuffer: CMSampleBuffer,
+    profiles: [CameraStreamProfile]
+  ) -> [CameraQuality: Data] {
+    guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return [:] }
     let source = CIImage(cvPixelBuffer: pixelBuffer)
     let sourceExtent = source.extent.standardized
-    guard sourceExtent.width > 0, sourceExtent.height > 0 else { return nil }
+    guard sourceExtent.width > 0, sourceExtent.height > 0 else { return [:] }
 
-    let targetAspect = Self.targetWidth / Self.targetHeight
+    let high = CameraMeshContract.profile(.high)
+    let targetAspect = CGFloat(high.width) / CGFloat(high.height)
     let sourceAspect = sourceExtent.width / sourceExtent.height
     let crop: CGRect
     if sourceAspect > targetAspect {
@@ -395,26 +457,29 @@ final class CameraCapture: NSObject, @unchecked Sendable {
     let normalized = source.cropped(to: crop).transformed(
       by: CGAffineTransform(translationX: -crop.minX, y: -crop.minY)
     )
-    let resized = normalized.transformed(
-      by: CGAffineTransform(
-        scaleX: Self.targetWidth / crop.width,
-        y: Self.targetHeight / crop.height
-      )
-    )
-    let targetExtent = CGRect(
-      x: 0,
-      y: 0,
-      width: Self.targetWidth,
-      height: Self.targetHeight
-    )
     let qualityKey = CIImageRepresentationOption(
       rawValue: kCGImageDestinationLossyCompressionQuality as String
     )
-    return imageContext.jpegRepresentation(
-      of: resized.cropped(to: targetExtent),
-      colorSpace: colorSpace,
-      options: [qualityKey: 0.7]
-    )
+    var result: [CameraQuality: Data] = [:]
+    for profile in profiles {
+      let targetWidth = CGFloat(profile.width)
+      let targetHeight = CGFloat(profile.height)
+      let resized = normalized.transformed(
+        by: CGAffineTransform(
+          scaleX: targetWidth / crop.width,
+          y: targetHeight / crop.height
+        )
+      )
+      let targetExtent = CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight)
+      if let jpeg = imageContext.jpegRepresentation(
+        of: resized.cropped(to: targetExtent),
+        colorSpace: colorSpace,
+        options: [qualityKey: 0.7]
+      ) {
+        result[profile.quality] = jpeg
+      }
+    }
+    return result
   }
 }
 
@@ -426,18 +491,13 @@ extension CameraCapture: AVCaptureVideoDataOutputSampleBufferDelegate {
   ) {
     guard state == .running else { return }
 
-    let now = DispatchTime.now().uptimeNanoseconds
-    if let last = lastFrameUptimeNanoseconds,
-      now >= last,
-      now - last < Self.frameIntervalNanoseconds
-    {
-      return
-    }
-    lastFrameUptimeNanoseconds = now
+    let profiles = dueProfiles()
+    guard !profiles.isEmpty else { return }
 
     autoreleasepool {
-      guard let jpeg = makeJPEG(from: sampleBuffer) else { return }
-      switch frameContinuation.yield(jpeg) {
+      let renditions = makeJPEGs(from: sampleBuffer, profiles: profiles)
+      guard !renditions.isEmpty else { return }
+      switch frameContinuation.yield(CameraCaptureBatch(renditions: renditions)) {
       case .enqueued, .dropped:
         lastSuccessfulJPEGUptimeNanoseconds = DispatchTime.now().uptimeNanoseconds
       case .terminated:

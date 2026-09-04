@@ -64,6 +64,7 @@ final class CameraTile: ObservableObject {
   @Published var paused = false
   @Published var snapshotPending = false
   @Published var controlPending = false
+  @Published var switchingQuality: CameraQuality?
 
   init(
     peerID: String,
@@ -83,6 +84,8 @@ final class CameraTile: ObservableObject {
 
   var name: String { connection?.name ?? "Camera \(shortCameraPeerID(peerID))" }
   var runtime: String { connection?.runtime ?? "remote" }
+  var quality: CameraQuality? { connection?.quality }
+  var availableQualities: [CameraQuality] { connection?.availableQualities ?? [] }
 }
 
 func isCameraApprovalRequired(_ message: String) -> Bool {
@@ -99,6 +102,7 @@ final class CameraMeshModel: ObservableObject {
   @Published var selectedRole: CameraMeshRole = .viewer
   @Published var selectedCameraPeerID = ""
   @Published var remoteCard = ""
+  @Published private(set) var preferredViewerQuality: CameraQuality = .medium
 
   @Published private(set) var domains: [AukiDomain] = []
   @Published private(set) var discoveredCameras: [CameraMeshCandidate] = []
@@ -328,13 +332,16 @@ final class CameraMeshModel: ObservableObject {
     do {
       write("Requesting foreground camera access…")
       try await camera.start()
-      let initialJPEG = try await firstFrame(from: camera)
+      let initialBatch = try await firstFrame(from: camera)
+      guard let initialRenditions = initialBatch.initialRenditions else {
+        throw CameraPublisherError("The first camera sample did not produce all three renditions")
+      }
       guard generation == operationGeneration, phase == .starting else {
         await camera.stop()
         return false
       }
 
-      latestFrameImage = UIImage(data: initialJPEG)
+      latestFrameImage = UIImage(data: initialRenditions.low)
       frameCount = 1
 
       let peerIdentity = identity ?? AukiPeerIdentity.generate()
@@ -359,7 +366,7 @@ final class CameraMeshModel: ObservableObject {
         peer: peer,
         displayName: ProcessInfo.processInfo.environment["AUKI_IOS_CAMERA_NAME"]
           ?? "iPhone Camera",
-        initialJPEG: initialJPEG
+        initialRenditions: initialRenditions
       )
       mountedPublisher = mounted
       provisionalPeer = nil
@@ -631,10 +638,15 @@ final class CameraMeshModel: ObservableObject {
 
     addingAllCameras = true
     defer { addingAllCameras = false }
+    let quality = preferredViewerQuality
     let tasks = candidates.map { candidate in
       Task { [weak self] in
         guard let self else { return false }
-        return await self.connect(using: .discovered(candidate), peerID: candidate.peerID)
+        return await self.connect(
+          using: .discovered(candidate),
+          peerID: candidate.peerID,
+          preferredQuality: quality
+        )
       }
     }
     for task in tasks { _ = await task.value }
@@ -660,6 +672,51 @@ final class CameraMeshModel: ObservableObject {
   func focusCamera(peerID: String) {
     guard cameraTiles.contains(where: { $0.peerID == peerID }) else { return }
     focusedCameraPeerID = peerID
+  }
+
+  func setPreferredViewerQuality(forColumnCount columns: Int) {
+    preferredViewerQuality = preferredCameraQuality(forColumnCount: columns)
+  }
+
+  @discardableResult
+  func switchCameraQuality(peerID: String, quality: CameraQuality) async -> Bool {
+    guard
+      phase == .ready,
+      let viewer,
+      let tile = tile(peerID: peerID),
+      let connectionID = tile.connectionID,
+      tile.quality != quality,
+      tile.availableQualities.contains(quality),
+      tile.switchingQuality == nil,
+      !tile.snapshotPending
+    else { return false }
+
+    let operationGeneration = generation
+    updateTile(peerID: peerID) {
+      $0.switchingQuality = quality
+      $0.message = "Opening the \(quality.title) rendition…"
+    }
+    do {
+      let replacementID = try await viewer.switchQuality(
+        connectionID: connectionID,
+        quality: quality
+      )
+      guard generation == operationGeneration, self.viewer === viewer else { return false }
+      updateTile(peerID: peerID) {
+        $0.connectionID = replacementID
+        $0.switchingQuality = nil
+      }
+      write("Switched \(peerID) to \(CameraMeshContract.profile(quality).label).")
+      return true
+    } catch {
+      guard generation == operationGeneration, self.viewer === viewer else { return false }
+      updateTile(peerID: peerID) {
+        $0.switchingQuality = nil
+        $0.message = error.localizedDescription
+      }
+      write(error)
+      return false
+    }
   }
 
   func moveFocus(by offset: Int) {
@@ -771,7 +828,11 @@ final class CameraMeshModel: ObservableObject {
     }
   }
 
-  private func connect(using attempt: ConnectionAttempt, peerID: String) async -> Bool {
+  private func connect(
+    using attempt: ConnectionAttempt,
+    peerID: String,
+    preferredQuality: CameraQuality? = nil
+  ) async -> Bool {
     guard phase == .ready, let viewer else { return false }
     if let existing = tile(peerID: peerID),
       existing.status == .connecting || existing.status == .waiting || existing.status == .live
@@ -784,6 +845,7 @@ final class CameraMeshModel: ObservableObject {
     }
 
     let operationGeneration = generation
+    let quality = preferredQuality ?? preferredViewerQuality
     retryAttempts[peerID] = attempt
     if tile(peerID: peerID) == nil {
       cameraTiles.append(
@@ -802,6 +864,7 @@ final class CameraMeshModel: ObservableObject {
         $0.paused = false
         $0.snapshotPending = false
         $0.controlPending = false
+        $0.switchingQuality = nil
       }
     }
 
@@ -809,9 +872,15 @@ final class CameraMeshModel: ObservableObject {
       let connectionID: CameraViewerConnectionID
       switch attempt {
       case .discovered(let candidate):
-        connectionID = try await viewer.connect(candidate: candidate)
+        connectionID = try await viewer.connect(
+          candidate: candidate,
+          preferredQuality: quality
+        )
       case .card(let card):
-        connectionID = try await viewer.connect(cardJSON: card)
+        connectionID = try await viewer.connect(
+          cardJSON: card,
+          preferredQuality: quality
+        )
       }
       guard generation == operationGeneration, self.viewer === viewer,
         tile(peerID: peerID) != nil
@@ -852,14 +921,14 @@ final class CameraMeshModel: ObservableObject {
     }
   }
 
-  private func firstFrame(from source: CameraCapture) async throws -> Data {
-    try await withThrowingTaskGroup(of: Data.self) { group in
+  private func firstFrame(from source: CameraCapture) async throws -> CameraCaptureBatch {
+    try await withThrowingTaskGroup(of: CameraCaptureBatch.self) { group in
       group.addTask {
         var frames = source.frames.makeAsyncIterator()
-        guard let jpeg = try await frames.next() else {
+        guard let batch = try await frames.next() else {
           throw CameraPublisherError("Camera capture stopped before its first frame")
         }
-        return jpeg
+        return batch
       }
       group.addTask {
         try await Task.sleep(for: .seconds(10))
@@ -867,10 +936,10 @@ final class CameraMeshModel: ObservableObject {
       }
 
       defer { group.cancelAll() }
-      guard let jpeg = try await group.next() else {
-        throw CameraPublisherError("Camera did not produce its first JPEG")
+      guard let batch = try await group.next() else {
+        throw CameraPublisherError("Camera did not produce its first rendition batch")
       }
-      return jpeg
+      return batch
     }
   }
 
@@ -882,10 +951,14 @@ final class CameraMeshModel: ObservableObject {
     let frames = source.frames
     frameTask = Task { [weak self] in
       do {
-        for try await jpeg in frames {
+        for try await batch in frames {
           guard !Task.isCancelled else { return }
           do {
-            try await target.updateLatestJPEG(jpeg)
+            for quality in CameraQuality.allCases {
+              if let jpeg = batch[quality] {
+                try await target.updateLatestJPEG(jpeg, quality: quality)
+              }
+            }
           } catch {
             guard
               let self,
@@ -907,8 +980,10 @@ final class CameraMeshModel: ObservableObject {
             self.publisher === target,
             self.phase == .ready
           else { return }
-          self.latestFrameImage = UIImage(data: jpeg)
-          self.frameCount &+= 1
+          if let previewJPEG = batch[.low] {
+            self.latestFrameImage = UIImage(data: previewJPEG)
+            self.frameCount &+= 1
+          }
         }
       } catch {
         guard
@@ -1083,10 +1158,13 @@ final class CameraMeshModel: ObservableObject {
         $0.connectionID = connectionID
         $0.connection = connected
         $0.status = .waiting
-        $0.message = "Waiting for the first frame…"
+        $0.message = "Waiting for the first \(connected.quality.title) frame…"
         $0.paused = false
+        $0.switchingQuality = nil
       }
-      write("Connected to \(connected.name) (\(connected.runtime)).")
+      write(
+        "Connected to \(connected.name) (\(connected.runtime)) at \(connected.quality.title)."
+      )
       print(
         "AUKI_IOS_CAMERA_CONNECTED peer=\(connected.peerID) runtime=\(connected.runtime)"
       )
@@ -1160,6 +1238,7 @@ final class CameraMeshModel: ObservableObject {
         $0.paused = false
         $0.snapshotPending = false
         $0.controlPending = false
+        $0.switchingQuality = nil
       }
       write(reason)
       print("AUKI_IOS_CAMERA_DISCONNECTED peer=\(peerID)")
@@ -1176,6 +1255,7 @@ final class CameraMeshModel: ObservableObject {
             $0.status = .error
             $0.paused = false
             $0.controlPending = false
+            $0.switchingQuality = nil
           }
           $0.message = reason
         }
@@ -1266,4 +1346,12 @@ final class CameraMeshModel: ObservableObject {
 func shortCameraPeerID(_ peerID: String) -> String {
   guard peerID.count > 20 else { return peerID }
   return "\(peerID.prefix(10))…\(peerID.suffix(8))"
+}
+
+func preferredCameraQuality(forColumnCount columns: Int) -> CameraQuality {
+  switch columns {
+  case ...1: .high
+  case 2: .medium
+  default: .low
+  }
 }

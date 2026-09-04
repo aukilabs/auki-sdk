@@ -1,5 +1,21 @@
 import Foundation
 
+public struct CameraRenditionJPEGs: Sendable {
+  public let low: Data
+  public let medium: Data
+  public let high: Data
+
+  public init(low: Data, medium: Data, high: Data) {
+    self.low = low
+    self.medium = medium
+    self.high = high
+  }
+
+  fileprivate var bridgeFrames: AukiCameraRenditionFrames {
+    AukiCameraRenditionFrames(low: low, medium: medium, high: high)
+  }
+}
+
 public enum CameraPublisherEvent: Equatable, Sendable {
   case approvalRequired(peerID: String)
   case controlReceived(peerID: String, control: String)
@@ -48,12 +64,12 @@ public actor CameraPublisher {
   public static func mount(
     peer: AukiPeer,
     displayName: String = "iOS Camera",
-    initialJPEG: Data
+    initialRenditions: CameraRenditionJPEGs
   ) async throws -> CameraPublisher {
     let publisher = try await AukiCameraPublisher.mount(
       peer: peer,
       displayName: displayName,
-      initialJpeg: initialJPEG
+      initialFrames: initialRenditions.bridgeFrames
     )
 
     do {
@@ -71,11 +87,12 @@ public actor CameraPublisher {
     }
   }
 
-  /// Atomically replace the JPEG used by future Stream frames and snapshots.
-  /// Rust retains only the latest frame.
-  public func updateLatestJPEG(_ jpeg: Data) throws {
+  /// Atomically replace one JPEG rendition used by future Stream frames.
+  /// Rust retains only the latest frame in each quality tier. Snapshots remain
+  /// based on the backward-compatible Low rendition.
+  public func updateLatestJPEG(_ jpeg: Data, quality: CameraQuality) throws {
     try ensureOpen("update the latest camera frame")
-    try publisher.updateFrame(jpeg: jpeg)
+    try publisher.updateFrame(quality: quality.bridgeQuality, jpeg: jpeg)
   }
 
   /// Receive one publisher event, or `nil` when the publisher is closed.
@@ -143,6 +160,16 @@ public actor CameraPublisher {
   private func ensureOpen(_ operation: String) throws {
     if closed {
       throw CameraPublisherError("Cannot \(operation): publisher is closed")
+    }
+  }
+}
+
+extension CameraQuality {
+  fileprivate var bridgeQuality: AukiCameraQuality {
+    switch self {
+    case .low: .low
+    case .medium: .medium
+    case .high: .high
     }
   }
 }

@@ -7,7 +7,8 @@
 use std::sync::Arc;
 
 use auki_camera_mesh::{
-    CameraEvent, CameraProtocols, CameraRole, PeerRoutes, protocol_ids_for_role,
+    CameraEvent, CameraProtocols, CameraQuality, CameraRole, PeerRoutes, camera_profile,
+    protocol_ids_for_role,
 };
 use auki_sdk_binding::{AukiPeer, CleanupResult, DetachedCleanup, wait_cleanup};
 use parking_lot::Mutex;
@@ -26,6 +27,30 @@ fn operation_error(context: &'static str, error: impl std::fmt::Display) -> Auki
     AukiCameraMeshError::Operation {
         message: format!("{context}: {error}"),
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
+pub enum AukiCameraQuality {
+    Low,
+    Medium,
+    High,
+}
+
+impl From<AukiCameraQuality> for CameraQuality {
+    fn from(value: AukiCameraQuality) -> Self {
+        match value {
+            AukiCameraQuality::Low => Self::Low,
+            AukiCameraQuality::Medium => Self::Medium,
+            AukiCameraQuality::High => Self::High,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, uniffi::Record)]
+pub struct AukiCameraRenditionFrames {
+    pub low: Vec<u8>,
+    pub medium: Vec<u8>,
+    pub high: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
@@ -160,7 +185,7 @@ impl AukiCameraPublisher {
     pub async fn mount(
         peer: Arc<AukiPeer>,
         display_name: String,
-        initial_jpeg: Vec<u8>,
+        initial_frames: AukiCameraRenditionFrames,
     ) -> Result<Arc<Self>, AukiCameraMeshError> {
         let peer_id = peer
             .peer_id()
@@ -171,7 +196,7 @@ impl AukiCameraPublisher {
         let routes = peer
             .routes()
             .map_err(|error| operation_error("read Camera Mesh relay routes", error))?;
-        let (protocols, events) = CameraProtocols::mount_context(
+        let (protocols, events) = CameraProtocols::mount_renditions_context(
             peer.rust_protocols(),
             peer_id,
             domain_id,
@@ -182,7 +207,11 @@ impl AukiCameraPublisher {
             CameraRole::Publisher,
             display_name,
             "swift",
-            initial_jpeg,
+            vec![
+                (camera_profile(CameraQuality::Low), initial_frames.low),
+                (camera_profile(CameraQuality::Medium), initial_frames.medium),
+                (camera_profile(CameraQuality::High), initial_frames.high),
+            ],
         )
         .await
         .map_err(|error| operation_error("mount Camera Mesh publisher", error))?;
@@ -211,12 +240,16 @@ impl AukiCameraPublisher {
         protocol_ids_for_role(CameraRole::Publisher)
     }
 
-    /// Atomically replace the latest JPEG. Rust retains no frame backlog.
-    pub fn update_frame(&self, jpeg: Vec<u8>) -> Result<(), AukiCameraMeshError> {
+    /// Atomically replace one latest rendition. Rust retains no frame backlog.
+    pub fn update_frame(
+        &self,
+        quality: AukiCameraQuality,
+        jpeg: Vec<u8>,
+    ) -> Result<(), AukiCameraMeshError> {
         self.owner
             .with_protocols("update Camera Mesh frame", |protocols| {
                 protocols
-                    .replace_frame(jpeg)
+                    .replace_rendition_frame(quality.into(), jpeg)
                     .map_err(|error| operation_error("validate Camera Mesh frame", error))
             })
     }
@@ -315,5 +348,21 @@ mod tests {
         assert_eq!(mapped.peer_id.as_deref(), Some("peer"));
         assert_eq!(mapped.sha256.as_deref(), Some("hash"));
         assert_eq!(mapped.size, Some(42));
+    }
+
+    #[test]
+    fn swift_quality_tiers_map_to_shared_camera_mesh_profiles() {
+        assert_eq!(
+            CameraQuality::from(AukiCameraQuality::Low),
+            CameraQuality::Low
+        );
+        assert_eq!(
+            CameraQuality::from(AukiCameraQuality::Medium),
+            CameraQuality::Medium
+        );
+        assert_eq!(
+            CameraQuality::from(AukiCameraQuality::High),
+            CameraQuality::High
+        );
     }
 }

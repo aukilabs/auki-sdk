@@ -1,4 +1,51 @@
 import Foundation
+import ImageIO
+
+public enum CameraQuality: String, CaseIterable, Hashable, Identifiable, Sendable {
+  case low
+  case medium
+  case high
+
+  public var id: Self { self }
+
+  public var title: String {
+    rawValue.prefix(1).uppercased() + rawValue.dropFirst()
+  }
+
+  public var shortTitle: String {
+    switch self {
+    case .low: "L"
+    case .medium: "M"
+    case .high: "H"
+    }
+  }
+}
+
+public struct CameraStreamProfile: Equatable, Sendable {
+  public let quality: CameraQuality
+  public let resourceID: String
+  public let width: Int
+  public let height: Int
+  public let rateHz: Int
+
+  public init(
+    quality: CameraQuality,
+    resourceID: String,
+    width: Int,
+    height: Int,
+    rateHz: Int
+  ) {
+    self.quality = quality
+    self.resourceID = resourceID
+    self.width = width
+    self.height = height
+    self.rateHz = rateHz
+  }
+
+  public var label: String {
+    "\(quality.title) · \(width)×\(height) @ \(rateHz) fps"
+  }
+}
 
 public enum CameraMeshContract {
   public static let application = "auki-camera-mesh"
@@ -11,6 +58,8 @@ public enum CameraMeshContract {
   public static let width = 480
   public static let height = 270
   public static let rateHz = 5
+  public static let cameraMediumResourceID = "camera/main/medium"
+  public static let cameraHighResourceID = "camera/main/high"
   public static let maximumViewerConnections = 16
   public static let maximumPendingSnapshots = 16
   public static let maximumBlobBytes = 20 * 1024 * 1024
@@ -34,6 +83,38 @@ public enum CameraMeshContract {
   ]
 
   public static let publisherProtocolIDs = viewerProtocolIDs + [streamProtocolID]
+
+  public static let profiles: [CameraStreamProfile] = [
+    CameraStreamProfile(
+      quality: .low,
+      resourceID: cameraResourceID,
+      width: width,
+      height: height,
+      rateHz: rateHz
+    ),
+    CameraStreamProfile(
+      quality: .medium,
+      resourceID: cameraMediumResourceID,
+      width: 960,
+      height: 540,
+      rateHz: 15
+    ),
+    CameraStreamProfile(
+      quality: .high,
+      resourceID: cameraHighResourceID,
+      width: 1_920,
+      height: 1_080,
+      rateHz: 30
+    ),
+  ]
+
+  public static func profile(_ quality: CameraQuality) -> CameraStreamProfile {
+    profiles.first(where: { $0.quality == quality })!
+  }
+
+  public static func profile(resourceID: String) -> CameraStreamProfile? {
+    profiles.first(where: { $0.resourceID == resourceID })
+  }
 }
 
 public struct CameraMeshCandidate: Equatable, Identifiable, Sendable {
@@ -202,6 +283,8 @@ public struct CameraFrameRegistry: Decodable, Sendable {
 
 public struct CameraCatalogMetadata: Sendable {
   public let info: CameraParticipantInfo
+  public let profile: CameraStreamProfile
+  public let availableQualities: [CameraQuality]
   public let sensorRef: CameraRegistryReference
   public let clockRef: CameraRegistryReference
   public let frameRef: CameraRegistryReference
@@ -210,6 +293,8 @@ public struct CameraCatalogMetadata: Sendable {
 
 public struct CameraRemoteMetadata: Sendable {
   public let info: CameraParticipantInfo
+  public let profile: CameraStreamProfile
+  public let availableQualities: [CameraQuality]
   public let sensor: CameraSensorRegistry
   public let clock: CameraClockRegistry
   public let frame: CameraFrameRegistry
@@ -268,7 +353,8 @@ public func nativeCameraTarget(cardJSON: String, domainID: String) throws -> Auk
 public func parseCameraCatalog(
   infoJSON: String,
   catalogJSON: String,
-  expectedPeerID: String
+  expectedPeerID: String,
+  preferredQuality: CameraQuality = .low
 ) throws -> CameraCatalogMetadata {
   let info = try decode(CameraParticipantInfo.self, json: infoJSON, label: "Info")
   guard info.peerID == expectedPeerID else {
@@ -285,39 +371,62 @@ public func parseCameraCatalog(
   try validateRegistryHash(info.sessionClockHash, label: "Info clock hash")
 
   let snapshot = try decode(CameraCatalogSnapshot.self, json: catalogJSON, label: "Catalog")
-  let cameras = snapshot.resources.filter {
-    $0.variant == "sensor_log" && $0.resourceID == CameraMeshContract.cameraResourceID
+  let cameraRows = snapshot.resources.filter {
+    $0.variant == "sensor_log" && CameraMeshContract.profile(resourceID: $0.resourceID) != nil
   }
-  guard !cameras.isEmpty else {
+  guard !cameraRows.isEmpty else {
     throw CameraMeshContractError("approval_required: camera Catalog row is unavailable")
   }
-  guard cameras.count == 1, let camera = cameras.first else {
+  let resourceIDs = cameraRows.map(\.resourceID)
+  guard Set(resourceIDs).count == resourceIDs.count else {
     throw CameraMeshContractError("Camera Catalog contains duplicate resource IDs")
   }
-  guard camera.sourcePeerID == expectedPeerID, camera.writerPeerID == expectedPeerID else {
-    throw CameraMeshContractError("Camera Catalog source or writer does not match the peer")
+
+  let cameras = try cameraRows.map { row in
+    guard let profile = CameraMeshContract.profile(resourceID: row.resourceID) else {
+      throw CameraMeshContractError("Camera Catalog has an unsupported rendition")
+    }
+    guard row.sourcePeerID == expectedPeerID, row.writerPeerID == expectedPeerID else {
+      throw CameraMeshContractError("Camera Catalog source or writer does not match the peer")
+    }
+    guard row.state == "live" else {
+      throw CameraMeshContractError("Camera Catalog resource is not live")
+    }
+    guard let sensor = row.sensor, sensor.kind == "camera", sensor.type == "rgb" else {
+      throw CameraMeshContractError("Camera Catalog has the wrong sensor metadata")
+    }
+    guard let manifest = row.manifest, let frame = manifest.frame else {
+      throw CameraMeshContractError("Camera Catalog is missing clock or frame metadata")
+    }
+    let sensorRef = CameraRegistryReference(
+      peerID: expectedPeerID,
+      id: sensor.sensorID,
+      hash: sensor.sensorHash
+    )
+    try validateReference(sensorRef, owner: expectedPeerID, label: "Camera Sensor")
+    try validateReference(manifest.clock, owner: expectedPeerID, label: "Camera Clock")
+    try validateReference(frame, owner: expectedPeerID, label: "Camera Frame")
+    guard info.sessionClockID == manifest.clock.id,
+      info.sessionClockHash == manifest.clock.hash
+    else {
+      throw CameraMeshContractError("Info and Catalog use different clocks")
+    }
+    return ParsedCameraCatalogRendition(
+      profile: profile,
+      sensorRef: sensorRef,
+      clockRef: manifest.clock,
+      frameRef: frame
+    )
+  }.sorted { left, right in
+    let leftIndex = CameraQuality.allCases.firstIndex(of: left.profile.quality) ?? 0
+    let rightIndex = CameraQuality.allCases.firstIndex(of: right.profile.quality) ?? 0
+    return leftIndex < rightIndex
   }
-  guard camera.state == "live" else {
-    throw CameraMeshContractError("Camera Catalog resource is not live")
-  }
-  guard let sensor = camera.sensor, sensor.kind == "camera", sensor.type == "rgb" else {
-    throw CameraMeshContractError("Camera Catalog has the wrong sensor metadata")
-  }
-  guard let manifest = camera.manifest, let frame = manifest.frame else {
-    throw CameraMeshContractError("Camera Catalog is missing clock or frame metadata")
-  }
-  let sensorRef = CameraRegistryReference(
-    peerID: expectedPeerID,
-    id: sensor.sensorID,
-    hash: sensor.sensorHash
-  )
-  try validateReference(sensorRef, owner: expectedPeerID, label: "Camera Sensor")
-  try validateReference(manifest.clock, owner: expectedPeerID, label: "Camera Clock")
-  try validateReference(frame, owner: expectedPeerID, label: "Camera Frame")
-  guard info.sessionClockID == manifest.clock.id,
-    info.sessionClockHash == manifest.clock.hash
+  guard
+    let camera = cameras.first(where: { $0.profile.quality == preferredQuality })
+      ?? cameras.first
   else {
-    throw CameraMeshContractError("Info and Catalog use different clocks")
+    throw CameraMeshContractError("Camera Catalog has no supported rendition")
   }
 
   let controls = snapshot.resources.filter {
@@ -329,15 +438,17 @@ public func parseCameraCatalog(
   else {
     throw CameraMeshContractError("Camera Catalog control channel is missing or duplicated")
   }
-  guard owner == expectedPeerID, clock == manifest.clock else {
+  guard owner == expectedPeerID, clock == camera.clockRef else {
     throw CameraMeshContractError("Camera control channel owner or clock is invalid")
   }
 
   return CameraCatalogMetadata(
     info: info,
-    sensorRef: sensorRef,
-    clockRef: manifest.clock,
-    frameRef: frame,
+    profile: camera.profile,
+    availableQualities: cameras.map { $0.profile.quality },
+    sensorRef: camera.sensorRef,
+    clockRef: camera.clockRef,
+    frameRef: camera.frameRef,
     controlChannel: AukiMessageChannel(
       ownerPeerId: owner,
       resourceId: CameraMeshContract.controlResourceID,
@@ -358,10 +469,10 @@ public func resolveCameraMetadata(
   let owner = catalog.info.peerID
 
   guard sensor.peerID == owner, sensor.sensorID == catalog.sensorRef.id,
-    sensor.sensorID == CameraMeshContract.cameraResourceID,
+    sensor.sensorID == catalog.profile.resourceID,
     sensor.kind == "camera", sensor.type == "rgb",
-    sensor.width == CameraMeshContract.width, sensor.height == CameraMeshContract.height,
-    sensor.frameRateHz == CameraMeshContract.rateHz,
+    sensor.width == catalog.profile.width, sensor.height == catalog.profile.height,
+    sensor.frameRateHz == catalog.profile.rateHz,
     sensor.imageEncoding == "jpeg", sensor.pixelFormat == "rgb8",
     sensor.rowStrideBytes == 0, sensor.colorSpace == "srgb",
     sensor.intrinsicsModel == "none", sensor.distortionModel == "none",
@@ -388,6 +499,8 @@ public func resolveCameraMetadata(
 
   return CameraRemoteMetadata(
     info: catalog.info,
+    profile: catalog.profile,
+    availableQualities: catalog.availableQualities,
     sensor: sensor,
     clock: clock,
     frame: frame,
@@ -402,9 +515,9 @@ public func validateStreamManifest(
   _ manifest: AukiStreamManifest,
   metadata: CameraRemoteMetadata
 ) throws {
-  guard manifest.resourceId == CameraMeshContract.cameraResourceID,
+  guard manifest.resourceId == metadata.profile.resourceID,
     manifest.payload == "camera_frame", manifest.writerMode == "live",
-    manifest.expectedRateHz == CameraMeshContract.rateHz,
+    manifest.expectedRateHz == UInt32(metadata.profile.rateHz),
     manifest.sensorId == metadata.sensorRef.id,
     manifest.sensorHash == metadata.sensorRef.hash,
     manifest.clockPeerId == metadata.clockRef.peerID,
@@ -494,6 +607,29 @@ public func validateJPEG(_ bytes: Data) throws {
   else {
     throw CameraMeshContractError("Camera frame is not a JPEG")
   }
+}
+
+public func validateJPEG(_ bytes: Data, profile: CameraStreamProfile) throws {
+  try validateJPEG(bytes)
+  guard
+    let source = CGImageSourceCreateWithData(bytes as CFData, nil),
+    let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+    let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+    let height = properties[kCGImagePropertyPixelHeight] as? NSNumber,
+    width.intValue == profile.width,
+    height.intValue == profile.height
+  else {
+    throw CameraMeshContractError(
+      "Camera JPEG dimensions do not match \(profile.width)×\(profile.height)"
+    )
+  }
+}
+
+private struct ParsedCameraCatalogRendition {
+  let profile: CameraStreamProfile
+  let sensorRef: CameraRegistryReference
+  let clockRef: CameraRegistryReference
+  let frameRef: CameraRegistryReference
 }
 
 private struct CameraCatalogSnapshot: Decodable {

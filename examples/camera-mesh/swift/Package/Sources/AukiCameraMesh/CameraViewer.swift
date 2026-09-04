@@ -30,11 +30,21 @@ public struct CameraViewerConnection: Equatable, Sendable {
   public let peerID: String
   public let name: String
   public let runtime: String
+  public let quality: CameraQuality
+  public let availableQualities: [CameraQuality]
 
-  public init(peerID: String, name: String, runtime: String) {
+  public init(
+    peerID: String,
+    name: String,
+    runtime: String,
+    quality: CameraQuality,
+    availableQualities: [CameraQuality]
+  ) {
     self.peerID = peerID
     self.name = name
     self.runtime = runtime
+    self.quality = quality
+    self.availableQualities = availableQualities
   }
 }
 
@@ -68,6 +78,13 @@ private struct PendingSnapshot: Sendable {
   var timeout: Task<Void, Never>?
 }
 
+private struct OpenedCameraStream: Sendable {
+  let target: AukiPeerTarget
+  let metadata: CameraRemoteMetadata
+  let subscription: AukiStreamSubscription
+  let firstFrame: CameraViewerFrame
+}
+
 /// Foreground-only Camera Mesh viewer composed from the SDK's standard protocols.
 ///
 /// Transport, authenticated exact-peer connections, protocol framing, Registry
@@ -95,6 +112,7 @@ public actor CameraViewer {
   private var activeCameras: [CameraViewerConnectionID: ActiveCamera] = [:]
   private var connectionIDsByPeerID: [String: CameraViewerConnectionID] = [:]
   private var pendingSnapshots: [String: PendingSnapshot] = [:]
+  private var switchingPeerIDs: Set<String> = []
   private var connectionGeneration: UInt64 = 0
   private var closed = false
 
@@ -236,15 +254,91 @@ public actor CameraViewer {
   }
 
   @discardableResult
-  public func connect(candidate: CameraMeshCandidate) async throws -> CameraViewerConnectionID {
+  public func connect(
+    candidate: CameraMeshCandidate,
+    preferredQuality: CameraQuality = .low
+  ) async throws -> CameraViewerConnectionID {
     let target = try nativeCameraTarget(candidate: candidate, domainID: domainID)
-    return try await connect(target: target)
+    return try await connect(target: target, preferredQuality: preferredQuality)
   }
 
   @discardableResult
-  public func connect(cardJSON: String) async throws -> CameraViewerConnectionID {
+  public func connect(
+    cardJSON: String,
+    preferredQuality: CameraQuality = .low
+  ) async throws -> CameraViewerConnectionID {
     let target = try nativeCameraTarget(cardJSON: cardJSON, domainID: domainID)
-    return try await connect(target: target)
+    return try await connect(target: target, preferredQuality: preferredQuality)
+  }
+
+  /// Switch one camera to another advertised rendition without tearing down
+  /// its working subscription until the replacement has produced a frame.
+  @discardableResult
+  public func switchQuality(
+    connectionID: CameraViewerConnectionID,
+    quality: CameraQuality
+  ) async throws -> CameraViewerConnectionID {
+    try ensureOpen("switch camera quality")
+    let previous = try active(connectionID)
+    if previous.metadata.profile.quality == quality { return connectionID }
+    guard previous.metadata.availableQualities.contains(quality) else {
+      throw CameraViewerError(
+        "Camera \(previous.target.peerId) does not publish the \(quality.title) rendition"
+      )
+    }
+    guard !pendingSnapshots.values.contains(where: { $0.connectionID == connectionID }) else {
+      throw CameraViewerError("Wait for the pending snapshot before switching quality")
+    }
+    guard switchingPeerIDs.insert(previous.target.peerId).inserted else {
+      throw CameraViewerError("Camera quality is already changing")
+    }
+    defer { switchingPeerIDs.remove(previous.target.peerId) }
+
+    emit(
+      .status(
+        connectionID: connectionID,
+        message: "Opening the \(quality.title) rendition…"
+      ))
+    let replacement = try await openCamera(
+      target: previous.target,
+      preferredQuality: quality
+    )
+    guard replacement.metadata.profile.quality == quality else {
+      try? await replacement.subscription.cancel()
+      throw CameraViewerError("Camera did not return the requested rendition")
+    }
+    do {
+      try ensureCurrent(previous, operation: "switch camera quality")
+    } catch {
+      try? await replacement.subscription.cancel()
+      throw error
+    }
+
+    connectionGeneration &+= 1
+    let replacementID = CameraViewerConnectionID(generation: connectionGeneration)
+    let previousTask = streamTasks.removeValue(forKey: connectionID)
+    let previousSubscription = subscriptions.removeValue(forKey: connectionID)
+    activeCameras.removeValue(forKey: connectionID)
+
+    activeCameras[replacementID] = ActiveCamera(
+      connectionID: replacementID,
+      target: replacement.target,
+      metadata: replacement.metadata
+    )
+    subscriptions[replacementID] = replacement.subscription
+    connectionIDsByPeerID[replacement.target.peerId] = replacementID
+    emitConnected(replacement, connectionID: replacementID)
+    emit(.frame(connectionID: replacementID, frame: replacement.firstFrame))
+    startStreamWorker(
+      replacement.subscription,
+      connectionID: replacementID,
+      profile: replacement.metadata.profile
+    )
+
+    previousTask?.cancel()
+    if let previousSubscription { try? await previousSubscription.cancel() }
+    await previousTask?.value
+    return replacementID
   }
 
   public func pause(connectionID: CameraViewerConnectionID) async throws {
@@ -349,7 +443,10 @@ public actor CameraViewer {
     }
   }
 
-  private func connect(target: AukiPeerTarget) async throws -> CameraViewerConnectionID {
+  private func connect(
+    target: AukiPeerTarget,
+    preferredQuality: CameraQuality
+  ) async throws -> CameraViewerConnectionID {
     try ensureOpen("connect camera")
     guard connectionIDsByPeerID[target.peerId] == nil else {
       throw CameraViewerError("Camera \(target.peerId) is already connected or connecting")
@@ -368,77 +465,126 @@ public actor CameraViewer {
         message: "Authenticating camera \(target.peerId)…"
       ))
 
-    var opened: AukiStreamSubscription?
+    var opened: OpenedCameraStream?
     do {
-      let infoJSON = try await info.client().fetchExact(target: target)
-      let catalogJSON = try await catalog.client().fetchResourcesExact(
-        target: target,
-        variants: [.sensorLog, .messageChannel]
-      )
-      let catalogMetadata = try parseCameraCatalog(
-        infoJSON: infoJSON,
-        catalogJSON: catalogJSON,
-        expectedPeerID: target.peerId
-      )
-      let registryClient = registry.client()
-      let sensorJSON = try await registryClient.fetchExact(
-        target: target,
-        kind: .sensor,
-        id: catalogMetadata.sensorRef.id,
-        hash: catalogMetadata.sensorRef.hash
-      )
-      let clockJSON = try await registryClient.fetchExact(
-        target: target,
-        kind: .clock,
-        id: catalogMetadata.clockRef.id,
-        hash: catalogMetadata.clockRef.hash
-      )
-      let frameJSON = try await registryClient.fetchExact(
-        target: target,
-        kind: .frame,
-        id: catalogMetadata.frameRef.id,
-        hash: catalogMetadata.frameRef.hash
-      )
-      let metadata = try resolveCameraMetadata(
-        catalog: catalogMetadata,
-        sensorJSON: sensorJSON,
-        clockJSON: clockJSON,
-        frameJSON: frameJSON
-      )
-      let subscription = try await streamClient.subscribe(
-        target: target,
-        payloadKind: .camera,
-        request: AukiStreamRequest(
-          sourcePeerId: target.peerId,
-          resourceId: CameraMeshContract.cameraResourceID,
-          readFrom: .latest
-        )
-      )
-      opened = subscription
-      try validateStreamManifest(subscription.manifest(), metadata: metadata)
+      let stream = try await openCamera(target: target, preferredQuality: preferredQuality)
+      opened = stream
       try ensureReserved(connectionID, peerID: target.peerId, operation: "connect camera")
       activeCameras[connectionID] = ActiveCamera(
         connectionID: connectionID,
         target: target,
-        metadata: metadata
+        metadata: stream.metadata
       )
-      subscriptions[connectionID] = subscription
-      let info = metadata.info
-      emit(
-        .connected(
-          connectionID: connectionID,
-          camera: CameraViewerConnection(
-            peerID: target.peerId,
-            name: info.name,
-            runtime: info.appInstance
-          )))
-      startStreamWorker(subscription, connectionID: connectionID)
+      subscriptions[connectionID] = stream.subscription
+      emitConnected(stream, connectionID: connectionID)
+      emit(.frame(connectionID: connectionID, frame: stream.firstFrame))
+      startStreamWorker(
+        stream.subscription,
+        connectionID: connectionID,
+        profile: stream.metadata.profile
+      )
       return connectionID
     } catch {
-      if let opened { try? await opened.cancel() }
+      if let opened { try? await opened.subscription.cancel() }
       releaseReservation(connectionID, peerID: target.peerId)
       throw error
     }
+  }
+
+  private func openCamera(
+    target: AukiPeerTarget,
+    preferredQuality: CameraQuality
+  ) async throws -> OpenedCameraStream {
+    let infoJSON = try await info.client().fetchExact(target: target)
+    let catalogJSON = try await catalog.client().fetchResourcesExact(
+      target: target,
+      variants: [.sensorLog, .messageChannel]
+    )
+    let catalogMetadata = try parseCameraCatalog(
+      infoJSON: infoJSON,
+      catalogJSON: catalogJSON,
+      expectedPeerID: target.peerId,
+      preferredQuality: preferredQuality
+    )
+    let registryClient = registry.client()
+    let sensorJSON = try await registryClient.fetchExact(
+      target: target,
+      kind: .sensor,
+      id: catalogMetadata.sensorRef.id,
+      hash: catalogMetadata.sensorRef.hash
+    )
+    let clockJSON = try await registryClient.fetchExact(
+      target: target,
+      kind: .clock,
+      id: catalogMetadata.clockRef.id,
+      hash: catalogMetadata.clockRef.hash
+    )
+    let frameJSON = try await registryClient.fetchExact(
+      target: target,
+      kind: .frame,
+      id: catalogMetadata.frameRef.id,
+      hash: catalogMetadata.frameRef.hash
+    )
+    let metadata = try resolveCameraMetadata(
+      catalog: catalogMetadata,
+      sensorJSON: sensorJSON,
+      clockJSON: clockJSON,
+      frameJSON: frameJSON
+    )
+    let subscription = try await streamClient.subscribe(
+      target: target,
+      payloadKind: .camera,
+      request: AukiStreamRequest(
+        sourcePeerId: target.peerId,
+        resourceId: metadata.profile.resourceID,
+        readFrom: .latest
+      )
+    )
+    do {
+      try validateStreamManifest(subscription.manifest(), metadata: metadata)
+      guard let first = try await subscription.next() else {
+        throw CameraViewerError("Camera stream closed before its first frame")
+      }
+      let firstFrame: CameraViewerFrame
+      switch first {
+      case .entry(let entry):
+        let jpeg = try decodeCameraFrameImage(payload: entry.payload)
+        try validateJPEG(jpeg, profile: metadata.profile)
+        firstFrame = CameraViewerFrame(
+          jpeg: jpeg,
+          sequence: entry.sequence,
+          timestampNs: entry.timestampNs
+        )
+      case .end(let reason):
+        throw CameraViewerError("Camera stream ended: \(describe(reason))")
+      }
+      return OpenedCameraStream(
+        target: target,
+        metadata: metadata,
+        subscription: subscription,
+        firstFrame: firstFrame
+      )
+    } catch {
+      try? await subscription.cancel()
+      throw error
+    }
+  }
+
+  private func emitConnected(
+    _ stream: OpenedCameraStream,
+    connectionID: CameraViewerConnectionID
+  ) {
+    let info = stream.metadata.info
+    emit(
+      .connected(
+        connectionID: connectionID,
+        camera: CameraViewerConnection(
+          peerID: stream.target.peerId,
+          name: info.name,
+          runtime: info.appInstance,
+          quality: stream.metadata.profile.quality,
+          availableQualities: stream.metadata.availableQualities
+        )))
   }
 
   private func sendControl(
@@ -502,7 +648,8 @@ public actor CameraViewer {
 
   private func startStreamWorker(
     _ opened: AukiStreamSubscription,
-    connectionID: CameraViewerConnectionID
+    connectionID: CameraViewerConnectionID,
+    profile: CameraStreamProfile
   ) {
     streamTasks[connectionID] = Task { [weak self] in
       do {
@@ -518,7 +665,7 @@ public actor CameraViewer {
           switch next {
           case .entry(let entry):
             let jpeg = try decodeCameraFrameImage(payload: entry.payload)
-            try validateJPEG(jpeg)
+            try validateJPEG(jpeg, profile: profile)
             await self?.receivedFrame(
               CameraViewerFrame(
                 jpeg: jpeg,

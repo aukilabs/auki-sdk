@@ -26,4 +26,11 @@ final class CameraMeshModelTests: XCTestCase {
     XCTAssertEqual(effectiveCameraColumnCount(requested: 3, compact: false), 3)
     XCTAssertEqual(effectiveCameraColumnCount(requested: 9, compact: false), 4)
   }
+
+  func testCameraWallDensityChoosesNewConnectionQuality() {
+    XCTAssertEqual(preferredCameraQuality(forColumnCount: 1), .high)
+    XCTAssertEqual(preferredCameraQuality(forColumnCount: 2), .medium)
+    XCTAssertEqual(preferredCameraQuality(forColumnCount: 3), .low)
+    XCTAssertEqual(preferredCameraQuality(forColumnCount: 4), .low)
+  }
 }

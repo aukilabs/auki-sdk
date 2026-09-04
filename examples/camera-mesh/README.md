@@ -19,8 +19,9 @@ test runners can drive the same application flow without a UI. The browser has
 a responsive CCTV wall for up to 16 simultaneous feeds. Web, Native Rust, and
 Python publishers each offer Low (480×270 at 5 fps), Medium (960×540 at 15
 fps), and High (1920×1080 at 30 fps) renditions from one peer; Web viewers can
-switch quality without blanking the current frame. Swift/iOS currently
-publishes the Low rendition. The wall's density control uses one through four
+switch quality without blanking the current frame. The Swift/iOS publisher
+offers the same three renditions from one foreground camera, and its viewer can
+select or switch among them. The wall's density control uses one through four
 columns, with a single-camera focus mode and a two-column mobile wall.
 Protocol and live stream diagnostics stay in a drawer. Headless viewers
 validate the metadata and JPEG bytes, then report frame counts and hashes.
@@ -169,9 +170,11 @@ discovery and copied peer cards.
 
 The [Swift/iOS app](swift/README.md) uses an ephemeral identity, explicit Domain
 selection, and ordered foreground lifecycle cleanup. Its viewer discovers and
-consumes Web or native publishers. Its publisher advertises a bounded 480×270,
-5 fps iPhone camera and keeps approval, protocol serving, controls, and
-snapshots in the shared Rust Camera Mesh application.
+consumes Web, native, Python, or Swift publishers. Its publisher derives Low
+(480×270 at 5 fps), Medium (960×540 at 15 fps), and High (1920×1080 at 30
+fps) renditions from one bounded foreground capture path. Approval, protocol
+serving, controls, and snapshots remain in the shared Rust Camera Mesh
+application.
 
 Phase 3 proves Web/native publisher to iPhone viewer. Phase 4 reverses the
 direction: a physical iPhone publisher must reject an unapproved viewer, then

@@ -561,8 +561,14 @@ impl CameraProtocols {
         .await
     }
 
+    /// Mount one or more fixed Camera Mesh renditions on an already-running
+    /// peer context.
+    ///
+    /// Platform camera bindings use this seam to publish the same Low,
+    /// Medium, and High resources as the native and Web examples. The Low
+    /// rendition remains mandatory for backward compatibility and snapshots.
     #[allow(clippy::too_many_arguments)]
-    async fn mount_renditions_context(
+    pub async fn mount_renditions_context(
         protocols: AukiPeerProtocols,
         local_peer_id: PeerId,
         domain_id: Uuid,

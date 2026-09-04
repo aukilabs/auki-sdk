@@ -215,6 +215,9 @@ private struct CameraMonitorView: View {
         cameraWall(columns: columns, compact: compact)
       }
       .background(CameraMeshStyle.background)
+      .onChange(of: columns, initial: true) { _, value in
+        model.setPreferredViewerQuality(forColumnCount: value)
+      }
     }
     .sheet(item: $presentedSheet) { sheet in
       switch sheet {
@@ -361,6 +364,9 @@ private struct CameraMonitorView: View {
           onPause: { Task { await model.pauseCamera(peerID: focusedTile.peerID) } },
           onResume: { Task { await model.resumeCamera(peerID: focusedTile.peerID) } },
           onSnapshot: { Task { await model.requestSnapshot(peerID: focusedTile.peerID) } },
+          onQuality: { quality in
+            Task { await model.switchCameraQuality(peerID: focusedTile.peerID, quality: quality) }
+          },
           onViewSnapshot: { presentedSheet = .snapshot(focusedTile.peerID) },
           onRemove: { Task { await model.removeCamera(peerID: focusedTile.peerID) } }
         )
@@ -392,6 +398,9 @@ private struct CameraMonitorView: View {
               onPause: { Task { await model.pauseCamera(peerID: tile.peerID) } },
               onResume: { Task { await model.resumeCamera(peerID: tile.peerID) } },
               onSnapshot: { Task { await model.requestSnapshot(peerID: tile.peerID) } },
+              onQuality: { quality in
+                Task { await model.switchCameraQuality(peerID: tile.peerID, quality: quality) }
+              },
               onViewSnapshot: { presentedSheet = .snapshot(tile.peerID) },
               onRemove: { Task { await model.removeCamera(peerID: tile.peerID) } }
             )
@@ -441,6 +450,7 @@ private struct CameraTileView: View {
   let onPause: () -> Void
   let onResume: () -> Void
   let onSnapshot: () -> Void
+  let onQuality: (CameraQuality) -> Void
   let onViewSnapshot: () -> Void
   let onRemove: () -> Void
 
@@ -505,6 +515,11 @@ private struct CameraTileView: View {
       Text(statusLabel.uppercased())
         .font(.system(size: focused ? 11 : 8, weight: .semibold, design: .monospaced))
         .foregroundStyle(CameraMeshStyle.text.opacity(0.9))
+      if let quality = tile.quality {
+        Text(quality.shortTitle)
+          .font(.system(size: focused ? 11 : 8, weight: .bold, design: .monospaced))
+          .foregroundStyle(CameraMeshStyle.warning)
+      }
     }
   }
 
@@ -554,6 +569,29 @@ private struct CameraTileView: View {
       Spacer(minLength: 0)
       Menu {
         if tile.connectionID != nil {
+          Section("Stream quality") {
+            ForEach(CameraQuality.allCases) { quality in
+              Button {
+                onQuality(quality)
+              } label: {
+                if tile.quality == quality {
+                  Label(
+                    CameraMeshContract.profile(quality).label,
+                    systemImage: "checkmark"
+                  )
+                } else {
+                  Text(CameraMeshContract.profile(quality).label)
+                }
+              }
+              .disabled(
+                !tile.availableQualities.contains(quality)
+                  || tile.quality == quality
+                  || tile.switchingQuality != nil
+                  || tile.snapshotPending
+                  || tile.paused
+              )
+            }
+          }
           Button(tile.paused ? "Resume camera" : "Pause camera") {
             tile.paused ? onResume() : onPause()
           }
@@ -576,7 +614,7 @@ private struct CameraTileView: View {
           .background(Color.black.opacity(0.58))
           .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
       }
-      .disabled(tile.controlPending)
+      .disabled(tile.controlPending || tile.switchingQuality != nil)
     }
   }
 
@@ -888,7 +926,7 @@ private struct CameraPublisherView: View {
             .foregroundStyle(model.paused ? CameraMeshStyle.warning : CameraMeshStyle.accent)
           }
           .font(.caption.monospacedDigit())
-          Text("480×270 JPEG · up to 5 fps · foreground only")
+          Text("Low 480×270 @ 5 · Medium 960×540 @ 15 · High 1920×1080 @ 30")
             .font(.caption)
             .foregroundStyle(.secondary)
         }

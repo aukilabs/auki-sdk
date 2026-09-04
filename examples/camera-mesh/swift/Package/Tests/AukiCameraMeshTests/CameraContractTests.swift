@@ -111,6 +111,46 @@ final class CameraContractTests: XCTestCase {
     XCTAssertThrowsError(try validateStreamManifest(wrong, metadata: metadata))
   }
 
+  func testEveryCameraRenditionUsesTheSameVerifiedShape() throws {
+    let peerID = AukiPeerIdentity.generate().peerId()
+    for quality in CameraQuality.allCases {
+      let profile = CameraMeshContract.profile(quality)
+      let catalog = try parseCameraCatalog(
+        infoJSON: infoJSON(peerID: peerID),
+        catalogJSON: catalogJSON(peerID: peerID, quality: quality),
+        expectedPeerID: peerID,
+        preferredQuality: quality
+      )
+      let metadata = try resolveCameraMetadata(
+        catalog: catalog,
+        sensorJSON: sensorJSON(peerID: peerID, quality: quality),
+        clockJSON: clockJSON(peerID: peerID),
+        frameJSON: frameJSON(peerID: peerID)
+      )
+      XCTAssertEqual(metadata.profile, profile)
+      XCTAssertEqual(metadata.availableQualities, [quality])
+      XCTAssertNoThrow(
+        try validateStreamManifest(
+          streamManifest(peerID: peerID, quality: quality),
+          metadata: metadata
+        )
+      )
+    }
+  }
+
+  func testCatalogSelectsPreferredRenditionAndReportsEveryAvailableTier() throws {
+    let peerID = AukiPeerIdentity.generate().peerId()
+    let catalog = try parseCameraCatalog(
+      infoJSON: infoJSON(peerID: peerID),
+      catalogJSON: catalogJSON(peerID: peerID, qualities: CameraQuality.allCases),
+      expectedPeerID: peerID,
+      preferredQuality: .high
+    )
+
+    XCTAssertEqual(catalog.profile, CameraMeshContract.profile(.high))
+    XCTAssertEqual(catalog.availableQualities, CameraQuality.allCases)
+  }
+
   func testEmptyCatalogIsTheExplicitApprovalBoundary() throws {
     let peerID = AukiPeerIdentity.generate().peerId()
     XCTAssertThrowsError(
@@ -245,12 +285,28 @@ final class CameraContractTests: XCTestCase {
     #"{"app":"auki-camera-mesh","app_version":"0.1.0","name":"unit camera","session_id":"camera-session","session_clock_id":"camera/utc","session_clock_hash":"\#(clockHash)","session_now_ns":7,"peer_id":"\#(peerID)","app_instance":"native/publisher"}"#
   }
 
-  private func catalogJSON(peerID: String) -> String {
-    #"{"resources":[{"variant":"sensor_log","source_peer_id":"\#(peerID)","writer_peer_id":"\#(peerID)","resource_id":"camera/main","state":"live","head":{"kind":"rolling","retention_ns":200000000},"available":{"bytes":0,"entries":0,"duration_ns":0},"sensor":{"kind":"camera","type":"rgb","sensor_id":"camera/main","sensor_hash":"\#(sensorHash)"},"manifest":{"clock":{"peer_id":"\#(peerID)","id":"camera/utc","hash":"\#(clockHash)"},"frame":{"peer_id":"\#(peerID)","id":"camera/optical","hash":"\#(frameHash)"}}},{"variant":"message_channel","owner_peer_id":"\#(peerID)","resource_id":"camera/control","clock":{"peer_id":"\#(peerID)","id":"camera/utc","hash":"\#(clockHash)"}}]}"#
+  private func catalogJSON(peerID: String, quality: CameraQuality = .low) -> String {
+    catalogJSON(peerID: peerID, qualities: [quality])
   }
 
-  private func sensorJSON(peerID: String) -> String {
-    #"{"peer_id":"\#(peerID)","sensor_id":"camera/main","kind":"camera","type":"rgb","width":480,"height":270,"frame_rate_hz":5,"image_encoding":"jpeg","pixel_format":"rgb8","row_stride_bytes":0,"color_space":"srgb","intrinsics_model":"none","distortion_model":"none","frame":{"peer_id":"\#(peerID)","id":"camera/optical","hash":"\#(frameHash)"}}"#
+  private func catalogJSON(peerID: String, qualities: [CameraQuality]) -> String {
+    let rows = qualities.map { catalogCameraRowJSON(peerID: peerID, quality: $0) }
+    let control =
+      #"{"variant":"message_channel","owner_peer_id":"\#(peerID)","resource_id":"camera/control","clock":{"peer_id":"\#(peerID)","id":"camera/utc","hash":"\#(clockHash)"}}"#
+    return #"{"resources":[\#((rows + [control]).joined(separator: ","))]}"#
+  }
+
+  private func catalogCameraRowJSON(peerID: String, quality: CameraQuality) -> String {
+    let profile = CameraMeshContract.profile(quality)
+    let retentionNs = 1_000_000_000 / profile.rateHz
+    return
+      #"{"variant":"sensor_log","source_peer_id":"\#(peerID)","writer_peer_id":"\#(peerID)","resource_id":"\#(profile.resourceID)","state":"live","head":{"kind":"rolling","retention_ns":\#(retentionNs)},"available":{"bytes":0,"entries":0,"duration_ns":0},"sensor":{"kind":"camera","type":"rgb","sensor_id":"\#(profile.resourceID)","sensor_hash":"\#(sensorHash)"},"manifest":{"clock":{"peer_id":"\#(peerID)","id":"camera/utc","hash":"\#(clockHash)"},"frame":{"peer_id":"\#(peerID)","id":"camera/optical","hash":"\#(frameHash)"}}}"#
+  }
+
+  private func sensorJSON(peerID: String, quality: CameraQuality = .low) -> String {
+    let profile = CameraMeshContract.profile(quality)
+    return
+      #"{"peer_id":"\#(peerID)","sensor_id":"\#(profile.resourceID)","kind":"camera","type":"rgb","width":\#(profile.width),"height":\#(profile.height),"frame_rate_hz":\#(profile.rateHz),"image_encoding":"jpeg","pixel_format":"rgb8","row_stride_bytes":0,"color_space":"srgb","intrinsics_model":"none","distortion_model":"none","frame":{"peer_id":"\#(peerID)","id":"camera/optical","hash":"\#(frameHash)"}}"#
   }
 
   private func clockJSON(peerID: String) -> String {
@@ -261,23 +317,27 @@ final class CameraContractTests: XCTestCase {
     #"{"peer_id":"\#(peerID)","frame_id":"camera/optical","handedness":"right","axes":{"x":"right","y":"down","z":"forward"},"units":"meters"}"#
   }
 
-  private func streamManifest(peerID: String) -> AukiStreamManifest {
-    AukiStreamManifest(
-      sensorId: CameraMeshContract.cameraResourceID,
+  private func streamManifest(
+    peerID: String,
+    quality: CameraQuality = .low
+  ) -> AukiStreamManifest {
+    let profile = CameraMeshContract.profile(quality)
+    return AukiStreamManifest(
+      sensorId: profile.resourceID,
       sensorHash: sensorHash,
       clockPeerId: peerID,
       clockId: CameraMeshContract.clockID,
       clockHash: clockHash,
       frameId: CameraMeshContract.frameID,
       frameHash: frameHash,
-      resourceId: CameraMeshContract.cameraResourceID,
+      resourceId: profile.resourceID,
       payload: "camera_frame",
       fromFrameId: "",
       fromFrameHash: "",
       toFrameId: "",
       toFrameHash: "",
       writerMode: "live",
-      expectedRateHz: UInt32(CameraMeshContract.rateHz),
+      expectedRateHz: UInt32(profile.rateHz),
       mapPeerId: "",
       mapId: "",
       mapHash: ""

@@ -8,7 +8,9 @@ This foreground-only SwiftUI app can either publish the iPhone camera or run a
 - Swift owns the UI, app lifecycle, and AVFoundation camera capture.
 - One Swift viewer peer owns independent authenticated connections to every
   camera on the wall; each feed can fail, retry, pause, or snapshot separately.
-- The publisher retains only the newest 480×270 JPEG and serves at 5 fps.
+- One 30 fps camera source produces bounded Low (480×270 at 5 fps), Medium
+  (960×540 at 15 fps), and High (1920×1080 at 30 fps) renditions. Rust retains
+  only the newest JPEG for each tier.
 
 The identity is process-scoped: relaunching the app creates a new Peer ID.
 Credentials are used only for login and are not stored in Keychain. Sending the
@@ -100,7 +102,11 @@ with **Add all**. The wall is capped at 16 cameras.
 On iPhone the wall uses two columns. Select **1** or tap a camera to focus a
 single feed, then use the arrow controls to move through the wall. Wider Apple
 devices expose one through four columns. Each tile's menu owns pause/resume,
-verified snapshot, retry, focus, and removal for that camera only.
+verified snapshot, Low/Medium/High quality, retry, focus, and removal for that
+camera only. New one-column feeds prefer High, two-column feeds prefer Medium,
+and denser walls prefer Low. Missing tiers fall back to the publisher's lowest
+available quality. Switching waits for the first replacement frame before it
+closes the working stream.
 
 An unapproved connection returns `approval_required`. Compare the complete
 viewer Peer ID shown by the app with the publisher's pending request, approve
@@ -115,8 +121,10 @@ The app previews the back camera, books TCP and WSS relay routes, advertises the
 Stream protocol through DDS, and displays its complete peer card.
 
 Capture uses a fixed sensor-native landscape orientation so every runtime sees
-the same 480×270 wire image. Hold the phone in landscape for an upright preview;
-rotating the UI does not rotate frames already being published.
+the same aspect ratio at each quality tier. Hold the phone in landscape for an
+upright preview; rotating the UI does not rotate frames already being
+published. All three tiers come from the same captured frame and keep only
+their newest encoded JPEG, so a slow viewer cannot create an unbounded queue.
 
 Connect from a Web or native viewer. Before approval, Info may identify the
 peer, but Catalog and Registry camera resources and Stream frames remain

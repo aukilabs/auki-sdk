@@ -381,15 +381,20 @@ export class CameraMesh {
       let subscription: AukiStreamSubscription | undefined;
       let adopted = false;
       try {
+        const metadataStarted = performance.now();
         const metadata = await this.protocolStack().resolveRemoteMetadata(target, preferredQuality);
+        const metadataMs = performance.now() - metadataStarted;
         const request: AukiStreamRequest = {
           sourcePeerId: candidate.peerId,
           resourceId: metadata.resourceId,
           from: { kind: "latest" },
         };
+        const streamStarted = performance.now();
         subscription = await this.streamClient.subscribeExact(target, "camera", request);
+        const streamOpened = performance.now();
         validateStreamManifest(subscription.manifest, metadata, candidate.peerId);
         const firstFrame = await readStreamFrame(subscription, metadata, candidate.peerId);
+        const firstFrameMs = performance.now() - streamOpened;
         if (this.closing) throw new Error("Camera Mesh peer is stopping");
         const connection: RemoteConnection = {
           target: { ...target },
@@ -420,7 +425,10 @@ export class CameraMesh {
           });
         }
         this.hooks.event(
-          `Viewing ${candidate.peerId} ${metadata.profile.quality} through ${route}`,
+          `Viewing ${candidate.peerId} ${metadata.profile.quality} through ${route} `
+            + `(metadata ${Math.round(metadataMs)} ms, Stream open `
+            + `${Math.round(streamOpened - streamStarted)} ms, first frame `
+            + `${Math.round(firstFrameMs)} ms)`,
         );
         return connection;
       } catch (error) {
@@ -440,6 +448,9 @@ export class CameraMesh {
         }
         failures.push(reasons.join("; "));
       }
+    }
+    if (!this.remotes.has(candidate.peerId)) {
+      this.protocolStack().forgetRemoteMetadata(candidate.peerId);
     }
     throw new Error(`Camera request declined or unreachable: ${failures.join("; ")}`);
   }
@@ -479,6 +490,7 @@ export class CameraMesh {
 
   async disconnectCamera(peerId: string): Promise<void> {
     const remote = this.remotes.get(peerId);
+    this.protocolStack().forgetRemoteMetadata(peerId);
     if (!remote) return;
     this.remotes.delete(peerId);
     try {
@@ -711,6 +723,7 @@ export class CameraMesh {
     } finally {
       if (this.remotes.get(peerId) === remote) {
         this.remotes.delete(peerId);
+        this.protocolStack().forgetRemoteMetadata(peerId);
         subscription.free();
         this.hooks.remoteEnded(terminalReason ?? `Camera ${peerId} Stream stopped`, peerId);
       }

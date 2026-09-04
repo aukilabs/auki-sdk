@@ -99,6 +99,7 @@ try {
   await assertProfile(viewer, cardA.peerId, "high");
   await assertQualitySwitch(viewer, cardA.peerId, "medium");
   await assertProfile(viewer, cardA.peerId, "medium");
+  await assertMetadataReuse(viewer, cardA.peerId, 2);
 
   await cameraMenuAction(viewer, cardA.peerId, "source-pause");
   await waitForText(publishers[0], "#events", "Camera paused by an approved viewer", timeout);
@@ -436,6 +437,17 @@ async function assertQualitySwitch(page, peerId, quality) {
   if (blankSamples > 0) {
     throw new Error(
       `camera ${peerId} exposed ${blankSamples} blank sample(s) while switching to ${quality}`,
+    );
+  }
+}
+
+async function assertMetadataReuse(page, peerId, expectedUses) {
+  const events = await elementText(page, "#events");
+  const marker = `Reused verified Camera Mesh metadata for ${peerId}`;
+  const uses = events.split(marker).length - 1;
+  if (uses < expectedUses) {
+    throw new Error(
+      `camera ${peerId} reused verified metadata ${uses} time(s); expected ${expectedUses}`,
     );
   }
 }

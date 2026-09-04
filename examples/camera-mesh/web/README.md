@@ -67,12 +67,14 @@ Web publisher captures once and advertises three immutable renditions:
 Keeping Low at the original `camera/main` resource preserves Rust, Python, and
 Swift viewer compatibility. A Web viewer selects Low, Medium, or High from the
 camera action menu. It verifies that the chosen Catalog resource, Registry
-metadata, Stream manifest, and every JPEG agree. Switching opens and validates
-the replacement stream before closing the current one, so the last decoded
-frame remains visible throughout the handoff. The Add Camera sheet initially
-chooses High for one column, Medium for two, and Low for denser layouts, while
-still letting the operator override it before connecting. Camera Mesh rejects
-JPEG frames larger than 1 MiB.
+metadata, Stream manifest, and every JPEG agree. The first connection validates
+and caches the immutable metadata for every advertised rendition. Switching
+therefore opens only the replacement Stream, then closes the current one after
+the first replacement frame, so the last decoded frame remains visible
+throughout the handoff. The cache is discarded when the camera disconnects.
+The Add Camera sheet initially chooses High for one column, Medium for two, and
+Low for denser layouts, while still letting the operator override it before
+connecting. Camera Mesh rejects JPEG frames larger than 1 MiB.
 
 The application retains only the newest captured frame before each transport
 write. The Web viewer shares a bounded, fair decode scheduler across the wall

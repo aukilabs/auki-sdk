@@ -168,6 +168,11 @@ export interface RemoteCameraMetadata extends CameraRegistryMetadata {
   readonly availableQualities: readonly CameraQualityTier[];
 }
 
+interface RemoteCameraMetadataSet {
+  readonly peerId: string;
+  readonly renditions: ReadonlyMap<CameraQualityTier, RemoteCameraMetadata>;
+}
+
 export interface VerifiedBlob {
   readonly peerId: string;
   readonly sha256: string;
@@ -207,6 +212,7 @@ export class CameraProtocols {
   private readonly endpoints: Endpoint[] = [];
   private readonly clients: Client[] = [];
   private readonly blobs = new Map<string, Uint8Array>();
+  private readonly remoteMetadata = new Map<string, RemoteCameraMetadataSet>();
   private readonly operations = new Set<Promise<unknown>>();
   private readonly pendingSnapshots = new Map<string, PendingSnapshot>();
   private readonly controlChannel: AukiMessageChannelResource;
@@ -316,72 +322,29 @@ export class CameraProtocols {
     preferredQuality: CameraQualityTier,
   ): Promise<RemoteCameraMetadata> {
     return this.track(async () => {
-      const [info, catalog] = await Promise.all([
-        this.fetchInfoImpl(target),
-        required(this.catalogClient, "Catalog client").fetchResourcesExact(
-          target,
-          ["sensor_log", "message_channel"],
-        ),
-      ]);
-      assert(info.app === APP, `Info app must be ${APP}`);
-      assert(info.appVersion === APP_VERSION, `Info app version must be ${APP_VERSION}`);
-      this.emit(
-        `Catalog fetched ${catalog.resources.length} row(s): ${catalog.resources
-          .map((resource) => `${String(resource.variant)}:${String(resource["resource_id"])}`)
-          .join(", ") || "none"}`,
-      );
-      const cameras = parseCameraCatalog(catalog.resources, target.peerId);
-      const availableQualities = cameras.map((camera) => camera.quality);
-      const camera = cameras.find((candidate) => candidate.quality === preferredQuality)
-        ?? required(cameras[0], "camera Catalog rendition");
-      if (camera.quality !== preferredQuality) {
+      const cacheKey = remoteMetadataKey(target);
+      let metadata = this.remoteMetadata.get(cacheKey);
+      if (metadata) {
+        this.emit(`Reused verified Camera Mesh metadata for ${target.peerId}`);
+      } else {
+        metadata = await this.fetchRemoteMetadata(target);
+        this.remoteMetadata.set(cacheKey, metadata);
+      }
+      const rendition = metadata.renditions.get(preferredQuality)
+        ?? required(metadata.renditions.values().next().value, "camera Catalog rendition");
+      if (rendition.profile.quality !== preferredQuality) {
         this.emit(
-          `Camera does not offer ${preferredQuality}; using ${camera.quality} rendition`,
+          `Camera does not offer ${preferredQuality}; using ${rendition.profile.quality} rendition`,
         );
       }
-      assert(info.sessionClockId === camera.clock.id, "Info and Catalog use different clocks");
-      assert(info.sessionClockHash === camera.clock.hash, "Info and Catalog clock hashes differ");
-      const controlChannel = parseControlChannel(catalog.resources, target.peerId, camera.clock);
-      const registry = required(this.registryClient, "Registry client");
-      // Resolve these small immutable entries in order. Exact relay routes may
-      // reuse one authenticated connection, so racing three new request streams
-      // here can make one runtime close a connection another request still uses.
-      const sensorEntry = await registry.fetchExact(
-        target,
-        "sensor",
-        camera.sensor.id,
-        camera.sensor.hash,
-      ) as AukiSensorRegistryEntry;
-      const clockEntry = await registry.fetchExact(
-        target,
-        "clock",
-        camera.clock.id,
-        camera.clock.hash,
-      ) as AukiClockRegistryEntry;
-      const frameEntry = await registry.fetchExact(
-        target,
-        "frame",
-        camera.frame.id,
-        camera.frame.hash,
-      ) as AukiFrameRegistryEntry;
-      assert(clockEntry.session_id === info.sessionId,
-        "Info and Clock Registry entry use different sessions");
-      const sensor = verifyRegistryEntry("sensor", camera.sensor, sensorEntry);
-      const clock = verifyRegistryEntry("clock", camera.clock, clockEntry);
-      const frame = verifyRegistryEntry("frame", camera.frame, frameEntry);
-      const profile = validateCameraEntries(sensor.entry, clock.entry, frame.entry, camera);
-      return {
-        info,
-        catalog: camera.row,
-        controlChannel,
-        resourceId: camera.resourceId,
-        availableQualities,
-        profile,
-        sensor,
-        clock,
-        frame,
-      };
+      return rendition;
     });
+  }
+
+  forgetRemoteMetadata(peerId: string): void {
+    for (const [key, metadata] of this.remoteMetadata) {
+      if (metadata.peerId === peerId) this.remoteMetadata.delete(key);
+    }
   }
 
   sendControl(
@@ -721,6 +684,99 @@ export class CameraProtocols {
     return info;
   }
 
+  private async fetchRemoteMetadata(
+    target: AukiExactTarget,
+  ): Promise<RemoteCameraMetadataSet> {
+    const infoCatalogStarted = performance.now();
+    const [info, catalog] = await Promise.all([
+      this.fetchInfoImpl(target),
+      required(this.catalogClient, "Catalog client").fetchResourcesExact(
+        target,
+        ["sensor_log", "message_channel"],
+      ),
+    ]);
+    const infoCatalogMs = performance.now() - infoCatalogStarted;
+    assert(info.app === APP, `Info app must be ${APP}`);
+    assert(info.appVersion === APP_VERSION, `Info app version must be ${APP_VERSION}`);
+    this.emit(
+      `Catalog fetched ${catalog.resources.length} row(s): ${catalog.resources
+        .map((resource) => `${String(resource.variant)}:${String(resource["resource_id"])}`)
+        .join(", ") || "none"}`,
+    );
+
+    const cameras = parseCameraCatalog(catalog.resources, target.peerId);
+    const firstCamera = required(cameras[0], "camera Catalog rendition");
+    for (const camera of cameras) {
+      assert(sameRef(camera.clock, firstCamera.clock),
+        "camera renditions use different clocks");
+      assert(sameRef(camera.frame, firstCamera.frame),
+        "camera renditions use different frames");
+    }
+    assert(info.sessionClockId === firstCamera.clock.id,
+      "Info and Catalog use different clocks");
+    assert(info.sessionClockHash === firstCamera.clock.hash,
+      "Info and Catalog clock hashes differ");
+    const controlChannel = parseControlChannel(
+      catalog.resources,
+      target.peerId,
+      firstCamera.clock,
+    );
+
+    const registryStarted = performance.now();
+    const registry = required(this.registryClient, "Registry client");
+    // Registry entries are immutable and content-addressed. Resolve every
+    // advertised rendition once before the first Stream starts, then quality
+    // switches need only open their replacement Stream.
+    const clockEntry = await registry.fetchExact(
+      target,
+      "clock",
+      firstCamera.clock.id,
+      firstCamera.clock.hash,
+    ) as AukiClockRegistryEntry;
+    const frameEntry = await registry.fetchExact(
+      target,
+      "frame",
+      firstCamera.frame.id,
+      firstCamera.frame.hash,
+    ) as AukiFrameRegistryEntry;
+    assert(clockEntry.session_id === info.sessionId,
+      "Info and Clock Registry entry use different sessions");
+    const clock = verifyRegistryEntry("clock", firstCamera.clock, clockEntry);
+    const frame = verifyRegistryEntry("frame", firstCamera.frame, frameEntry);
+    const availableQualities = cameras.map((camera) => camera.quality);
+    const renditions = new Map<CameraQualityTier, RemoteCameraMetadata>();
+    for (const camera of cameras) {
+      const sensorEntry = await registry.fetchExact(
+        target,
+        "sensor",
+        camera.sensor.id,
+        camera.sensor.hash,
+      ) as AukiSensorRegistryEntry;
+      const sensor = verifyRegistryEntry("sensor", camera.sensor, sensorEntry);
+      const profile = validateCameraEntries(sensor.entry, clock.entry, frame.entry, camera);
+      renditions.set(camera.quality, {
+        info,
+        catalog: camera.row,
+        controlChannel,
+        resourceId: camera.resourceId,
+        availableQualities,
+        profile,
+        sensor,
+        clock,
+        frame,
+      });
+    }
+    const registryMs = performance.now() - registryStarted;
+    this.emit(
+      `Verified ${renditions.size} Camera Mesh rendition(s) for ${target.peerId} `
+        + `(Info/Catalog ${Math.round(infoCatalogMs)} ms, Registry ${Math.round(registryMs)} ms)`,
+    );
+    return {
+      peerId: target.peerId,
+      renditions,
+    };
+  }
+
   private sameDomain(requester: AukiAuthenticatedPeer): boolean {
     return requester.domainIds.includes(this.peer.domainId);
   }
@@ -792,6 +848,7 @@ export class CameraProtocols {
     for (const client of this.clients.reverse()) client.free();
     this.clients.length = 0;
     this.blobs.clear();
+    this.remoteMetadata.clear();
     for (const requestId of this.pendingSnapshots.keys()) {
       this.removePendingSnapshot(requestId);
     }
@@ -1159,6 +1216,10 @@ function sameRef(left: AukiRegistryRef, right: AukiRegistryRef): boolean {
 
 function browserRoutes(routes: readonly string[]): string[] {
   return routes.filter((route) => route.split("/").includes("wss"));
+}
+
+function remoteMetadataKey(target: AukiExactTarget): string {
+  return JSON.stringify([target.peerId, target.route]);
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {

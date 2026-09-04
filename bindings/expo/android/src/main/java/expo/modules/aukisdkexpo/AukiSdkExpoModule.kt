@@ -15,10 +15,6 @@ class AukiSdkExpoModule : Module() {
       throw AndroidUnsupportedException()
     }
 
-    AsyncFunction("loginWithDomainAccessToken") { _: String, _: String, _: String, _: String ->
-      throw AndroidUnsupportedException()
-    }
-
     AsyncFunction("accessibleDomains") { _: String ->
       throw AndroidUnsupportedException()
     }

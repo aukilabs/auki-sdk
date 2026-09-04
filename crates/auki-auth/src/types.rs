@@ -87,36 +87,8 @@ impl fmt::Debug for AppCredentials {
     }
 }
 
-/// Already-minted DDS domains-access-token (service bearer).
-///
-/// Callers exchange an upstream identity token (for example Zitadel) at the API
-/// or DDS for this bearer, then hand it to [`crate::AuthClient::authenticate`].
-/// The session is intentionally non-renewable: mint a fresh token when it expires.
-pub struct DomainAccessToken {
-    pub(crate) token: SecretString,
-}
-
-impl DomainAccessToken {
-    pub fn new(token: impl Into<SecretString>) -> Self {
-        Self {
-            token: token.into(),
-        }
-    }
-}
-
-impl fmt::Debug for DomainAccessToken {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DomainAccessToken")
-            .field("token", &"[redacted]")
-            .finish()
-    }
-}
-
 pub enum Credentials {
     UserPassword(UserPassword),
-    /// Pre-minted domains-access-token; treated as a User principal for DDS peer_type.
-    DomainAccessToken(DomainAccessToken),
     #[cfg(not(target_arch = "wasm32"))]
     AppCredentials(AppCredentials),
 }
@@ -126,10 +98,6 @@ impl Credentials {
         Self::UserPassword(UserPassword::new(email, password))
     }
 
-    pub fn domain_access_token(token: impl Into<SecretString>) -> Self {
-        Self::DomainAccessToken(DomainAccessToken::new(token))
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     pub fn app(access_key: impl Into<String>, secret: impl Into<SecretString>) -> Self {
         Self::AppCredentials(AppCredentials::new(access_key, secret))
@@ -137,7 +105,7 @@ impl Credentials {
 
     pub const fn principal_kind(&self) -> PrincipalKind {
         match self {
-            Self::UserPassword(_) | Self::DomainAccessToken(_) => PrincipalKind::User,
+            Self::UserPassword(_) => PrincipalKind::User,
             #[cfg(not(target_arch = "wasm32"))]
             Self::AppCredentials(_) => PrincipalKind::App,
         }

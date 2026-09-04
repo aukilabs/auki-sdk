@@ -111,34 +111,6 @@ mod facade {
             Ok(Self { bootstrap })
         }
 
-        /// Bootstrap from an already-minted DDS domains-access-token.
-        ///
-        /// The host exchanges an upstream identity token (for example Zitadel)
-        /// for this bearer before calling. The session cannot refresh — mint a
-        /// new token when DDS returns unauthorized.
-        #[wasm_bindgen(js_name = loginWithDomainAccessToken)]
-        pub async fn login_with_domain_access_token(
-            api_base_url: String,
-            dds_base_url: String,
-            dms_base_url: String,
-            domain_access_token: String,
-        ) -> Result<AukiUserSession, JsValue> {
-            let environment = AuthEnvironment::new(api_base_url, dds_base_url)
-                .map_err(|error| js_context("configure authentication", error))?;
-            let peer_config = AukiPeerConfig::new(dms_base_url)
-                .map_err(|error| js_context("configure DMS", error))?;
-            let client = AuthClient::new(environment)
-                .map_err(|error| js_context("configure authentication", error))?;
-            let bootstrap = AukiPeerBootstrap::authenticate(
-                client,
-                Credentials::domain_access_token(domain_access_token),
-                peer_config,
-            )
-            .await
-            .map_err(|error| js_context("authenticate domain access token", error))?;
-            Ok(Self { bootstrap })
-        }
-
         /// Public descriptors for every Domain this User can select.
         #[wasm_bindgen(js_name = accessibleDomains, unchecked_return_type = "AukiDomain[]")]
         pub async fn accessible_domains(&self) -> Result<Array, JsValue> {

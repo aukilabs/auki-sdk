@@ -156,8 +156,6 @@ enum PrincipalState {
     User {
         refresh_token: SecretString,
     },
-    /// Bearer-only session; refresh is impossible — caller must mint again.
-    DomainAccessToken,
     #[cfg(not(target_arch = "wasm32"))]
     App(AppCredentials),
 }
@@ -170,7 +168,7 @@ struct SessionState {
 impl SessionState {
     fn gateway_mac(&self) -> Option<&str> {
         match &self.principal {
-            PrincipalState::User { .. } | PrincipalState::DomainAccessToken => None,
+            PrincipalState::User { .. } => None,
             #[cfg(not(target_arch = "wasm32"))]
             PrincipalState::App(credentials) => credentials.gateway_mac.as_deref(),
         }
@@ -228,14 +226,6 @@ impl AuthClient {
                     .await?;
                 SessionState {
                     principal: PrincipalState::User { refresh_token },
-                    dds_service_bearer,
-                }
-            }
-            Credentials::DomainAccessToken(credentials) => {
-                validate_domain_access_token(&credentials.token)?;
-                let dds_service_bearer = credentials.token;
-                SessionState {
-                    principal: PrincipalState::DomainAccessToken,
                     dds_service_bearer,
                 }
             }
@@ -352,12 +342,6 @@ impl AuthClient {
                     .await?;
                 // Keep the former DDS bearer until its replacement is complete.
                 state.dds_service_bearer = dds_service_bearer;
-            }
-            PrincipalState::DomainAccessToken => {
-                return Err(Error::InvalidInput {
-                    field: "domain_access_token",
-                    reason: "session is not renewable; mint a fresh domains-access-token",
-                });
             }
             #[cfg(not(target_arch = "wasm32"))]
             PrincipalState::App(credentials) => {
@@ -933,10 +917,6 @@ fn validate_user_credentials(credentials: &UserPassword) -> Result<()> {
         });
     }
     validate_secret(&credentials.password, MAX_PASSWORD_BYTES, "password")
-}
-
-fn validate_domain_access_token(token: &SecretString) -> Result<()> {
-    validate_secret(token, P2P_TOKEN_MAX_BYTES, "domain_access_token")
 }
 
 #[cfg(not(target_arch = "wasm32"))]

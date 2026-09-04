@@ -85,24 +85,6 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     return id;
   }
 
-  async loginWithDomainAccessToken(
-    apiBaseUrl: string,
-    ddsBaseUrl: string,
-    dmsBaseUrl: string,
-    domainAccessToken: string,
-  ): Promise<string> {
-    const sdk = await this.sdk();
-    const session = await sdk.AukiUserSession.loginWithDomainAccessToken(
-      apiBaseUrl,
-      ddsBaseUrl,
-      dmsBaseUrl,
-      domainAccessToken,
-    );
-    const id = newId("session");
-    this.sessions.set(id, session);
-    return id;
-  }
-
   async accessibleDomains(sessionId: string): Promise<AukiDomainInfo[]> {
     const domains = await this.session(sessionId).accessibleDomains();
     return domains.map((domain) => ({

@@ -10,12 +10,6 @@ import type {
 
 declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents> {
   loginDev(email: string, password: string): Promise<string>;
-  loginWithDomainAccessToken(
-    apiBaseUrl: string,
-    ddsBaseUrl: string,
-    dmsBaseUrl: string,
-    domainAccessToken: string,
-  ): Promise<string>;
   accessibleDomains(sessionId: string): Promise<AukiDomainInfo[]>;
   startPeer(sessionId: string, domainId: string): Promise<string>;
   startPeerWithDiscovery(

@@ -36,12 +36,8 @@ Sessions and peers are opaque string handles so web Wasm objects and iOS UniFFI 
 ```ts
 import AukiSdkExpo from "@aukilabs/auki-sdk-expo";
 
-const session = await AukiSdkExpo.loginWithDomainAccessToken(
-  apiBase,
-  ddsBase,
-  dmsBase,
-  mintedDomainAccessToken,
-);
+// Temporary until upstream Zitadel→DDS auth lands — then swap to product login.
+const session = await AukiSdkExpo.loginDev(email, password);
 const domains = await AukiSdkExpo.accessibleDomains(session);
 const peer = await AukiSdkExpo.startPeerWithDiscovery(
   session,
@@ -54,11 +50,10 @@ await AukiSdkExpo.shutdown(peer);
 
 | Method | Web | iOS | Android |
 |--------|-----|-----|---------|
-| `loginWithDomainAccessToken` | yes | throws (UniFFI not exported yet) | throws |
 | `loginDev` | yes | yes | throws |
 | `accessibleDomains` / `startPeer*` / `discover*` | yes | yes | throws |
-| `infoFetchExact` / catalog | yes | yes (catalog variants TBD) | throws |
-| `stream*` | yes | throws (follow-up) | throws |
+| `infoFetchExact` / catalog / registry / blob | yes | yes | throws |
+| `stream*` | yes | yes | throws |
 
 ## Metro (consumer)
 
@@ -74,4 +69,4 @@ Example dep:
 
 ## Auth note
 
-`loginWithDomainAccessToken` expects an already-minted DDS **domains-access-token** (service bearer). The host (e.g. peyote) exchanges Zitadel → DDS first; this module does not talk to Zitadel.
+Product auth (Zitadel → DDS) is expected upstream. Until that lands, consumers use `loginDev` for local/dev fleet smoke only.

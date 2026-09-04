@@ -28,18 +28,6 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("loginWithDomainAccessToken") {
-      (
-        _: String,
-        _: String,
-        _: String,
-        _: String
-      ) -> String in
-      throw unsupported(
-        "loginWithDomainAccessToken is not exported on auki-sdk-swift yet; use web or loginDev on iOS"
-      )
-    }
-
     AsyncFunction("accessibleDomains") { (sessionId: String) -> [[String: Any?]] in
       #if canImport(auki_sdk_swiftFFI)
       guard let session = self.sessions[sessionId] else {

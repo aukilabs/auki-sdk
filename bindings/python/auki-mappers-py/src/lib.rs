@@ -1,5 +1,11 @@
 //! Python boundary for SDK-native Mappers.
 
+// PyO3 0.22 proc-macro expansions trigger these Rust 2024/Clippy lints. They
+// cannot be corrected in handwritten wrapper code without changing the shared
+// binding ABI, so scope the compatibility allowance to this crate.
+#![allow(unsafe_op_in_unsafe_fn)]
+#![allow(clippy::useless_conversion)]
+
 use auki_datatypes::{
     point_cloud::Data as PointCloudData,
     pose::{Quat, SpatialTransform, Vec3},

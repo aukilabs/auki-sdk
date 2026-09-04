@@ -1,245 +1,188 @@
 ---
 name: auki-sdk-app-builder
-description: Use when building public applications, demos, integrations, prototypes, robot producers, or tools with the Auki SDK; when code touches peer identity, Peer/Session/Domain lifecycle, registries, logs, resource catalogs, streams, geometry, discovery, clocks, or payload contracts; or when deciding whether app code should use an SDK API versus an app-side adapter.
+description: Build or review Auki SDK applications, robot producers, and portable peer protocols using the public AukiPeer, Peer/Session, registry, log, and geometry surfaces. Use when application code must authenticate, connect peers, mount or author a protocol, expose robot data, or decide whether behavior belongs in the SDK or an app-side adapter; not for implementing SDK internals.
 ---
 
 # Auki SDK App Builder
 
-Use the Auki SDK as the product surface. Build applications on top of SDK capabilities instead of recreating the SDK inside the app.
+Keep applications thin: compose public SDK owners, then add product behavior at
+the edge. Do not recreate authentication, P2P, relay, protocol, registry, clock,
+or spatial machinery in application code.
 
-## Core Rule
+## Read the maintained P2P guides
 
-If the code is about how Auki peers find each other, join clusters, describe capabilities, register metadata, open streams, encode/decode SDK payloads, manage clocks, or convert frames and transforms, inspect the SDK first.
+- [Auki P2P mental model](../../docs/p2p/README.md)
+- [Native Rust getting started](../../docs/p2p/getting-started.md)
+- [Portable protocol authoring](../../docs/p2p/authoring-protocols.md)
 
-Do not hand-roll Auki SDK concepts when an official SDK API, binding, example, or helper exists.
+Use those guides for runnable flows. This skill records the architectural
+choices that should guide application work. If documentation and the pinned SDK
+revision disagree, inspect that revision's public exports, tests, and examples.
 
-## SDK Mental Model
+## Choose the correct owner
 
-The Auki SDK handles shared distributed-system and spatial machinery for an application. The app should consume this machinery through public SDK APIs.
+- `auki_sdk::AukiPeer` is the canonical networking facade for new Rust and Web
+  applications. It owns one authenticated Peer ID in one DDS Domain, authority
+  supervision, P2P transport, DMS relay allocation, routes, protocol hosting,
+  lifecycle fencing, and ordered shutdown. Native exposes readiness status;
+  Web exposes a terminal lifecycle observer.
+- `auki_session::Peer` is the long-lived local recording owner. Register
+  peer-level frames, sensors, detectors, maps, device models, and URDF packages
+  there.
+- `auki_session::Session` is one recording timeline created with
+  `Peer::start_session()`. It owns session clocks and sensor, pose,
+  time-transform, detection, and map logs.
+- `auki_protocols` contains transport-neutral SDK wire contracts and opt-in
+  portable `Endpoint` / cloneable `Client` implementations for each supported
+  family. Compiling a wire feature does not mount its endpoint.
+- `auki_geometry` owns convention conversion, transform composition and
+  inversion, and pose/matrix spatial math.
 
-Current native app layering:
+`auki_session::Peer` and `auki_sdk::AukiPeer` have different ownership roles
+even when a product associates them with the same participant.
 
-- Stable identity: `auki_identity` loads or reconstructs wallet seed material; `auki_network::PeerIdentity` derives the libp2p peer identity.
-- `auki_session::Peer`: long-lived peer identity + app identity + storage root + peer-level registries for sensors, frames, and detectors.
-- `auki_session::Session`: one run / timeline born from `Peer::start_session()`. It owns the fresh `session_id`, the session clock registry, the auto-minted monotonic + UTC clocks, and live logs.
-- `auki_domain::Domain`: network presence for a `Peer` + `Session`. It joins/leaves clusters and serves the resource catalog built from `Peer.registries` + `Session.logs`.
+The legacy Manager and Rust/Python `Domain` runtimes are removed. Use an old tag
+only to understand or migrate historical consumers. Python and Swift do not yet
+have the canonical high-level `AukiPeer` facade.
 
-Use the SDK for:
+## Start an authenticated peer
 
-- Stable peer identity: seed loading/minting, wallet reconstruction, peer identity derivation, and representing the app in the Auki network.
-- Peer/session lifecycle: `Peer::new(...)`, peer-level registry registration, `Peer::start_session()`, session clocks/logs, and `Domain::join(...)`.
-- Discovery and cluster membership: finding peers, joining/leaving clusters, reconnecting, and observing participants.
-- Live resource discovery: reading what a peer currently offers through the SDK resource catalog, including `/auki/resources`.
-- Registries: content-addressed metadata for sensors, frames, clocks, payloads, and typed resources.
-- Stream lifecycle: opening, accepting, producing, consuming, ending, and erroring streams.
-- Typed payload contracts: using SDK-defined message wrappers and serialization instead of raw ad hoc bytes.
-- Clocks and timestamps: declaring clock metadata and interpreting stream timestamps consistently.
-- `auki-geometry`: coordinate frames, frame conventions, convention conversion, pose/transform composition, transform inversion, and spatial payload interpretation.
-- Protocol compatibility: relying on SDK protocol versions and bindings rather than copying protocol details into app code.
+For a trusted native User or App host:
 
-The app is responsible for:
+1. Persist identity with `auki_sdk::Identity::load_or_create`; one live runtime
+   owns that Peer ID at a time.
+2. Authenticate with `auki_auth::AuthClient` and User email/password or App
+   access-key/secret credentials.
+3. Select one Domain and authorize the exact identity proof, producing a
+   `PreparedPeer`. List accessible Domains first only when presenting a choice.
+4. Start `AukiPeer`. Relay-backed reachability through DMS is the default.
 
-- Product behavior, UI, workflows, and presentation.
-- Choosing which SDK resources to request, produce, display, or reconcile.
-- Domain adaptation at the edge, such as reading a device/vendor API and publishing the result through SDK resources.
-- User-facing error handling, observability, retries, and loading states.
-- Small glue code around public SDK APIs.
+App secrets belong only in trusted native or headless processes. Never embed
+them in a browser, mobile binary, public repository, image, URL, or log.
 
-## Native App Startup Shape
+Robot and Compute hosts whose product control plane owns machine authentication
+use `AukiPeer::start_external`. The host supplies complete authority updates and
+responds to refresh requests through the returned control handle; `AukiPeer`
+still owns transport, relay, protocols, fencing, status, and shutdown. Keep
+task scheduling, heartbeat, and product safety policy in the host.
 
-For a native app using the current split API, the startup order is:
+Native hosts may explicitly choose `AukiPeerConfig::direct_only()` when they do
+not want DMS relay allocation. Inbound direct reachability needs a listener plus
+a dialable route shared by the application. Configure an advertised direct
+route only when the application publishes from the SDK's local route catalog;
+outbound-only peers need neither. Browser peers have no direct-only mode.
 
-1. Load or reconstruct stable identity.
-2. Construct a `Peer`.
-3. Register peer-level metadata on the `Peer`.
-4. Start a `Session` from the `Peer`.
-5. Register session logs on the `Session`.
-6. Join a `Domain` only when network presence/catalog serving is needed.
+## Routes, peers, and authority
 
-Rust shape:
+- Dial an exact expected Peer ID through a complete compatible route: normally
+  TCP from native Rust and WSS from a browser.
+- A route is an untrusted location hint. The authenticated stream must still
+  prove the expected Peer ID and selected Domain.
+- Native Rust exposes confirmed local routes and authenticated peer
+  observations; `known_peers()` is not an authorization roster.
+- Automatic remote-peer discovery and route publication are not available yet.
+  Obtain remote Peer IDs and routes from configuration, a product control
+  plane, or an explicit application exchange.
+- Domain authentication permits a peer onto the transport. Product capability
+  and safety policy still decides who may operate a robot or invoke a command.
 
-```rust
-let seed = auki_identity::load_or_mint_seed(&identity_seed_path)?;
-let wallet = auki_identity::Wallet::from_seed(seed.to_vec())?;
-let identity = auki_network::PeerIdentity::from_wallet(wallet);
-let peer_id = identity.peer_id().to_string();
+## Protocols stay explicit and portable
 
-let peer = auki_session::Peer::new(peer_id, app_id)
-    .with_storage_root(storage_root);
+Applications should mount an existing product endpoint through
+`peer.protocols()`, use its small typed API, and keep the endpoint alive while
+serving. A peer serves no product protocol merely because wire types compile or
+a client method exists. Close mounted endpoints before `peer.shutdown()` and
+monitor the native status or Web lifecycle observer for terminal failure.
 
-let frame = peer.register_frame("head_left_camera_optical", FrameDef::ros_optical())?;
-let sensor = peer.register_sensor("head_left_rgb", sensor_body)?;
+For SDK resource discovery, Catalog v3 is the live general endpoint. It carries
+unchanged v2-shaped sensor, pose, time-transform, and detection rows plus v3
+message-channel rows. Catalog v2 remains a compatibility wire schema; Map Logs
+use Catalog v4.
 
-let session = peer.start_session()?; // mints session_id + monotonic/UTC clocks
-let clock = session.monotonic_clock();
-let log = session.register_sensor_log(SensorLogSpec {
-    sensor,
-    clock,
-    frame: Some(frame),
-    head,
-    segment_duration,
-    retention,
-})?;
+When authoring a protocol, use one product-owned Rust crate with two focused
+modules:
+
+```text
+wire.rs      exact ID, types, bounded codec, conversation, locked vectors
+endpoint.rs  AukiPeer registration, exact-route dialing, deadlines, cleanup
 ```
 
-`Session::new(peer_id, app_id)`, `Session::with_storage_root(...)`, sensor/frame/detector registration on `Session`, `Session::catalog()`, and `Session::join_domain(...)` are old-shape APIs. Do not use them in new app code unless pinned to an older SDK version that still exports them.
+The wire module stays executor-, transport-, and platform-neutral. The endpoint
+adapts that one conversation to both native and Wasm peers. Platform hosts add
+only thin bindings or UI; they do not duplicate the codec. Protocol authors own
+the ID, bounds, versioning, compatibility tests, and endpoint behavior. Change
+the exact protocol ID when its wire contract or observable conversation becomes
+incompatible.
 
-Catalog and network shape:
+Do not put product endpoints in `auki_protocols` or generic application glue in
+`auki_sdk`. Keep the SDK runtime generic and the protocol crate product-owned.
 
-```rust
-let rows = auki_domain::catalog_of(&peer, &session);
+## Web behavior
 
-let domain = auki_domain::Domain::join(&peer, &session, domain_config).await?;
-let served_rows = domain.catalog();
-domain.leave().await?;
-```
+The current Web/Wasm facade supports User authentication through
+`auki-sdk-web::AukiUserSession`, accessible-Domain selection, and `AukiPeer`
+startup. Each start creates a fresh in-memory identity and mandatory confirmed
+WSS relay; reload or restart therefore produces a new Peer ID. Web applications
+use exact WSS routes, mount portable Rust endpoints through thin Wasm bindings,
+and close endpoints before shutting down the peer. They do not accept App
+credentials or persist credentials or identity.
 
-When docs, READMEs, examples, and exports disagree, prefer the current package exports, source-level public API, and tests for the SDK version being used.
+## Recording and spatial data
 
-## Cold-Start Workflow
+Register durable metadata on `auki_session::Peer`, start a `Session`, then
+register extra clocks and owned logs on that session. Keep registry references
+and hashes attached to data rather than guessing contracts from names. Preserve
+the source clock, frame, payload type, sequence, and timestamp semantics.
 
-Before implementing an SDK-based feature:
+Use `auki_geometry` for frame convention conversion, point/vector/direction and
+pose conversion, transform composition or inversion, and matrix conversion.
+When spatial output is wrong, verify registry conventions, transform direction,
+and timestamp alignment before applying device-specific calibration. Do not fix
+spatial bugs with unexplained sign flips, axis swaps, or quaternion reordering.
 
-1. Identify the SDK version, target language/runtime, and package names in use.
-2. Read the relevant official SDK docs, examples, package exports, and generated bindings.
-3. Search the existing app for SDK usage patterns before adding a new abstraction.
-4. Find the SDK primitive for each Auki concept involved: stable identity, peer, session, domain, resource, registry entry, stream, clock, payload, cluster, frame, pose, or transform.
-5. Implement with public SDK APIs first.
-6. Validate against an SDK example, integration test, or live SDK behavior.
+## Robot producers
 
-Prefer official examples over invented patterns. If the examples and exports disagree, trust the current SDK surface and verify with a small runnable probe.
+Inventory the actual vendor APIs, runtime frame names, calibration sources, and
+availability behavior before declaring resources. Consider cameras and depth,
+lidar/radar/point clouds, joints and actuators, audio/IMU/force state, poses and
+extrinsics, frames, clocks, and other capabilities the product truly exposes.
 
-## Stop Signs
+For each advertised resource, confirm:
 
-Stop and inspect the SDK before writing code that implements any of these locally:
+- stable resource ID and correct SDK variant/payload;
+- required registry metadata, frame reference and convention, and clock/time
+  semantics;
+- whether it can accept a request or stream now; and
+- open, first-sample, no-signal, error, and end-of-stream behavior.
 
-- A peer discovery mechanism.
-- A cluster join/reconnect loop.
-- Direct construction of `Session` for current native SDKs; sessions are born from `Peer::start_session()`.
-- Sensor, frame, or detector registration on `Session`; these are peer-level registries.
-- Catalog serving or domain joining on `Session`; these are `auki-domain::Domain` responsibilities.
-- A custom resource catalog or resource polling contract.
-- A local registry or content-addressed hash format.
-- A stream protocol, stream request envelope, stream accept path, or stream error path.
-- A custom payload wrapper for SDK transport.
-- A clock model or timestamp normalization layer.
-- Coordinate-frame convention conversion.
-- Quaternion, matrix, or transform inversion/composition for SDK spatial data.
-- A producer-to-render-frame conversion.
+Advertise only currently requestable resources. A temporarily unavailable
+resource may disappear from the live catalog while retaining its stable ID when
+it returns.
 
-If the SDK provides the concept, use it. If the SDK lacks the concept, isolate the smallest app-side adapter and document the SDK gap.
+## Stop signs
 
-## Resources And Registries
+Stop and inspect the SDK before adding:
 
-Treat the SDK resource catalog as the source of truth for what a peer can currently provide.
+- a second P2P runtime, authentication handshake, relay booker, renewal loop, or
+  reconnect owner beside `AukiPeer`;
+- authorization based on routes, discovery data, cached metadata, or native
+  `known_peers()` observations;
+- an assumption that discovery, route publication, or inbound protocols happen
+  automatically;
+- separate native and Web implementations of one wire protocol;
+- a custom catalog, registry/hash format, payload wrapper, clock model, or
+  spatial math already represented by the SDK; or
+- new-app networking built around removed Manager or `Domain` semantics.
 
-- Register frames, sensors, and detectors on `auki_session::Peer`.
-- Start a `Session` from the peer; the SDK mints `session_id` and registers monotonic + UTC session clocks.
-- Register extra clocks and owned logs on `auki_session::Session`.
-- Build/serve catalog rows through `auki_domain::catalog_of(&peer, &session)` or `Domain::join(...)`, not through app-owned catalog builders.
-- Use SDK resource APIs to discover sensors, streams, pose resources, and other capabilities.
-- Use resource IDs as stable handles for requestable resources.
-- Use registry references and hashes to fetch immutable metadata instead of embedding guessed schemas in app code.
-- Do not infer resource contracts from names when typed SDK metadata is available.
-- Do not advertise or assume resources that cannot currently accept stream opens.
+If the SDK genuinely lacks a capability, state the gap precisely and isolate the
+smallest app-side adapter behind a narrow interface. Do not create a competing
+public contract.
 
-When a resource appears wrong, inspect the resource entry and registry entries first. Check the resource ID, variant, state, sensor or pose metadata, frame reference, clock reference, and payload type before changing app behavior.
+## Completion check
 
-## Robot Producers
-
-When building an app that produces SDK resources for a robot, first build a resource inventory from the robot's APIs and documentation.
-
-Do not rely on a single demo stream, UI-visible stream, or guessed sensor list. Investigate the robot/vendor API surface, device documentation, runtime frame names, sensor metadata, and available calibration/extrinsic methods before deciding what to register.
-
-Register every SDK-relevant robot resource the producer is responsible for exposing:
-
-- Image sensors: RGB, depth, stereo, fisheye, thermal, or other camera streams.
-- Range sensors: lidar, radar, depth point clouds, sonar, and related point clouds.
-- Joint and actuator state: joint encoders, grippers, end effectors, wheels, and other kinematic state.
-- Pose and transform resources: fixed sensor extrinsics, live moving sensor poses, robot root poses, tool poses, and frame edges needed by consumers.
-- Frames: body frames, optical frames, sensor frames, tool frames, world/map frames, and their conventions.
-- Clocks: capture clocks and stream timestamp domains.
-- Other robot capabilities the SDK supports and the app exposes, such as audio, IMU, force, or device state.
-
-For each resource, confirm:
-
-- The stable resource ID.
-- The correct SDK resource variant and payload type.
-- The registry metadata required by consumers.
-- The frame ID, frame convention, and frame hash.
-- The clock ID and timestamp semantics.
-- Whether the resource is currently requestable.
-- How stream open, first frame, no-signal, and end-of-stream behave.
-
-Only advertise resources that can currently accept stream opens. If a robot resource is temporarily unavailable, omit it from the live catalog until it becomes requestable, while keeping its resource ID stable when it returns.
-
-## Streams And Payloads
-
-Use SDK stream APIs for stream lifecycle and SDK payload types for wire data.
-
-- Open streams through SDK stream requests.
-- Produce and consume typed SDK payloads.
-- Preserve SDK timestamps and sequence metadata where available.
-- Handle SDK stream errors explicitly instead of treating them as generic network failures.
-- Avoid forwarding raw bytes unless the SDK payload contract says the payload is raw bytes.
-
-If a consumer cannot decode a stream, verify the SDK payload wrapper and registry metadata before changing the producer's application logic.
-
-## Auki Geometry
-
-Use `auki-geometry` for SDK spatial math.
-
-Do not hand-roll:
-
-- Frame convention conversion.
-- Axis flips between producer frames and render/world frames.
-- Quaternion order conversion by guesswork.
-- Transform composition or inversion.
-- Sensor-frame to world/render-frame matrices.
-- Pose interpretation for SDK spatial payloads.
-
-When spatial data appears wrong:
-
-1. Inspect the frame registry entries for all frames involved.
-2. Confirm the declared frame conventions match the source data.
-3. Confirm transform direction: which frame maps to which parent/root frame.
-4. Use `auki-geometry` helpers for conversion, composition, and inversion.
-5. Check timestamp alignment between sensor samples and pose/transform samples.
-6. Only then consider domain-specific calibration or vendor-frame issues.
-
-Do not fix spatial bugs by flipping signs or swapping axes locally unless you can point to the SDK or device contract that requires that conversion.
-
-## Missing SDK Capabilities
-
-When the SDK does not expose the capability the app needs:
-
-- State the missing SDK capability precisely.
-- Use the smallest app-side adapter that keeps the workaround isolated.
-- Keep the adapter behind a narrow interface so it can be removed when the SDK surface exists.
-- Avoid editing SDK internals, generated bindings, or private modules in the application repo.
-- Do not create a parallel public contract that competes with the SDK.
-
-Public app agents should not make SDK implementation changes as part of app work. Document the gap for SDK maintainers or the application owner.
-
-## Implementation Checklist
-
-Before coding:
-
-- SDK version and runtime identified.
-- Official docs/examples/exports inspected.
-- Existing app SDK patterns inspected.
-- Current lifecycle selected: identity -> `Peer` -> `Session` -> optional `Domain`.
-- Robot/vendor APIs and docs inspected when building a robot producer.
-- SDK resource inventory completed for every exposed robot capability.
-- SDK-owned responsibilities separated from app-owned responsibilities.
-- `auki-geometry` considered for all frame, pose, and transform work.
-
-Before finishing:
-
-- No local replacement exists for an available SDK concept.
-- Identity, peer/session/domain lifecycle, resource, registry, stream, clock, payload, and frame metadata paths use public SDK APIs.
-- Peer-level metadata is registered on `Peer`; clocks/logs are registered on `Session`; catalog/network presence is handled by `Domain`.
-- Robot producer catalogs include all requestable SDK-relevant resources and required registry metadata.
-- Any app-side workaround is isolated and documented as a missing SDK capability.
-- Spatial math uses SDK geometry helpers or clearly justified device-specific calibration.
-- A focused test, example, or live probe verifies the SDK integration path.
+Before finishing an SDK application change, verify the exact pinned SDK surface,
+target and authentication method; intentional protocol opt-ins; exact route and
+expected-peer handling; recording metadata ownership; robot resource
+availability; native/Wasm compilation as applicable; and ordered endpoint then
+peer shutdown. Exercise a focused local test or real authenticated exchange for
+the behavior changed.

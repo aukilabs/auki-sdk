@@ -23,7 +23,8 @@ GitHub wiki page filenames map to URL slugs. Hyphens stay; spaces become URL-enc
 - `_Footer.md` — optional footer (underscore-prefixed).
 - All other pages use hyphenated `Title-Case.md` (e.g., `Quickstart.md`, `Concept-Peer-Owned-Logs.md`). The page title in the wiki UI is the filename with hyphens replaced by spaces.
 
-Page-to-page links use the filename without `.md`: `[Quickstart](Quickstart)`, `[Three IDs](Concept-Three-IDs)`.
+Page-to-page links use the filename without `.md`, for example
+`[Quickstart](Quickstart)` or `[Peer-owned logs](Concept-Peer-Owned-Logs)`.
 
 ## Adding a page
 

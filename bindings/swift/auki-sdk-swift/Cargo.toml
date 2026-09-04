@@ -1,0 +1,74 @@
+[package]
+name = "auki-sdk-swift"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Mechanical UniFFI facade for authenticated Auki peers on Apple platforms"
+readme = "README.md"
+publish = false
+
+[lib]
+name = "auki_sdk_swift"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = []
+cli = ["uniffi/cli"]
+info = [
+  "dep:auki-protocols",
+  "auki-protocols/info-endpoint",
+]
+catalog = [
+  "dep:auki-protocols",
+  "auki-protocols/catalog-endpoint",
+]
+registry = [
+  "dep:auki-protocols",
+  "dep:auki-registry",
+  "auki-protocols/registry-endpoint",
+]
+blob = [
+  "dep:auki-protocols",
+  "dep:sha2",
+  "auki-protocols/blob-endpoint",
+]
+message = [
+  "dep:auki-protocols",
+  "dep:auki-registry",
+  "auki-protocols/message-endpoint",
+]
+stream = [
+  "dep:async-channel",
+  "dep:auki-datatypes",
+  "dep:auki-protocols",
+  "dep:futures",
+  "dep:prost",
+  "auki-protocols/stream-endpoint",
+]
+finite-protocols = ["info", "catalog", "registry", "blob"]
+standard-protocols = ["finite-protocols", "message", "stream"]
+
+[dependencies]
+async-channel = { workspace = true, optional = true }
+auki-datatypes = { path = "../../../crates/auki-datatypes", optional = true }
+auki-protocols = { path = "../../../crates/auki-protocols", optional = true }
+auki-registry = { path = "../../../crates/auki-registry", optional = true }
+auki-sdk-rs = { package = "auki-sdk", path = "../../../crates/auki-sdk" }
+futures = { workspace = true, optional = true }
+parking_lot.workspace = true
+prost = { version = "0.13", optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2 = { workspace = true, optional = true }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+uniffi = { version = "0.31", features = ["tokio"] }
+uuid.workspace = true
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]

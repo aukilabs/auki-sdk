@@ -51,11 +51,10 @@
 //!   time-bounded captures are all the same kind of log on disk — they
 //!   differ only in their manifest's `retention_ns` (backward window kept on
 //!   disk; `0` = no eviction). Whether a daemon auto-creates any log at
-//!   session boot is daemon-application policy, not SDK contract — see the
-//!   [Control API spec](../../../docs/control-api.md). For sensor logs, the
-//!   manifest's `sensor_id` identifies the sensor; for pose logs, the
-//!   manifest's `source` field identifies the producer (e.g. ROS TF, SLAM,
-//!   odometry).
+//!   session boot is daemon-application policy, not SDK contract. For sensor
+//!   logs, the manifest's `sensor_id` identifies the sensor; for pose logs,
+//!   the manifest's `source` field identifies the producer (e.g. ROS TF,
+//!   SLAM, odometry).
 //!
 //! `/` in IDs is replaced with `__` so namespaced ids like
 //! `K1-AABBCCDDEEFF/head_left_cam` become a single filesystem-safe directory

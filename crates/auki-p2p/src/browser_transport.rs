@@ -1,0 +1,1981 @@
+//! Browser WSS/Circuit Relay runtime driven on the local Wasm executor.
+//!
+//! The first browser contract intentionally owns one relay reservation for its
+//! lifetime. Changing providers or recovering a terminal reservation starts a
+//! fresh node; discovery and automatic relay recovery remain facade concerns.
+
+use std::{
+    collections::{HashMap, VecDeque},
+    error::Error as StdError,
+    future::Future,
+    pin::Pin,
+    rc::Rc,
+    task::{Context, Poll},
+    time::Duration,
+};
+
+use async_channel::{Receiver, Sender};
+use chrono::{DateTime, Utc};
+use futures::{
+    channel::oneshot,
+    future::{join_all, poll_fn, AbortHandle, Abortable, FutureExt, Shared},
+    io::{AsyncRead, AsyncWrite},
+    stream::FuturesUnordered,
+    Stream as FuturesStream, StreamExt,
+};
+use libp2p::{
+    core::{upgrade, Transport as _},
+    noise, relay,
+    swarm::{
+        dial_opts::{DialOpts, PeerCondition},
+        ConnectionId, NetworkBehaviour, SwarmEvent,
+    },
+    websocket_websys, yamux, Multiaddr, PeerId, Stream, Swarm, SwarmBuilder,
+};
+use libp2p_stream::{Behaviour as StreamBehaviour, IncomingStreams};
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+use wasm_bindgen_futures::spawn_local;
+
+use crate::{
+    authentication::{authenticate_duplex, SessionRequirements},
+    browser_authority::BrowserAuthority,
+    browser_route::{browser_direct_address, parse_browser_relay_route_for_peer},
+    relay::{
+        ObservedRelayLimits, RelayCancellation, RelayProvider, RelayReservationEvent,
+        RelayReservationHandle, RelayReservationNode, RelayReservationSnapshot,
+    },
+    relay_client,
+    relay_dial_gate::{RelayCircuitDialGate, RelayCircuitDialPermit},
+    source_admission,
+    targeted_stream::{TargetedStreamBehaviour, TargetedStreamControl},
+    ApplicationProtocol, ApplicationProtocolSpec, AuthenticatedApplicationStream,
+    AuthenticatedStream, Error, Identity, PeerAuthorityUpdate, Result,
+};
+
+const COMMAND_CAPACITY: usize = 16;
+const INCOMING_AUTH_CONCURRENCY: usize = 4;
+const INCOMING_AUTH_QUEUE_CAPACITY: usize = 8;
+
+#[derive(NetworkBehaviour)]
+struct BrowserBehaviour {
+    relay: relay_client::Behaviour,
+    streams: StreamBehaviour,
+    targeted_streams: TargetedStreamBehaviour,
+}
+
+/// Incoming application streams authenticated for the node's fixed Domain.
+///
+/// A bounded local worker pool keeps accepting and authenticating streams even
+/// while the caller handles an earlier result.
+pub struct BrowserIncomingAuthenticatedStreams {
+    results: Receiver<Result<AuthenticatedStream>>,
+    completed: Shared<oneshot::Receiver<()>>,
+    abort: AbortHandle,
+}
+
+impl BrowserIncomingAuthenticatedStreams {
+    pub async fn accept(&mut self) -> Option<Result<AuthenticatedStream>> {
+        self.results.recv().await.ok()
+    }
+
+    async fn shutdown(self) {
+        self.results.close();
+        let _ = self.completed.clone().await;
+    }
+}
+
+impl Drop for BrowserIncomingAuthenticatedStreams {
+    fn drop(&mut self) {
+        self.abort.abort();
+    }
+}
+
+/// Supervised browser-local application protocol host.
+///
+/// Dropping the handle requests cancellation. [`Self::shutdown`] additionally
+/// waits until the accept loop and every active local handler have stopped.
+pub struct ApplicationProtocolServer {
+    stop: CancellationToken,
+    completed: Shared<oneshot::Receiver<()>>,
+    abort: AbortHandle,
+}
+
+impl ApplicationProtocolServer {
+    pub async fn shutdown(self) -> Result<()> {
+        self.stop.cancel();
+        self.completed
+            .clone()
+            .await
+            .map_err(|_| Error::ApplicationProtocolServerStopped)
+    }
+}
+
+impl Drop for ApplicationProtocolServer {
+    fn drop(&mut self) {
+        self.stop.cancel();
+        self.abort.abort();
+    }
+}
+
+/// Why a browser node's local swarm stopped.
+///
+/// Relay failure is terminal in the first browser contract. Callers restart a
+/// fresh node rather than coordinating in-place provider replacement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BrowserNodeExit {
+    Shutdown,
+    OwnersDropped,
+    SwarmEnded,
+    RuntimeDropped,
+    RelayReservationAbandoned,
+    RelayReservationFailed { reason: String },
+}
+
+/// Exact browser circuit selected after relay source admission.
+#[derive(Clone, Debug)]
+pub struct BrowserRelayRoute {
+    node_instance_id: Uuid,
+    relay_peer_id: PeerId,
+    target_peer_id: PeerId,
+    connection_id: ConnectionId,
+    admission_expires_at: DateTime<Utc>,
+    route: Multiaddr,
+}
+
+impl BrowserRelayRoute {
+    pub fn relay_peer_id(&self) -> PeerId {
+        self.relay_peer_id
+    }
+
+    pub fn target_peer_id(&self) -> PeerId {
+        self.target_peer_id
+    }
+
+    pub fn route(&self) -> &Multiaddr {
+        &self.route
+    }
+
+    pub fn admission_expires_at(&self) -> DateTime<Utc> {
+        self.admission_expires_at
+    }
+}
+
+/// Authenticated browser stream retaining ownership of its exact relay circuit.
+///
+/// Explicit [`Self::close`] waits for circuit cleanup. Dropping an open stream
+/// schedules the same cleanup on the browser's local executor so application
+/// code cannot accidentally leave a connected circuit behind.
+pub struct BrowserAuthenticatedRouteStream {
+    stream: Option<AuthenticatedStream>,
+    route: Option<BrowserRelayRoute>,
+    control: BrowserRouteControl,
+}
+
+impl BrowserAuthenticatedRouteStream {
+    fn pending(route: BrowserRelayRoute, control: BrowserRouteControl) -> Self {
+        Self {
+            stream: None,
+            route: Some(route),
+            control,
+        }
+    }
+
+    fn route(&self) -> &BrowserRelayRoute {
+        self.route
+            .as_ref()
+            .expect("a pending browser route remains present until authentication completes")
+    }
+
+    fn authenticate(&mut self, stream: AuthenticatedStream) {
+        debug_assert!(self.stream.is_none());
+        self.stream = Some(stream);
+    }
+
+    /// Mutually authenticated remote peer bound to this stream.
+    pub fn remote_peer(&self) -> &crate::AuthenticatedPeer {
+        self.stream
+            .as_ref()
+            .expect("an authenticated browser route stream remains present until close")
+            .remote_peer()
+    }
+
+    /// Browser exact-route streams always own a relay circuit.
+    pub fn is_relayed(&self) -> bool {
+        true
+    }
+
+    /// Close the authenticated stream and release its exact relay circuit.
+    pub async fn close(mut self) -> Result<()> {
+        drop(self.stream.take());
+        if let Some(route) = self.route.as_ref() {
+            self.control.close(route).await?;
+            self.route.take();
+        }
+        Ok(())
+    }
+}
+
+impl AsyncRead for BrowserAuthenticatedRouteStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut [u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(
+            self.stream
+                .as_mut()
+                .expect("an authenticated browser route stream remains present until close"),
+        )
+        .poll_read(context, buffer)
+    }
+}
+
+impl AsyncWrite for BrowserAuthenticatedRouteStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(
+            self.stream
+                .as_mut()
+                .expect("an authenticated browser route stream remains present until close"),
+        )
+        .poll_write(context, buffer)
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(
+            self.stream
+                .as_mut()
+                .expect("an authenticated browser route stream remains present until close"),
+        )
+        .poll_flush(context)
+    }
+
+    fn poll_close(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(
+            self.stream
+                .as_mut()
+                .expect("an authenticated browser route stream remains present until close"),
+        )
+        .poll_close(context)
+    }
+}
+
+impl Drop for BrowserAuthenticatedRouteStream {
+    fn drop(&mut self) {
+        let Some(route) = self.route.take() else {
+            return;
+        };
+        let control = self.control.clone();
+        spawn_local(async move {
+            let _ = control.close(&route).await;
+        });
+    }
+}
+
+#[derive(Clone)]
+struct BrowserRouteControl {
+    node_instance_id: Uuid,
+    commands: Sender<Command>,
+    _local_only: Rc<()>,
+}
+
+impl BrowserRouteControl {
+    async fn close(&self, route: &BrowserRelayRoute) -> Result<()> {
+        if route.node_instance_id != self.node_instance_id {
+            return Err(Error::ForeignRelayRoute);
+        }
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(Command::CloseConnection {
+                connection_id: route.connection_id,
+                response,
+            })
+            .await
+            .map_err(|_| Error::SwarmStopped)?;
+        receiver.await.map_err(|_| Error::SwarmStopped)?
+    }
+}
+
+/// Authenticated browser P2P node.
+///
+/// The swarm remains on the browser's local executor. Raw libp2p controls,
+/// unauthenticated streams, token bytes, and the swarm itself never escape.
+pub struct BrowserNode {
+    node_instance_id: Uuid,
+    peer_id: PeerId,
+    authority: BrowserAuthority,
+    streams: libp2p_stream::Control,
+    targeted_streams: TargetedStreamControl,
+    commands: Sender<Command>,
+    stopped: Shared<oneshot::Receiver<BrowserNodeExit>>,
+    source_admissions: source_admission::AdmissionCache,
+    relay_circuit_dials: RelayCircuitDialGate,
+    _local_only: Rc<()>,
+}
+
+impl BrowserNode {
+    pub async fn start(identity: Identity, initial: PeerAuthorityUpdate) -> Result<Self> {
+        let peer_id = identity.peer_id();
+        let authority = BrowserAuthority::start(peer_id, initial).await?;
+
+        let stream_behaviour = StreamBehaviour::new();
+        let streams = stream_behaviour.new_control();
+        let targeted_behaviour = TargetedStreamBehaviour::new();
+        let targeted_streams = targeted_behaviour.new_control();
+        let swarm = build_swarm(identity.keypair(), stream_behaviour, targeted_behaviour)
+            .map_err(|error| Error::TransportBuild(error.to_string()))?;
+        let (commands, command_receiver) = async_channel::bounded(COMMAND_CAPACITY);
+        let (stopped_sender, stopped_receiver) = oneshot::channel();
+
+        spawn_local(async move {
+            let status = match run_swarm(swarm, command_receiver).await {
+                BrowserSwarmExit::Shutdown(response) => {
+                    let _ = response.send(Ok(()));
+                    BrowserNodeExit::Shutdown
+                }
+                BrowserSwarmExit::Terminal(status) => status,
+                BrowserSwarmExit::OwnersDropped => BrowserNodeExit::OwnersDropped,
+                BrowserSwarmExit::SwarmEnded => BrowserNodeExit::SwarmEnded,
+            };
+            let _ = stopped_sender.send(status);
+        });
+
+        Ok(Self {
+            node_instance_id: Uuid::new_v4(),
+            peer_id,
+            authority,
+            streams,
+            targeted_streams,
+            commands,
+            stopped: stopped_receiver.shared(),
+            source_admissions: source_admission::AdmissionCache::default(),
+            relay_circuit_dials: RelayCircuitDialGate::new(),
+            _local_only: Rc::new(()),
+        })
+    }
+
+    pub fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
+
+    pub fn domain_id(&self) -> Uuid {
+        self.authority.domain_id()
+    }
+
+    pub fn authority(&self) -> BrowserAuthority {
+        self.authority.clone()
+    }
+
+    pub fn accept(
+        &self,
+        protocol: ApplicationProtocol,
+    ) -> Result<BrowserIncomingAuthenticatedStreams> {
+        let requirements = SessionRequirements::new(self.domain_id().to_string())?;
+        self.accept_with_requirements(protocol, requirements)
+    }
+
+    fn accept_with_requirements(
+        &self,
+        protocol: ApplicationProtocol,
+        requirements: SessionRequirements,
+    ) -> Result<BrowserIncomingAuthenticatedStreams> {
+        let mut streams = self.streams.clone();
+        let incoming = streams
+            .accept(protocol.stream_protocol())
+            .map_err(|_| Error::ProtocolAlreadyRegistered)?;
+        let (pending_sender, pending_receiver) =
+            async_channel::bounded(INCOMING_AUTH_QUEUE_CAPACITY);
+        let (result_sender, results) = async_channel::bounded(INCOMING_AUTH_QUEUE_CAPACITY);
+        let pump = pump_incoming_streams(incoming, pending_sender, result_sender.clone());
+        let workers = (0..INCOMING_AUTH_CONCURRENCY)
+            .map(|_| {
+                authenticate_incoming_streams(
+                    pending_receiver.clone(),
+                    result_sender.clone(),
+                    self.peer_id,
+                    self.authority.clone(),
+                    requirements.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        drop(pending_receiver);
+        drop(result_sender);
+        let (abort, abort_registration) = AbortHandle::new_pair();
+        let (completed_sender, completed_receiver) = oneshot::channel();
+        spawn_local(async move {
+            let workers = async move {
+                let _ = futures::join!(pump, join_all(workers));
+            };
+            let _ = Abortable::new(workers, abort_registration).await;
+            let _ = completed_sender.send(());
+        });
+
+        Ok(BrowserIncomingAuthenticatedStreams {
+            results,
+            completed: completed_receiver.shared(),
+            abort,
+        })
+    }
+
+    /// Register and supervise one authenticated application protocol on the
+    /// browser's local executor.
+    ///
+    /// Handlers are deliberately local rather than `Send`; concurrency and
+    /// frame bounds come from the same portable spec used by native peers.
+    pub fn serve<H, F>(
+        &self,
+        spec: ApplicationProtocolSpec,
+        requirements: SessionRequirements,
+        shutdown: &CancellationToken,
+        handler: H,
+    ) -> Result<ApplicationProtocolServer>
+    where
+        H: Fn(AuthenticatedApplicationStream) -> F + 'static,
+        F: Future<Output = ()> + 'static,
+    {
+        let incoming = self.accept_with_requirements(spec.protocol().clone(), requirements)?;
+        let stop = shutdown.child_token();
+        let task_stop = stop.clone();
+        let (abort, abort_registration) = AbortHandle::new_pair();
+        let (completed_sender, completed_receiver) = oneshot::channel();
+        spawn_local(async move {
+            let server =
+                run_application_protocol_server(incoming, spec, task_stop, Rc::new(handler));
+            let _ = Abortable::new(server, abort_registration).await;
+            let _ = completed_sender.send(());
+        });
+        Ok(ApplicationProtocolServer {
+            stop,
+            completed: completed_receiver.shared(),
+            abort,
+        })
+    }
+
+    /// Establish the node's one WSS relay reservation and wait until both the
+    /// exact listener and finite-limit acceptance evidence make it publishable.
+    /// One failed or abandoned attempt is terminal; construct a fresh node.
+    pub async fn reserve_relay(&self, provider: RelayProvider) -> Result<RelayReservationSnapshot> {
+        browser_direct_address(&provider)?;
+        let (response, receiver) = oneshot::channel();
+        self.send(Command::ReserveRelay { provider, response })
+            .await?;
+        receiver.await.map_err(|_| Error::SwarmStopped)?
+    }
+
+    /// Perform relay source admission and establish one exact WSS circuit.
+    pub async fn connect_relayed(
+        &self,
+        expected_peer_id: PeerId,
+        route: Multiaddr,
+    ) -> Result<BrowserRelayRoute> {
+        self.connect_relayed_inner(expected_peer_id, route, false)
+            .await
+    }
+
+    async fn connect_relayed_reusing_admission(
+        &self,
+        expected_peer_id: PeerId,
+        route: Multiaddr,
+    ) -> Result<BrowserRelayRoute> {
+        self.connect_relayed_inner(expected_peer_id, route, true)
+            .await
+    }
+
+    async fn connect_relayed_inner(
+        &self,
+        expected_peer_id: PeerId,
+        route: Multiaddr,
+        reuse_admission: bool,
+    ) -> Result<BrowserRelayRoute> {
+        // The expected terminal Peer ID is checked before source admission so
+        // a mismatched route never receives this peer's DDS credential.
+        let parsed = parse_browser_relay_route_for_peer(&route, expected_peer_id)?;
+        let domain_id = self.domain_id();
+        let relay_connection = self
+            .select_relay_connection(parsed.relay_peer_id, parsed.direct_relay_address)
+            .await?;
+        let admission = if reuse_admission {
+            self.authorize_relay_source_reusing(
+                parsed.relay_peer_id,
+                relay_connection,
+                parsed.target_peer_id,
+                domain_id,
+            )
+            .await?
+        } else {
+            source_admission::CachedAdmission::uncached(
+                self.authorize_relay_source(
+                    parsed.relay_peer_id,
+                    relay_connection,
+                    parsed.target_peer_id,
+                    domain_id,
+                )
+                .await?,
+            )
+        };
+        let first_connection = self
+            .dial_circuit(
+                parsed.target_peer_id,
+                parsed.circuit_dial_address.clone(),
+                parsed.relay_peer_id,
+            )
+            .await;
+        let connection_id = match first_connection {
+            Ok(connection_id) => connection_id,
+            Err(error) => {
+                if reuse_admission {
+                    self.source_admissions
+                        .invalidate(
+                            parsed.relay_peer_id,
+                            relay_connection,
+                            parsed.target_peer_id,
+                            domain_id,
+                            &admission,
+                        )
+                        .await;
+                }
+                return Err(error);
+            }
+        };
+        let admission_expires_at = admission.expires_at;
+        Ok(BrowserRelayRoute {
+            node_instance_id: self.node_instance_id,
+            relay_peer_id: parsed.relay_peer_id,
+            target_peer_id: parsed.target_peer_id,
+            connection_id,
+            admission_expires_at,
+            route,
+        })
+    }
+
+    /// Open one application stream on the exact circuit and run mutual DDS
+    /// authentication before exposing bytes.
+    pub async fn open_relayed(
+        &self,
+        route: &BrowserRelayRoute,
+        protocol: ApplicationProtocol,
+    ) -> Result<AuthenticatedStream> {
+        if route.node_instance_id != self.node_instance_id {
+            return Err(Error::ForeignRelayRoute);
+        }
+        let requirements = SessionRequirements::new(self.domain_id().to_string())?
+            .with_expected_remote_peer_id(route.target_peer_id);
+        let stream = self
+            .targeted_streams
+            .open_stream(
+                route.target_peer_id,
+                route.connection_id,
+                protocol.stream_protocol(),
+            )
+            .await?;
+        authenticate_stream(
+            stream,
+            self.peer_id,
+            route.target_peer_id,
+            &self.authority,
+            &requirements,
+        )
+        .await
+    }
+
+    /// Connect through one exact WSS circuit, authenticate the selected
+    /// application stream, and retain the circuit until the returned stream is
+    /// explicitly closed or dropped.
+    pub async fn open_exact_route(
+        &self,
+        expected_peer_id: PeerId,
+        route: Multiaddr,
+        protocol: ApplicationProtocol,
+    ) -> Result<BrowserAuthenticatedRouteStream> {
+        let route = self
+            .connect_relayed_reusing_admission(expected_peer_id, route)
+            .await?;
+        let mut pending = BrowserAuthenticatedRouteStream::pending(route, self.route_control());
+        match self.open_relayed(pending.route(), protocol).await {
+            Ok(stream) => {
+                pending.authenticate(stream);
+                Ok(pending)
+            }
+            Err(open_error) => match pending.close().await {
+                Ok(()) => Err(open_error),
+                Err(close_error) => Err(close_error),
+            },
+        }
+    }
+
+    pub async fn close_relay_route(&self, route: &BrowserRelayRoute) -> Result<()> {
+        self.route_control().close(route).await
+    }
+
+    /// Drop the browser swarm and its WebSocket/relay resources before this
+    /// future resolves.
+    pub async fn shutdown(&self) -> Result<()> {
+        let (response, receiver) = oneshot::channel();
+        self.send(Command::Shutdown { response }).await?;
+        receiver.await.map_err(|_| Error::SwarmStopped)?
+    }
+
+    /// Wait for the shared terminal status while other code continues using
+    /// the node. Every waiter observes the same value.
+    pub async fn wait_stopped(&self) -> BrowserNodeExit {
+        self.stopped
+            .clone()
+            .await
+            .unwrap_or(BrowserNodeExit::RuntimeDropped)
+    }
+
+    async fn select_relay_connection(
+        &self,
+        peer_id: PeerId,
+        address: Multiaddr,
+    ) -> Result<ConnectionId> {
+        let (response, receiver) = oneshot::channel();
+        self.send(Command::SelectRelayConnection {
+            peer_id,
+            address,
+            response,
+        })
+        .await?;
+        receiver.await.map_err(|_| Error::SwarmStopped)?
+    }
+
+    async fn authorize_relay_source(
+        &self,
+        relay_peer_id: PeerId,
+        relay_connection: ConnectionId,
+        target_peer_id: PeerId,
+        domain_id: Uuid,
+    ) -> Result<DateTime<Utc>> {
+        let authorization = source_admission::prepare_authorization(
+            self.peer_id,
+            target_peer_id,
+            domain_id,
+            &self.authority.tokens(),
+            &self.authority.verifier(),
+        )
+        .await?;
+        self.authorize_relay_source_prepared(relay_peer_id, relay_connection, authorization)
+            .await
+    }
+
+    async fn authorize_relay_source_reusing(
+        &self,
+        relay_peer_id: PeerId,
+        relay_connection: ConnectionId,
+        target_peer_id: PeerId,
+        domain_id: Uuid,
+    ) -> Result<source_admission::CachedAdmission> {
+        // Validate the current browser credential before every circuit. The
+        // cache contains only the relay's shorter proof window, never tokens.
+        let authorization = source_admission::prepare_authorization(
+            self.peer_id,
+            target_peer_id,
+            domain_id,
+            &self.authority.tokens(),
+            &self.authority.verifier(),
+        )
+        .await?;
+        let issued_at = authorization.issued_at();
+        self.source_admissions
+            .authorize(
+                relay_peer_id,
+                relay_connection,
+                target_peer_id,
+                domain_id,
+                issued_at,
+                || {
+                    self.authorize_relay_source_prepared(
+                        relay_peer_id,
+                        relay_connection,
+                        authorization,
+                    )
+                },
+            )
+            .await
+    }
+
+    async fn authorize_relay_source_prepared(
+        &self,
+        relay_peer_id: PeerId,
+        relay_connection: ConnectionId,
+        authorization: source_admission::PreparedAuthorization,
+    ) -> Result<DateTime<Utc>> {
+        let mut stream = self
+            .targeted_streams
+            .open_stream(relay_peer_id, relay_connection, source_admission::PROTOCOL)
+            .await?;
+        source_admission::authorize_prepared(&mut stream, authorization, Utc::now).await
+    }
+
+    async fn dial_circuit(
+        &self,
+        peer_id: PeerId,
+        address: Multiaddr,
+        relay_peer_id: PeerId,
+    ) -> Result<ConnectionId> {
+        let permit = self.relay_circuit_dials.acquire().await;
+        let (response, receiver) = oneshot::channel();
+        self.send(Command::DialCircuit {
+            peer_id,
+            address,
+            relay_peer_id,
+            permit,
+            response,
+        })
+        .await?;
+        receiver.await.map_err(|_| Error::SwarmStopped)?
+    }
+
+    async fn send(&self, command: Command) -> Result<()> {
+        self.commands
+            .send(command)
+            .await
+            .map_err(|_| Error::SwarmStopped)
+    }
+
+    fn route_control(&self) -> BrowserRouteControl {
+        BrowserRouteControl {
+            node_instance_id: self.node_instance_id,
+            commands: self.commands.clone(),
+            _local_only: Rc::clone(&self._local_only),
+        }
+    }
+}
+
+enum ApplicationProtocolHostEvent {
+    Cancelled,
+    HandlerCompleted,
+    IncomingClosed,
+    SessionRejected,
+    Accepted(Box<AuthenticatedStream>),
+}
+
+async fn run_application_protocol_server<H, F>(
+    mut incoming: BrowserIncomingAuthenticatedStreams,
+    spec: ApplicationProtocolSpec,
+    stop: CancellationToken,
+    handler: Rc<H>,
+) where
+    H: Fn(AuthenticatedApplicationStream) -> F + 'static,
+    F: Future<Output = ()> + 'static,
+{
+    let mut handlers = FuturesUnordered::new();
+    loop {
+        let has_handlers = !handlers.is_empty();
+        let has_capacity = handlers.len() < spec.max_concurrency();
+        let event = match (has_handlers, has_capacity) {
+            (false, _) => {
+                let cancelled = stop.cancelled().fuse();
+                let accepted = incoming.accept().fuse();
+                futures::pin_mut!(cancelled, accepted);
+                futures::select_biased! {
+                    () = cancelled => ApplicationProtocolHostEvent::Cancelled,
+                    accepted = accepted => application_protocol_host_event(accepted),
+                }
+            }
+            (true, false) => {
+                let cancelled = stop.cancelled().fuse();
+                let completed = handlers.next().fuse();
+                futures::pin_mut!(cancelled, completed);
+                futures::select_biased! {
+                    () = cancelled => ApplicationProtocolHostEvent::Cancelled,
+                    _ = completed => ApplicationProtocolHostEvent::HandlerCompleted,
+                }
+            }
+            (true, true) => {
+                let cancelled = stop.cancelled().fuse();
+                let completed = handlers.next().fuse();
+                let accepted = incoming.accept().fuse();
+                futures::pin_mut!(cancelled, completed, accepted);
+                futures::select_biased! {
+                    () = cancelled => ApplicationProtocolHostEvent::Cancelled,
+                    _ = completed => ApplicationProtocolHostEvent::HandlerCompleted,
+                    accepted = accepted => application_protocol_host_event(accepted),
+                }
+            }
+        };
+        match event {
+            ApplicationProtocolHostEvent::Cancelled => break,
+            ApplicationProtocolHostEvent::HandlerCompleted => {}
+            ApplicationProtocolHostEvent::IncomingClosed => break,
+            ApplicationProtocolHostEvent::SessionRejected => {}
+            ApplicationProtocolHostEvent::Accepted(stream) => {
+                let handler = Rc::clone(&handler);
+                let stream = AuthenticatedApplicationStream::new(*stream, spec.max_frame_bytes());
+                handlers.push(async move { handler(stream).await }.boxed_local());
+            }
+        }
+    }
+    drop(handlers);
+    incoming.shutdown().await;
+}
+
+fn application_protocol_host_event(
+    accepted: Option<Result<AuthenticatedStream>>,
+) -> ApplicationProtocolHostEvent {
+    match accepted {
+        None => ApplicationProtocolHostEvent::IncomingClosed,
+        Some(Err(_)) => ApplicationProtocolHostEvent::SessionRejected,
+        Some(Ok(stream)) => ApplicationProtocolHostEvent::Accepted(Box::new(stream)),
+    }
+}
+
+impl std::fmt::Debug for BrowserNode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BrowserNode")
+            .field("peer_id", &self.peer_id)
+            .field("domain_id", &self.domain_id())
+            .field("authority", &"[redacted]")
+            .finish_non_exhaustive()
+    }
+}
+
+enum Command {
+    SelectRelayConnection {
+        peer_id: PeerId,
+        address: Multiaddr,
+        response: oneshot::Sender<Result<ConnectionId>>,
+    },
+    ReserveRelay {
+        provider: RelayProvider,
+        response: oneshot::Sender<Result<RelayReservationSnapshot>>,
+    },
+    DialCircuit {
+        peer_id: PeerId,
+        address: Multiaddr,
+        relay_peer_id: PeerId,
+        permit: RelayCircuitDialPermit,
+        response: oneshot::Sender<Result<ConnectionId>>,
+    },
+    CloseConnection {
+        connection_id: ConnectionId,
+        response: oneshot::Sender<Result<()>>,
+    },
+    Shutdown {
+        response: oneshot::Sender<Result<()>>,
+    },
+}
+
+struct BrowserRuntime {
+    direct_connections: HashMap<PeerId, DirectConnection>,
+    pending_dials: HashMap<ConnectionId, PendingDial>,
+    reservations: RelayReservationNode,
+    reservation_started: bool,
+    reservation_waiter: Option<(
+        RelayReservationHandle,
+        oneshot::Sender<Result<RelayReservationSnapshot>>,
+    )>,
+    terminal_exit: Option<BrowserNodeExit>,
+}
+
+#[derive(Clone)]
+struct DirectConnection {
+    connection_id: ConnectionId,
+    address: Multiaddr,
+}
+
+enum PendingDial {
+    Direct {
+        peer_id: PeerId,
+        address: Multiaddr,
+        responses: Vec<oneshot::Sender<Result<ConnectionId>>>,
+    },
+    Reservation {
+        peer_id: PeerId,
+        address: Multiaddr,
+        provider: RelayProvider,
+        response: oneshot::Sender<Result<RelayReservationSnapshot>>,
+    },
+    Circuit {
+        peer_id: PeerId,
+        relay_peer_id: PeerId,
+        _permit: RelayCircuitDialPermit,
+        response: oneshot::Sender<Result<ConnectionId>>,
+    },
+}
+
+impl BrowserRuntime {
+    fn new(local_peer_id: PeerId) -> Self {
+        Self {
+            direct_connections: HashMap::new(),
+            pending_dials: HashMap::new(),
+            reservations: RelayReservationNode::new(local_peer_id),
+            reservation_started: false,
+            reservation_waiter: None,
+            terminal_exit: None,
+        }
+    }
+
+    fn handle_command(&mut self, swarm: &mut Swarm<BrowserBehaviour>, command: Command) -> bool {
+        match command {
+            Command::SelectRelayConnection {
+                peer_id,
+                address,
+                response,
+            } => self.select_relay_connection(swarm, peer_id, address, response),
+            Command::ReserveRelay { provider, response } => {
+                self.reserve_relay(swarm, provider, response)
+            }
+            Command::DialCircuit {
+                peer_id,
+                address,
+                relay_peer_id,
+                permit,
+                response,
+            } => self.dial_circuit(swarm, peer_id, address, relay_peer_id, permit, response),
+            Command::CloseConnection {
+                connection_id,
+                response,
+            } => {
+                swarm.close_connection(connection_id);
+                let _ = response.send(Ok(()));
+            }
+            Command::Shutdown { .. } => return true,
+        }
+        false
+    }
+
+    fn select_relay_connection(
+        &mut self,
+        swarm: &mut Swarm<BrowserBehaviour>,
+        peer_id: PeerId,
+        address: Multiaddr,
+        response: oneshot::Sender<Result<ConnectionId>>,
+    ) {
+        if response.is_canceled() {
+            return;
+        }
+        if let Some(existing) = self.direct_connections.get(&peer_id) {
+            let result = if existing.address == address {
+                Ok(existing.connection_id)
+            } else {
+                Err(Error::RelayDirectConnectionMismatch {
+                    relay_peer_id: peer_id.to_string(),
+                    expected: address.to_string(),
+                    actual: existing.address.to_string(),
+                })
+            };
+            let _ = response.send(result);
+            return;
+        }
+        if self.pending_dials.values().any(|pending| {
+            matches!(
+                pending,
+                PendingDial::Reservation {
+                    peer_id: pending_peer,
+                    ..
+                } if *pending_peer == peer_id
+            )
+        }) {
+            let _ = response.send(Err(Error::RelayReservationClosed(
+                "relay reservation connection attempt is still pending".into(),
+            )));
+            return;
+        }
+        if let Some(PendingDial::Direct {
+            address: pending_address,
+            responses,
+            ..
+        }) = self.pending_dials.values_mut().find(|pending| {
+            matches!(pending, PendingDial::Direct { peer_id: pending_peer, .. } if *pending_peer == peer_id)
+        }) {
+            if *pending_address == address {
+                responses.push(response);
+            } else {
+                let _ = response.send(Err(Error::RelayDirectConnectionMismatch {
+                    relay_peer_id: peer_id.to_string(),
+                    expected: address.to_string(),
+                    actual: pending_address.to_string(),
+                }));
+            }
+            return;
+        }
+
+        let dial = DialOpts::peer_id(peer_id)
+            .condition(PeerCondition::Always)
+            .allocate_new_port()
+            .addresses(vec![address.clone()])
+            .build();
+        let connection_id = dial.connection_id();
+        match swarm.dial(dial) {
+            Ok(()) => {
+                self.pending_dials.insert(
+                    connection_id,
+                    PendingDial::Direct {
+                        peer_id,
+                        address,
+                        responses: vec![response],
+                    },
+                );
+            }
+            Err(error) => {
+                let _ = response.send(Err(Error::Dial(error.to_string())));
+            }
+        }
+    }
+
+    fn reserve_relay(
+        &mut self,
+        swarm: &mut Swarm<BrowserBehaviour>,
+        provider: RelayProvider,
+        response: oneshot::Sender<Result<RelayReservationSnapshot>>,
+    ) {
+        if self.reservation_started {
+            let _ = response.send(Err(Error::RelayReservationClosed(
+                "browser nodes support one relay reservation for their lifetime".into(),
+            )));
+            return;
+        }
+        if response.is_canceled() {
+            return;
+        }
+
+        let relay_peer_id = provider.relay_peer_id();
+        let address = match browser_direct_address(&provider) {
+            Ok(address) => address,
+            Err(error) => {
+                let _ = response.send(Err(error));
+                return;
+            }
+        };
+        if self.pending_dials.values().any(|pending| {
+            matches!(
+                pending,
+                PendingDial::Direct {
+                    peer_id: pending_peer,
+                    ..
+                } | PendingDial::Reservation {
+                    peer_id: pending_peer,
+                    ..
+                } if *pending_peer == relay_peer_id
+            )
+        }) {
+            let _ = response.send(Err(Error::RelayReservationClosed(
+                "a direct connection attempt to the selected relay is already pending".into(),
+            )));
+            return;
+        }
+        if self.pending_dials.values().any(|pending| {
+            matches!(
+                pending,
+                PendingDial::Circuit {
+                    relay_peer_id: pending_relay,
+                    ..
+                } if *pending_relay == relay_peer_id
+            )
+        }) {
+            let _ = response.send(Err(Error::RelayReservationClosed(
+                "an outbound circuit request is still pending on the selected relay".into(),
+            )));
+            return;
+        }
+
+        self.reservation_started = true;
+        if let Some(existing) = self.direct_connections.get(&relay_peer_id).cloned() {
+            if existing.address != address {
+                let error = Error::RelayDirectConnectionMismatch {
+                    relay_peer_id: relay_peer_id.to_string(),
+                    expected: address.to_string(),
+                    actual: existing.address.to_string(),
+                };
+                self.mark_reservation_failed(error.to_string());
+                let _ = response.send(Err(error));
+                return;
+            }
+            self.begin_reservation(swarm, provider, existing.connection_id, response);
+            return;
+        }
+
+        let dial = DialOpts::peer_id(relay_peer_id)
+            .condition(PeerCondition::Always)
+            .allocate_new_port()
+            .addresses(vec![address.clone()])
+            .build();
+        let connection_id = dial.connection_id();
+        match swarm.dial(dial) {
+            Ok(()) => {
+                self.pending_dials.insert(
+                    connection_id,
+                    PendingDial::Reservation {
+                        peer_id: relay_peer_id,
+                        address,
+                        provider,
+                        response,
+                    },
+                );
+            }
+            Err(error) => {
+                let error = Error::Dial(error.to_string());
+                self.mark_reservation_failed(error.to_string());
+                let _ = response.send(Err(error));
+            }
+        }
+    }
+
+    fn begin_reservation(
+        &mut self,
+        swarm: &mut Swarm<BrowserBehaviour>,
+        provider: RelayProvider,
+        direct_connection: ConnectionId,
+        response: oneshot::Sender<Result<RelayReservationSnapshot>>,
+    ) {
+        if response.is_canceled() {
+            self.mark_reservation_abandoned();
+            return;
+        }
+        let relay_peer_id = provider.relay_peer_id();
+        if self
+            .direct_connections
+            .get(&relay_peer_id)
+            .is_none_or(|connection| connection.connection_id != direct_connection)
+        {
+            let error = Error::RelayReservationClosed(
+                "selected direct relay connection closed before reservation start".into(),
+            );
+            self.mark_reservation_failed(error.to_string());
+            let _ = response.send(Err(error));
+            return;
+        }
+        if self.pending_dials.values().any(|pending| {
+            matches!(
+                pending,
+                PendingDial::Circuit {
+                    relay_peer_id: pending_relay,
+                    ..
+                } if *pending_relay == relay_peer_id
+            )
+        }) {
+            let error = Error::RelayReservationClosed(
+                "an outbound circuit request is still pending on the selected relay".into(),
+            );
+            self.mark_reservation_failed(error.to_string());
+            let _ = response.send(Err(error));
+            return;
+        }
+
+        let listen_address = provider.reservation_listen_address();
+        let listener_id = match swarm.listen_on(listen_address.clone()) {
+            Ok(listener_id) => listener_id,
+            Err(error) => {
+                let error = Error::Listen {
+                    address: listen_address.to_string(),
+                    reason: error.to_string(),
+                };
+                self.mark_reservation_failed(error.to_string());
+                let _ = response.send(Err(error));
+                return;
+            }
+        };
+        let handle = match self.reservations.begin(provider, listener_id) {
+            Ok(handle) => handle,
+            Err(error) => {
+                swarm.remove_listener(listener_id);
+                let error = Error::from(error);
+                self.mark_reservation_failed(error.to_string());
+                let _ = response.send(Err(error));
+                return;
+            }
+        };
+        if let Err(error) = self
+            .reservations
+            .observe_direct_connection(handle, direct_connection)
+        {
+            if let Ok(event) = self.reservations.cancel(handle) {
+                self.apply_reservation_event(swarm, event);
+            } else {
+                swarm.remove_listener(listener_id);
+            }
+            let error = Error::from(error);
+            self.mark_reservation_failed(error.to_string());
+            let _ = response.send(Err(error));
+            return;
+        }
+        if swarm
+            .behaviour_mut()
+            .relay
+            .register_dispatch(handle, direct_connection)
+            .is_err()
+        {
+            let error = Error::RelayReservationClosed(
+                "another reservation dispatch is already pending".into(),
+            );
+            self.mark_reservation_failed(error.to_string());
+            let _ = response.send(Err(error));
+            if let Ok(event) = self.reservations.cancel(handle) {
+                self.apply_reservation_event(swarm, event);
+            }
+            return;
+        }
+        self.reservation_waiter = Some((handle, response));
+    }
+
+    fn dial_circuit(
+        &mut self,
+        swarm: &mut Swarm<BrowserBehaviour>,
+        peer_id: PeerId,
+        address: Multiaddr,
+        relay_peer_id: PeerId,
+        permit: RelayCircuitDialPermit,
+        response: oneshot::Sender<Result<ConnectionId>>,
+    ) {
+        if response.is_canceled() {
+            return;
+        }
+        if swarm.behaviour().relay.has_pending_dispatch(relay_peer_id) {
+            let _ = response.send(Err(Error::RelayReservationClosed(
+                "relay reservation dispatch is still pending".into(),
+            )));
+            return;
+        }
+        let dial = DialOpts::peer_id(peer_id)
+            .condition(PeerCondition::Always)
+            .allocate_new_port()
+            .addresses(vec![address])
+            .build();
+        let connection_id = dial.connection_id();
+        match swarm.dial(dial) {
+            Ok(()) => {
+                self.pending_dials.insert(
+                    connection_id,
+                    PendingDial::Circuit {
+                        peer_id,
+                        relay_peer_id,
+                        _permit: permit,
+                        response,
+                    },
+                );
+            }
+            Err(error) => {
+                let _ = response.send(Err(Error::Dial(error.to_string())));
+            }
+        }
+    }
+
+    fn handle_swarm_event(
+        &mut self,
+        swarm: &mut Swarm<BrowserBehaviour>,
+        event: SwarmEvent<BrowserBehaviourEvent>,
+    ) {
+        match event {
+            SwarmEvent::NewListenAddr {
+                listener_id,
+                address,
+            } => {
+                if let Some(handle) = self.reservations.handle_for_listener(listener_id) {
+                    if let Ok(event) =
+                        self.reservations
+                            .observe_listener_address(handle, listener_id, &address)
+                    {
+                        self.apply_reservation_event(swarm, event);
+                    }
+                }
+            }
+            SwarmEvent::ConnectionEstablished {
+                peer_id,
+                connection_id,
+                endpoint,
+                ..
+            } => self.connection_established(swarm, peer_id, connection_id, endpoint.is_relayed()),
+            SwarmEvent::OutgoingConnectionError {
+                connection_id,
+                error,
+                ..
+            } => {
+                if let Some(pending) = self.pending_dials.remove(&connection_id) {
+                    let reason = error.to_string();
+                    if pending.is_reservation() {
+                        self.mark_reservation_failed(format!(
+                            "failed to dial selected relay: {reason}"
+                        ));
+                    }
+                    pending.fail_dial(reason);
+                }
+            }
+            SwarmEvent::ConnectionClosed {
+                peer_id,
+                connection_id,
+                endpoint,
+                ..
+            } => {
+                if !endpoint.is_relayed()
+                    && self
+                        .direct_connections
+                        .get(&peer_id)
+                        .is_some_and(|connection| connection.connection_id == connection_id)
+                {
+                    self.direct_connections.remove(&peer_id);
+                    if let Some(handle) = self.reservations.handle_for_relay(peer_id) {
+                        if self
+                            .reservations
+                            .snapshot(handle)
+                            .ok()
+                            .and_then(|snapshot| snapshot.direct_connection())
+                            == Some(connection_id)
+                        {
+                            self.fail_reservation(
+                                handle,
+                                Error::RelayReservationClosed(
+                                    "selected direct relay connection closed".into(),
+                                ),
+                            );
+                            if let Ok(event) = self
+                                .reservations
+                                .observe_direct_connection_closed(handle, connection_id)
+                            {
+                                self.apply_reservation_event(swarm, event);
+                            }
+                        }
+                    }
+                }
+            }
+            SwarmEvent::ListenerClosed {
+                listener_id,
+                reason,
+                ..
+            } => {
+                if let Some(handle) = self.reservations.handle_for_listener(listener_id) {
+                    let reason = reason
+                        .err()
+                        .map(|error| error.to_string())
+                        .unwrap_or_else(|| "relay reservation listener closed".into());
+                    self.fail_reservation(handle, Error::RelayReservationClosed(reason));
+                    if let Ok(event) = self
+                        .reservations
+                        .observe_listener_closed(handle, listener_id)
+                    {
+                        self.apply_reservation_event(swarm, event);
+                    }
+                }
+            }
+            SwarmEvent::Behaviour(BrowserBehaviourEvent::Relay(
+                relay_client::Event::ReservationDispatchFailed { handle, reason },
+            )) => {
+                self.fail_reservation(handle, Error::RelayReservationClosed(reason.to_string()));
+                if let Ok(event) = self.reservations.cancel(handle) {
+                    self.apply_reservation_event(swarm, event);
+                }
+            }
+            SwarmEvent::Behaviour(BrowserBehaviourEvent::Relay(
+                relay_client::Event::Upstream {
+                    event:
+                        relay::client::Event::ReservationReqAccepted {
+                            relay_peer_id,
+                            renewal,
+                            limit,
+                        },
+                    handle,
+                },
+            )) => {
+                let Some(handle) = handle else {
+                    if let Some(active) = self.reservations.handle_for_relay(relay_peer_id) {
+                        self.fail_reservation(
+                            active,
+                            Error::RelayReservationClosed(
+                                "relay acceptance was not correlated to its reservation".into(),
+                            ),
+                        );
+                    }
+                    return;
+                };
+                if handle.relay_peer_id() != relay_peer_id {
+                    self.fail_reservation(
+                        handle,
+                        Error::RelayReservationClosed(
+                            "relay acceptance carried a different relay Peer ID".into(),
+                        ),
+                    );
+                    if let Ok(event) = self.reservations.cancel(handle) {
+                        self.apply_reservation_event(swarm, event);
+                    }
+                    return;
+                }
+                let observed = limit
+                    .map(|limit| ObservedRelayLimits::new(limit.duration(), limit.data_in_bytes()));
+                if let Ok(event) = self
+                    .reservations
+                    .observe_acceptance(handle, renewal, observed)
+                {
+                    self.apply_reservation_event(swarm, event);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn connection_established(
+        &mut self,
+        swarm: &mut Swarm<BrowserBehaviour>,
+        peer_id: PeerId,
+        connection_id: ConnectionId,
+        relayed: bool,
+    ) {
+        let Some(pending) = self.pending_dials.remove(&connection_id) else {
+            return;
+        };
+        match pending {
+            PendingDial::Direct {
+                peer_id: expected,
+                address,
+                responses,
+            } if expected == peer_id && !relayed => {
+                self.direct_connections.insert(
+                    peer_id,
+                    DirectConnection {
+                        connection_id,
+                        address,
+                    },
+                );
+                let mut accepted = false;
+                for response in responses {
+                    accepted |= response.send(Ok(connection_id)).is_ok();
+                }
+                if !accepted {
+                    self.direct_connections.remove(&peer_id);
+                    swarm.close_connection(connection_id);
+                }
+            }
+            PendingDial::Circuit {
+                peer_id: expected,
+                response,
+                ..
+            } if expected == peer_id && relayed => {
+                if response.send(Ok(connection_id)).is_err() {
+                    swarm.close_connection(connection_id);
+                }
+            }
+            PendingDial::Reservation {
+                peer_id: expected,
+                address,
+                provider,
+                response,
+            } if expected == peer_id && !relayed => {
+                self.direct_connections.insert(
+                    peer_id,
+                    DirectConnection {
+                        connection_id,
+                        address,
+                    },
+                );
+                if response.is_canceled() {
+                    self.direct_connections.remove(&peer_id);
+                    swarm.close_connection(connection_id);
+                    self.mark_reservation_abandoned();
+                    return;
+                }
+                self.begin_reservation(swarm, provider, connection_id, response);
+            }
+            pending => {
+                swarm.close_connection(connection_id);
+                if pending.is_reservation() {
+                    self.mark_reservation_failed(format!(
+                        "selected relay dial connected to unexpected Peer {peer_id}"
+                    ));
+                }
+                pending.fail_unexpected_peer(peer_id);
+            }
+        }
+    }
+
+    fn apply_reservation_event(
+        &mut self,
+        swarm: &mut Swarm<BrowserBehaviour>,
+        event: RelayReservationEvent,
+    ) {
+        let mut events = VecDeque::from([event]);
+        while let Some(event) = events.pop_front() {
+            match event {
+                RelayReservationEvent::EvidenceRecorded { .. }
+                | RelayReservationEvent::Renewed { .. }
+                | RelayReservationEvent::Fenced { .. } => {}
+                RelayReservationEvent::Publishable { handle, .. } => {
+                    if let Some((waiting_handle, response)) = self.reservation_waiter.take() {
+                        if waiting_handle == handle {
+                            match self.reservations.snapshot(handle) {
+                                Ok(snapshot) => {
+                                    if response.send(Ok(snapshot)).is_err() {
+                                        self.mark_reservation_abandoned();
+                                        if let Ok(event) = self.reservations.cancel(handle) {
+                                            events.push_back(event);
+                                        }
+                                    }
+                                }
+                                Err(error) => {
+                                    let error = Error::from(error);
+                                    self.mark_reservation_failed(error.to_string());
+                                    let _ = response.send(Err(error));
+                                    if let Ok(event) = self.reservations.cancel(handle) {
+                                        events.push_back(event);
+                                    }
+                                }
+                            }
+                        } else {
+                            self.reservation_waiter = Some((waiting_handle, response));
+                        }
+                    }
+                }
+                RelayReservationEvent::ConfirmationRejected {
+                    handle,
+                    reason,
+                    cancellation,
+                } => {
+                    self.fail_reservation(handle, Error::RelayConfirmationRejected(reason));
+                    events.extend(self.start_teardown(swarm, cancellation));
+                }
+                RelayReservationEvent::CancellationStarted { cancellation }
+                | RelayReservationEvent::CancellationPending { cancellation } => {
+                    events.extend(self.start_teardown(swarm, cancellation));
+                }
+                RelayReservationEvent::CloseLateConnection {
+                    handle,
+                    connection_id,
+                } => {
+                    if !swarm.close_connection(connection_id) {
+                        if let Ok(event) = self
+                            .reservations
+                            .observe_direct_connection_closed(handle, connection_id)
+                        {
+                            events.push_back(event);
+                        }
+                    }
+                }
+                RelayReservationEvent::Canceled { .. } => {}
+            }
+        }
+    }
+
+    fn start_teardown(
+        &mut self,
+        swarm: &mut Swarm<BrowserBehaviour>,
+        cancellation: RelayCancellation,
+    ) -> Vec<RelayReservationEvent> {
+        swarm
+            .behaviour_mut()
+            .relay
+            .fence_dispatch(cancellation.handle());
+        let mut events = Vec::new();
+        if !swarm.remove_listener(cancellation.listener_id()) {
+            if let Ok(event) = self
+                .reservations
+                .observe_listener_closed(cancellation.handle(), cancellation.listener_id())
+            {
+                events.push(event);
+            }
+        }
+        match cancellation.direct_connection() {
+            Some(connection_id) if !swarm.close_connection(connection_id) => {
+                if let Ok(event) = self
+                    .reservations
+                    .observe_direct_connection_closed(cancellation.handle(), connection_id)
+                {
+                    events.push(event);
+                }
+            }
+            None => {
+                if let Ok(event) = self
+                    .reservations
+                    .observe_no_direct_connection(cancellation.handle())
+                {
+                    events.push(event);
+                }
+            }
+            Some(_) => {}
+        }
+        events
+    }
+
+    fn fail_reservation(&mut self, handle: RelayReservationHandle, error: Error) {
+        let reason = error.to_string();
+        if self
+            .reservation_waiter
+            .as_ref()
+            .is_some_and(|(waiting, _)| *waiting == handle)
+        {
+            if let Some((_, response)) = self.reservation_waiter.take() {
+                let _ = response.send(Err(error));
+            }
+        }
+        self.mark_reservation_failed(reason);
+    }
+
+    fn mark_reservation_failed(&mut self, reason: String) {
+        self.terminal_exit
+            .get_or_insert(BrowserNodeExit::RelayReservationFailed { reason });
+    }
+
+    fn mark_reservation_abandoned(&mut self) {
+        self.terminal_exit
+            .get_or_insert(BrowserNodeExit::RelayReservationAbandoned);
+    }
+
+    fn poll_reservation_abandoned(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<()> {
+        if self
+            .reservation_waiter
+            .as_mut()
+            .is_some_and(|(_, response)| response.poll_canceled(cx).is_ready())
+        {
+            return std::task::Poll::Ready(());
+        }
+        if self
+            .pending_dials
+            .values_mut()
+            .any(|pending| match pending {
+                PendingDial::Reservation { response, .. } => response.poll_canceled(cx).is_ready(),
+                _ => false,
+            })
+        {
+            return std::task::Poll::Ready(());
+        }
+        std::task::Poll::Pending
+    }
+}
+
+impl PendingDial {
+    fn peer_id(&self) -> PeerId {
+        match self {
+            Self::Direct { peer_id, .. }
+            | Self::Reservation { peer_id, .. }
+            | Self::Circuit { peer_id, .. } => *peer_id,
+        }
+    }
+
+    fn is_reservation(&self) -> bool {
+        matches!(self, Self::Reservation { .. })
+    }
+
+    fn fail_dial(self, reason: String) {
+        match self {
+            Self::Direct { responses, .. } => {
+                for response in responses {
+                    let _ = response.send(Err(Error::Dial(reason.clone())));
+                }
+            }
+            Self::Circuit { response, .. } => {
+                let _ = response.send(Err(Error::Dial(reason)));
+            }
+            Self::Reservation { response, .. } => {
+                let _ = response.send(Err(Error::Dial(reason)));
+            }
+        }
+    }
+
+    fn fail_unexpected_peer(self, actual: PeerId) {
+        let expected = self.peer_id().to_string();
+        let actual = actual.to_string();
+        match self {
+            Self::Direct { responses, .. } => {
+                for response in responses {
+                    let _ = response.send(Err(Error::UnexpectedRemotePeer {
+                        expected: expected.clone(),
+                        actual: actual.clone(),
+                    }));
+                }
+            }
+            Self::Circuit { response, .. } => {
+                let _ = response.send(Err(Error::UnexpectedRemotePeer { expected, actual }));
+            }
+            Self::Reservation { response, .. } => {
+                let _ = response.send(Err(Error::UnexpectedRemotePeer { expected, actual }));
+            }
+        }
+    }
+}
+
+enum RuntimeInput {
+    Swarm(SwarmEvent<BrowserBehaviourEvent>),
+    Command(Command),
+    CommandsClosed,
+    SwarmEnded,
+    ReservationAbandoned,
+}
+
+enum BrowserSwarmExit {
+    Shutdown(oneshot::Sender<Result<()>>),
+    Terminal(BrowserNodeExit),
+    OwnersDropped,
+    SwarmEnded,
+}
+
+async fn run_swarm(
+    mut swarm: Swarm<BrowserBehaviour>,
+    commands: Receiver<Command>,
+) -> BrowserSwarmExit {
+    let local_peer_id = *swarm.local_peer_id();
+    let mut runtime = BrowserRuntime::new(local_peer_id);
+    let mut commands = Box::pin(commands);
+    let mut commands_first = true;
+
+    loop {
+        let input = poll_fn(|cx| {
+            if runtime.poll_reservation_abandoned(cx).is_ready() {
+                return std::task::Poll::Ready(RuntimeInput::ReservationAbandoned);
+            }
+
+            if commands_first {
+                if let std::task::Poll::Ready(command) = commands.as_mut().poll_next(cx) {
+                    return std::task::Poll::Ready(match command {
+                        Some(command) => RuntimeInput::Command(command),
+                        None => RuntimeInput::CommandsClosed,
+                    });
+                }
+                if let std::task::Poll::Ready(event) = Pin::new(&mut swarm).poll_next(cx) {
+                    return std::task::Poll::Ready(match event {
+                        Some(event) => RuntimeInput::Swarm(event),
+                        None => RuntimeInput::SwarmEnded,
+                    });
+                }
+            } else {
+                if let std::task::Poll::Ready(event) = Pin::new(&mut swarm).poll_next(cx) {
+                    return std::task::Poll::Ready(match event {
+                        Some(event) => RuntimeInput::Swarm(event),
+                        None => RuntimeInput::SwarmEnded,
+                    });
+                }
+                if let std::task::Poll::Ready(command) = commands.as_mut().poll_next(cx) {
+                    return std::task::Poll::Ready(match command {
+                        Some(command) => RuntimeInput::Command(command),
+                        None => RuntimeInput::CommandsClosed,
+                    });
+                }
+            }
+            std::task::Poll::Pending
+        })
+        .await;
+        commands_first = !commands_first;
+
+        match input {
+            RuntimeInput::Swarm(event) => runtime.handle_swarm_event(&mut swarm, event),
+            RuntimeInput::Command(Command::Shutdown { response }) => {
+                return BrowserSwarmExit::Shutdown(response);
+            }
+            RuntimeInput::Command(command) => {
+                debug_assert!(!runtime.handle_command(&mut swarm, command));
+            }
+            RuntimeInput::ReservationAbandoned => {
+                runtime.mark_reservation_abandoned();
+            }
+            RuntimeInput::CommandsClosed => return BrowserSwarmExit::OwnersDropped,
+            RuntimeInput::SwarmEnded => return BrowserSwarmExit::SwarmEnded,
+        }
+        if let Some(exit) = runtime.terminal_exit.take() {
+            return BrowserSwarmExit::Terminal(exit);
+        }
+    }
+}
+
+async fn pump_incoming_streams(
+    mut incoming: IncomingStreams,
+    pending: Sender<(PeerId, Stream)>,
+    results: Sender<Result<AuthenticatedStream>>,
+) {
+    loop {
+        let stream = incoming.next().fuse();
+        let results_closed = results.closed().fuse();
+        futures::pin_mut!(stream, results_closed);
+        let next = futures::select! {
+            stream = stream => stream,
+            () = results_closed => break,
+        };
+        match next {
+            Some(stream) => {
+                let send = pending.send(stream).fuse();
+                let results_closed = results.closed().fuse();
+                futures::pin_mut!(send, results_closed);
+                let sent = futures::select! {
+                    result = send => result.is_ok(),
+                    () = results_closed => false,
+                };
+                if !sent {
+                    break;
+                }
+            }
+            None => break,
+        }
+    }
+}
+
+async fn authenticate_incoming_streams(
+    pending: Receiver<(PeerId, Stream)>,
+    results: Sender<Result<AuthenticatedStream>>,
+    local_peer_id: PeerId,
+    authority: BrowserAuthority,
+    requirements: SessionRequirements,
+) {
+    loop {
+        let stream = pending.recv().fuse();
+        let results_closed = results.closed().fuse();
+        futures::pin_mut!(stream, results_closed);
+        let next = futures::select! {
+            stream = stream => stream,
+            () = results_closed => break,
+        };
+        let Ok((remote_peer_id, stream)) = next else {
+            break;
+        };
+        let result = authenticate_stream(
+            stream,
+            local_peer_id,
+            remote_peer_id,
+            &authority,
+            &requirements,
+        )
+        .await;
+        if results.send(result).await.is_err() {
+            break;
+        }
+    }
+}
+
+async fn authenticate_stream(
+    stream: Stream,
+    local_peer_id: PeerId,
+    remote_peer_id: PeerId,
+    authority: &BrowserAuthority,
+    requirements: &SessionRequirements,
+) -> Result<AuthenticatedStream> {
+    let tokens = authority.tokens();
+    let verifier = authority.verifier();
+    let (stream, remote) = authenticate_duplex(
+        stream,
+        local_peer_id,
+        remote_peer_id,
+        &tokens,
+        &verifier,
+        requirements,
+    )
+    .await?;
+    Ok(AuthenticatedStream::new(stream, remote))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    #[wasm_bindgen_test(async)]
+    async fn cancelling_an_exact_open_schedules_its_connected_circuit_for_cleanup() {
+        let node_instance_id = Uuid::new_v4();
+        let relay_peer_id = Identity::generate().peer_id();
+        let target_peer_id = Identity::generate().peer_id();
+        let connection_id = ConnectionId::new_unchecked(7);
+        let route = format!(
+            "/dns4/relay.example/tcp/443/wss/p2p/{relay_peer_id}/p2p-circuit/p2p/{target_peer_id}"
+        )
+        .parse()
+        .expect("the test circuit route is valid");
+        let (commands, command_receiver) = async_channel::bounded(1);
+        let control = BrowserRouteControl {
+            node_instance_id,
+            commands,
+            _local_only: Rc::new(()),
+        };
+        let connected = BrowserRelayRoute {
+            node_instance_id,
+            relay_peer_id,
+            target_peer_id,
+            connection_id,
+            admission_expires_at: Utc::now(),
+            route,
+        };
+
+        drop(BrowserAuthenticatedRouteStream::pending(connected, control));
+
+        let command = command_receiver
+            .recv()
+            .await
+            .expect("dropping the pending open schedules circuit cleanup");
+        match command {
+            Command::CloseConnection {
+                connection_id: closed,
+                response,
+            } => {
+                assert_eq!(closed, connection_id);
+                let _ = response.send(Ok(()));
+            }
+            _ => panic!("pending exact-route drop scheduled an unexpected command"),
+        }
+    }
+
+    #[wasm_bindgen_test(async)]
+    async fn dropping_protocol_owners_aborts_their_local_tasks() {
+        let (incoming_abort, incoming_registration) = AbortHandle::new_pair();
+        let (result_sender, results) = async_channel::bounded(1);
+        let observed_results = results.clone();
+        let (incoming_completed_sender, incoming_completed_receiver) = oneshot::channel();
+        let incoming_completed = incoming_completed_receiver.shared();
+        spawn_local(async move {
+            let work = async move {
+                let _result_sender = result_sender;
+                futures::future::pending::<()>().await;
+            };
+            let _ = Abortable::new(work, incoming_registration).await;
+            let _ = incoming_completed_sender.send(());
+        });
+        drop(BrowserIncomingAuthenticatedStreams {
+            results,
+            completed: incoming_completed.clone(),
+            abort: incoming_abort,
+        });
+        incoming_completed
+            .await
+            .expect("aborted incoming task reports completion");
+        assert!(observed_results.recv().await.is_err());
+
+        let (server_abort, server_registration) = AbortHandle::new_pair();
+        let (server_completed_sender, server_completed_receiver) = oneshot::channel();
+        let server_completed = server_completed_receiver.shared();
+        spawn_local(async move {
+            let _ = Abortable::new(futures::future::pending::<()>(), server_registration).await;
+            let _ = server_completed_sender.send(());
+        });
+        let stop = CancellationToken::new();
+        let observed_stop = stop.clone();
+        drop(ApplicationProtocolServer {
+            stop,
+            completed: server_completed.clone(),
+            abort: server_abort,
+        });
+        assert!(observed_stop.is_cancelled());
+        server_completed
+            .await
+            .expect("aborted server task reports completion");
+    }
+}
+
+fn build_swarm(
+    identity: libp2p::identity::Keypair,
+    streams: StreamBehaviour,
+    targeted_streams: TargetedStreamBehaviour,
+) -> std::result::Result<Swarm<BrowserBehaviour>, Box<dyn StdError + Send + Sync>> {
+    Ok(SwarmBuilder::with_existing_identity(identity)
+        .with_wasm_bindgen()
+        .with_other_transport(|identity| {
+            websocket_websys::Transport::default()
+                .upgrade(upgrade::Version::V1Lazy)
+                .authenticate(
+                    noise::Config::new(identity).expect("Ed25519 identity supports Noise"),
+                )
+                .multiplex(yamux::Config::default())
+        })?
+        .with_relay_client(noise::Config::new, yamux::Config::default)?
+        .with_behaviour(|_identity, relay| BrowserBehaviour {
+            relay: relay_client::Behaviour::new(relay),
+            streams,
+            targeted_streams,
+        })?
+        .with_swarm_config(|config| config.with_idle_connection_timeout(Duration::from_secs(60)))
+        .build())
+}

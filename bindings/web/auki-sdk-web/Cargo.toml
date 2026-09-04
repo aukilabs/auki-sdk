@@ -1,0 +1,81 @@
+[package]
+name = "auki-sdk-web"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Generic Rust/Wasm composition for authenticated Auki browser peers"
+readme = "README.md"
+publish = false
+
+[features]
+default = []
+info = [
+  "dep:auki-protocols",
+  "dep:serde",
+  "dep:serde-wasm-bindgen",
+  "auki-protocols/info-endpoint",
+]
+catalog = [
+  "dep:auki-protocols",
+  "dep:serde",
+  "dep:serde-wasm-bindgen",
+  "auki-protocols/catalog-endpoint",
+]
+registry = [
+  "dep:auki-protocols",
+  "dep:serde",
+  "dep:serde-wasm-bindgen",
+  "auki-protocols/registry-endpoint",
+]
+blob = [
+  "dep:auki-protocols",
+  "dep:serde",
+  "dep:serde-wasm-bindgen",
+  "auki-protocols/blob-endpoint",
+]
+message = [
+  "dep:async-channel",
+  "dep:auki-protocols",
+  "dep:auki-registry",
+  "dep:futures",
+  "dep:serde",
+  "dep:serde-wasm-bindgen",
+  "auki-protocols/message-endpoint",
+]
+stream = [
+  "dep:async-channel",
+  "dep:auki-datatypes",
+  "dep:auki-protocols",
+  "dep:futures",
+  "dep:prost",
+  "dep:serde",
+  "dep:serde-wasm-bindgen",
+  "auki-protocols/stream-endpoint",
+]
+finite-protocols = ["info", "catalog", "registry", "blob"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+auki-sdk = { path = "../../../crates/auki-sdk" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+async-channel = { workspace = true, optional = true }
+auki-datatypes = { path = "../../../crates/auki-datatypes", optional = true }
+auki-protocols = { path = "../../../crates/auki-protocols", optional = true }
+auki-registry = { path = "../../../crates/auki-registry", optional = true }
+futures = { workspace = true, optional = true }
+js-sys = { workspace = true }
+prost = { version = "0.13", optional = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+serde-wasm-bindgen = { workspace = true, optional = true }
+uuid = { workspace = true, features = ["js"] }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"

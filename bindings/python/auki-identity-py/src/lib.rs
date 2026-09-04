@@ -1,26 +1,28 @@
-//! PyO3 bindings for a tiny slice of the Auki SDK.
+//! Synchronous PyO3 bindings for Auki identity primitives.
 //!
-//! This crate exposes exactly three things to Python so Boosterapp's
-//! Python sidecar can build its SDK identity (`ParticipantInfo`
-//! fields) today, ahead of the full `auki-py` MVP (Swarm + async
-//! runtime):
+//! This crate exposes three narrowly owned operations:
 //!
-//! 1. [`load_or_mint_seed`] — wraps `auki_identity::load_or_mint_seed`
+//! 1. `load_or_mint_seed` — wraps `auki_identity::load_or_mint_seed`
 //!    for persistent peer-key material across daemon restarts.
-//! 2. [`Wallet`] (with `from_seed` + `derive_child` + `peer_id`) —
-//!    wraps `auki_identity::Wallet` and the canonical PeerId
-//!    derivation recipe `auki_network::PeerIdentity::from_wallet` uses.
+//! 2. `Wallet` (with `from_seed` + `derive_child` + `peer_id`) —
+//!    wraps `auki_identity::Wallet` and constructs the canonical
+//!    `auki_p2p::Identity` from the explicitly derived wallet child.
 //! 3. `app_instance::derive` — wraps
-//!    `auki_network::app_instance::derive` for the per-machine
-//!    identifier carried in `ParticipantInfo.app_instance`.
+//!    `auki_identity::app_instance::derive` for the per-machine
+//!    identifier carried in `AuthenticatedParticipantInfo.app_instance`.
 //!
-//! Out of scope: libp2p Swarm, async / Tokio integration, the cluster
-//! protocol, all signing primitives. Those land in the full `auki-py`
-//! crate later. This crate is data-only — pure synchronous functions
-//! with no GIL-around-await dance.
+//! Authenticated networking belongs to the canonical `auki_sdk::AukiPeer`
+//! facade, whose Python binding is pending. This crate stays data-only: pure
+//! synchronous functions with no GIL-around-await bridge.
 //!
 //! See [`bindings/python/auki-identity-py/README.md`](../README.md) for the
 //! Python-side surface and install instructions.
+
+// PyO3 0.22 generates unsafe helper calls and redundant conversions inside
+// proc-macro expansions under Rust 2024. Keep the release gate strict for
+// handwritten code while the binding family remains ABI-pinned to 0.22.
+#![allow(unsafe_op_in_unsafe_fn)]
+#![allow(clippy::useless_conversion)]
 
 use std::path::PathBuf;
 
@@ -32,10 +34,11 @@ use pyo3::types::{PyBytes, PyModule};
 // in Cargo.toml so it doesn't collide with this crate's own lib name
 // (`auki_identity` — also the Python module name).
 use auki_identity_rs::{
-    SeedError, Wallet as RustWallet, load_or_mint_seed as rust_load_or_mint_seed,
+    SeedError, Wallet as RustWallet,
+    app_instance::{DeriveError, derive as rust_app_instance_derive},
+    load_or_mint_seed as rust_load_or_mint_seed,
 };
-use auki_network::PeerIdentity;
-use auki_network::app_instance::{DeriveError, derive as rust_app_instance_derive};
+use auki_p2p::Identity;
 
 // ─── load_or_mint_seed ───────────────────────────────────────────────────────
 
@@ -67,7 +70,7 @@ fn map_seed_error(e: SeedError) -> PyErr {
 
 // ─── Wallet ──────────────────────────────────────────────────────────────────
 
-/// An ed25519 wallet keypair. Construct with [`Wallet.from_seed`].
+/// An ed25519 wallet keypair. Construct with `Wallet.from_seed`.
 ///
 /// The Rust-side wallet holds secret material; treat instances as
 /// sensitive. The Python wrapper exposes only the operations Boosterapp
@@ -136,24 +139,21 @@ impl Wallet {
     /// pid = peer.peer_id()
     /// ```
     ///
-    /// This matches `auki_network::PeerIdentity::from_wallet(Arc::clone(&w)).peer_id()`
-    /// byte-for-byte: that function is sugar for
-    /// `from_seed(w.derive_child("peer/v1").seed()).peer_id()`.
+    /// This matches `auki_p2p::Identity::from_ed25519_seed(...)` byte-for-byte.
     ///
     /// The encoding is libp2p's: ed25519 pubkey → protobuf-wrapped
     /// `PublicKey` → SHA-256 multihash → base58btc multibase.
     #[pyo3(text_signature = "($self, /)")]
     fn peer_id(&self) -> String {
-        // `Wallet::seed()` returns `Vec<u8>` after the swift-bindings
-        // signature change; `PeerIdentity::from_seed` still takes
-        // `&[u8; 32]`. Bridge the two with try_into — the length is
-        // structurally guaranteed (signing key seed is 32 bytes).
+        // `Wallet::seed()` returns `Vec<u8>`; bridge it to the canonical
+        // fixed-size Identity constructor. The length is structurally
+        // guaranteed because a wallet signing-key seed is 32 bytes.
         let seed_vec: Vec<u8> = self.inner.seed();
         let seed_array: [u8; 32] = seed_vec
             .as_slice()
             .try_into()
             .expect("32-byte seed from Wallet::seed()");
-        let peer = PeerIdentity::from_seed(&seed_array);
+        let peer = Identity::from_ed25519_seed(&seed_array);
         peer.peer_id().to_string()
     }
 
@@ -162,19 +162,14 @@ impl Wallet {
     /// argument that constructed it (or, for a derived wallet, the
     /// XXH3-128-derived child seed).
     ///
-    /// **Why this exists.** `cluster.spawn` in `auki_network` takes a
-    /// 32-byte seed and constructs the swarm's keypair via
-    /// `PeerIdentity::from_seed(seed)` — *not* via `from_wallet`. To make
-    /// the swarm's PeerId match what `Wallet::derive_child("peer/v1").peer_id()`
-    /// reports (the canonical wallet-rooted peer identity), the caller has
-    /// to derive the peer wallet first and hand its `.seed()` to
-    /// `cluster.spawn`. Without this getter, Python consumers couldn't
-    /// extract the derived seed bytes; the Rust `auki_identity::Wallet::seed`
-    /// method existed upstream from day one but was never wired to the
-    /// binding.
+    /// **Why this exists.** Native hosts construct the canonical P2P identity
+    /// from the 32-byte `Wallet::derive_child("peer/v1")` seed. Exposing that
+    /// same derived seed lets a Python host pass it across a narrow native
+    /// boundary without introducing a second Peer-ID derivation model. The
+    /// Rust `auki_identity::Wallet::seed` method existed upstream from day one
+    /// but was not previously wired to this binding.
     ///
-    /// Typical usage in a Python sidecar that participates in an ansuz
-    /// cluster:
+    /// Typical derivation in a Python host:
     ///
     /// ```python
     /// wallet_seed = auki_identity.load_or_mint_seed(seed_path)
@@ -182,8 +177,8 @@ impl Wallet {
     /// peer = wallet.derive_child("peer/v1")
     /// peer_seed = peer.seed()
     /// peer_id = peer.peer_id()
-    /// runtime = auki_network.cluster.spawn(seed=peer_seed, ...)
-    /// # runtime's libp2p PeerId == peer_id, by construction.
+    /// # Supply peer_seed to a trusted native AukiPeer host adapter.
+    /// # Its canonical P2P Identity must have this same peer_id.
     /// ```
     ///
     /// **Sensitivity.** This returns the secret key bytes. Treat the
@@ -204,9 +199,9 @@ impl Wallet {
 
 /// `auki_identity.app_instance.derive()` — per-machine identifier
 /// (12 lowercase hex chars, no separators) used as the
-/// `ParticipantInfo.app_instance` field.
+/// `AuthenticatedParticipantInfo.app_instance` field.
 ///
-/// Wraps `auki_network::app_instance::derive`. Recipe: first
+/// Wraps `auki_identity::app_instance::derive`. Recipe: first
 /// non-loopback IEEE-administered MAC (skipping locally-administered
 /// MACs whose U/L bit is set), sorted lexicographically, lowercased.
 ///
@@ -377,9 +372,8 @@ mod tests {
         // A derived child's seed, when fed back into Wallet::from_seed,
         // must produce a wallet with the same peer_id as the original
         // derived child. This is the round-trip property the BoosterApp
-        // sidecar relies on: derive once, hand the seed to cluster.spawn,
-        // and trust that the swarm's PeerId matches the derived peer's
-        // peer_id.
+        // authenticated native host relies on: derive once, hand the seed to
+        // the canonical P2P identity adapter, and keep the same PeerId.
         Python::with_gil(|py| {
             let seed = PyBytes::new_bound(py, &[7u8; 32]);
             let parent = Wallet::from_seed(&seed).unwrap();
@@ -398,7 +392,7 @@ mod tests {
         // Property pin: the seed format is 32-byte ed25519 secret bytes.
         // If anything in the upstream Wallet representation changes the
         // length, this test catches it before it cascades into the
-        // cluster.spawn FFI seam (which strictly requires 32 bytes).
+        // canonical native P2P identity seam (which requires 32 bytes).
         Python::with_gil(|py| {
             let seed = PyBytes::new_bound(py, &[1u8; 32]);
             let w = Wallet::from_seed(&seed).unwrap();
@@ -417,7 +411,7 @@ mod tests {
     fn locked_peer_id_vector() {
         // Cross-language locked vector. The same string must come out
         // of the parallel-agent's locked Rust test
-        // (`PeerIdentity::from_wallet(Wallet::from_seed(vec![3u8; 32]).expect("32-byte seed")).peer_id().to_string()`).
+        // (`Identity::from_ed25519_seed(&Wallet::from_seed(...).derive_child("peer/v1").seed())`).
         // If both pass, the bindings agree byte-for-byte with the Rust
         // crate.
         //

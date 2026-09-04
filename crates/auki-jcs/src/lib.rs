@@ -79,7 +79,7 @@ mod tests {
         let v = json!({
             "z": [3, 2, 1, {"k": "v", "j": null}],
             "a": "hello",
-            "m": 3.14,
+            "m": 12.34,
             "t": true,
             "f": false,
             "n": null,

@@ -1,0 +1,6 @@
+Package/.build/
+*.xcodeproj/
+DerivedData/
+.mint/
+.swiftpm/
+Package/.swiftpm/

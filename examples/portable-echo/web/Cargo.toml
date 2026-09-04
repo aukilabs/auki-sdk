@@ -1,0 +1,25 @@
+[package]
+name = "auki-portable-echo-web"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "Browser Wasm adapter for the portable Auki echo protocol."
+readme = "README.md"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+auki-portable-echo = { path = ".." }
+auki-sdk = { path = "../../../crates/auki-sdk" }
+auki-sdk-web = { path = "../../../bindings/web/auki-sdk-web" }
+js-sys = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"

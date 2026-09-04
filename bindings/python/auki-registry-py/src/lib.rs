@@ -8,8 +8,10 @@
 //!
 //! Producer sidecars can now do the complete registry dance in Python:
 //! write a `FrameRegistryEntry`, use its returned hash in a spatial
-//! `SensorRegistryEntry`, write that sensor entry, then hand the two
-//! hashes to `auki_domain.StreamManifestBuilder.from_registry(...)`.
+//! `SensorRegistryEntry`, write that sensor entry, then pin both hashes in a
+//! log manifest or `auki-session-py` registration. Native Rust can project the
+//! resulting Session through the opt-in Catalog and Stream endpoints; the
+//! canonical Python `AukiPeer` facade is pending.
 //!
 //! ## RegistryRef / LogRef
 //!
@@ -17,6 +19,12 @@
 //! `(peer_id, id, hash)` / `(source_peer_id, resource_id)` shapes
 //! without building plain dicts by hand. Both are serialized as `dict`
 //! when passed through the `hash_*` / `write_*` helpers.
+
+// PyO3 0.22 proc-macro expansions trigger these Rust 2024/Clippy lints. They
+// cannot be corrected in handwritten wrapper code without changing the shared
+// binding ABI, so scope the compatibility allowance to this crate.
+#![allow(unsafe_op_in_unsafe_fn)]
+#![allow(clippy::useless_conversion)]
 
 use std::path::PathBuf;
 
@@ -207,6 +215,7 @@ fn frame_unity(py: Python<'_>, peer_id: &str, frame_id: &str) -> PyResult<PyObje
 
 #[pyfunction]
 #[pyo3(signature = (*, peer_id, frame_id, handedness, x, y, z, units))]
+#[allow(clippy::too_many_arguments)]
 fn frame_entry(
     py: Python<'_>,
     peer_id: &str,
@@ -298,6 +307,7 @@ fn camera_sensor_entry(
 
 #[pyfunction]
 #[pyo3(signature = (*, peer_id, sensor_id, sensor_type, fields, point_step, is_bigendian, frame_rate_hz, frame))]
+#[allow(clippy::too_many_arguments)]
 fn rangefinder_sensor_entry(
     py: Python<'_>,
     peer_id: &str,
@@ -328,6 +338,7 @@ fn rangefinder_sensor_entry(
 
 #[pyfunction]
 #[pyo3(signature = (*, peer_id, sensor_id, sensor_type, sample_rate_hz, channels, sample_format, channel_layout, frame))]
+#[allow(clippy::too_many_arguments)]
 fn audio_sensor_entry(
     py: Python<'_>,
     peer_id: &str,
@@ -518,6 +529,7 @@ fn utc_clock_entry(
 
 #[pyfunction]
 #[pyo3(signature = (*, peer_id, map_id, frame, voxel_size_m, chunk_dimension, color_model=None, semantic_classes=Vec::new()))]
+#[allow(clippy::too_many_arguments)]
 fn voxel_map_entry(
     py: Python<'_>,
     peer_id: &str,
@@ -637,9 +649,15 @@ fn write_map(py: Python<'_>, app_root: PathBuf, entry: &Bound<'_, PyAny>) -> PyR
 }
 
 #[pyfunction]
-fn write_device_model(py: Python<'_>, app_root: PathBuf, entry: &Bound<'_, PyAny>) -> PyResult<String> {
+fn write_device_model(
+    py: Python<'_>,
+    app_root: PathBuf,
+    entry: &Bound<'_, PyAny>,
+) -> PyResult<String> {
     let entry: registry::DeviceModelRegistryEntry = parse_py(py, entry, "device model")?;
-    registry::write_device_model(&app_root, &entry).map(write_outcome_hash).map_err(map_registry_error)
+    registry::write_device_model(&app_root, &entry)
+        .map(write_outcome_hash)
+        .map_err(map_registry_error)
 }
 
 #[pyfunction]
@@ -650,7 +668,9 @@ fn put_blob(app_root: PathBuf, bytes: &[u8]) -> PyResult<String> {
 #[pyfunction]
 fn get_blob(py: Python<'_>, app_root: PathBuf, sha256: &str) -> PyResult<PyObject> {
     match registry::get_blob(&app_root, sha256).map_err(map_registry_error)? {
-        Some(bytes) => Ok(pyo3::types::PyBytes::new_bound(py, &bytes).into_any().unbind()),
+        Some(bytes) => Ok(pyo3::types::PyBytes::new_bound(py, &bytes)
+            .into_any()
+            .unbind()),
         None => Ok(py.None()),
     }
 }
@@ -700,9 +720,9 @@ fn parse_mesh_substitutions(
     if raw.is_none() {
         return Ok(None);
     }
-    let map = raw.downcast::<PyDict>().map_err(|_| {
-        PyValueError::new_err("mesh_substitutions must be a dict[str, dict]")
-    })?;
+    let map = raw
+        .downcast::<PyDict>()
+        .map_err(|_| PyValueError::new_err("mesh_substitutions must be a dict[str, dict]"))?;
     let mut out = std::collections::HashMap::new();
     for (key, value) in map.iter() {
         let key: String = key.extract()?;
@@ -738,8 +758,7 @@ fn parse_mesh_substitutions(
 
 #[pyfunction]
 fn list_device_models(py: Python<'_>, app_root: PathBuf, peer_id: &str) -> PyResult<PyObject> {
-    let entries =
-        registry::list_device_models(&app_root, peer_id).map_err(map_registry_error)?;
+    let entries = registry::list_device_models(&app_root, peer_id).map_err(map_registry_error)?;
     struct_to_pyobject(py, &entries)
 }
 

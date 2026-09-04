@@ -1,0 +1,51 @@
+[package]
+name = "auki-p2p"
+version = "0.1.0"
+edition = "2021"
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "DDS-authenticated Auki P2P runtime, exact-route transport, and relay routing"
+readme = "README.md"
+
+[dependencies]
+async-channel = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+futures-timer = { workspace = true }
+http = { workspace = true }
+jsonwebtoken = { version = "10.4.0", default-features = false, features = ["rust_crypto", "use_pem"] }
+libp2p-identity = { workspace = true }
+parking_lot = { workspace = true }
+p256 = "0.13.2"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio-util = { workspace = true, features = ["rt"] }
+uuid = { workspace = true }
+web-time = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+hickory-resolver = "0.25.2"
+libp2p = { workspace = true, features = ["tokio", "macros", "noise", "tcp", "yamux", "dns", "relay"] }
+libp2p-stream = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tracing = { workspace = true }
+zeroize = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
+getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+libp2p = { workspace = true, features = ["ed25519", "macros", "noise", "relay", "wasm-bindgen", "websocket-websys", "yamux"] }
+libp2p-stream = { workspace = true }
+uuid = { workspace = true, features = ["js"] }
+wasm-bindgen-futures = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+wasm-bindgen-test = "0.3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

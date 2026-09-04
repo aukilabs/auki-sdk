@@ -42,6 +42,7 @@ def test_module_exports_expected_classes():
     assert hasattr(auki_logs, "LogReader")
     assert hasattr(auki_logs, "TailIter")
     assert hasattr(auki_logs, "Entry")
+    assert hasattr(auki_logs, "StreamSource")
 
 
 def test_open_creates_layout_and_writes_manifest(tmp_path: Path):
@@ -89,8 +90,13 @@ def test_stream_source_carries_manifest_metadata(tmp_path: Path):
     )
 
     assert source.root == str(tmp_path)
+    assert source.resource_id == ""
     assert source.sensor_id == "robot/rgb"
     assert source.sensor_hash == "sensor-hash"
+    assert source.map_peer_id == ""
+    assert source.map_id == ""
+    assert source.map_hash == ""
+    assert source.clock_peer_id == ""
     assert source.clock_id == "robot/clock"
     assert source.clock_hash == "clock-hash"
     assert source.payload_kind == "camera"
@@ -117,6 +123,35 @@ def test_stream_source_accepts_absent_frame_metadata(tmp_path: Path):
     log.close()
 
 
+def test_map_stream_source_carries_exact_resource_map_and_clock_identity(tmp_path: Path):
+    log = auki_logs.Log.open(str(tmp_path), manifest())
+
+    source = log.map_stream_source(
+        resource_id="voxel/world-resource",
+        map_peer_id="12D3KooWMapPeer",
+        map_id="voxel/world-map",
+        map_hash="map-sha256",
+        clock_peer_id="12D3KooWClockPeer",
+        clock_id="sdk-clock",
+        clock_hash="clock-sha256",
+    )
+
+    assert source.root == str(tmp_path)
+    assert source.resource_id == "voxel/world-resource"
+    assert source.sensor_id == ""
+    assert source.sensor_hash == ""
+    assert source.map_peer_id == "12D3KooWMapPeer"
+    assert source.map_id == "voxel/world-map"
+    assert source.map_hash == "map-sha256"
+    assert source.clock_peer_id == "12D3KooWClockPeer"
+    assert source.clock_id == "sdk-clock"
+    assert source.clock_hash == "clock-sha256"
+    assert source.payload_kind == "map"
+    assert source.frame_id == ""
+    assert source.frame_hash == ""
+    log.close()
+
+
 def test_stream_source_rejects_unknown_payload_kind(tmp_path: Path):
     log = auki_logs.Log.open(str(tmp_path), manifest())
 
@@ -129,28 +164,6 @@ def test_stream_source_rejects_unknown_payload_kind(tmp_path: Path):
             payload_kind="thermal",
         )
 
-    log.close()
-
-
-def test_stream_source_exposes_named_internal_capsule(tmp_path: Path):
-    import ctypes
-
-    log = auki_logs.Log.open(str(tmp_path), manifest())
-    source = log.stream_source(
-        sensor_id="robot/rgb",
-        sensor_hash="sensor-hash",
-        clock_id="robot/clock",
-        clock_hash="clock-hash",
-        payload_kind="camera",
-    )
-
-    capsule = source._stream_source_capsule()
-    assert type(capsule).__name__ == "PyCapsule"
-
-    ctypes.pythonapi.PyCapsule_GetName.restype = ctypes.c_char_p
-    ctypes.pythonapi.PyCapsule_GetName.argtypes = [ctypes.py_object]
-    name = ctypes.pythonapi.PyCapsule_GetName(capsule)
-    assert name == b"auki_logs_py::stream_source::v1"
     log.close()
 
 

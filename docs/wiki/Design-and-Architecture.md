@@ -11,12 +11,12 @@ This section is for engineers reading or contributing to the Auki SDK source. It
 
 ## In-repo documentation
 
-The repo holds frozen-in-time design records for major changes:
+The repository keeps maintained documentation close to the code:
 
-- [`docs/superpowers/specs/`](https://github.com/aukilabs/auki-sdk/tree/develop/docs/superpowers/specs) — design specifications
-- [`docs/superpowers/plans/`](https://github.com/aukilabs/auki-sdk/tree/develop/docs/superpowers/plans) — implementation plans
-- [`dataproducts.md`](https://github.com/aukilabs/auki-sdk/blob/develop/dataproducts.md) — the peer-discovery / resource catalog reference
-- [`docs/control-api.md`](https://github.com/aukilabs/auki-sdk/blob/develop/docs/control-api.md) — HTTP control API for SDK-session daemons
+- [`docs/p2p/`](https://github.com/aukilabs/auki-sdk/tree/develop/docs/p2p) — authenticated peer and protocol development
+- [`dataproducts.md`](https://github.com/aukilabs/auki-sdk/blob/develop/dataproducts.md) — Resource Catalog and data-lifecycle reference
+
+Git history, tagged releases, and linked issues retain superseded design plans.
 
 ## Release / tag history
 

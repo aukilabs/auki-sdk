@@ -2,9 +2,9 @@ syntax = "proto3";
 
 package auki.blob;
 
-// libp2p substream protocol envelope for `/auki/blobs/0.1.0`.
+// libp2p substream protocol envelope for `/auki/auth/1/blobs/0.1.0`.
 //
-// Framing is owned by `auki-network`: 4-byte big-endian u32 length prefix
+// Framing is owned by `auki-protocols`: 4-byte big-endian u32 length prefix
 // followed by the protobuf-encoded message body. For BlobResponse.status =
 // ok, exactly `chunk_len` raw payload bytes follow the framed meta
 // (mesh/URDF bytes are never embedded in the protobuf message).

@@ -4,7 +4,67 @@ One entry per SDK tag from v0.0.50 onward. Tags older than v0.0.50 predate the #
 
 Each entry summarizes what changed, who's affected, and any migration notes. The annotated git tag message (`git show vX.Y.Z`) is the canonical source; this page is the long-form narrative companion.
 
-> **Cadence note.** The SDK is pre-1.0; breaking changes tick the patch version (v0.0.X). Downstream consumers should pin a tag rather than a branch. Major shifts get called out below.
+> **Cadence note.** The SDK is pre-1.0; breaking changes tick the minor version.
+> Downstream consumers should pin a coordinated tag rather than a branch and
+> upgrade communicating peers together.
+
+---
+
+## Unreleased v0.1.0 — authenticated AukiPeer runtime
+
+**Status:** the source migration is in progress; the coordinated release tag
+and package publication are still pending.
+
+- `auki_sdk::AukiPeer` is the single high-level networking runtime for native
+  Rust and Web/Wasm. The old Manager, `auki-network`, and `auki-domain`
+  runtimes are removed.
+- `auki-auth` prepares renewable, Domain-scoped authority for User or trusted
+  native App credentials. Robot and Compute hosts can supply externally
+  managed authority through `AukiPeer::start_external`.
+- Relay-backed reachability is the default. Native direct-only and browser
+  outbound-only operation are explicit and make no local relay booking; one
+  live runtime per persisted Peer ID is supported. Web `tcpRoute` and
+  `wssRoute` are now optional, with `relayBacked` exposing the selected result.
+- `auki-protocols` exposes compile-time opt-in wire families with explicit
+  outbound Clients and inbound Endpoints. Current endpoints do not negotiate
+  hidden legacy fallbacks; Catalog v2 remains only where its locked row shape
+  is embedded by Catalog v3.
+- One portable echo protocol now proves relay-backed and outbound-only browser
+  clients plus both native/Web directions without duplicating its Rust wire
+  conversation.
+- Python retains local data-model bindings and Swift retains a Wallet binding.
+  Their canonical high-level `AukiPeer` facades remain follow-up work.
+- Discovery and remote-route publication remain application-owned. Relay
+  allocation provides reachability, not peer discovery.
+
+**Who's affected:** every networking consumer. Upgrade communicating peers
+together; this is intentionally not a compatibility runtime for v0.0.x.
+
+**Migration:** follow the
+[AukiPeer migration guide](https://github.com/aukilabs/auki-sdk/blob/develop/docs/authenticated-domain-migration.md).
+
+---
+
+## v0.0.60 — SDK-native voxel mapping and scalar sensors
+
+**Released:** 2026-08-07 · [`git show v0.0.60`](https://github.com/aukilabs/auki-sdk/releases/tag/v0.0.60)
+
+- Added SDK-native voxel mapping, replay checkpoints, frame aliases, map
+  source color, and independent Mapper output clocks.
+- Added application-owned detector execution and streamed detection-log
+  resources.
+- Added live typed messages and Python send/receive surfaces.
+- Added the scalar sensor family across registries, logs, resources, streams,
+  and Python bindings.
+- Hardened stream teardown and expanded geometry conversion bindings.
+
+**Who's affected:** Manager-era native, Swift, and browser consumers that need
+the final pre-Stage-1 source line. This tag remains the pinned prior line while
+authenticated Swift/browser engines are developed separately.
+
+**Migration:** Do not mix `v0.0.60` peers with authenticated `v0.1.0` peers.
+Upgrade a communicating Rust/Python group together, or keep the entire group on
+this tag.
 
 ---
 
@@ -13,7 +73,7 @@ Each entry summarizes what changed, who's affected, and any migration notes. The
 **Released:** 2026-06-25 · [`git show v0.0.59`](https://github.com/aukilabs/auki-sdk/releases/tag/v0.0.59)
 
 - **[#296](https://github.com/aukilabs/auki-sdk/pull/296) (#295)** Manager tiebreaker: Discovery-arbitrated promotion, step-down, and rejoin — closes races where two peers could each believe they're Manager.
-- **[#294](https://github.com/aukilabs/auki-sdk/pull/294) (#293)** Identity confirmed libp2p-only: the HTTP `/api/info` control-API path for `ParticipantInfo` is removed. `ParticipantInfo` is now gated by cluster membership over `/auki/info/0.0.1` exclusively.
+- **[#294](https://github.com/aukilabs/auki-sdk/pull/294) (#293)** Identity confirmed libp2p-only: the legacy HTTP `/api/info` path for `ParticipantInfo` is removed. `ParticipantInfo` is now gated by cluster membership over `/auki/info/0.0.1` exclusively.
 - **[#305](https://github.com/aukilabs/auki-sdk/pull/305) (#304)** Heartbeat write stalls instrumented for field diagnosis — logging only, no behavior change.
 - **[#300](https://github.com/aukilabs/auki-sdk/pull/300)** `.understand-anything` knowledge-graph + dashboard added for GitHub Pages (repo-internal tooling, not an SDK surface).
 
@@ -23,13 +83,13 @@ Each entry summarizes what changed, who's affected, and any migration notes. The
 
 ---
 
-## v0.0.58 — Peer/Session/Domain doc sweep + control-api Manager fields
+## v0.0.58 — Peer/Session/Domain doc sweep + legacy Manager fields
 
 **Released:** 2026-06-10 · [`git show v0.0.58`](https://github.com/aukilabs/auki-sdk/releases/tag/v0.0.58)
 
-- **[#292](https://github.com/aukilabs/auki-sdk/pull/292) (#288)** Repo-wide doc sweep for the #274/#282 Peer/Session/Domain split — READMEs, the app-builder skill, and `docs/control-api.md` updated to the current shape.
+- **[#292](https://github.com/aukilabs/auki-sdk/pull/292) (#288)** Repo-wide doc sweep for the #274/#282 Peer/Session/Domain split.
 - **[#284](https://github.com/aukilabs/auki-sdk/pull/284)** Session clock unified: `ClusterManager` reads time through the shared SDK clock primitive; `examples/diagnostic-app` becomes a proper peer instead of hand-rolling its own clock.
-- Control API's `/api/info` gains `is_manager` + `manager_peer_id` fields. (Superseded in v0.0.59, which removes the HTTP `/api/info` identity path entirely — those two fields did not survive.)
+- The legacy `/api/info` response gains `is_manager` + `manager_peer_id` fields. (Superseded in v0.0.59, which removes the HTTP identity path entirely — those two fields did not survive.)
 
 **Who's affected:** Contributors reading docs/examples for the current Peer/Session/Domain shape.
 
@@ -149,7 +209,7 @@ Each entry summarizes what changed, who's affected, and any migration notes. The
 
 **Released:** 2026-05-21 · [`git show v0.0.50`](https://github.com/aukilabs/auki-sdk/releases/tag/v0.0.50)
 
-- **[#161](https://github.com/aukilabs/auki-sdk/pull/161)** Heartbeat-driven domain clock sync. Heartbeats now carry NTP-style timing observations; each peer computes a `ClockTransformEstimate` against the Manager and composes with the Manager-announced domain clock to produce a live `DomainClockEstimate`. (See [The Five Questions § Temporal](The-Five-Questions#temporal--when-did-this-happen) for the live-vs-recorded distinction.)
+- **[#161](https://github.com/aukilabs/auki-sdk/pull/161)** Heartbeat-driven domain clock sync. Heartbeats now carry NTP-style timing observations; each peer computes a `ClockTransformEstimate` against the Manager and composes with the Manager-announced domain clock to produce a live `DomainClockEstimate`. (See [The Five Questions § Temporal](The-Five-Questions#temporal--when-is-this) for the live-vs-recorded distinction.)
 - **[#162 / #158](https://github.com/aukilabs/auki-sdk/pull/158)** Diagnostic app and diagnostic-flash timestamp logging.
 - **[#156](https://github.com/aukilabs/auki-sdk/pull/156)** Python bindings relocated under `bindings/python/` (away from sibling crate dirs). Cargo paths and import paths updated.
 - **[#155](https://github.com/aukilabs/auki-sdk/pull/155)** Retained stream source bridge.

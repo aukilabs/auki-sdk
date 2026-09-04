@@ -1,0 +1,28 @@
+[package]
+name = "auki-portable-echo-native"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "Native AukiPeer adapter for the portable echo protocol."
+readme = "README.md"
+default-run = "auki-portable-echo-native"
+autobins = false
+
+[[bin]]
+name = "auki-portable-echo-native"
+path = "src/main.rs"
+
+[[bin]]
+name = "auki-portable-echo-interop"
+path = "src/bin/interop.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+auki-portable-echo = { path = ".." }
+auki-sdk = { path = "../../../crates/auki-sdk" }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "time"] }
+uuid = { workspace = true }

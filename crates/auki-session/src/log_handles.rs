@@ -11,12 +11,19 @@ use std::sync::Arc;
 
 use crate::log_specs::HeadSpec;
 
+/// A consistent persisted-log snapshot paired with its live append receiver.
+pub type LogSnapshot<T> = (
+    Vec<auki_logs::Entry<T>>,
+    tokio::sync::broadcast::Receiver<(i64, T)>,
+);
+
 pub struct SensorLogHandle {
     pub resource_id: String,
     pub log_ref: LogRef,
-    /// Full manifest. Public so `auki-domain` can build catalog rows; the
-    /// sensor kind/type are derived from the peer's sensor registry at
-    /// catalog-build time, not stored here. See #274 (D3).
+    /// Full manifest used by local readers and protocol adapters.
+    ///
+    /// Sensor kind/type are resolved from the peer's Sensor Registry when a
+    /// catalog row is projected; they are not duplicated here.
     pub manifest: SensorLogManifest,
     /// Head window spec, used for catalog row production.
     pub head_spec: HeadSpec,
@@ -58,6 +65,7 @@ impl MapLogHandle {
     ) -> crate::Result<()> {
         let mut writer = self.writer.lock();
         writer.append(timestamp_ns, update)?;
+        writer.flush()?;
         // Durability precedes visibility. A missing receiver is expected when
         // nobody currently subscribes and is not an append failure.
         let _ = self.updates.send((timestamp_ns, update.clone()));
@@ -83,10 +91,7 @@ impl MapLogHandle {
     /// replay/live boundary from losing or duplicating an append.
     pub fn snapshot_and_subscribe(
         &self,
-    ) -> crate::Result<(
-        Vec<auki_logs::Entry<auki_datatypes::map::MapUpdate>>,
-        tokio::sync::broadcast::Receiver<(i64, auki_datatypes::map::MapUpdate)>,
-    )> {
+    ) -> crate::Result<LogSnapshot<auki_datatypes::map::MapUpdate>> {
         let mut writer = self.writer.lock();
         writer.flush()?;
         let entries =
@@ -239,13 +244,7 @@ impl DetectionLogHandle {
     /// Atomically capture persisted history and subscribe to future entries.
     pub fn snapshot_and_subscribe(
         &self,
-    ) -> Result<
-        (
-            Vec<auki_logs::Entry<auki_datatypes::detection::DetectionFrame>>,
-            tokio::sync::broadcast::Receiver<(i64, auki_datatypes::detection::DetectionFrame)>,
-        ),
-        auki_logs::Error,
-    > {
+    ) -> Result<LogSnapshot<auki_datatypes::detection::DetectionFrame>, auki_logs::Error> {
         let mut writer = self.writer.lock();
         writer.flush()?;
         let history =
@@ -278,4 +277,56 @@ impl DetectionLogHandle {
 
 pub struct MaterializedLogHandle {
     pub log_ref: LogRef,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use auki_datatypes::map::MapUpdate;
+    use auki_registry::{FiniteF64, MapBody, VoxelMap, VoxelValueModel};
+    use tempfile::tempdir;
+
+    use crate::{FrameDef, HeadSpec, MapLogSpec, Peer};
+
+    #[test]
+    fn map_append_is_durable_when_it_becomes_visible() {
+        let tmp = tempdir().unwrap();
+        let peer = Peer::new("galbot", "test-app").with_storage_root(tmp.path().to_path_buf());
+        let session = peer.start_session().unwrap();
+        let frame = peer.register_frame("world", FrameDef::ros_body()).unwrap();
+        let map = peer
+            .register_map(
+                "occupancy",
+                MapBody::Voxel(VoxelMap {
+                    frame,
+                    voxel_size_m: FiniteF64(0.05),
+                    chunk_dimension: 64,
+                    value_model: VoxelValueModel::AdditiveOccupancyEvidence,
+                    color_model: None,
+                    semantic_classes: Vec::new(),
+                }),
+            )
+            .unwrap();
+        let handle = session
+            .register_map_log(MapLogSpec {
+                map,
+                clock: session.monotonic_clock(),
+                head: HeadSpec::Fixed,
+                segment_duration: Duration::from_secs(1),
+                retention: Duration::ZERO,
+            })
+            .unwrap();
+        let mut updates = handle.subscribe();
+
+        handle.append(42, &MapUpdate::default()).unwrap();
+
+        assert_eq!(updates.try_recv().unwrap().0, 42);
+        let persisted = auki_logs::Log::<MapUpdate>::read(&handle.root)
+            .unwrap()
+            .entries()
+            .unwrap();
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].timestamp_ns, 42);
+    }
 }

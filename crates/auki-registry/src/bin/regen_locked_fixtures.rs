@@ -4,7 +4,7 @@
 //! Run after any intentional schema change to commit updated fixtures:
 //!
 //! ```sh
-//! cargo run -p auki-registry --bin regen_locked_fixtures
+//! cargo run -p auki-registry --bin regen_registry_fixtures
 //! ```
 
 use auki_registry::{

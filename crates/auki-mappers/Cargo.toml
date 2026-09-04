@@ -2,13 +2,14 @@
 name = "auki-mappers"
 version = "0.0.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
 auki-datatypes = { path = "../auki-datatypes" }
 auki-registry = { path = "../auki-registry" }
 auki-session = { path = "../auki-session" }
-auki-network = { path = "../auki-network", features = ["swarm"] }
+auki-protocols = { path = "../auki-protocols", features = ["catalog", "stream-endpoint"] }
 thiserror = "2"
 futures = "0.3"
 tokio = { version = "1", features = ["macros", "rt", "sync"] }

@@ -37,9 +37,8 @@
 //!
 //! - Not a key store. Encryption-at-rest, OS keychain integration, and
 //!   passphrase-protected exports are downstream consumer concerns.
-//! - Not a network identity. The peer identity used for libp2p connections
-//!   is *derived* from a wallet (via `derive_child`), not the wallet itself.
-//!   Lives in the planned `auki-network` crate.
+//! - Not a network runtime. The canonical libp2p identity lives in
+//!   `auki-p2p`; hosts may derive its persistent seed from a wallet child.
 
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -56,6 +55,10 @@ uniffi::setup_scaffolding!();
 mod seed;
 #[cfg(not(target_arch = "wasm32"))]
 pub use seed::{SeedError, load_or_mint_seed};
+
+/// Native per-machine application-instance identifiers.
+#[cfg(all(feature = "app-instance", not(target_arch = "wasm32")))]
+pub mod app_instance;
 
 /// Errors that can occur constructing an identity primitive across the
 /// FFI boundary. The type is available in all builds (so the new
@@ -539,10 +542,9 @@ mod tests {
     /// pubkey below. The locked chain: seed → ed25519 keypair → labeled-hash
     /// child seed → child ed25519 keypair → child pubkey bytes. Any reimpl in
     /// another language is correct only if it reproduces these exact bytes from
-    /// the same seed + label. Pairs with `auki_network::tests::locked_seed_to_peer_id_vector`
-    /// — the parent wallet's PeerId there is derived from this same `[3u8; 32]`
-    /// seed via the libp2p PeerId encoding. Don't update this without a
-    /// coordinated version bump.
+    /// the same seed + label. The P2P conformance vectors derive the canonical
+    /// PeerId from this child seed. Don't update this without a coordinated
+    /// version bump.
     #[test]
     fn locked_derive_child_peer_v1_pubkey_vector() {
         let parent = Wallet::from_seed(vec![3u8; 32]).expect("32-byte seed");
@@ -683,10 +685,9 @@ mod tests {
     /// another language is correct only if it reproduces these exact
     /// canonical bytes AND signature from the same seed + JSON value. Drift
     /// in JCS, in ed25519, or in the seed-to-signing-key path will surface
-    /// here. Pairs with the existing `auki-hash` / `auki-identity` /
-    /// `auki-network` locked vectors as the cross-language conformance set
-    /// downstream Vinland verifiers (Discovery, Python sidecar) will pin
-    /// against. Don't update without a coordinated version bump.
+    /// here. Pairs with the existing `auki-hash`, `auki-identity`, and
+    /// `auki-p2p` locked vectors as the cross-language conformance set.
+    /// Don't update without a coordinated version bump.
     ///
     /// Source value uses a Vinland-shaped registration body in deliberately
     /// non-sorted insertion order so the assertion exercises JCS's

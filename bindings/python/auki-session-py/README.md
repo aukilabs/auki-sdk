@@ -2,7 +2,9 @@
 
 PyO3 bindings for [`auki-session`](../../../crates/auki-session) — Python surface for the SDK's declarative control-plane API. Shipped in #224; tracks the post-#282 `Peer` / `Session` split.
 
-**Status:** Shipped. Tested in `python_tests/`. Cluster lifecycle is **not** in this package — Python daemons drive [`auki-domain-py`](../auki-domain-py)'s `ClusterManager` directly (the Rust `Domain::join` path has no Python binding yet).
+**Status:** Shipped and tested in `python_tests/`. This package is deliberately
+network-free. The canonical authenticated networking owner is
+`auki_sdk::AukiPeer`; its separate Python facade is `auki-sdk-py`.
 
 ## Public surface
 
@@ -54,9 +56,18 @@ Each returns a typed handle with `resource_id`, `log_ref`, and canonical session
 - `materialize_remote_log(log_ref, *, retention_ns, segment_duration_ns)` — deferred to Phase 5.
 - `resolve_static_transform(log_ref)` — deferred to Phase 5.
 
-### Catalog and domain — not here
+### Networking and live catalogs — not here
 
-`catalog()` and `join_domain` / `leave_domain` were removed with the #282 split (they no longer exist on the Rust `Session` either). Resource catalogs and cluster lifecycle live in [`auki-domain-py`](../auki-domain-py) (`ClusterManager`, `ResourceEntry`).
+`catalog()` and the former Session-level network lifecycle were removed with
+the #282 split; they do not exist on the Rust `Session` either. In native Rust,
+`auki_protocols::session_adapter::SessionProtocolProvider` can project a
+`Peer`/`Session` pair into the opt-in Catalog and Stream endpoints mounted on an
+`AukiPeer`. Python applications use `auki-sdk-py` for authenticated networking;
+this local component package does not own that lifecycle.
+
+Catalog v3 is the live general resource service. It carries compatible v2 log
+rows plus message-channel rows; Catalog v2 remains a wire schema rather than a
+mounted endpoint.
 
 ## Type sharing
 

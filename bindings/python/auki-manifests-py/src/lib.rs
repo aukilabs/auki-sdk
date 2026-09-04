@@ -35,6 +35,12 @@
 //! callers already think in. The wrappers parse via `serde_json` into
 //! the Rust enum, surfacing decode errors as `ValueError`.
 
+// PyO3 0.22 proc-macro expansions trigger these Rust 2024/Clippy lints. They
+// cannot be corrected in handwritten wrapper code without changing the shared
+// binding ABI, so scope the compatibility allowance to this crate.
+#![allow(unsafe_op_in_unsafe_fn)]
+#![allow(clippy::useless_conversion)]
+
 use std::time::Duration;
 
 use auki_manifests_rs as manifests;

@@ -4,12 +4,12 @@
 //! Run after any intentional schema change to commit updated fixtures:
 //!
 //! ```sh
-//! cargo run -p auki-manifests --bin regen_locked_fixtures
+//! cargo run -p auki-manifests --bin regen_manifest_fixtures
 //! ```
 //!
 //! Hash values for `RegistryRef` fields are computed from the same registry
 //! entry shapes that `auki-registry`'s own regen binary produces; running
-//! `cargo run -p auki-registry --bin regen_locked_fixtures` first keeps the
+//! `cargo run -p auki-registry --bin regen_registry_fixtures` first keeps the
 //! two sets of fixtures in sync.
 
 use auki_manifests::{
@@ -59,7 +59,7 @@ fn canonical<T: serde::Serialize>(v: T) -> String {
 //
 // Hashes are computed from the corresponding auki-registry entry shapes (same
 // peer_id / id / canonical JSON). Running `cargo run -p auki-registry
-// --bin regen_locked_fixtures` regenerates those entries and the hashes below
+// --bin regen_registry_fixtures` regenerates those entries and the hashes below
 // must track them.
 
 /// Galbot's head_left_rgb sensor (Camera/rgb, 1920x1200 @ 30 Hz).

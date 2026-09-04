@@ -6,7 +6,13 @@ The Auki SDK rests on one invariant. Internalize this and the rest of the API st
 > A data product has exactly one canonical `peer_id`.
 > Materialized copies preserve that `peer_id`.
 
-— from the [#216 design spec](https://github.com/aukilabs/auki-sdk/blob/develop/docs/superpowers/specs/2026-05-27-216-schema-and-api-placement-design.md)
+This invariant is implemented by the current manifest and catalog schemas; see
+the [`dataproducts.md`](https://github.com/aukilabs/auki-sdk/blob/develop/dataproducts.md)
+reference.
+
+The identity model is shipped. Automatic remote-log materialization remains a
+deferred `Session` operation; the discussion below describes the schema and
+behavior that implementation must preserve.
 
 ## Why ownership matters
 
@@ -96,7 +102,7 @@ pub struct SensorLogManifest {
 
 The split is in `auki_manifests::*Manifest` for all four log variants (`SensorLogManifest`, `PoseLogManifest`, `TimeTransformLogManifest`, `DetectionLogManifest`).
 
-### Catalog row (over `/auki/resources/0.2.0`)
+### Catalog row (v2-compatible row inside Catalog v3)
 
 ```json
 {
@@ -108,9 +114,14 @@ The split is in `auki_manifests::*Manifest` for all four log variants (`SensorLo
 }
 ```
 
-Defined as `auki_network::resources_protocol::ResourceEntry`. The full row shape is documented in [`dataproducts.md`](https://github.com/aukilabs/auki-sdk/blob/develop/dataproducts.md).
+The log row is defined as `auki_protocols::catalog::v2::ResourceEntry`, but the
+live general resource endpoint is `/auki/auth/1/resources/0.3.0`. Catalog v3
+wraps these unchanged v2-shaped rows alongside its additional message-channel
+variant. The v2 protocol remains a wire-compatibility contract and is not
+mounted by the current `CatalogEndpoint`. The full log-row shape is documented
+in [`dataproducts.md`](https://github.com/aukilabs/auki-sdk/blob/develop/dataproducts.md).
 
-### Stream request (over `/auki/stream/0.2.0`)
+### Stream request (over `/auki/auth/1/stream/0.2.0`)
 
 ```rust
 pub struct StreamRequest {
@@ -131,7 +142,11 @@ pub struct LogRef {
 }
 ```
 
-When the SDK refers to "a log" abstractly — a `Session::materialize_remote_log` argument, the input of a detection log, anywhere a log is named without saying *which copy* — it uses `LogRef`, which carries only the canonical identity. The writer is irrelevant when discussing logs as abstract entities; it only matters once you're actually moving bytes.
+When the SDK refers to "a log" abstractly — including the currently deferred
+`Session::materialize_remote_log` operation and detection-log inputs — it uses
+`LogRef`, which carries only the canonical identity. The writer is irrelevant
+when discussing logs as abstract entities; it matters once an application
+chooses which peer will serve or store bytes.
 
 ## What this enables
 
@@ -142,7 +157,7 @@ When the SDK refers to "a log" abstractly — a `Session::materialize_remote_log
 ## See also
 
 - [Quickstart](Quickstart) — register your first peer-owned sensor log
-- [#216 design spec](https://github.com/aukilabs/auki-sdk/blob/develop/docs/superpowers/specs/2026-05-27-216-schema-and-api-placement-design.md) — the canonical record of this design
+- [Issue #216](https://github.com/aukilabs/auki-sdk/issues/216) — historical discussion for the schema migration
 - [`dataproducts.md`](https://github.com/aukilabs/auki-sdk/blob/develop/dataproducts.md) — catalog row reference with worked examples per variant
 - [The Five Questions](The-Five-Questions) — where ownership fits in the architectural frame
 

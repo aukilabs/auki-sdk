@@ -2,10 +2,11 @@
 name = "auki-identity"
 version = "0.0.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Wallet primitive for the Auki SDK — ed25519 keypairs, signing, deterministic child derivation, and signed creation certs. WASM-friendly."
+description = "Identity primitives for the Auki SDK — wallets, deterministic child derivation, signed creation certs, and native app-instance identifiers."
 
 [dependencies]
 auki-hash = { path = "../auki-hash" }
@@ -15,6 +16,7 @@ rand_core = { version = "0.6", features = ["std", "getrandom"] }
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 serde_json = "1"
+mac_address = { version = "1", optional = true }
 
 # Optional — only pulled in when the `swift-bindings` feature is on. Carries
 # the UniFFI proc-macros for the Swift binding crate under
@@ -27,6 +29,7 @@ uniffi = { version = "0.31", features = ["tokio"], optional = true }
 thiserror = { version = "2", optional = true }
 
 [features]
+app-instance = ["dep:mac_address"]
 # Enables UniFFI proc-macros on `Wallet` (and any future identity types
 # the Swift binding needs). When off, the crate compiles exactly as today.
 swift-bindings = ["dep:uniffi", "dep:thiserror"]

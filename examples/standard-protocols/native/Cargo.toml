@@ -1,0 +1,31 @@
+[package]
+name = "auki-standard-protocols-native"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "Native node for the Auki standard-protocol interoperability playground."
+
+[dependencies]
+anyhow = { workspace = true }
+auki-datatypes = { path = "../../../crates/auki-datatypes" }
+auki-protocols = { path = "../../../crates/auki-protocols", features = [
+    "blob-endpoint",
+    "catalog-endpoint",
+    "info-endpoint",
+    "message-endpoint",
+    "registry-endpoint",
+    "stream-endpoint",
+] }
+auki-registry = { path = "../../../crates/auki-registry" }
+auki-sdk = { path = "../../../crates/auki-sdk" }
+futures = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt-multi-thread", "signal"] }
+uuid = { workspace = true }

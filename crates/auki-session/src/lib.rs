@@ -1,8 +1,9 @@
-//! Session — per-process declarative API for the Auki SDK.
+//! Network-free recording and registry model for the Auki SDK.
 //!
-//! Apps construct a [`Session`], register their sensors / clocks / frames /
-//! detectors and the logs they own, then join a domain to advertise them.
-//! Spec: `docs/superpowers/specs/2026-05-27-216-schema-and-api-placement-design.md` §4.
+//! Apps construct a long-lived [`Peer`], register local metadata, and create
+//! [`Session`] timelines that own their logs. Networking composes this model
+//! separately through
+//! `auki_protocols::session_adapter::SessionProtocolProvider`.
 
 #![deny(unused_must_use)]
 

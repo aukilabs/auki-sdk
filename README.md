@@ -1,100 +1,158 @@
 # Auki SDK
 
-On-device SDK for the Auki spatial-computing protocol — a Cargo workspace of Rust crates plus per-language bindings (Python via PyO3, Swift via UniFFI, TypeScript for the browser).
+Rust-first building blocks for authenticated peer-to-peer robotics and spatial
+computing. The SDK records typed data locally, authenticates peers into a DDS
+Domain, makes them reachable through direct or relay routes, and lets
+applications opt into exact protocol versions.
 
-See [VISION.md](VISION.md) for the aspirational spec; this file describes what's actually in the repo today. [GLOSSARY.md](GLOSSARY.md) defines the domain terms.
+Start here:
 
-## What this SDK does today
+- [Build a P2P application](docs/p2p/README.md)
+- [Run the native echo example](docs/p2p/getting-started.md)
+- [Author a portable protocol](docs/p2p/authoring-protocols.md)
+- [Choose a runnable example](examples/README.md)
+- [Understand the longer-term direction](VISION.md)
+- [Look up terminology](GLOSSARY.md)
 
-The Auki protocol is built around five questions any node should be able to answer about any other node — **Identity (who am I?)**, **Spatial (where did this happen?)**, **Temporal (when did this happen?)**, **Networking (how do I talk to you?)**, and **Tokenomics (how do I compensate you?)**. The SDK today implements the foundations for each.
+## The architecture
 
-### Identity
+A **Domain** is a DDS-owned physical-space and authority boundary. It is not a
+Rust runtime object, a leader, or a peer roster.
 
-- **`Wallet`** — ed25519 keypair with deterministic child derivation. Mints libp2p peer identities via `Wallet::derive_child("peer/v1")` and signs creation certs.
-- **`auki-jcs` + `auki-hash`** — RFC 8785 JSON canonicalization + XXH3-128 content-addressing. The hash IS the version; refining an entry is a sibling-write under the same id.
-- **Sensor / Clock / Frame Registries** — content-addressed catalogs for every entity referenced by the logs. Logs pin their `sensor_hash` / `clock_hash` / `frame_hash`; spatial sensors pin an exact `frame_id` + `frame_hash`.
+`auki_sdk::AukiPeer` is the networking runtime. One instance owns one Peer ID
+inside one selected Domain:
 
-### Spatial
+```text
+credentials + Domain choice + identity
+                  |
+                  v
+             PreparedPeer
+                  |
+                  v
+              AukiPeer
+       authority · relay/routes · protocols · shutdown
+                              |
+                              v
+             explicit Client / Endpoint pairs
+```
 
-- **Pose Logs** — segmented `from → to` transforms keyed per ordered frame pair. The future `convert_pose` composition along a transform path is pending.
-- **Sensor + Detection Logs** — per-frame sensor payloads (camera, point cloud, joint encoders, audio) and detector outputs.
-- **Maps + Mappers** — content-addressed Map resources, durable Map Logs, and SDK-native producers that transform sensor/pose streams into mergeable Map Updates.
-- **Application-controlled components** — bring-your-own Detectors and Mappers run only when an application starts an instance. Live runners isolate blocking work behind bounded latest-wins queues; local Sensor Log detector replay remains ordered and exhaustive. Detection Logs and Map Logs, rather than component instances, are the Resources peers consume.
-- **`auki-geometry`** — convention conversion for points, vectors, directions, and `SpatialTransform` poses (the convention-only layer underneath the future full `convert_pose`).
+The split is deliberate:
 
-### Temporal
+- `auki-auth` turns User or trusted native App credentials into a validated
+  `PreparedPeer` for one Domain.
+- `auki-sdk` owns authority renewal, authenticated transport, default DMS relay
+  allocation, atomic TCP/WSS route pairs, optional DDS discovery, protocol
+  registration, status, and ordered shutdown.
+- `auki-protocols` provides opt-in wire contracts and portable `Client` /
+  `Endpoint` APIs. A peer serves nothing until an application mounts an
+  endpoint.
+- `auki-session` owns the network-free `Peer`, `Session`, registries, and local
+  logs.
+- `SessionProtocolProvider` mechanically projects a local Session into Catalog
+  v3/v4 and Stream v2 providers. The application still decides who may see or
+  subscribe to it.
 
-- **TimeTransform Logs** — segmented sampled offsets between two clocks. Combined with NTP-style exchanges between peers, they let a cluster converge on a shared **domain time** so events recorded against different local clocks can be aligned.
-- **`auki-time`** — `SessionClock`, pure `TimeTransform` math, NTP-style offset samples (`NtpExchange`, `NtpSample`, `compute_ntp_sample`, `select_best_ntp_sample`), and the 1 Hz `local_clock_read` sampler that writes the TimeTransform Log. The `convert_time` operation that consumes the log is pending.
+Routes are location hints, not authority. Relay allocation makes a peer
+reachable; opt-in DDS discovery publishes and finds short-lived route and
+mounted-protocol hints. Applications may instead exchange the expected Peer ID
+and complete route through configuration, a peer card, or their own control
+plane. See [Discover peers](docs/p2p/discovery.md).
 
-### Networking
+## Protocols
 
-- **libp2p substrate** (TCP/QUIC, Noise, Yamux, Circuit Relay v2) with typed `/auki/stream/0.2.0` streams for camera, point-cloud, joint-encoder, audio, detection, and live pose `SpatialTransform` payloads. Native Managers can reserve a relay-mediated circuit address through a Domain Relay and publish the relay base metadata through Discovery for browser peers.
-- **Peer protocols**: `/auki/join`, `/auki/heartbeat`, `/auki/membership`, `/auki/info`, `/auki/resources/0.2.0`, `/auki/registries/0.2.0`, `/auki/registries/0.3.0`, `/auki/blobs/0.1.0`.
-- **`Peer` / `Session` / `Domain`** — the app-facing API split (#282): a long-lived `Peer` (in `auki-session`) owns identity and the sensor / frame / detector registries and mints `Session`s — one timeline each, with a ULID session id and auto-registered monotonic + UTC clocks (#284) — which register the logs they write. `auki-domain`'s `Domain::join(&peer, &session, config)` puts the pair on the network and serves the resource catalog; `ClusterManager` is the engine `Domain` constructs and owns.
-- The resource catalog (`/auki/resources/0.2.0`) exposes rows discriminated by a `variant` field (`sensor_log` | `pose_log` | `time_transform_log` | `detection_log`), replacing the old `sensor_stream` / `transform_edge` / `pose_stream` row types.
-- `/auki/resources/0.2.0` is a live, pollable snapshot of resources that can currently accept stream opens. Peers may join before resources are ready; consumers such as Park poll and reconcile additions/removals; producers omit unavailable resources and re-add them later with the same stable `resource_id`.
-- A registered Detection Log is served automatically by `Domain` with retained replay and live tailing. Python consumers can use `ClusterManager.open_detection_stream(...)` or the generic `open_stream_with_request(...)`; entries carry a typed `DetectionFrame(data, sensor_hash, type)` envelope. Detector Registry entries are available through `fetch_detector_entry(...)`, allowing consumers to verify open output types such as `qr` without hard-coding an implementation id.
-- **HTTP control API** for daemons that produce SDK sessions — see [`docs/control-api.md`](docs/control-api.md).
+`auki-protocols` has no default features. Enable only what the application
+uses:
 
-### Tokenomics
+| Family | Active endpoint | Useful provider |
+| --- | --- | --- |
+| Info | `InfoClient` / `InfoEndpoint` | application `InfoProvider` |
+| Catalog | `CatalogClient` / `CatalogEndpoint` for v3 resources and v4 maps | `SessionProtocolProvider` |
+| Registry | `RegistryClient` / `RegistryEndpoint` for v3 | native `FsRegistryProvider` |
+| Blob | `BlobClient` / `BlobEndpoint` for v1 | native `FsBlobProvider` |
+| Message | `MessageClient` / `MessageEndpoint` for v1 | endpoint-owned channel declarations |
+| Stream | `StreamClient` / `StreamEndpoint` for v2 | `SessionProtocolProvider` or an application provider |
 
-- Not implemented. The `Wallet` under Identity is the on-device primitive future payment / billing rails will bind to.
+Catalog v2 remains available only as a wire codec because v3 embeds its locked
+log-row shape. Registry support begins at v3. The portable endpoints serve only
+the listed current versions; compatibility is not silently negotiated.
 
-The first live pose-stream hardware target is Galbot G1 using RoboStreamer to publish `base_link -> head_left_rgb_optical` pose logs into Park. Tracked on the [SDK Kanban](https://github.com/orgs/Aukilabs/projects/5).
+Product protocols can live outside this repository. Keep one immutable wire
+contract and its small `AukiPeer` client/endpoint in one Rust crate, then reuse
+that crate from native, Web, Python, and Swift hosts. Posemesh follows this
+model for its dataset protocol.
 
-## Crate map
+## Platform status
 
-### `crates/` — Rust workspace (plus one TypeScript browser package)
+| Platform | Authenticated peer facade |
+| --- | --- |
+| Native Rust | User/App authentication, persistent identity, default TCP reservation with TCP/WSS routes, exact protocols, ordered shutdown |
+| Web/Wasm | User authentication, ephemeral identity, optional outbound-only or WSS relay-backed reachability, client and serving roles for all six standard protocols, ordered shutdown, and custom same-module Rust adapters |
+| Python | User/App authentication, persistent identity, default TCP reservation with TCP/WSS routes, client and serving roles for all six standard protocols, ordered shutdown, and custom same-module Rust adapters |
+| Swift/iOS | User authentication, ephemeral or application-persisted identity, default TCP reservation with TCP/WSS routes, client and serving roles for all six standard protocols, custom same-artifact Rust adapters, and ordered shutdown |
 
-| Crate | Purpose | Status |
-|---|---|---|
-| [`auki-hash`](crates/auki-hash) | XXH3-128 wrapper for content-addressing | ✓ |
-| [`auki-jcs`](crates/auki-jcs) | RFC 8785 JSON canonicalization | ✓ |
-| [`auki-identity`](crates/auki-identity) | ed25519 wallet + child derivation + signed creation certs | ✓ |
-| [`auki-time`](crates/auki-time) | `SessionClock`, `TimeTransform` math, NTP-style sampler | ✓ |
-| [`auki-logs`](crates/auki-logs) | Generic segmented append-only log primitive | ✓ |
-| [`auki-registry`](crates/auki-registry) | Sensor / Clock / Frame / Map identity catalogs + IO | ✓ |
-| [`auki-datatypes`](crates/auki-datatypes) | Shared protobuf segment + wire payload schemas | ✓ |
-| [`auki-manifests`](crates/auki-manifests) | JCS-JSON log-manifest builders (sensor / pose / TT / detection / map) | ✓ |
-| [`auki-layout`](crates/auki-layout) | On-disk path helpers for session/log layout | ✓ |
-| [`auki-geometry`](crates/auki-geometry) | Convention conversion for points / vectors / poses | ✓ |
-| [`auki-maps`](crates/auki-maps) | Deterministic voxel Map accumulation + renderer-neutral chunk updates | ✓ |
-| [`auki-mappers`](crates/auki-mappers) | SDK-native Map producers; point-cloud + pose voxel Mapper | ✓ |
-| [`auki-network`](crates/auki-network) | libp2p substrate, typed camera/point-cloud/joint-encoder/audio/pose streams, Discovery HTTP client with Manager and relay address hints, peer protocols | ✓ |
-| [`auki-session`](crates/auki-session) | Declarative app API: `Peer` (identity + registries) + `Session` (clocks + log registration); network-free | ✓ |
-| [`auki-domain`](crates/auki-domain) | `Domain::join(&peer, &session, config)` — app-facing network presence; owns `ClusterManager`, the cluster lifecycle engine | ✓ |
-| [`auki-domain-relay`](crates/auki-domain-relay) | Domain Relay capability for browser-compatible reachability | WIP (v0.0.0) |
-| [`auki-ros-adapter`](crates/auki-ros-adapter) | ROS2 → SDK glue for `Image` / `CameraInfo` / `PointCloud2` | ⚠ broken at the `r2r 0.9.5` transport layer |
-| [`auki-network-browser-wasm`](crates/auki-network-browser-wasm) | Browser/WASM libp2p transport probe | WIP (v0.0.0) |
-| [`auki-domain-browser`](crates/auki-domain-browser) | TypeScript browser `Peer` contract types | WIP (v0.0.0) |
+Robot and Compute products that already manage machine authority use
+`AukiPeer::start_external`. They keep task, capability, heartbeat, and safety
+policy; the SDK still owns transport, relay/routes, protocol hosting, and
+shutdown.
 
-### `bindings/python/` — PyO3 / betterproto
+Native applications should persist `auki_p2p::Identity` and run only one live
+process or pod for that Peer ID. Web generates a new in-memory identity on each
+start. Swift exposes canonical identity bytes but leaves persistence policy to
+the application; the portable echo app intentionally stays ephemeral. Never
+ship App secrets in a browser or mobile binary.
 
-| Package | Purpose | Status |
-|---|---|---|
-| [`auki-identity-py`](bindings/python/auki-identity-py) | Wallet + per-machine identity | ✓ |
-| [`auki-datatypes-py`](bindings/python/auki-datatypes-py) | betterproto dataclasses for the shared protobuf types | ✓ |
-| [`auki-logs-py`](bindings/python/auki-logs-py) | `Log<T>` with opaque-bytes payload | ✓ |
-| [`auki-registry-py`](bindings/python/auki-registry-py) | Sensor / Clock / Frame registry IO | ✓ |
-| [`auki-manifests-py`](bindings/python/auki-manifests-py) | Log-manifest builders | ✓ |
-| [`auki-layout-py`](bindings/python/auki-layout-py) | On-disk path helpers | ✓ |
-| [`auki-network-py`](bindings/python/auki-network-py) | Discovery client with relay hints + shared stream pyclasses, including `SpatialTransformFrame` | ✓ |
-| [`auki-domain-py`](bindings/python/auki-domain-py) | `ClusterManager` Python facade with `ResourceEntry`, resource-catalog fetch, and typed stream openers including pose | ✓ |
-| [`auki-mappers-py`](bindings/python/auki-mappers-py) | Python boundary for SDK-native Mappers; normalized point cloud + registry + pose to `MapUpdate` | ✓ |
-| [`auki-session-py`](bindings/python/auki-session-py) | Python binding for `auki-session` — `Session`, register_*, log specs/handles, `catalog()` | ✓ |
+## Workspace map
 
-### `bindings/swift/` — UniFFI
+The main layers are:
 
-| Package | Purpose | Status |
-|---|---|---|
-| [`auki-identity-swift`](bindings/swift/auki-identity-swift) | `Wallet` + `PeerIdentity` | ✓ |
-| [`auki-network-swift`](bindings/swift/auki-network-swift) | Discovery client + `NetworkRuntime` + 5-payload streams | ✓ |
+| Crate | Responsibility |
+| --- | --- |
+| [`auki-sdk`](crates/auki-sdk) | High-level `AukiPeer` lifecycle |
+| [`auki-auth`](crates/auki-auth) | User/App authentication and Domain-scoped peer preparation |
+| [`auki-p2p`](crates/auki-p2p) | Low-level identity, mutual authentication, native TCP/browser WSS transport, relay circuits |
+| [`auki-protocols`](crates/auki-protocols) | Opt-in wire contracts, clients, endpoints, providers, and adapters |
+| [`auki-session`](crates/auki-session) | Network-free recording model and log lifecycle |
+| [`auki-registry`](crates/auki-registry) | Content-addressed Sensor, Clock, Frame, Detector, Map, and Device Model entries plus blobs |
+| [`auki-logs`](crates/auki-logs) | Segmented append-only storage |
+| [`auki-datatypes`](crates/auki-datatypes) | Shared protobuf payloads |
+| [`auki-manifests`](crates/auki-manifests) | Canonical log manifests |
+| [`auki-mappers`](crates/auki-mappers) | SDK-native Map producers |
+| [`auki-maps`](crates/auki-maps) | Deterministic Map accumulation and updates |
+| [`auki-time`](crates/auki-time) | Local clocks and time-transform math |
+| [`auki-geometry`](crates/auki-geometry) | Coordinate-convention conversion |
 
-Each package's own `README.md` documents its current state, public surface, and dependencies.
+Supporting crates provide canonical JSON, hashing, identity, filesystem layout,
+detectors, and ROS adapters. The Python directory also exposes the native peer
+facade; the Web directory exposes the browser peer and built-in protocol
+facade. Swift exposes the native peer lifecycle through one generated Apple
+artifact; application protocols compile their Rust adapter into that same
+artifact.
 
-## Contributing & license
+## Examples
 
-Work is tracked on the [SDK Kanban](https://github.com/orgs/Aukilabs/projects/5). See [CONTRIBUTING.md](CONTRIBUTING.md) for the folder convention, board flow, and git hygiene rules; [CLAUDE.md](CLAUDE.md) is the equivalent for AI agents.
+The [examples index](examples/README.md) orders the runnable applications from
+one portable protocol through the complete multi-runtime Camera Mesh demo.
+
+[`examples/portable-echo`](examples/portable-echo) demonstrates one bounded
+Rust protocol shared by native, Web, Python, and Swift applications. Its hosts
+opt in to DDS discovery and keep custom-protocol application code small.
+
+The [standard protocol playground](examples/standard-protocols) exposes matching
+client and serving roles for all six families in Rust, Web/Wasm, Python, and
+Swift/iOS. Its protected matrix proves the same Rust wire implementations across
+Native, Python, Browser A, and Browser B. A separate physical-iPhone/native gate
+proves all six families in both directions; portable echo remains the small
+custom-protocol authoring example.
+
+[`examples/camera-mesh`](examples/camera-mesh) combines those foundations into
+one product-shaped application with discovery, explicit camera authorization,
+controls, snapshots, and concurrent Low/Medium/High video feeds.
+
+## Release status
+
+The workspace is pre-stable. The coordinated source target is `0.1.0` with an
+MSRV of Rust `1.89.0`. A source version does not imply that a Git tag, crates,
+wheels, Web package, or mobile facade has been published. Downstream projects
+should pin one reviewed SDK revision until a release is cut.
 
 MIT — see [LICENSE](LICENSE). Copyright © 2026 Auki Labs Limited.

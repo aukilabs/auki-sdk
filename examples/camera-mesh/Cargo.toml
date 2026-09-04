@@ -1,0 +1,38 @@
+[package]
+name = "auki-camera-mesh"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "Portable Camera Mesh application contract and standard-protocol composition."
+
+[dependencies]
+anyhow = { workspace = true }
+auki-datatypes = { path = "../../crates/auki-datatypes" }
+auki-protocols = { path = "../../crates/auki-protocols", features = [
+    "blob-endpoint",
+    "catalog-endpoint",
+    "info-endpoint",
+    "message-endpoint",
+    "registry-endpoint",
+    "stream-endpoint",
+] }
+auki-registry = { path = "../../crates/auki-registry" }
+auki-sdk = { path = "../../crates/auki-sdk" }
+base64 = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
+uuid = { workspace = true }
+
+[dev-dependencies]
+libp2p-identity = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

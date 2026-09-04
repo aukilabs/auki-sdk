@@ -63,11 +63,13 @@ export AUKI_CAMERA_PYTHON_COUNT=4
 ./examples/camera-mesh/scripts/run-publishers.mjs
 ```
 
-The launcher prepares both runtimes, staggers authentication, creates unique
-ephemeral Peer IDs named `lab-native-01` through `lab-python-04`, and advertises
-all publishers through DDS. Open the Web app with the same login and Domain;
-discovery can add them directly to the wall. Ctrl-C shuts down the batch and
-deletes its identities. The total is limited to 16 publishers.
+The launcher prepares both runtimes, creates unique ephemeral Peer IDs named
+`lab-native-01` through `lab-python-04`, and advertises all publishers through
+DDS. Colocated publishers are admitted in groups of eight with an 11-second
+cooldown between groups so a 16-camera wall does not exceed DDS's per-IP
+challenge limit. Open the Web app with the same login and Domain; discovery can
+add them directly to the wall. Ctrl-C shuts down the batch and deletes its
+identities. The total is limited to 16 publishers.
 
 Each unattended publisher simultaneously cycles checked-in Low, Medium, and
 High animations, so quality switching and stalled feeds are visible without

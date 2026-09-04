@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 const START_TIMEOUT_MS = 180_000;
 const STOP_TIMEOUT_MS = 10_000;
 const START_INTERVAL_MS = 1_250;
+const START_BATCH_SIZE = 8;
+const DDS_ADMISSION_COOLDOWN_MS = 11_000;
 const MAX_PUBLISHERS = 16;
 const TEMP_PREFIX = "auki-camera-publishers-";
 
@@ -57,12 +59,36 @@ try {
   console.log(
     `Starting ${specifications.length} Camera Mesh publisher(s) in Domain ${config.domainId}...`,
   );
+  let startingBatch = [];
   for (const [index, specification] of specifications.entries()) {
     const publisher = startPublisher(specification);
     publishers.push(publisher);
+    startingBatch.push(publisher);
     publisher.ready.catch(() => {});
-    if (index + 1 < specifications.length) {
+
+    const hasMore = index + 1 < specifications.length;
+    const batchComplete = startingBatch.length === START_BATCH_SIZE || !hasMore;
+    if (!batchComplete) {
       await Promise.race([delay(START_INTERVAL_MS), fatal, signal]);
+      if (stopRequested) break;
+      continue;
+    }
+
+    // Process startup time is variable, so spawn intervals alone do not bound
+    // when children reach DDS. Wait until this whole admission batch is ready,
+    // then let the colocated-IP rate-limit window clear before starting more.
+    await Promise.race([
+      Promise.all(startingBatch.map((candidate) => candidate.ready)),
+      fatal,
+      signal,
+    ]);
+    if (stopRequested) break;
+    startingBatch = [];
+    if (hasMore) {
+      console.log(
+        `${publishers.length} publishers ready; waiting ${DDS_ADMISSION_COOLDOWN_MS / 1_000}s for the DDS admission window...`,
+      );
+      await Promise.race([delay(DDS_ADMISSION_COOLDOWN_MS), fatal, signal]);
       if (stopRequested) break;
     }
   }

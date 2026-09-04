@@ -100,6 +100,7 @@ const cameraActionsDialog = dialog("camera-actions-dialog");
 const cameraActionsTitle = get<HTMLElement>("camera-actions-title");
 const cameraResults = get<HTMLElement>("camera-results");
 const addAllCamerasButton = button("add-all-cameras-button");
+const removeAllCamerasButton = button("remove-all-cameras-button");
 const addCameraQuality = get<HTMLSelectElement>("add-camera-quality");
 const manualCard = get<HTMLTextAreaElement>("manual-card");
 const addCameraError = get<HTMLElement>("add-camera-error");
@@ -134,6 +135,7 @@ let generation = 0;
 let snapshotObjectUrl: string | undefined;
 let toastTimer: number | undefined;
 let addingAllCameras = false;
+let removingAllCameras = false;
 const publisherDiagnostics = new Map<CameraQualityTier, CaptureDiagnostics>();
 const timelineRows: string[] = [];
 const eventRows: string[] = [];
@@ -156,6 +158,7 @@ button("stop-publish-button").addEventListener("click", () => void stopPublishin
 button("add-camera-button").addEventListener("click", openAddCamera);
 button("discover-button").addEventListener("click", () => void discover());
 addAllCamerasButton.addEventListener("click", () => void addAllCameras());
+removeAllCamerasButton.addEventListener("click", () => void removeAllCameras());
 button("add-card-button").addEventListener("click", () => void addManualCard());
 button("close-add-camera-button").addEventListener("click", () => addDialog.close());
 button("close-diagnostics-button").addEventListener("click", () => diagnosticsDialog.close());
@@ -656,6 +659,57 @@ async function removeCamera(peerId: string): Promise<void> {
   }
 }
 
+async function removeAllCameras(): Promise<void> {
+  const running = mesh;
+  if (
+    !running
+    || running.role !== "viewer"
+    || removingAllCameras
+    || cameras.size === 0
+  ) return;
+
+  removingAllCameras = true;
+  const removed = [...cameras.values()];
+  for (const state of removed) {
+    state.operation += 1;
+    clearCameraSurface(state);
+  }
+  cameras.clear();
+  cameraOrder = [];
+  selectedPeerId = undefined;
+  actionPeerId = undefined;
+  if (cameraActionsDialog.open) cameraActionsDialog.close();
+  document.querySelector<HTMLDetailsElement>(".session-menu")?.removeAttribute("open");
+  renderWall();
+  renderCandidates();
+
+  try {
+    const results = await Promise.allSettled(
+      removed.map((state) => running.disconnectCamera(state.candidate.peerId)),
+    );
+    const failures = results.filter((result) => result.status === "rejected");
+    for (const failure of failures) {
+      if (failure.status === "rejected") report(failure.reason, false);
+    }
+    if (failures.length > 0) {
+      record(
+        `Removed ${removed.length} camera(s); ${failures.length} Stream disconnect(s) reported errors`,
+      );
+      showToast(
+        `Removed ${removed.length} camera${removed.length === 1 ? "" : "s"} · ${failures.length} disconnect failed`,
+        true,
+      );
+    } else {
+      record(`Disconnected and removed ${removed.length} camera(s)`);
+      showToast(`Removed ${removed.length} camera${removed.length === 1 ? "" : "s"}`);
+    }
+  } finally {
+    removingAllCameras = false;
+    renderWall();
+    renderCandidates();
+  }
+}
+
 async function setRemoteSourcePaused(peerId: string, paused: boolean): Promise<void> {
   const running = mesh;
   const state = cameras.get(peerId);
@@ -705,7 +759,7 @@ async function openFullscreen(peerId: string): Promise<void> {
 
 function renderCandidates(): void {
   const addable = addableCandidates();
-  addAllCamerasButton.disabled = addingAllCameras || addable.length === 0;
+  addAllCamerasButton.disabled = addingAllCameras || removingAllCameras || addable.length === 0;
   addAllCamerasButton.textContent = addingAllCameras
     ? "Adding…"
     : addable.length > 0
@@ -793,7 +847,14 @@ function renderWall(): void {
     : `0 / ${cameraOrder.length}`;
   button("previous-camera-button").disabled = cameraOrder.length < 2;
   button("next-camera-button").disabled = cameraOrder.length < 2;
-  button("add-camera-button").disabled = cameras.size >= MAX_CAMERAS;
+  button("add-camera-button").disabled = removingAllCameras || cameras.size >= MAX_CAMERAS;
+  removeAllCamerasButton.hidden = mesh?.role !== "viewer";
+  removeAllCamerasButton.disabled = removingAllCameras || cameras.size === 0;
+  removeAllCamerasButton.textContent = removingAllCameras
+    ? "Disconnecting cameras…"
+    : cameras.size > 0
+      ? `Disconnect and remove all cameras (${cameras.size})`
+      : "Disconnect and remove all cameras";
   updateWallStatus();
   updateAggregateMetrics();
 }

@@ -170,6 +170,26 @@ try {
   await connectApproved(viewer, cardA.peerId);
   await waitForFrames(viewer, cardA.peerId, 2);
 
+  const remainingCameras = await viewer.locator("#camera-grid > .camera-tile").count();
+  const sessionMenu = viewer.locator(".session-menu");
+  await sessionMenu.locator("summary").click();
+  const removeAll = viewer.locator("#remove-all-cameras-button");
+  if (await removeAll.isDisabled()) {
+    throw new Error("Remove all cameras is disabled while the wall contains cameras");
+  }
+  await removeAll.click();
+  await waitFor(
+    async () => await viewer.locator("#camera-grid > .camera-tile").count() === 0,
+    timeout,
+    "all camera tiles to be removed",
+  );
+  await waitForText(
+    viewer,
+    "#events",
+    `Disconnected and removed ${remainingCameras} camera(s)`,
+    timeout,
+  );
+
   if (pageErrors.length) throw new Error(`browser page errors: ${pageErrors.join("; ")}`);
   if (consoleErrors.length) throw new Error(`browser console errors: ${consoleErrors.join("; ")}`);
 

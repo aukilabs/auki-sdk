@@ -45,7 +45,9 @@ The column selector changes density; it does not divide cameras into square
 pages. Two, three, and four columns keep every camera in one scrolling wall.
 On mobile those choices render as two columns. Choose **1** for focus mode,
 where one camera fills the available wall and previous/next controls switch the
-focused peer.
+focused peer. Use **Disconnect and remove all cameras** in the session menu to
+close every active subscription and clear the wall without stopping the local
+viewer Peer.
 
 Browser identities and publisher approvals are intentionally ephemeral. One
 Web publisher captures once and advertises three immutable renditions:

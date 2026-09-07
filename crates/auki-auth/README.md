@@ -81,6 +81,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Never embed an App secret in a browser, mobile binary, public repository,
 container image, or log.
 
+## ZITADEL handoff primitives
+
+`ZitadelSessionCredentials::new(access_token, refresh_token, client_id, issuer,
+access_token_expires_at)` accepts a public-client session after the host's PKCE
+login. Tokens can be opaque; initial expiry is an optional UTC timestamp. Keep
+issuer/client ID in trusted application configuration, not unverified token claims.
+Credential diagnostics are redacted. Reading tokens requires the explicit
+`access_token().expose_secret()` / `refresh_token().expose_secret()` accessors;
+never log those values.
+
+Configure initial login with `offline_access`, the Auki API's expected audience,
+and the `auki-api-organization` metadata mapping. The SDK does not add scopes or
+change organizations during refresh. See the official ZITADEL
+[endpoint contract](https://zitadel.com/docs/apis/openidoauth/endpoints) and
+[scope configuration](https://zitadel.com/docs/apis/openidoauth/scopes).
+
+`ZitadelTokenClient` is the low-level refresh primitive, not a second session
+owner. It validates discovery against the expected issuer, permits only its
+same-origin token endpoint, and sends public-client authentication `none` with
+no scope or client secret. HTTPS is required except for explicit loopback HTTP
+development URLs. Redirects are rejected before following them on native and
+Wasm. Browser deployments need provider CORS support. Requests and streamed
+response bodies are bounded by `AuthLimits`.
+
+The result retains a replacement refresh token when supplied (otherwise the
+previous one), with UTC access expiry computed from `expires_in`. A request whose
+rotation outcome cannot be recovered returns `RefreshOutcomeUnknown`: require
+login instead of replaying the old token. Provider error descriptions and
+transport internals are not exposed in errors.
+
+`ZitadelSessionStore::save` is the session-scoped persistence boundary: atomically
+save all five fields to secure host storage and acknowledge only after completion.
+Reject with `Error::Persistence` without including raw host error text. Do not
+implement storage acknowledgement as a fire-and-forget event. Host OAuth
+libraries, other tabs, and other processes must stop refreshing a handed-over
+session; an SDK coordinator cannot serialize independent refresh owners.
+
+Session import/coordination is a separate integration stage. A caller using the
+low-level token client must drive an issued refresh to completion and retain/save
+the result before another refresh. A process crash between rotation and durable
+storage can require login. Provider refresh-token idle/absolute limits must cover
+the application's expected inactive periods; the SDK cannot extend them.
+
 ## Web/Wasm
 
 User authentication and authority preparation compile to Wasm. The generic Web

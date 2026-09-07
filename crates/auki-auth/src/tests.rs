@@ -65,6 +65,9 @@ struct MockResponse {
     status: u16,
     body: Vec<u8>,
     delay: Duration,
+    content_type: &'static str,
+    location: Option<String>,
+    omit_content_length: bool,
 }
 
 impl MockResponse {
@@ -73,6 +76,9 @@ impl MockResponse {
             status: 200,
             body: value.to_string().into_bytes(),
             delay: Duration::ZERO,
+            content_type: "application/json",
+            location: None,
+            omit_content_length: false,
         }
     }
 
@@ -81,6 +87,9 @@ impl MockResponse {
             status,
             body: b"{}".to_vec(),
             delay: Duration::ZERO,
+            content_type: "application/json",
+            location: None,
+            omit_content_length: false,
         }
     }
 
@@ -98,8 +107,13 @@ struct MockServer {
 
 impl MockServer {
     async fn start(responses: Vec<MockResponse>) -> Self {
+        Self::start_with(move |_| responses).await
+    }
+
+    async fn start_with(build: impl FnOnce(&str) -> Vec<MockResponse>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let responses = build(&format!("http://{address}")).into_iter();
         let requests = std::sync::Arc::new(Mutex::new(Vec::new()));
         let task_requests = requests.clone();
         let task = tokio::spawn(async move {
@@ -118,10 +132,19 @@ impl MockServer {
                     _ => "Test Status",
                 };
                 let head = format!(
-                    "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    "HTTP/1.1 {} {}\r\nContent-Type: {}\r\n{}{}Connection: close\r\n\r\n",
                     response.status,
                     reason,
-                    response.body.len()
+                    response.content_type,
+                    if response.omit_content_length {
+                        String::new()
+                    } else {
+                        format!("Content-Length: {}\r\n", response.body.len())
+                    },
+                    response
+                        .location
+                        .map(|location| format!("Location: {location}\r\n"))
+                        .unwrap_or_default(),
                 );
                 let _ = stream.write_all(head.as_bytes()).await;
                 let _ = stream.write_all(&response.body).await;
@@ -140,6 +163,8 @@ impl MockServer {
         self.requests.lock().await.clone()
     }
 }
+
+mod zitadel;
 
 async fn read_request(stream: &mut TcpStream) -> RecordedRequest {
     let mut bytes = Vec::new();
@@ -1317,9 +1342,8 @@ async fn json_extensions_are_ignored_while_known_fields_size_and_cancellation_st
     missing.finish().await;
 
     let oversized = MockServer::start(vec![MockResponse {
-        status: 200,
         body: vec![b'x'; 1024],
-        delay: Duration::ZERO,
+        ..MockResponse::status(200)
     }])
     .await;
     let environment = AuthEnvironment::new(&oversized.base_url, &oversized.base_url).unwrap();

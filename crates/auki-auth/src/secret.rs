@@ -15,6 +15,12 @@ impl SecretString {
         &self.0
     }
 
+    /// Explicit plaintext access for host secure persistence or a binding handoff.
+    /// Never log this value or put it in diagnostics. Debug/Display stay redacted.
+    pub fn expose_secret(&self) -> &str {
+        &self.0
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.0.len()
     }

@@ -50,6 +50,8 @@ mod error;
 mod secret;
 mod types;
 mod wire;
+mod zitadel;
+mod zitadel_http;
 
 pub use client::{AuthClient, AuthEnvironment, AuthLimits, AuthSession};
 pub use error::{Error, Result};
@@ -60,6 +62,9 @@ pub use types::{
     AuthorityRenewal, AuthorityRenewalProvider, Credentials, DomainChoice, DomainDescriptor,
     DomainSelection, PeerAuthorityProvider, PreparedPeer, PrincipalKind, RenewedAuthority,
     UserPassword,
+};
+pub use zitadel::{
+    ZitadelOAuthError, ZitadelSessionCredentials, ZitadelSessionStore, ZitadelTokenClient,
 };
 
 #[cfg(test)]

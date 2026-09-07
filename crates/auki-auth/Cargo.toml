@@ -28,6 +28,17 @@ tokio-util = { workspace = true, features = ["rt"] }
 uuid = { workspace = true }
 zeroize = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+web-sys = { version = "0.3.98", features = [
+    "AbortController", "AbortSignal", "Headers", "ReadableStream",
+    "ReadableStreamDefaultReader", "Request", "RequestInit", "RequestCache",
+    "RequestCredentials", "RequestMode", "RequestRedirect", "ReferrerPolicy",
+    "Response", "UrlSearchParams",
+] }
+
 [dev-dependencies]
 auki-protocols = { path = "../auki-protocols", features = ["info-endpoint"] }
 auki-sdk = { path = "../auki-sdk" }

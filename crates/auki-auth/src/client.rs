@@ -459,7 +459,7 @@ impl AuthClient {
     }
 }
 
-fn build_http_client(_limits: AuthLimits) -> Result<HttpClient> {
+pub(crate) fn build_http_client(_limits: AuthLimits) -> Result<HttpClient> {
     let builder = HttpClient::builder();
     #[cfg(not(target_arch = "wasm32"))]
     let builder = builder
@@ -886,7 +886,7 @@ fn is_loopback_host(host: &str) -> bool {
             .is_ok_and(|address| address.is_loopback())
 }
 
-fn validate_limits(limits: AuthLimits) -> Result<()> {
+pub(crate) fn validate_limits(limits: AuthLimits) -> Result<()> {
     if limits.connect_timeout.is_zero()
         || limits.request_timeout.is_zero()
         || limits.connect_timeout > limits.request_timeout

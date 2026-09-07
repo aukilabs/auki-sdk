@@ -307,6 +307,7 @@ dependencies = [
  "futures",
  "futures-timer",
  "hex",
+ "js-sys",
  "jsonwebtoken 9.3.1",
  "p256",
  "reqwest",
@@ -317,6 +318,9 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "zeroize",
 ]
 

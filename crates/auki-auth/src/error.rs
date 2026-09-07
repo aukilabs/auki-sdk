@@ -8,6 +8,15 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// from every variant.
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("ZITADEL rejected refresh: {0:?}")]
+    ZitadelOAuth(crate::ZitadelOAuthError),
+
+    #[error("ZITADEL refresh outcome is unknown; sign in again")]
+    RefreshOutcomeUnknown,
+
+    #[error("could not persist the replacement ZITADEL session")]
+    Persistence,
+
     #[error("invalid auth configuration: {0}")]
     InvalidConfiguration(&'static str),
 

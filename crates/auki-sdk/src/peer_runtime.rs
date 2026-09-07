@@ -1098,7 +1098,9 @@ fn startup_readiness(
     let authority_ready = match authority {
         AuthorityStatus::Ready { .. } => true,
         AuthorityStatus::Starting | AuthorityStatus::Expired { .. } => false,
-        AuthorityStatus::Stopped => return Err(StartupReadinessError::Authority),
+        AuthorityStatus::Stopped | AuthorityStatus::AuthenticationFailed(_) => {
+            return Err(StartupReadinessError::Authority);
+        }
     };
     let reachability_ready = !relay_required || confirmed_relay_count > 0;
     Ok(
@@ -1262,6 +1264,9 @@ fn observed_status(
     }
     if matches!(authority, AuthorityStatus::Stopped) {
         return AukiPeerStatus::Failed(AukiPeerFailure::Authority);
+    }
+    if let AuthorityStatus::AuthenticationFailed(kind) = authority {
+        return AukiPeerStatus::Failed(AukiPeerFailure::Authentication(*kind));
     }
     if relay_failed {
         return AukiPeerStatus::Failed(AukiPeerFailure::Relay);
@@ -2384,6 +2389,23 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             credential_revision: 1,
             expires_at: Utc::now() + chrono::Duration::minutes(5),
         };
+        for kind in [
+            auki_auth::AuthFailureKind::AuthenticationRequired,
+            auki_auth::AuthFailureKind::Configuration,
+            auki_auth::AuthFailureKind::AuthorizationDenied,
+            auki_auth::AuthFailureKind::Closed,
+        ] {
+            assert_eq!(
+                observed_status(
+                    NodeObservationStatus::Running,
+                    &AuthorityStatus::AuthenticationFailed(kind),
+                    &route_status,
+                    false,
+                    true
+                ),
+                AukiPeerStatus::Failed(AukiPeerFailure::Authentication(kind))
+            );
+        }
         assert_eq!(
             observed_status(
                 NodeObservationStatus::Stopped,

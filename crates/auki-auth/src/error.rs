@@ -14,6 +14,19 @@ pub enum AuthFailureKind {
     Closed,
 }
 
+impl AuthFailureKind {
+    /// These failures require host action, not another automatic renewal.
+    pub const fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::AuthenticationRequired
+                | Self::Configuration
+                | Self::AuthorizationDenied
+                | Self::Closed
+        )
+    }
+}
+
 /// Fail-closed authentication and authority-preparation failures.
 ///
 /// Response bodies, credentials, and bearer tokens are deliberately absent

@@ -6,7 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use auki_auth::{AuthorityRenewal, PreparedPeer};
+use auki_auth::{AuthFailureKind, AuthorityRenewal, PreparedPeer};
 use auki_p2p::{
     BrowserAuthority, BrowserNode, BrowserNodeExit, Identity, PeerAuthorityUpdate, PeerId,
     RelayCircuitRoutes, RelayReservationError,
@@ -53,6 +53,8 @@ use crate::{
 
 const RELAY_RETRY: Duration = Duration::from_secs(2);
 const AUTHORITY_RETRY: Duration = Duration::from_secs(2);
+const AUTHORITY_RETRY_MAX: Duration = Duration::from_secs(30);
+const AUTHORITY_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
 const CLEANUP_STAGE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// One browser Peer with renewable DDS authority and optional relay reachability.
@@ -628,6 +630,7 @@ struct AuthoritySupervisor {
     authority: BrowserAuthority,
     cancellation: CancellationToken,
     state: Mutex<AuthorityState>,
+    terminal_wakeup: CancellationToken,
 }
 
 struct AuthorityState {
@@ -635,6 +638,9 @@ struct AuthorityState {
     current: CurrentAuthority,
     pending: Option<PendingAuthority>,
     stopped: bool,
+    terminal: Option<AuthFailureKind>,
+    retry_at: Option<DateTime<Utc>>,
+    retry_delay: Duration,
 }
 
 struct CurrentAuthority {
@@ -667,28 +673,39 @@ impl AuthoritySupervisor {
         Self {
             authority,
             cancellation: CancellationToken::new(),
+            terminal_wakeup: CancellationToken::new(),
             state: Mutex::new(AuthorityState {
                 renewal,
                 current,
                 pending: None,
                 stopped: false,
+                terminal: None,
+                retry_at: None,
+                retry_delay: AUTHORITY_RETRY,
             }),
         }
     }
 
     async fn maintain(&self) -> Result<AuthorityMaintenance, AuthoritySupervisorError> {
         let mut state = self.state.lock().await;
-        if state.stopped {
-            return Err(AuthoritySupervisorError::Stopped);
-        }
+        Self::check_running(&state)?;
         let now = Utc::now();
+        if now >= state.current.expires_at {
+            self.fence_peer().await;
+        }
+        if state.retry_at.is_some_and(|at| now < at) {
+            return Ok(AuthorityMaintenance::Retry);
+        }
         if state.pending.is_none() && now < state.current.renew_at {
             return Ok(AuthorityMaintenance::Current);
         }
         match self.renew_locked(&mut state).await {
             Ok(()) => Ok(AuthorityMaintenance::Renewed),
-            Err(error) if state.current.expires_at > Utc::now() => {
-                warn!(error = %error, "browser authority renewal will retry before expiry");
+            Err(error) if state.terminal.is_none() => {
+                if state.current.expires_at <= Utc::now() {
+                    self.fence_peer().await;
+                }
+                warn!(error = %error, "browser authority renewal will retry with expiry fencing");
                 Ok(AuthorityMaintenance::Retry)
             }
             Err(error) => Err(error),
@@ -697,8 +714,16 @@ impl AuthoritySupervisor {
 
     async fn maintenance_delay(&self) -> Result<Duration, AuthoritySupervisorError> {
         let state = self.state.lock().await;
-        if state.stopped {
-            return Err(AuthoritySupervisorError::Stopped);
+        Self::check_running(&state)?;
+        let now = Utc::now();
+        if let Some(mut retry_at) = state.retry_at {
+            if state.current.expires_at > now {
+                retry_at = retry_at.min(state.current.expires_at);
+            }
+            return Ok(retry_at
+                .signed_duration_since(now)
+                .to_std()
+                .unwrap_or_default());
         }
         if state.pending.is_some() {
             return Ok(Duration::ZERO);
@@ -716,9 +741,7 @@ impl AuthoritySupervisor {
         rejected_revision: u64,
     ) -> Result<(), AuthoritySupervisorError> {
         let mut state = self.state.lock().await;
-        if state.stopped {
-            return Err(AuthoritySupervisorError::Stopped);
-        }
+        Self::check_running(&state)?;
         match rejected_authority_revision(state.current.revision, rejected_revision) {
             RejectedAuthorityRevision::AlreadyReplaced => return Ok(()),
             RejectedAuthorityRevision::Current => {}
@@ -733,11 +756,82 @@ impl AuthoritySupervisor {
         &self,
         state: &mut AuthorityState,
     ) -> Result<(), AuthoritySupervisorError> {
+        Self::check_running(state)?;
+        if state.retry_at.is_some_and(|at| Utc::now() < at) {
+            return Err(AuthoritySupervisorError::RetryPending);
+        }
+        let result = self.renew_attempt(state).await;
+        match &result {
+            Ok(()) => {
+                state.retry_at = None;
+                state.retry_delay = AUTHORITY_RETRY;
+            }
+            Err(AuthoritySupervisorError::Renewal(error)) if error.kind().is_terminal() => {
+                state.terminal = Some(error.kind());
+                self.fence_peer().await;
+                self.terminal_wakeup.cancel();
+            }
+            Err(_) => {
+                state.retry_at = Some(Utc::now() + chrono_duration(state.retry_delay));
+                state.retry_delay = state.retry_delay.saturating_mul(2).min(AUTHORITY_RETRY_MAX);
+            }
+        }
+        result
+    }
+
+    fn check_running(state: &AuthorityState) -> Result<(), AuthoritySupervisorError> {
+        if let Some(kind) = state.terminal {
+            return Err(AuthoritySupervisorError::AuthenticationFailed(kind));
+        }
+        if state.stopped {
+            return Err(AuthoritySupervisorError::Stopped);
+        }
+        Ok(())
+    }
+
+    async fn terminal_error(&self) -> SupervisorError {
+        let state = self.state.lock().await;
+        AuthoritySupervisorError::AuthenticationFailed(
+            state.terminal.expect("terminal wakeup has a reason"),
+        )
+        .into()
+    }
+
+    async fn renew_attempt(
+        &self,
+        state: &mut AuthorityState,
+    ) -> Result<(), AuthoritySupervisorError> {
+        // A suspended tab can outlive a retained, partially installed update.
+        // Its session already owns any rotated OAuth credentials; ask it for
+        // new signed authority instead of retrying an expired update forever.
+        if state
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.expires_at <= Utc::now())
+        {
+            state.pending = None;
+        }
         if state.pending.is_none() {
-            let renewed = state
-                .renewal
-                .renew_with_cancellation(&self.cancellation)
-                .await?;
+            let attempt_cancellation = self.cancellation.child_token();
+            let attempt = state.renewal.renew_with_cancellation(&attempt_cancellation);
+            let budget = state
+                .current
+                .expires_at
+                .signed_duration_since(Utc::now())
+                .to_std()
+                .ok()
+                .filter(|duration| !duration.is_zero())
+                .map(|remaining| remaining.min(AUTHORITY_ATTEMPT_TIMEOUT))
+                .unwrap_or(AUTHORITY_ATTEMPT_TIMEOUT);
+            let deadline = Delay::new(budget);
+            pin_mut!(attempt, deadline);
+            let renewed = match select(attempt, deadline).await {
+                Either::Left((result, _)) => result?,
+                Either::Right(((), _)) => {
+                    attempt_cancellation.cancel();
+                    return Err(AuthoritySupervisorError::AttemptTimedOut);
+                }
+            };
             let header = renewed.credential.to_sensitive_bearer_header()?;
             state.pending = Some(PendingAuthority {
                 update: PeerAuthorityUpdate::new(
@@ -798,7 +892,7 @@ impl RelayAuthorizationProvider for AuthoritySupervisor {
             RelayAuthorizationError
         })?;
         let state = self.state.lock().await;
-        if state.stopped || state.current.expires_at <= Utc::now() {
+        if state.stopped || state.terminal.is_some() || state.current.expires_at <= Utc::now() {
             return Err(RelayAuthorizationError);
         }
         Ok(RelayAuthorizationSnapshot::new(
@@ -836,7 +930,7 @@ impl DdsAuthorizationProvider for BrowserDdsAuthorization {
             AukiDiscoveryError::Authentication
         })?;
         let state = authority.state.lock().await;
-        if state.stopped || state.current.expires_at <= Utc::now() {
+        if state.stopped || state.terminal.is_some() || state.current.expires_at <= Utc::now() {
             return Err(AukiDiscoveryError::Authentication);
         }
         Ok(DdsAuthorizationSnapshot::new(
@@ -863,6 +957,12 @@ impl DdsAuthorizationProvider for BrowserDdsAuthorization {
 
 #[derive(Debug, thiserror::Error)]
 enum AuthoritySupervisorError {
+    #[error("authority authentication requires host action: {0:?}")]
+    AuthenticationFailed(AuthFailureKind),
+    #[error("authority renewal did not complete before its deadline")]
+    AttemptTimedOut,
+    #[error("authority renewal backoff is pending")]
+    RetryPending,
     #[error("authority renewal failed: {0}")]
     Renewal(#[from] auki_auth::Error),
     #[error("authority installation failed: {0}")]
@@ -1149,6 +1249,7 @@ async fn supervise_outbound(
                 };
             }
             status = node_stopped => return SupervisionEnd::Node(status),
+            _ = authority.terminal_wakeup.cancelled().fuse() => return SupervisionEnd::Failed(authority.terminal_error().await),
             result = iteration => {
                 if let Err(error) = result {
                     return SupervisionEnd::Failed(error);
@@ -1162,9 +1263,7 @@ async fn outbound_authority_iteration(
     authority: &AuthoritySupervisor,
 ) -> Result<(), SupervisorError> {
     Delay::new(authority.maintenance_delay().await?).await;
-    if authority.maintain().await? == AuthorityMaintenance::Retry {
-        Delay::new(AUTHORITY_RETRY).await;
-    }
+    authority.maintain().await?;
     Ok(())
 }
 
@@ -1205,6 +1304,7 @@ async fn supervise_relay(
                 };
             }
             status = node_stopped => return SupervisionEnd::Node(status),
+            _ = authority.terminal_wakeup.cancelled().fuse() => return SupervisionEnd::Failed(authority.terminal_error().await),
             result = iteration => {
                 if let Err(error) = result {
                     return SupervisionEnd::Failed(error);
@@ -1231,11 +1331,23 @@ async fn relay_iteration(
         .signed_duration_since(now)
         .to_std()
         .unwrap_or_default();
-    Delay::new(delay).await;
+    Delay::new(delay.min(authority.maintenance_delay().await?)).await;
 
     let now = Utc::now();
     ensure_relay_usable(pinned, now)?;
-    authority.maintain().await?;
+    if authority.maintain().await? == AuthorityMaintenance::Retry
+        && authority.state.lock().await.current.expires_at <= Utc::now()
+    {
+        // Keep transient auth recovery alive, but never use an expired bearer
+        // for DMS or spin on an overdue booking while persistence is pending.
+        let retry = authority.maintenance_delay().await?;
+        let remaining = relay_usable_until(pinned)
+            .signed_duration_since(Utc::now())
+            .to_std()
+            .unwrap_or_default();
+        Delay::new(retry.min(remaining)).await;
+        return Ok(());
+    }
     let now = Utc::now();
     ensure_relay_usable(pinned, now)?;
     let should_renew = now >= *next_renew;
@@ -1470,6 +1582,14 @@ enum SupervisorError {
 impl SupervisorError {
     fn failure(&self) -> AukiPeerFailure {
         match self {
+            Self::Authority(AuthoritySupervisorError::AuthenticationFailed(kind)) => {
+                AukiPeerFailure::Authentication(*kind)
+            }
+            Self::Authority(AuthoritySupervisorError::Renewal(error))
+                if error.kind().is_terminal() =>
+            {
+                AukiPeerFailure::Authentication(error.kind())
+            }
             Self::Authority(_) => AukiPeerFailure::Authority,
             Self::Relay(_)
             | Self::Selection(_)
@@ -1479,6 +1599,10 @@ impl SupervisorError {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "browser_auth_tests.rs"]
+mod auth_tests;
 
 #[cfg(test)]
 mod tests {

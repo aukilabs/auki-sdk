@@ -80,6 +80,7 @@ pub(crate) enum AuthorityStatus {
         credential_revision: u64,
         expired_at: DateTime<Utc>,
     },
+    AuthenticationFailed(auki_auth::AuthFailureKind),
     Stopped,
 }
 
@@ -127,6 +128,8 @@ pub(crate) enum AuthoritySupervisorError {
     Install(#[source] AuthorityInstallerError),
     #[error("authority pull renewal failed")]
     PullRenewal(#[source] auki_auth::Error),
+    #[error("authority authentication requires host action: {0:?}")]
+    AuthenticationFailed(auki_auth::AuthFailureKind),
     #[error("authority refresh did not complete before its deadline")]
     RefreshTimedOut,
     #[error("the selected authority source cannot refresh")]
@@ -742,6 +745,9 @@ impl AuthorityInner {
                     return Err(AuthoritySupervisorError::RefreshTimedOut);
                 }
                 AuthorityStatus::Stopped => return Err(AuthoritySupervisorError::Stopped),
+                AuthorityStatus::AuthenticationFailed(kind) => {
+                    return Err(AuthoritySupervisorError::AuthenticationFailed(kind));
+                }
                 AuthorityStatus::Starting | AuthorityStatus::Ready { .. } => {}
             }
             tokio::select! {
@@ -775,6 +781,23 @@ impl AuthorityInner {
         if changed {
             self.status.send_replace(AuthorityStatus::Stopped);
         }
+        self.shutdown.cancel();
+    }
+
+    fn fail_authentication(&self, kind: auki_auth::AuthFailureKind) {
+        let mut state = self.state.write();
+        if state.stopped {
+            return;
+        }
+        state.stopped = true;
+        if let Some(current) = state.current.as_mut() {
+            current.available = false;
+        }
+        self.status
+            .send_replace(AuthorityStatus::AuthenticationFailed(kind));
+        // stop()/the expiry driver preserve this terminal reason because the
+        // stopped state is already installed. No outer trigger can retry it.
+        drop(state);
         self.shutdown.cancel();
     }
 
@@ -928,6 +951,12 @@ impl AuthorityInner {
                     );
                 }
                 Err(AuthoritySupervisorError::Stopped) => return,
+                Err(AuthoritySupervisorError::PullRenewal(error)) if error.kind().is_terminal() => {
+                    let kind = error.kind();
+                    warn!(?kind, "authority renewal requires host action");
+                    self.fail_authentication(kind);
+                    return;
+                }
                 Err(error) => {
                     warn!(error = %error, "authority pull renewal failed; retrying");
                     schedule_retry(
@@ -1469,6 +1498,7 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
     }
 
     enum RenewalStep {
+        Error(auki_auth::Error),
         Return {
             after: Duration,
             update: Box<RenewedAuthority>,
@@ -1509,6 +1539,7 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
             });
             let after = match &step {
                 RenewalStep::Return { after, .. } | RenewalStep::Fail { after } => *after,
+                RenewalStep::Error(_) => Duration::ZERO,
             };
             if !after.is_zero() {
                 tokio::select! {
@@ -1520,6 +1551,7 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
                 }
             }
             match step {
+                RenewalStep::Error(error) => Err(error),
                 RenewalStep::Return { update, .. } => Ok(*update),
                 RenewalStep::Fail { .. } => Err(auki_auth::Error::Transport {
                     endpoint: "test-renewal",
@@ -1758,6 +1790,267 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
         })
         .await
         .expect("authority revision must become ready");
+    }
+
+    #[tokio::test]
+    async fn terminal_auth_failures_fence_and_never_retry_even_after_early_triggers() {
+        for error in [
+            auki_auth::Error::AuthenticationRequired,
+            auki_auth::Error::InvalidConfiguration("test client"),
+            auki_auth::Error::DomainNotAccessible,
+            auki_auth::Error::SessionClosed,
+        ] {
+            let kind = error.kind();
+            let peer_id = identity().peer_id();
+            let domain = Uuid::new_v4();
+            let (token, expiry) = credential(peer_id, domain, unix_time());
+            let renewal = ScriptedRenewal::new([RenewalStep::Error(error)]);
+            let supervisor = AuthoritySupervisor::start_pull_with_installer(
+                Arc::new(FakeInstaller::new(domain, peer_id)),
+                prepared(domain, peer_id, token, expiry, Utc::now(), renewal.clone()),
+                config(),
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+            let mut status = supervisor.subscribe_status();
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while *status.borrow_and_update() != AuthorityStatus::AuthenticationFailed(kind) {
+                    status.changed().await.unwrap();
+                }
+            })
+            .await
+            .unwrap();
+            assert!(supervisor.inner.authorization_parts().is_err());
+            assert!(supervisor.inner.public_authorization_snapshot().is_err());
+            for _ in 0..3 {
+                assert!(
+                    supervisor
+                        .inner
+                        .refresh_after_unauthorized(1)
+                        .await
+                        .is_err()
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert_eq!(renewal.calls(), 1);
+            supervisor.shutdown().await;
+            assert_eq!(
+                *status.borrow(),
+                AuthorityStatus::AuthenticationFailed(kind)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn persistence_failure_is_retried_and_resumes_same_peer_authority() {
+        let peer_id = identity().peer_id();
+        let domain = Uuid::new_v4();
+        let now = unix_time();
+        let (initial, expiry) = credential(peer_id, domain, now - 1);
+        let (replacement, next_expiry) = credential(peer_id, domain, now);
+        let renewal = ScriptedRenewal::new([
+            RenewalStep::Error(auki_auth::Error::Persistence),
+            RenewalStep::Return {
+                after: Duration::ZERO,
+                update: Box::new(renewed_update(
+                    domain,
+                    peer_id,
+                    keys(),
+                    replacement,
+                    next_expiry,
+                )),
+            },
+        ]);
+        let supervisor = AuthoritySupervisor::start_pull_with_installer(
+            Arc::new(FakeInstaller::new(domain, peer_id)),
+            prepared(
+                domain,
+                peer_id,
+                initial,
+                expiry,
+                Utc::now(),
+                renewal.clone(),
+            ),
+            config(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        wait_for_ready_revision(&supervisor, 2).await;
+        assert_eq!(renewal.calls(), 2);
+        assert_eq!(
+            supervisor
+                .inner
+                .public_authorization_snapshot()
+                .unwrap()
+                .claims()
+                .peer_id,
+            peer_id.to_string()
+        );
+        supervisor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn native_ten_second_timeout_keeps_session_owned_rotation_and_save_alive() {
+        use auki_auth::{
+            AuthClient, AuthEnvironment, AuthSession, ZitadelSessionCredentials,
+            ZitadelSessionStore,
+        };
+        use httpmock::{
+            Method::{GET, POST},
+            MockServer,
+        };
+        use serde_json::json;
+
+        struct Store {
+            entered: Notify,
+            release: Semaphore,
+            calls: AtomicUsize,
+        }
+        #[async_trait]
+        impl ZitadelSessionStore for Store {
+            async fn save(&self, credentials: &ZitadelSessionCredentials) -> auki_auth::Result<()> {
+                assert_eq!(
+                    credentials.refresh_token().expose_secret(),
+                    "retained-rotation"
+                );
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                self.entered.notify_one();
+                self.release.acquire().await.unwrap().forget();
+                Ok(())
+            }
+        }
+        struct SessionRenewal {
+            session: AuthSession,
+            update: RenewedAuthority,
+            calls: Arc<AtomicUsize>,
+            entered: Arc<Semaphore>,
+            dropped: Arc<Notify>,
+        }
+        struct AttemptDrop(Arc<Notify>);
+        impl Drop for AttemptDrop {
+            fn drop(&mut self) {
+                self.0.notify_one();
+            }
+        }
+        #[async_trait]
+        impl AuthorityRenewalProvider for SessionRenewal {
+            async fn renew_authority(
+                &self,
+                cancellation: &CancellationToken,
+            ) -> auki_auth::Result<RenewedAuthority> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                self.entered.add_permits(1);
+                let _drop = AttemptDrop(self.dropped.clone());
+                self.session
+                    .accessible_domains_with_cancellation(cancellation)
+                    .await?;
+                Ok(self.update.clone())
+            }
+        }
+        let server = MockServer::start();
+        let base = server.base_url();
+        let discovery = server.mock(|when, then| {
+            when.method(GET).path("/.well-known/openid-configuration");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!({"issuer":base, "token_endpoint":format!("{base}/token")}));
+        });
+        let rotation = server.mock(|when, then| {
+            when.method(POST).path("/token").body_includes("refresh_token=original-refresh");
+            then.status(200).header("content-type", "application/json").json_body(json!({"access_token":"retained-access", "refresh_token":"retained-rotation", "expires_in":3600, "token_type":"Bearer"}));
+        });
+        let exchange = server.mock(|when, then| {
+            when.method(POST)
+                .path("/service/domains-access-token")
+                .query_param("purpose", "p2p")
+                .header("authorization", "Bearer retained-access");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!({"access_token":"dds"}));
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/api/v1/accessible-domains");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(json!({"domains":[], "total":0, "limit":100, "offset":0}));
+        });
+        let store = Arc::new(Store {
+            entered: Notify::new(),
+            release: Semaphore::new(0),
+            calls: AtomicUsize::new(0),
+        });
+        let session = AuthClient::new(AuthEnvironment::new(&base, &base).unwrap())
+            .unwrap()
+            .import_zitadel_session(
+                ZitadelSessionCredentials::new(
+                    "original-access",
+                    "original-refresh",
+                    "client",
+                    base.parse().unwrap(),
+                    Some(Utc::now()),
+                )
+                .unwrap(),
+                store.clone(),
+            )
+            .unwrap();
+        let peer_id = identity().peer_id();
+        let domain = Uuid::new_v4();
+        let now = unix_time();
+        let (initial, expiry) = credential(peer_id, domain, now - 1);
+        let (replacement, next_expiry) = credential(peer_id, domain, now);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let entered = Arc::new(Semaphore::new(0));
+        let dropped = Arc::new(Notify::new());
+        let mut prepared = prepared(
+            domain,
+            peer_id,
+            initial,
+            expiry,
+            Utc::now(),
+            ScriptedRenewal::new([]),
+        );
+        prepared.renewal = AuthorityRenewal::new(SessionRenewal {
+            session: session.clone(),
+            calls: calls.clone(),
+            entered: entered.clone(),
+            dropped: dropped.clone(),
+            update: renewed_update(domain, peer_id, keys(), replacement, next_expiry),
+        });
+        let config = AuthoritySupervisorConfig::default();
+        assert_eq!(config.renewal_attempt_timeout, Duration::from_secs(10));
+        let supervisor = AuthoritySupervisor::start_pull_with_installer(
+            Arc::new(FakeInstaller::new(domain, peer_id)),
+            prepared,
+            config,
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), store.entered.notified())
+            .await
+            .unwrap();
+        entered.acquire().await.unwrap().forget();
+        // Only advance Tokio's deadline clock, after the real HTTP rotation has
+        // reached storage. Signed-token UTC validation/lifetimes remain normal.
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(10)).await;
+        dropped.notified().await;
+        tokio::time::advance(Duration::from_secs(1)).await;
+        entered.acquire().await.unwrap().forget();
+        tokio::time::resume();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(store.calls.load(Ordering::SeqCst), 1);
+        exchange.assert_calls(0);
+        store.release.add_permits(1);
+        wait_for_ready_revision(&supervisor, 2).await;
+        discovery.assert_calls(1);
+        rotation.assert_calls(1);
+        exchange.assert_calls(1);
+        assert_eq!(store.calls.load(Ordering::SeqCst), 1);
+        supervisor.shutdown().await;
+        session.close().await;
     }
 
     #[tokio::test]

@@ -76,6 +76,27 @@ same facade by replacing `Credentials::user_password` with `Credentials::app`.
 `PreparedPeer` and raw `AukiPeer::start` remain available for lower-level
 composition and tests.
 
+ZITADEL hosts first call `AuthClient::import_zitadel_session`, retaining the
+returned handle, then compose `AukiPeerBootstrap::from_session(session.clone(),
+config)`. See [the auth handoff and storage contract](../auki-auth/README.md#zitadel-sessions).
+Import itself performs no network work and a later startup failure does not lose
+the session's replacement refresh token.
+
+On native and browser, login-required, invalid configuration, Domain denial and
+session close stop automatic renewal for the affected authority. Lifecycle
+observers receive `AukiPeerExit::Failed(AukiPeerFailure::Authentication(kind))`,
+where `kind` is `auki_auth::AuthFailureKind`. Domain denial does not close other
+Domains sharing a session. Transient errors and pending persistence use bounded
+backoff; each renewal attempt is capped at ten seconds (or remaining authority
+lifetime). A timed-out waiter does not cancel the session-owned refresh/save.
+
+Expired authority remains fenced during recovery. Browser suspension can delay
+timers, so resume checks actual UTC expiry, including any retained pending
+installation, before exposing usable authority. Renewal preserves Peer IDs and
+normal token lifetimes. This does not add immediate remote revocation or deadlines
+for closing already-open streams. The reproducible [browser runtime harness](../../docs/zitadel-browser-tests.md)
+uses real Chrome freeze/resume and loopback identity fixtures.
+
 `AukiPeer::start` accepts an `auki-auth` `PreparedPeer` and owns its single pull
 renewal loop. On native targets, `AukiPeer::start_external` instead accepts one
 complete `ExternalAuthorityUpdate` and returns the sole

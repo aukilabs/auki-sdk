@@ -8,6 +8,8 @@ pub enum AukiPeerFailure {
     Transport,
     /// Signed authority could not be renewed or installed.
     Authority,
+    /// Authentication/authorization requires host action; automatic renewal stopped.
+    Authentication(auki_auth::AuthFailureKind),
     /// Relay booking or reservation reconciliation failed.
     Relay,
     /// The facade lifecycle monitor stopped unexpectedly.

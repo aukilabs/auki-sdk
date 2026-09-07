@@ -1,4 +1,5 @@
 /target
+/output/playwright/
 **/*.rs.bk
 .DS_Store
 node_modules/

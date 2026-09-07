@@ -395,7 +395,9 @@ impl From<RustAukiPeerStatus> for AukiPeerStatus {
             RustAukiPeerStatus::AuthorityUnavailable => Self::AuthorityUnavailable,
             RustAukiPeerStatus::RelayUnavailable => Self::RelayUnavailable,
             RustAukiPeerStatus::Failed(AukiPeerFailure::Transport) => Self::FailedTransport,
-            RustAukiPeerStatus::Failed(AukiPeerFailure::Authority) => Self::FailedAuthority,
+            RustAukiPeerStatus::Failed(
+                AukiPeerFailure::Authority | AukiPeerFailure::Authentication(_),
+            ) => Self::FailedAuthority,
             RustAukiPeerStatus::Failed(AukiPeerFailure::Relay) => Self::FailedRelay,
             RustAukiPeerStatus::Failed(AukiPeerFailure::Supervisor) => Self::FailedSupervisor,
             RustAukiPeerStatus::Failed(AukiPeerFailure::Cleanup) => Self::FailedCleanup,

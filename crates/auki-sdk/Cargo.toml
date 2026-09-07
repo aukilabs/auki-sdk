@@ -40,3 +40,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }
+base64 = { workspace = true }
+p256 = "0.13.2"

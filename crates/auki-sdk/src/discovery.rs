@@ -770,7 +770,7 @@ async fn maintain_native_advertisement(
                 }
             }
             changed = authority.changed() => {
-                if changed.is_err() || matches!(*authority.borrow(), AuthorityStatus::Stopped) {
+                if changed.is_err() || matches!(*authority.borrow(), AuthorityStatus::Stopped | AuthorityStatus::AuthenticationFailed(_)) {
                     return discovery.client.withdraw(discovery.domain_id).await;
                 }
             }

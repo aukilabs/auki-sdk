@@ -6,6 +6,8 @@ import type {
   AukiDomainInfo,
   AukiExactTarget,
   AukiSdkExpoModuleEvents,
+  AukiServiceEnvironment,
+  ZitadelSessionCredentials,
 } from "./AukiSdkExpo.types";
 import { loadAukiSdkWasm, type AukiSdkWasm } from "./web/loadAukiSdkWasm";
 
@@ -53,6 +55,60 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
   private sessions = new Map<string, Session>();
   private peers = new Map<string, Peer>();
   private streams = new Map<string, StreamSub>();
+  private saves = new Map<string, {
+    requestId: string;
+    snapshot: import("./web/generated/auki_sdk_web.js").ZitadelCredentialsSnapshot;
+    resolve: () => void;
+    reject: () => void;
+  }>();
+
+  async _importZitadel(credentialsJson: string, environmentJson: string | null): Promise<string> {
+    const sdk = await this.sdk();
+    const id = newId("session");
+    try {
+      const credentials = JSON.parse(credentialsJson) as ZitadelSessionCredentials;
+      const environment = environmentJson ? JSON.parse(environmentJson) as AukiServiceEnvironment : null;
+      const save = (snapshot: import("./web/generated/auki_sdk_web.js").ZitadelCredentialsSnapshot) => new Promise<void>((resolve, reject) => {
+        const requestId = newId("save");
+        this.saves.set(id, { requestId, snapshot, resolve, reject: () => reject(new Error("persistence")) });
+        this.emit("onZitadelSaveRequested", { sessionId: id, requestId });
+      });
+      const session = environment
+        ? sdk.AukiUserSession.importZitadelWithEnvironment(environment.apiBaseUrl, environment.ddsBaseUrl, environment.dmsBaseUrl, credentials, save)
+        : sdk.AukiUserSession.importZitadelDev(credentials, save);
+      this.sessions.set(id, session);
+      return id;
+    } catch {
+      throw Object.assign(new Error("Invalid authentication configuration"), { code: "configuration" });
+    }
+  }
+
+  async _zitadelCredentials(sessionId: string, requestId: string): Promise<string> {
+    const pending = this.saves.get(sessionId);
+    if (!pending || pending.requestId !== requestId) throw new Error("No matching storage request");
+    const c = pending.snapshot;
+    return JSON.stringify({ accessToken: c.exposeAccessToken(), refreshToken: c.exposeRefreshToken(),
+      clientId: c.clientId, issuer: c.issuer, accessTokenExpiresAt: c.accessTokenExpiresAt ?? null });
+  }
+
+  async _ackZitadelSave(sessionId: string, requestId: string, success: boolean): Promise<boolean> {
+    const pending = this.saves.get(sessionId);
+    if (!pending || pending.requestId !== requestId) return false;
+    this.saves.delete(sessionId);
+    pending.snapshot.free();
+    if (success) pending.resolve(); else pending.reject();
+    return true;
+  }
+
+  async _closeSession(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    await session.close();
+    if (this.sessions.get(sessionId) === session) {
+      this.sessions.delete(sessionId);
+      session.free();
+    }
+  }
 
   private async sdk(): Promise<AukiSdkWasm> {
     if (!this.wasm) {
@@ -64,7 +120,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
   private session(sessionId: string): Session {
     const session = this.sessions.get(sessionId);
     if (!session) {
-      throw new Error(`unknown session: ${sessionId}`);
+      throw Object.assign(new Error("The session is closed"), { code: "closed" });
     }
     return session;
   }

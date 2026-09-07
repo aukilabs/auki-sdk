@@ -1,4 +1,5 @@
 import wasmAsset from "./generated/auki_sdk_web_bg.wasm";
+import * as sdkWasm from "./generated/auki_sdk_web.js";
 
 export type AukiSdkWasm = typeof import("./generated/auki_sdk_web.js");
 
@@ -24,7 +25,9 @@ function resolveWasmModuleOrPath(asset: unknown): string | URL | Request {
 }
 
 /**
- * Lazy-load the wasm-pack output under `./generated`.
+ * Lazily initialize the wasm-pack output under `./generated`. The small JS
+ * wrapper is statically imported: Metro's async chunk paths otherwise resolve
+ * relative to the consumer root for a local/symlinked SDK package.
  * Run `npm run build:wasm` before typecheck/build.
  *
  * Passes the .wasm asset explicitly — `--target web` defaults to
@@ -33,7 +36,7 @@ function resolveWasmModuleOrPath(asset: unknown): string | URL | Request {
 export async function loadAukiSdkWasm(): Promise<AukiSdkWasm> {
   if (!wasmPromise) {
     wasmPromise = (async () => {
-      const mod = await import("./generated/auki_sdk_web.js");
+      const mod = sdkWasm;
       const moduleOrPath = resolveWasmModuleOrPath(wasmAsset);
       console.log("[auki-sdk-expo] init wasm from", moduleOrPath);
       if (typeof mod.default === "function") {

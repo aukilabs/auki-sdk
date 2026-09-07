@@ -1,0 +1,21 @@
+{
+  "name": "auki-zitadel-handoff-example",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "web": "expo start --web",
+    "ios": "expo run:ios"
+  },
+  "dependencies": {
+    "@aukilabs/auki-sdk-expo": "file:..",
+    "@expo/metro-runtime": "6.1.2",
+    "expo": "54.0.37",
+    "expo-secure-store": "15.0.8",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-web": "0.21.2"
+  }
+}

@@ -7,6 +7,7 @@ const port = Number(process.argv[2] ?? 18111);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('invalid port');
 const base = `http://127.0.0.1:${port}`;
 let counts, generation, options;
+let phase = { phase: 'idle' };
 const reset = (settings = {}) => {
   counts = { refresh: 0, exchange: 0, domains: 0 };
   generation = 0; options = settings;
@@ -40,6 +41,11 @@ const server = http.createServer(async (request, response) => {
       if (body.length > 131072) return send(413, {});
     }
     if (url.pathname === '/__reset' && request.method === 'POST') { reset(body ? JSON.parse(body) : {}); return send(200, {}); }
+    // Z09 real Expo host coordination; synthetic diagnostics only.
+    if (url.pathname === '/__phase') {
+      if (request.method === 'POST') phase = JSON.parse(body);
+      return send(200, phase);
+    }
     if (url.pathname === '/__configure' && request.method === 'POST') { Object.assign(options, JSON.parse(body)); return send(200, {}); }
     if (url.pathname === '/__stats') return send(200, counts);
     if (url.pathname === '/favicon.ico') { response.writeHead(204); return response.end(); }

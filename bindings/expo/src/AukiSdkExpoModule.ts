@@ -9,6 +9,11 @@ import type {
 } from "./AukiSdkExpo.types";
 
 declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents> {
+  /** @internal Use importZitadelSession/closeSession, not these bridge methods. */
+  _importZitadel(credentialsJson: string, environmentJson: string | null): Promise<string>;
+  _zitadelCredentials(sessionId: string, requestId: string): Promise<string>;
+  _ackZitadelSave(sessionId: string, requestId: string, success: boolean): Promise<boolean>;
+  _closeSession(sessionId: string): Promise<void>;
   loginDev(email: string, password: string): Promise<string>;
   accessibleDomains(sessionId: string): Promise<AukiDomainInfo[]>;
   startPeer(sessionId: string, domainId: string): Promise<string>;

@@ -33,6 +33,10 @@ wasm-pack build "$WEB_CRATE" \
   --features finite-protocols,message,stream \
   --locked
 
+# Keep adaptation reproducible; never hand-edit wasm-pack output. The public
+# loader already passes Metro's resolved asset URL explicitly.
+node "$ROOT/scripts/prepare-metro-wasm.cjs"
+
 # Drop npm packaging noise from wasm-pack; Metro imports the JS/WASM directly.
 rm -f "$OUT/package.json" "$OUT/.gitignore" "$OUT/README.md"
 

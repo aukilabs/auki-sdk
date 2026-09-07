@@ -7,7 +7,7 @@ public class AukiSdkExpoModule: Module {
   // UniFFI Swift (ios/AukiSDK) is compiled into this pod; FFI comes from
   // Frameworks/AukiSDK.xcframework. canImport(auki_sdk_swiftFFI) gates the API.
   #if canImport(auki_sdk_swiftFFI)
-  private var sessions: [String: AukiSession] = [:]
+  private let sessions = ExpoSessionRegistry()
   private var peers: [String: AukiPeer] = [:]
   private var identities: [String: AukiPeerIdentity] = [:]
   private var streams: [String: AukiStreamSubscription] = [:]
@@ -16,12 +16,51 @@ public class AukiSdkExpoModule: Module {
 
   public func definition() -> ModuleDefinition {
     Name("AukiSdkExpo")
+    Events("onZitadelSaveRequested")
+
+    AsyncFunction("_importZitadel") { (credentialsJson: String, environmentJson: String?) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let id = self.newId("session")
+      let store = ExpoZitadelStore { [weak self] requestId in
+        self?.sendEvent("onZitadelSaveRequested", ["sessionId": id, "requestId": requestId])
+      }
+      let session = try importZitadel(credentialsJson: credentialsJson, environmentJson: environmentJson, store: store)
+      self.sessions.insert(id: id, session: session, store: store)
+      return id
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("_zitadelCredentials") { (sessionId: String, requestId: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      return try await self.sessions.store(sessionId).credentialsJson(requestId: requestId)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("_ackZitadelSave") { (sessionId: String, requestId: String, success: Bool) -> Bool in
+      #if canImport(auki_sdk_swiftFFI)
+      return try await self.sessions.store(sessionId).acknowledge(requestId: requestId, success: success)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("_closeSession") { (sessionId: String) in
+      #if canImport(auki_sdk_swiftFFI)
+      await self.sessions.close(sessionId)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
 
     AsyncFunction("loginDev") { (email: String, password: String) -> String in
       #if canImport(auki_sdk_swiftFFI)
-      let session = try await AukiSession.loginDev(email: email, password: password)
+      let session = try await withAuthErrors { try await AukiSession.loginDev(email: email, password: password) }
       let id = self.newId("session")
-      self.sessions[id] = session
+      self.sessions.insert(id: id, session: session)
       return id
       #else
       throw unsupported("AukiSDK XCFramework missing; run scripts/sync-ios-xcframework.sh")
@@ -30,10 +69,8 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("accessibleDomains") { (sessionId: String) -> [[String: Any?]] in
       #if canImport(auki_sdk_swiftFFI)
-      guard let session = self.sessions[sessionId] else {
-        throw unsupported("unknown session: \(sessionId)")
-      }
-      let domains = try await session.accessibleDomains()
+      let session = try self.sessions.session(sessionId)
+      let domains = try await withAuthErrors { try await session.accessibleDomains() }
       return domains.map { domain in
         [
           "id": domain.id,
@@ -49,7 +86,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("startPeer") { (sessionId: String, domainId: String) -> String in
       #if canImport(auki_sdk_swiftFFI)
-      return try await self.startPeer(sessionId: sessionId, domainId: domainId, mode: nil)
+      return try await withAuthErrors { try await self.startPeer(sessionId: sessionId, domainId: domainId, mode: nil) }
       #else
       throw unsupported("AukiSDK XCFramework missing")
       #endif
@@ -60,7 +97,7 @@ public class AukiSdkExpoModule: Module {
       #if canImport(auki_sdk_swiftFFI)
       let discovery: AukiDiscoveryMode =
         mode == "DiscoverAndAdvertise" ? .discoverAndAdvertise : .discoverOnly
-      return try await self.startPeer(sessionId: sessionId, domainId: domainId, mode: discovery)
+      return try await withAuthErrors { try await self.startPeer(sessionId: sessionId, domainId: domainId, mode: discovery) }
       #else
       throw unsupported("AukiSDK XCFramework missing")
       #endif
@@ -304,7 +341,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("waitStopped") { (peerHandle: String) in
       #if canImport(auki_sdk_swiftFFI)
-      try await self.requirePeer(peerHandle).waitStopped()
+      try await withAuthErrors { try await self.requirePeer(peerHandle).waitStopped() }
       #else
       throw unsupported("AukiSDK XCFramework missing")
       #endif
@@ -317,9 +354,7 @@ public class AukiSdkExpoModule: Module {
     domainId: String,
     mode: AukiDiscoveryMode?
   ) async throws -> String {
-    guard let session = sessions[sessionId] else {
-      throw unsupported("unknown session: \(sessionId)")
-    }
+    let session = try sessions.session(sessionId)
     let identity = AukiPeerIdentity.generate()
     let peer: AukiPeer
     if let mode {

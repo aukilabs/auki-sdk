@@ -566,7 +566,7 @@ pub(super) fn report_provider_error(py: Python<'_>, callback: &Bound<'_, PyAny>,
 pub(super) fn requester(peer_id: PeerId) -> AuthenticatedPeer {
     AuthenticatedPeer {
         peer_id,
-        subject: uuid::Uuid::nil(),
+        subject: uuid::Uuid::nil().to_string(),
         peer_type: Some("native_app".into()),
         domain_ids: vec![uuid::Uuid::nil()],
         scopes: vec!["protocol:test".into()],
@@ -595,8 +595,18 @@ mod tests {
     fn requester_record_contains_authenticated_identity_and_authority() {
         Python::with_gil(|py| {
             let peer_id = Identity::generate().peer_id();
-            let value = requester_to_python(py, &requester(peer_id)).unwrap();
+            let mut requester = requester(peer_id);
+            requester.subject = " User|Case-敏感 ".into();
+            let value = requester_to_python(py, &requester).unwrap();
             let value = value.bind(py);
+            assert_eq!(
+                value
+                    .get_item("subject")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                requester.subject,
+            );
             assert_eq!(
                 value
                     .get_item("peer_id")

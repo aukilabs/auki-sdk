@@ -9,7 +9,8 @@ use std::{
 
 use async_trait::async_trait;
 use auki_p2p::{
-    ApplicationProtocol, CANDIDATE_ROUTE_MAX_BYTES, Multiaddr, PeerId, canonicalize_candidate_route,
+    ApplicationProtocol, CANDIDATE_ROUTE_MAX_BYTES, Multiaddr, P2P_TOKEN_MAX_SUBJECT_BYTES, PeerId,
+    canonicalize_candidate_route,
 };
 use chrono::{DateTime, Utc};
 use futures::{FutureExt, StreamExt, future::Either, pin_mut};
@@ -138,8 +139,8 @@ pub struct AukiDiscoveryCandidate {
     served_protocols: Vec<String>,
     expires_at: DateTime<Utc>,
     source: AukiDiscoverySource,
-    /// DDS subject UUID when the advertisement names one (e.g. enrolled robot id).
-    subject_id: Option<Uuid>,
+    /// Exact, untrusted DDS subject when the advertisement names one.
+    subject_id: Option<String>,
     /// DDS peer classification when present (`robot`, `user`, …).
     peer_type: Option<String>,
 }
@@ -199,9 +200,9 @@ impl AukiDiscoveryCandidate {
         self.source
     }
 
-    /// DDS subject UUID when the advertisement includes one.
-    pub fn subject_id(&self) -> Option<Uuid> {
-        self.subject_id
+    /// Exact, untrusted DDS subject when present; never a grant of authority.
+    pub fn subject_id(&self) -> Option<&str> {
+        self.subject_id.as_deref()
     }
 
     /// DDS peer classification when the advertisement includes one.
@@ -1126,12 +1127,16 @@ fn validate_advertisement(
     if wire.expires_at <= Utc::now() {
         return Ok(None);
     }
-    let subject_id = wire
-        .subject_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .and_then(|value| Uuid::parse_str(value).ok());
+    let subject_id = wire.subject_id;
+    if subject_id
+        .as_ref()
+        .is_some_and(|value| value.is_empty() || value.len() > P2P_TOKEN_MAX_SUBJECT_BYTES)
+    {
+        return Err(invalid_response(
+            operation,
+            "candidate subject must contain 1..=255 UTF-8 bytes",
+        ));
+    }
     let peer_type = wire
         .peer_type
         .map(|value| value.trim().to_owned())
@@ -1366,6 +1371,43 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             "protocols": protocols,
             "expires_at": Utc::now() + chrono::Duration::minutes(2),
         })
+    }
+
+    #[test]
+    fn advertisement_subjects_preserve_exact_utf8_and_reject_invalid_bounds() {
+        for subject in [
+            "2938475629384756".to_owned(),
+            " User|Case-Sensitive ".to_owned(),
+            "550E8400-E29B-41D4-A716-446655440000".to_owned(),
+            Uuid::nil().to_string(),
+            "x".repeat(255),
+            "界".repeat(85),
+        ] {
+            let mut value = advertisement(peer(), 4001, &[INFO]);
+            value["subject_id"] = json!(subject);
+            let candidate = validate_advertisement(serde_json::from_value(value).unwrap(), "test")
+                .unwrap()
+                .unwrap();
+            assert_eq!(candidate.subject_id(), Some(subject.as_str()));
+        }
+        for subject in [String::new(), "x".repeat(256), "é".repeat(128)] {
+            let mut value = advertisement(peer(), 4001, &[INFO]);
+            value["subject_id"] = json!(subject);
+            assert!(
+                validate_advertisement(serde_json::from_value(value).unwrap(), "test").is_err()
+            );
+        }
+        for remove_field in [false, true] {
+            let mut value = advertisement(peer(), 4001, &[INFO]);
+            value["subject_id"] = serde_json::Value::Null;
+            if remove_field {
+                value.as_object_mut().unwrap().remove("subject_id");
+            }
+            let candidate = validate_advertisement(serde_json::from_value(value).unwrap(), "test")
+                .unwrap()
+                .unwrap();
+            assert!(candidate.subject_id().is_none());
+        }
     }
 
     #[test]

@@ -2124,7 +2124,7 @@ mod tests {
     fn authenticated_peer(peer_id: PeerId) -> AuthenticatedPeer {
         AuthenticatedPeer {
             peer_id,
-            subject: Uuid::new_v4(),
+            subject: Uuid::new_v4().to_string(),
             peer_type: None,
             domain_ids: vec![Uuid::nil()],
             scopes: Vec::new(),

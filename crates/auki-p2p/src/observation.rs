@@ -522,7 +522,7 @@ mod tests {
         let identity = crate::Identity::from_ed25519_seed(&[seed; 32]);
         AuthenticatedPeer {
             peer_id: identity.peer_id(),
-            subject: Uuid::from_u128(u128::from(seed) + 1),
+            subject: Uuid::from_u128(u128::from(seed) + 1).to_string(),
             peer_type: Some("native".into()),
             domain_ids: vec![Uuid::from_u128(100)],
             scopes: vec!["diagnostic:only".into()],

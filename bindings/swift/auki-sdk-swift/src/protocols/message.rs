@@ -706,7 +706,7 @@ mod tests {
     fn requester(peer_id: PeerId) -> AuthenticatedPeer {
         AuthenticatedPeer {
             peer_id,
-            subject: Uuid::nil(),
+            subject: Uuid::nil().to_string(),
             peer_type: Some("native_app".into()),
             domain_ids: vec![Uuid::nil()],
             scopes: vec!["protocol:test".into()],
@@ -738,9 +738,11 @@ mod tests {
     fn message_events_preserve_authenticated_sender_and_binary_payload() {
         let channel = channel();
         let sender_peer_id = Identity::generate().peer_id();
+        let mut sender = requester(sender_peer_id);
+        sender.subject = " User|Case-敏感 ".into();
         let record = AukiMessageEvent::from(MessageEvent {
             channel: channel.clone(),
-            sender: requester(sender_peer_id),
+            sender,
             message: Message {
                 r#type: "example.event".into(),
                 timestamp_ns: i64::MAX,
@@ -749,6 +751,7 @@ mod tests {
         });
         assert_eq!(record.channel, AukiMessageChannel::from(&channel));
         assert_eq!(record.sender.peer_id, sender_peer_id.to_string());
+        assert_eq!(record.sender.subject, " User|Case-敏感 ");
         assert_eq!(record.sender.peer_type.as_deref(), Some("native_app"));
         assert_eq!(record.sender.scopes, ["protocol:test"]);
         assert_eq!(record.message_type, "example.event");

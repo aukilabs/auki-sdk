@@ -53,6 +53,13 @@ Before application bytes flow, both sides prove:
 Handlers receive `AuthenticatedPeer`, not an unauthenticated transport stream.
 Routes and connection observations never grant application permission.
 
+`AuthenticatedPeer.subject` preserves the exact DDS-issued subject as a `String`
+of 1–255 UTF-8 bytes. Human subjects need not be UUIDs and must not be trimmed,
+case-folded, or UUID-normalized. Organization and Domain IDs remain canonical
+UUIDs. SDK discovery likewise exposes an optional, untrusted string subject.
+Update receiving peers and backend validators before issuing opaque subjects;
+older UUID-only receivers cannot authenticate them.
+
 ## Native and browser transport
 
 Native builds expose TCP/DNS transport, route catalogs, direct routes, relay

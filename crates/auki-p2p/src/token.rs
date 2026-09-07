@@ -20,6 +20,8 @@ pub const P2P_TOKEN_SCOPE: &str = "domain-data:r";
 pub const P2P_TOKEN_TTL: Duration = Duration::from_secs(30 * 60);
 pub const P2P_TOKEN_CLOCK_SKEW: Duration = Duration::from_secs(60);
 pub const P2P_TOKEN_MAX_BYTES: usize = 64 * 1024;
+/// Subjects are opaque, case-sensitive identifiers bounded by UTF-8 bytes.
+pub const P2P_TOKEN_MAX_SUBJECT_BYTES: usize = 255;
 pub const DOMAIN_SERVER_MAX_DOMAINS: usize = 25;
 pub const P2P_TOKEN_MAX_SCOPES: usize = 32;
 pub const P2P_TOKEN_MAX_SCOPE_BYTES: usize = 128;
@@ -71,6 +73,7 @@ pub struct P2PAccessClaims {
     pub token_type: String,
     pub iss: String,
     pub aud: Vec<String>,
+    /// Exact DDS-issued subject, not necessarily a UUID.
     pub sub: String,
     /// Organization authority carried by newer DDS credentials.
     ///
@@ -484,7 +487,11 @@ fn validate_profile(claims: &P2PAccessClaims, now: u64) -> Result<()> {
             "audience must be exactly [auki-p2p]".into(),
         ));
     }
-    validate_canonical_uuid(&claims.sub, "subject must be a canonical UUID")?;
+    if claims.sub.is_empty() || claims.sub.len() > P2P_TOKEN_MAX_SUBJECT_BYTES {
+        return Err(Error::InvalidToken(format!(
+            "subject must contain 1..={P2P_TOKEN_MAX_SUBJECT_BYTES} UTF-8 bytes"
+        )));
+    }
     if let Some(organization_id) = &claims.organization_id {
         validate_canonical_uuid(organization_id, "organization_id must be a canonical UUID")?;
     }

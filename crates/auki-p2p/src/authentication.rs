@@ -87,7 +87,8 @@ impl SessionRequirements {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AuthenticatedPeer {
     pub peer_id: PeerId,
-    pub subject: Uuid,
+    /// Exact verified DDS subject (1–255 UTF-8 bytes), without normalization.
+    pub subject: String,
     pub peer_type: Option<String>,
     pub domain_ids: Vec<Uuid>,
     pub scopes: Vec<String>,
@@ -224,8 +225,6 @@ fn authenticated_peer_from_claims(
     remote_claims: P2PAccessClaims,
     remote_peer_id: PeerId,
 ) -> Result<AuthenticatedPeer> {
-    let subject = Uuid::parse_str(&remote_claims.sub)
-        .map_err(|_| Error::InvalidToken("subject must be a canonical UUID".into()))?;
     let domain_ids = remote_claims
         .domain_ids
         .iter()
@@ -240,7 +239,7 @@ fn authenticated_peer_from_claims(
         .ok_or_else(|| Error::InvalidToken("expiration is outside the supported range".into()))?;
     Ok(AuthenticatedPeer {
         peer_id: remote_peer_id,
-        subject,
+        subject: remote_claims.sub,
         peer_type: remote_claims.peer_type,
         domain_ids,
         scopes: remote_claims.scopes,

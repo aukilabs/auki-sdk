@@ -189,6 +189,91 @@ async fn wait_for_listeners_reports_an_occupied_tcp_port() {
 }
 
 #[test]
+fn verifier_preserves_opaque_subjects_with_utf8_byte_bounds() {
+    let verifier = verifier();
+    let mut claims = claims(
+        Identity::generate().peer_id(),
+        PeerRole::Compute,
+        vec![Uuid::new_v4().to_string()],
+        unix_time(),
+    );
+    claims.peer_type = Some("user".into());
+    for subject in [
+        "2938475629384756".to_owned(),
+        " User|Case-Sensitive ".to_owned(),
+        "550E8400-E29B-41D4-A716-446655440000".to_owned(),
+        "550e8400-e29b-41d4-a716-446655440000".to_owned(),
+        "x".repeat(255),
+        "界".repeat(85),
+    ] {
+        claims.sub = subject.clone();
+        assert_eq!(verifier.verify(&sign(&claims)).unwrap().sub, subject);
+    }
+    for subject in [String::new(), "x".repeat(256), "é".repeat(128)] {
+        claims.sub = subject;
+        assert!(matches!(
+            verifier.verify(&sign(&claims)),
+            Err(Error::InvalidToken(_))
+        ));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mutual_authentication_and_observation_preserve_an_opaque_subject() {
+    let domain_id = Uuid::new_v4().to_string();
+    let receiver = listening_node();
+    let user = listening_node();
+    install_current_token(&receiver, PeerRole::Robot, vec![domain_id.clone()]).await;
+    let mut user_claims = claims(
+        user.peer_id(),
+        PeerRole::Compute,
+        vec![domain_id.clone()],
+        unix_time(),
+    );
+    user_claims.sub = " User|Case-敏感 ".into();
+    user_claims.peer_type = Some("user".into());
+    install_signed_token(&user, sign(&user_claims)).await;
+    let protocol = ApplicationProtocol::new(TEST_PROTOCOL).unwrap();
+    let requirements = SessionRequirements::new(&domain_id).unwrap();
+    let mut incoming = receiver
+        .accept(protocol.clone(), requirements.clone())
+        .unwrap();
+    let address = listen_address(&receiver).await;
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let accepted = async {
+            let mut stream = incoming.accept().await.unwrap().unwrap();
+            assert_eq!(stream.remote_peer().subject, user_claims.sub);
+            let mut request = [0; 4];
+            stream.read_exact(&mut request).await.unwrap();
+            assert_eq!(&request, b"ping");
+            stream.write_all(b"pong").await.unwrap();
+            stream.flush().await.unwrap();
+        };
+        let opened = async {
+            let mut stream = user
+                .open(receiver.peer_id(), vec![address], protocol, requirements)
+                .await
+                .unwrap();
+            stream.write_all(b"ping").await.unwrap();
+            stream.flush().await.unwrap();
+            let mut reply = [0; 4];
+            stream.read_exact(&mut reply).await.unwrap();
+            assert_eq!(&reply, b"pong");
+        };
+        tokio::join!(accepted, opened);
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        receiver.observations().snapshot().peers()[0].peer().subject,
+        user_claims.sub
+    );
+    receiver.shutdown().await.unwrap();
+    user.shutdown().await.unwrap();
+}
+
+#[test]
 fn verifier_enforces_known_dds_claims_and_ignores_extensions() {
     let verifier = verifier();
     let identity = Identity::generate();
@@ -227,10 +312,7 @@ fn verifier_enforces_known_dds_claims_and_ignores_extensions() {
             "extra audience",
             Box::new(|claims| claims.aud.push("other".into())),
         ),
-        (
-            "invalid subject",
-            Box::new(|claims| claims.sub = "not-a-uuid".into()),
-        ),
+        ("empty subject", Box::new(|claims| claims.sub.clear())),
         (
             "invalid organization",
             Box::new(|claims| claims.organization_id = Some("not-a-uuid".into())),
@@ -255,8 +337,8 @@ fn verifier_enforces_known_dds_claims_and_ignores_extensions() {
             }),
         ),
         (
-            "noncanonical subject",
-            Box::new(|claims| claims.sub = "550E8400-E29B-41D4-A716-446655440000".into()),
+            "oversized subject",
+            Box::new(|claims| claims.sub = "x".repeat(256)),
         ),
         (
             "noncanonical organization",

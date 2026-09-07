@@ -38,8 +38,9 @@ mod relay;
 #[cfg(not(target_arch = "wasm32"))]
 pub use auki_auth::AppCredentials;
 pub use auki_auth::{
-    AuthClient, AuthEnvironment, AuthLimits, Credentials, DomainChoice, DomainDescriptor,
-    DomainSelection, PreparedPeer, PrincipalKind,
+    AuthClient, AuthEnvironment, AuthFailureKind, AuthLimits, AuthSession, Credentials,
+    DomainChoice, DomainDescriptor, DomainSelection, Error as AuthError, PreparedPeer,
+    PrincipalKind, SecretString, ZitadelSessionCredentials, ZitadelSessionStore,
 };
 #[cfg(target_arch = "wasm32")]
 pub use auki_p2p::BrowserAuthenticatedRouteStream as AuthenticatedRouteStream;

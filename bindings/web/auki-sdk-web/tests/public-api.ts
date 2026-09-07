@@ -55,7 +55,24 @@ import {
   type AukiStreamPayloadKind,
   type AukiStreamReadFrom,
   type AukiStreamRequest,
+  type ZitadelSessionCredentials,
+  type ZitadelSessionStore,
+  type AukiAuthError,
 } from "../pkg-test/auki_sdk_web.js";
+
+declare const credentials: ZitadelSessionCredentials;
+const store: ZitadelSessionStore = async (c) => {
+  const stored: ZitadelSessionCredentials = {
+    accessToken: c.exposeAccessToken(), refreshToken: c.exposeRefreshToken(),
+    clientId: c.clientId, issuer: c.issuer, accessTokenExpiresAt: c.accessTokenExpiresAt,
+  };
+  void stored;
+};
+const imported: AukiUserSession = AukiUserSession.importZitadelDev(credentials, store);
+const closedSession: Promise<void> = imported.close();
+declare const authError: AukiAuthError;
+if (authError.code === "persistence") void imported.accessibleDomains();
+void closedSession;
 
 declare const peer: AukiPeer;
 declare const session: AukiUserSession;

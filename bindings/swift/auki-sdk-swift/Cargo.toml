@@ -53,6 +53,8 @@ finite-protocols = ["info", "catalog", "registry", "blob"]
 standard-protocols = ["finite-protocols", "message", "stream", "urdf-fk"]
 
 [dependencies]
+async-trait = { workspace = true }
+chrono = { workspace = true }
 async-channel = { workspace = true, optional = true }
 auki-datatypes = { path = "../../../crates/auki-datatypes", optional = true }
 auki-protocols = { path = "../../../crates/auki-protocols", optional = true }

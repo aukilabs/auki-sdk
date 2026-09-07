@@ -799,11 +799,13 @@ name = "auki-sdk-swift"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "async-trait",
  "auki-datatypes",
  "auki-protocols",
  "auki-registry",
  "auki-sdk",
  "auki-urdf-fk",
+ "chrono",
  "futures",
  "parking_lot",
  "prost",
@@ -821,13 +823,16 @@ name = "auki-sdk-web"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "async-trait",
  "auki-datatypes",
  "auki-protocols",
  "auki-registry",
  "auki-sdk",
+ "chrono",
  "futures",
  "js-sys",
  "prost",
+ "send_wrapper",
  "serde",
  "serde-wasm-bindgen",
  "uuid",

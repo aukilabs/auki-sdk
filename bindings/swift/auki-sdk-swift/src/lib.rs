@@ -6,13 +6,19 @@
 
 use std::sync::Arc;
 
+mod zitadel;
+pub use zitadel::{
+    AukiAuthFailureKind, AukiPersistenceError, AukiZitadelCredentials, AukiZitadelSessionStore,
+};
+use zitadel::{SwiftStore, auth_error, bootstrap_error};
+
 use auki_sdk_rs::{
     AukiDiscovery as RustAukiDiscovery, AukiDiscoveryCandidate as RustAukiDiscoveryCandidate,
     AukiDiscoveryError, AukiDiscoverySource as RustAukiDiscoverySource, AukiPeer as RustAukiPeer,
-    AukiPeerBootstrap, AukiPeerExit, AukiPeerFailure, AukiPeerLifecycle, AukiPeerProtocols,
-    AukiPeerRoutes as RustAukiPeerRoutes, AukiPeerStatus as RustAukiPeerStatus, Credentials,
-    DdsTrackerMode, DomainDescriptor, DomainSelection, Identity, Multiaddr, PeerId,
-    validate_relay_circuit_routes,
+    AukiPeerBootstrap, AukiPeerConfig, AukiPeerExit, AukiPeerFailure, AukiPeerLifecycle,
+    AukiPeerProtocols, AukiPeerRoutes as RustAukiPeerRoutes, AukiPeerStatus as RustAukiPeerStatus,
+    AuthClient, AuthEnvironment, AuthFailureKind, Credentials, DdsTrackerMode, DomainDescriptor,
+    DomainSelection, Identity, Multiaddr, PeerId, validate_relay_circuit_routes,
 };
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -103,6 +109,8 @@ pub async fn wait_cleanup(mut receiver: watch::Receiver<Option<CleanupResult>>) 
 /// source chains while the FFI exposes one non-secret diagnostic string.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum AukiSdkError {
+    #[error("authentication failed: {kind:?}")]
+    Authentication { kind: AukiAuthFailureKind },
     #[error("{message}")]
     Operation { message: String },
 }
@@ -381,6 +389,7 @@ pub enum AukiPeerStatus {
     RelayUnavailable,
     FailedTransport,
     FailedAuthority,
+    FailedAuthentication { kind: AukiAuthFailureKind },
     FailedRelay,
     FailedSupervisor,
     FailedCleanup,
@@ -395,9 +404,10 @@ impl From<RustAukiPeerStatus> for AukiPeerStatus {
             RustAukiPeerStatus::AuthorityUnavailable => Self::AuthorityUnavailable,
             RustAukiPeerStatus::RelayUnavailable => Self::RelayUnavailable,
             RustAukiPeerStatus::Failed(AukiPeerFailure::Transport) => Self::FailedTransport,
-            RustAukiPeerStatus::Failed(
-                AukiPeerFailure::Authority | AukiPeerFailure::Authentication(_),
-            ) => Self::FailedAuthority,
+            RustAukiPeerStatus::Failed(AukiPeerFailure::Authority) => Self::FailedAuthority,
+            RustAukiPeerStatus::Failed(AukiPeerFailure::Authentication(kind)) => {
+                Self::FailedAuthentication { kind: kind.into() }
+            }
             RustAukiPeerStatus::Failed(AukiPeerFailure::Relay) => Self::FailedRelay,
             RustAukiPeerStatus::Failed(AukiPeerFailure::Supervisor) => Self::FailedSupervisor,
             RustAukiPeerStatus::Failed(AukiPeerFailure::Cleanup) => Self::FailedCleanup,
@@ -458,12 +468,49 @@ pub struct AukiSession {
 
 #[uniffi::export(async_runtime = "tokio")]
 impl AukiSession {
+    /// Import without network I/O. Keep this handle across startup/save failure.
+    #[uniffi::constructor]
+    pub fn import_zitadel_dev(
+        credentials: Arc<AukiZitadelCredentials>,
+        store: Arc<dyn AukiZitadelSessionStore>,
+    ) -> Result<Arc<Self>, AukiSdkError> {
+        Self::import_zitadel(
+            credentials,
+            store,
+            AuthEnvironment::dev(),
+            AukiPeerConfig::dev(),
+        )
+    }
+
+    /// Import with exact API, DDS, and DMS bases; no network I/O at import.
+    #[uniffi::constructor]
+    pub fn import_zitadel_with_environment(
+        api_base_url: String,
+        dds_base_url: String,
+        dms_base_url: String,
+        credentials: Arc<AukiZitadelCredentials>,
+        store: Arc<dyn AukiZitadelSessionStore>,
+    ) -> Result<Arc<Self>, AukiSdkError> {
+        let environment =
+            AuthEnvironment::new(api_base_url, dds_base_url).map_err(|e| auth_error(e.kind()))?;
+        let config = AukiPeerConfig::new(dms_base_url)
+            .map_err(|_| auth_error(AuthFailureKind::Configuration))?;
+        Self::import_zitadel(credentials, store, environment, config)
+    }
+
+    /// Fence new auth work and drain an outstanding host save. Await completion
+    /// before clearing secure storage; if cancelled, await close again. Separately
+    /// shut down owned peers. This is not remote token revocation.
+    pub async fn close(&self) {
+        self.bootstrap.session().close().await;
+    }
+
     /// Authenticate a User against the shared development environment.
     #[uniffi::constructor]
     pub async fn login_dev(email: String, password: String) -> Result<Arc<Self>, AukiSdkError> {
         let bootstrap = AukiPeerBootstrap::dev(Credentials::user_password(email, password))
             .await
-            .map_err(|error| operation_error("authenticate Auki User", error))?;
+            .map_err(|error| bootstrap_error("authenticate Auki User", error))?;
         Ok(Arc::new(Self { bootstrap }))
     }
 
@@ -478,7 +525,7 @@ impl AukiSession {
                     .map(|choice| AukiDomain::from(choice.domain))
                     .collect()
             })
-            .map_err(|error| operation_error("list accessible Auki Domains", error))
+            .map_err(|error| bootstrap_error("list accessible Auki Domains", error))
     }
 
     /// Authorize the persisted identity and start a relay-backed peer.
@@ -493,7 +540,7 @@ impl AukiSession {
             .bootstrap
             .start_peer(DomainSelection::new(domain_id), identity.rust_identity())
             .await
-            .map_err(|error| operation_error_chain("start Auki peer", error))?;
+            .map_err(|error| bootstrap_error("start Auki peer", error))?;
         Ok(Arc::new(AukiPeer::new(peer)))
     }
 
@@ -513,8 +560,25 @@ impl AukiSession {
             .with_dds_tracker(mode.into())
             .start_peer(DomainSelection::new(domain_id), identity.rust_identity())
             .await
-            .map_err(|error| operation_error_chain("start discoverable Auki peer", error))?;
+            .map_err(|error| bootstrap_error("start discoverable Auki peer", error))?;
         Ok(Arc::new(AukiPeer::new(peer)))
+    }
+}
+
+impl AukiSession {
+    fn import_zitadel(
+        credentials: Arc<AukiZitadelCredentials>,
+        store: Arc<dyn AukiZitadelSessionStore>,
+        environment: AuthEnvironment,
+        config: AukiPeerConfig,
+    ) -> Result<Arc<Self>, AukiSdkError> {
+        let session = AuthClient::new(environment)
+            .map_err(|e| auth_error(e.kind()))?
+            .import_zitadel_session(credentials.copy_credentials(), Arc::new(SwiftStore(store)))
+            .map_err(|e| auth_error(e.kind()))?;
+        Ok(Arc::new(Self {
+            bootstrap: AukiPeerBootstrap::from_session(session, config),
+        }))
     }
 }
 
@@ -662,6 +726,7 @@ impl AukiPeer {
     pub async fn wait_stopped(&self) -> Result<(), AukiSdkError> {
         match self.lifecycle.wait_stopped().await {
             AukiPeerExit::Stopped => Ok(()),
+            AukiPeerExit::Failed(AukiPeerFailure::Authentication(kind)) => Err(auth_error(kind)),
             AukiPeerExit::Failed(failure) => Err(AukiSdkError::Operation {
                 message: format!("Auki peer stopped unexpectedly: {failure:?}"),
             }),

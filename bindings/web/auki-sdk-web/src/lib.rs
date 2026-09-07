@@ -13,16 +13,21 @@
 mod protocol_support;
 #[cfg(target_arch = "wasm32")]
 mod protocols;
+#[cfg(target_arch = "wasm32")]
+mod zitadel;
+#[cfg(target_arch = "wasm32")]
+pub use zitadel::{CredentialsPayload, StoreCallback, ZitadelCredentialsSnapshot};
 
 #[cfg(target_arch = "wasm32")]
 mod facade {
     use std::cell::RefCell;
+    use std::sync::Arc;
 
     use auki_sdk::{
         AukiDiscovery as SdkDiscovery, AukiDiscoveryCandidate as SdkDiscoveryCandidate,
         AukiDiscoverySource, AukiPeer as SdkPeer, AukiPeerBootstrap, AukiPeerConfig, AukiPeerExit,
-        AukiPeerLifecycle, AukiPeerProtocols, AuthClient, AuthEnvironment, Credentials,
-        DdsTrackerMode, DomainDescriptor, DomainSelection,
+        AukiPeerFailure, AukiPeerLifecycle, AukiPeerProtocols, AuthClient, AuthEnvironment,
+        Credentials, DdsTrackerMode, DomainDescriptor, DomainSelection,
     };
     use js_sys::{Array, Promise};
     use uuid::Uuid;
@@ -30,6 +35,10 @@ mod facade {
     use wasm_bindgen_futures::future_to_promise;
 
     use crate::protocol_support::{js_context, js_error};
+    use crate::zitadel::{
+        BrowserStore, CredentialsPayload, StoreCallback, auth_error, bootstrap_error,
+        parse_credentials,
+    };
 
     /// Explicit DDS tracker behavior for a browser peer.
     #[wasm_bindgen]
@@ -74,6 +83,47 @@ mod facade {
 
     #[wasm_bindgen]
     impl AukiUserSession {
+        /// Import without network I/O. Retain this handle across startup/save failures.
+        #[wasm_bindgen(js_name = importZitadelDev)]
+        pub fn import_zitadel_dev(
+            credentials: CredentialsPayload,
+            store: StoreCallback,
+        ) -> Result<Self, JsValue> {
+            Self::import_zitadel(
+                credentials,
+                store,
+                AuthEnvironment::dev(),
+                AukiPeerConfig::dev(),
+            )
+        }
+
+        /// Import against exact service bases without starting authentication work.
+        #[wasm_bindgen(js_name = importZitadelWithEnvironment)]
+        pub fn import_zitadel_with_environment(
+            api_base_url: String,
+            dds_base_url: String,
+            dms_base_url: String,
+            credentials: CredentialsPayload,
+            store: StoreCallback,
+        ) -> Result<Self, JsValue> {
+            let environment = AuthEnvironment::new(api_base_url, dds_base_url)
+                .map_err(|e| auth_error(e.kind()))?;
+            let config = AukiPeerConfig::new(dms_base_url)
+                .map_err(|_| auth_error(auki_sdk::AuthFailureKind::Configuration))?;
+            Self::import_zitadel(credentials, store, environment, config)
+        }
+
+        /// Fence new session work and drain any outstanding host save. Await before
+        /// clearing storage. Shut down owned peers separately; this is not revocation.
+        #[wasm_bindgen(unchecked_return_type = "Promise<void>")]
+        pub fn close(&self) -> Promise {
+            let session = self.bootstrap.session().clone();
+            future_to_promise(async move {
+                session.close().await;
+                Ok(JsValue::UNDEFINED)
+            })
+        }
+
         /// Authenticate against the shared development environment.
         #[wasm_bindgen(js_name = loginDev)]
         pub async fn login_dev(
@@ -82,7 +132,7 @@ mod facade {
         ) -> Result<AukiUserSession, JsValue> {
             let bootstrap = AukiPeerBootstrap::dev(Credentials::user_password(email, password))
                 .await
-                .map_err(|error| js_context("authenticate User", error))?;
+                .map_err(|error| bootstrap_error("authenticate User", error))?;
             Ok(Self { bootstrap })
         }
 
@@ -107,7 +157,7 @@ mod facade {
                 peer_config,
             )
             .await
-            .map_err(|error| js_context("authenticate User", error))?;
+            .map_err(|error| bootstrap_error("authenticate User", error))?;
             Ok(Self { bootstrap })
         }
 
@@ -118,7 +168,7 @@ mod facade {
                 .bootstrap
                 .accessible_domains()
                 .await
-                .map_err(|error| js_context("list accessible Domains", error))?;
+                .map_err(|error| bootstrap_error("list accessible Domains", error))?;
             let domains = Array::new();
             for choice in choices {
                 domains.push(&AukiDomain::from(choice.domain).into());
@@ -140,7 +190,7 @@ mod facade {
             let peer = configured_bootstrap(&self.bootstrap, reachability)
                 .start_ephemeral_peer(DomainSelection::new(domain_id))
                 .await
-                .map_err(|error| js_context("start browser Peer", error))?;
+                .map_err(|error| bootstrap_error("start browser Peer", error))?;
             Ok(AukiPeer::new(peer))
         }
 
@@ -161,8 +211,27 @@ mod facade {
                 .with_dds_tracker(mode.into())
                 .start_ephemeral_peer(DomainSelection::new(domain_id))
                 .await
-                .map_err(|error| js_context("start browser Peer with discovery", error))?;
+                .map_err(|error| bootstrap_error("start browser Peer with discovery", error))?;
             Ok(AukiPeer::new(peer))
+        }
+    }
+
+    impl AukiUserSession {
+        fn import_zitadel(
+            credentials: CredentialsPayload,
+            store: StoreCallback,
+            environment: AuthEnvironment,
+            config: AukiPeerConfig,
+        ) -> Result<Self, JsValue> {
+            let credentials = parse_credentials(credentials.as_ref())?;
+            let store = Arc::new(BrowserStore::new(store)?);
+            let session = AuthClient::new(environment)
+                .map_err(|e| auth_error(e.kind()))?
+                .import_zitadel_session(credentials, store)
+                .map_err(|e| auth_error(e.kind()))?;
+            Ok(Self {
+                bootstrap: AukiPeerBootstrap::from_session(session, config),
+            })
         }
     }
 
@@ -373,6 +442,9 @@ mod facade {
             future_to_promise(async move {
                 match lifecycle.wait_stopped().await {
                     AukiPeerExit::Stopped => Ok(JsValue::UNDEFINED),
+                    AukiPeerExit::Failed(AukiPeerFailure::Authentication(kind)) => {
+                        Err(auth_error(kind))
+                    }
                     AukiPeerExit::Failed(failure) => Err(js_context(
                         "browser Peer stopped unexpectedly",
                         format!("{failure:?}"),

@@ -308,6 +308,36 @@ mod tests {
     use super::*;
 
     #[wasm_bindgen_test]
+    fn exact_opaque_subject_and_nanoseconds_reach_javascript() {
+        let peer = AuthenticatedPeer {
+            peer_id: auki_sdk::Identity::generate().peer_id(),
+            subject: " User|Case-敏感 ".into(),
+            peer_type: Some("user".into()),
+            domain_ids: vec![],
+            scopes: vec![],
+            application: None,
+            verified_until: chrono::DateTime::parse_from_rfc3339("2026-09-07T00:00:00.123456789Z")
+                .unwrap()
+                .to_utc(),
+        };
+        let js = authenticated_peer_to_js("test", &peer).unwrap();
+        assert_eq!(
+            Reflect::get(&js, &"subject".into())
+                .unwrap()
+                .as_string()
+                .as_deref(),
+            Some(" User|Case-敏感 ")
+        );
+        assert_eq!(
+            Reflect::get(&js, &"verifiedUntil".into())
+                .unwrap()
+                .as_string()
+                .as_deref(),
+            Some("2026-09-07T00:00:00.123456789+00:00")
+        );
+    }
+
+    #[wasm_bindgen_test]
     fn exact_target_is_validated_at_the_wasm_boundary() {
         let target = Object::new();
         Reflect::set(

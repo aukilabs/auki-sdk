@@ -52,9 +52,10 @@ mod types;
 mod wire;
 mod zitadel;
 mod zitadel_http;
+mod zitadel_session;
 
 pub use client::{AuthClient, AuthEnvironment, AuthLimits, AuthSession};
-pub use error::{Error, Result};
+pub use error::{AuthFailureKind, Error, Result};
 pub use secret::SecretString;
 #[cfg(not(target_arch = "wasm32"))]
 pub use types::AppCredentials;

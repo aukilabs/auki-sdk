@@ -81,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Never embed an App secret in a browser, mobile binary, public repository,
 container image, or log.
 
-## ZITADEL handoff primitives
+## ZITADEL sessions
 
 `ZitadelSessionCredentials::new(access_token, refresh_token, client_id, issuer,
 access_token_expires_at)` accepts a public-client session after the host's PKCE
@@ -118,11 +118,65 @@ implement storage acknowledgement as a fire-and-forget event. Host OAuth
 libraries, other tabs, and other processes must stop refreshing a handed-over
 session; an SDK coordinator cannot serialize independent refresh owners.
 
-Session import/coordination is a separate integration stage. A caller using the
-low-level token client must drive an issued refresh to completion and retain/save
-the result before another refresh. A process crash between rotation and durable
-storage can require login. Provider refresh-token idle/absolute limits must cover
-the application's expected inactive periods; the SDK cannot extend them.
+Ordinary applications import a session synchronously, then start a peer through
+the existing bootstrap. Import performs no network work, so the host retains a
+recoverable handle even if startup rotates credentials and subsequently fails:
+
+```rust,no_run
+use std::sync::Arc;
+use auki_auth::{AuthClient, DomainSelection, ZitadelSessionCredentials, ZitadelSessionStore};
+use auki_sdk::{AukiPeerBootstrap, AukiPeerConfig, Identity};
+
+async fn run(
+    client: AuthClient,
+    credentials: ZitadelSessionCredentials,
+    store: Arc<dyn ZitadelSessionStore>,
+    domain: DomainSelection,
+    identity: Identity,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let session = client.import_zitadel_session(credentials, store)?;
+    let bootstrap = AukiPeerBootstrap::from_session(session.clone(), AukiPeerConfig::dev());
+    // Optional: session.accessible_domains().await? for a selection UI.
+    let result = bootstrap.start_peer(domain, identity).await;
+    // Keep `session` available to retry after transient or persistence failure.
+    if let Ok(peer) = result { peer.shutdown().await?; }
+    session.close().await;
+    // Only now may the host clear its secure session storage for logout.
+    Ok(())
+}
+```
+
+When API exchange is needed, known expiry within 30 seconds triggers refresh;
+unknown expiry first tries API and recovers from one 401. Both use the same
+one-refresh budget per operation. ZITADEL alone exchanges with `?purpose=p2p`;
+password/app flows retain the legacy exchange. A DDS 401 renews the API bearer and
+restarts the complete bearer-bound proof once, using the same Peer ID. Domain
+denial does not poison other Domains sharing the session.
+
+One session-owned refresh/save task survives caller cancellation and supervisor
+timeouts. Replacements enter memory before storage is awaited. A rejected save
+returns `Error::Persistence`; the next operation saves that same generation
+before any rotation or API/DDS request (including with a cached DDS bearer).
+`Error::kind()` exposes login-required, configuration, Domain denial, persistence,
+transient, cancelled and closed recovery categories. Invalid grants, ambiguous
+refresh submissions, or a rejected freshly refreshed access token latch a
+login-required state; correcting configuration requires importing a new session.
+
+Each HTTP request and each caller's wait is bounded by `AuthLimits`.
+`SessionOperationPending` means retry waiting on the existing task, not launch
+another refresh. An already-running host write cannot safely be cancelled by the
+SDK: `close()` fences all clones and drains its acknowledgement before returning.
+If the close waiter is cancelled, await `close()` again before clearing storage.
+The storage callback must settle all writes before success **or failure**, must
+not reenter the session, and must eventually acknowledge; a never-resolving save
+prevents safe logout completion. Closing a session prevents future renewal; hosts
+also shut down their peers. It does not revoke existing remotely held tokens.
+
+A caller using the low-level token client must drive an issued refresh to
+completion and retain/save the result before another refresh. A process crash
+between rotation and durable storage can require login. Provider refresh-token
+idle/absolute limits must cover expected inactive periods; the SDK cannot extend
+them. There is no additional auth scheduler or shorter revocation lifetime.
 
 ## Web/Wasm
 

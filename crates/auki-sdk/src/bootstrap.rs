@@ -24,6 +24,16 @@ pub struct AukiPeerBootstrap {
 }
 
 impl AukiPeerBootstrap {
+    /// Compose an already-owned session without network work. Keep a clone of
+    /// the session for persistence recovery and close-before-clear logout.
+    pub fn from_session(auth: AuthSession, peer_config: AukiPeerConfig) -> Self {
+        Self { auth, peer_config }
+    }
+
+    pub fn session(&self) -> &AuthSession {
+        &self.auth
+    }
+
     /// Authenticate a User or trusted native App and retain the configuration
     /// used for every peer started from this session.
     pub async fn authenticate(
@@ -145,4 +155,72 @@ pub enum AukiPeerBootstrapError {
     /// Authenticated peer runtime startup failed.
     #[error("start Auki peer: {0}")]
     StartPeer(#[source] AukiPeerStartError),
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod zitadel_tests {
+    use super::*;
+    use auki_auth::{Error, ZitadelSessionCredentials, ZitadelSessionStore};
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    struct Store;
+    #[async_trait::async_trait]
+    impl ZitadelSessionStore for Store {
+        async fn save(&self, _: &ZitadelSessionCredentials) -> auki_auth::Result<()> {
+            panic!("unknown-expiry service failure must not rotate or save");
+        }
+    }
+
+    #[tokio::test]
+    async fn imported_handle_survives_bootstrap_failure_and_closes_all_clones() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 4096];
+            let n = stream.read(&mut request).await.unwrap();
+            assert!(
+                std::str::from_utf8(&request[..n])
+                    .unwrap()
+                    .starts_with("POST /service/domains-access-token?purpose=p2p ")
+            );
+            stream
+                .write_all(
+                    b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+        });
+        let client = AuthClient::new(AuthEnvironment::new(&base, &base).unwrap()).unwrap();
+        let credentials = ZitadelSessionCredentials::new(
+            "opaque",
+            "refresh",
+            "client",
+            base.parse().unwrap(),
+            None,
+        )
+        .unwrap();
+        let session = client
+            .import_zitadel_session(credentials, Arc::new(Store))
+            .unwrap();
+        let bootstrap =
+            AukiPeerBootstrap::from_session(session.clone(), AukiPeerConfig::dev().without_relay());
+        let result = bootstrap
+            .start_peer(uuid::Uuid::new_v4().into(), Identity::generate())
+            .await;
+        assert!(matches!(
+            result,
+            Err(AukiPeerBootstrapError::AuthorizePeer(Error::HttpStatus {
+                status: 503,
+                ..
+            }))
+        ));
+        server.await.unwrap();
+        session.close().await;
+        assert!(matches!(
+            bootstrap.session().accessible_domains().await,
+            Err(Error::SessionClosed)
+        ));
+    }
 }

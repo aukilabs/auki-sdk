@@ -76,6 +76,8 @@ impl fmt::Debug for ZitadelSessionCredentials {
 ///
 /// Resolve successfully only after secure persistence has finished. Return
 /// [`Error::Persistence`] on failure; do not include host error text or secrets.
+/// On either result, all writes started by this invocation must have settled:
+/// no detached writes or callback reentry into the same SDK session.
 /// Close the SDK session and await its outstanding save before clearing storage.
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]

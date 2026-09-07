@@ -32,12 +32,14 @@ use crate::AppCredentials;
 use crate::{
     AuthorityRenewal, AuthorityRenewalProvider, Credentials, DomainChoice, DomainDescriptor,
     DomainSelection, Error, PeerAuthorityProvider, PreparedPeer, PrincipalKind, RenewedAuthority,
-    Result, SecretString, UserPassword,
+    Result, SecretString, UserPassword, ZitadelSessionCredentials, ZitadelSessionStore,
+    ZitadelTokenClient,
     wire::{
         AccessibleDomain, AccessibleDomainsResponse, ApiTokenResponse, LoginRequest,
         PeerChallengeRequest, PeerChallengeResponse, PeerVerifyRequest, PeerVerifyResponse,
         ServiceTokenResponse, VerificationKeyStatus, VerificationKeysResponse,
     },
+    zitadel_session::{RefreshMode, ZitadelSession},
 };
 
 const API_LOGIN: &str = "API /user/login";
@@ -150,6 +152,7 @@ struct SessionInner {
     client: AuthClient,
     principal_kind: PrincipalKind,
     state: Mutex<SessionState>,
+    closed: CancellationToken,
 }
 
 enum PrincipalState {
@@ -158,17 +161,21 @@ enum PrincipalState {
     },
     #[cfg(not(target_arch = "wasm32"))]
     App(AppCredentials),
+    Zitadel(Arc<ZitadelSession>),
+    Closed,
 }
 
 struct SessionState {
     principal: PrincipalState,
-    dds_service_bearer: SecretString,
+    dds_service_bearer: Option<SecretString>,
 }
 
 impl SessionState {
     fn gateway_mac(&self) -> Option<&str> {
         match &self.principal {
-            PrincipalState::User { .. } => None,
+            PrincipalState::User { .. } | PrincipalState::Zitadel(_) | PrincipalState::Closed => {
+                None
+            }
             #[cfg(not(target_arch = "wasm32"))]
             PrincipalState::App(credentials) => credentials.gateway_mac.as_deref(),
         }
@@ -186,6 +193,40 @@ impl fmt::Debug for AuthSession {
 }
 
 impl AuthClient {
+    /// Take ownership without performing network work or rotating credentials.
+    /// Keep this handle if listing, authorizing, or peer startup later fails.
+    /// Issuer/client in the payload must be trusted host configuration.
+    pub fn import_zitadel_session(
+        &self,
+        credentials: ZitadelSessionCredentials,
+        store: Arc<dyn ZitadelSessionStore>,
+    ) -> Result<AuthSession> {
+        let token_client = ZitadelTokenClient::new(
+            credentials.issuer().clone(),
+            credentials.client_id(),
+            self.inner.limits,
+        )?;
+        let closed = CancellationToken::new();
+        let zitadel = ZitadelSession::new(
+            credentials,
+            token_client,
+            store,
+            closed.clone(),
+            self.inner.limits.request_timeout,
+        );
+        Ok(AuthSession {
+            inner: Arc::new(SessionInner {
+                client: self.clone(),
+                principal_kind: PrincipalKind::User,
+                state: Mutex::new(SessionState {
+                    principal: PrincipalState::Zitadel(zitadel),
+                    dds_service_bearer: None,
+                }),
+                closed,
+            }),
+        })
+    }
+
     pub fn new(environment: AuthEnvironment) -> Result<Self> {
         Self::with_limits(environment, AuthLimits::default())
     }
@@ -226,7 +267,7 @@ impl AuthClient {
                     .await?;
                 SessionState {
                     principal: PrincipalState::User { refresh_token },
-                    dds_service_bearer,
+                    dds_service_bearer: Some(dds_service_bearer),
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -237,7 +278,7 @@ impl AuthClient {
                     .await?;
                 SessionState {
                     principal: PrincipalState::App(credentials),
-                    dds_service_bearer,
+                    dds_service_bearer: Some(dds_service_bearer),
                 }
             }
         };
@@ -246,6 +287,7 @@ impl AuthClient {
                 client: self.clone(),
                 principal_kind,
                 state: Mutex::new(state),
+                closed: CancellationToken::new(),
             }),
         })
     }
@@ -306,6 +348,29 @@ impl AuthClient {
         validated_token(response.access_token, API_SERVICE_TOKEN)
     }
 
+    async fn exchange_zitadel_service_token(
+        &self,
+        access_token: &SecretString,
+        cancellation: &CancellationToken,
+    ) -> Result<SecretString> {
+        let mut url = self.api_url("service/domains-access-token");
+        url.query_pairs_mut().append_pair("purpose", "p2p");
+        let request = self
+            .inner
+            .http
+            .post(url)
+            .header(ACCEPT, "application/json")
+            .bearer_auth(access_token.expose());
+        let response: ServiceTokenResponse = self
+            .send_json(request, API_SERVICE_TOKEN, cancellation)
+            .await
+            .map_err(|error| match error {
+                Error::HttpStatus { status: 403, .. } => Error::AuthorizationDenied,
+                other => other,
+            })?;
+        validated_token(response.access_token, API_SERVICE_TOKEN)
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     async fn exchange_app_service_token(
         &self,
@@ -327,6 +392,7 @@ impl AuthClient {
     async fn refresh_service_bearer(
         &self,
         state: &mut SessionState,
+        refresh_used: &mut bool,
         cancellation: &CancellationToken,
     ) -> Result<()> {
         match &state.principal {
@@ -341,15 +407,49 @@ impl AuthClient {
                     .exchange_user_service_token(&access_token, cancellation)
                     .await?;
                 // Keep the former DDS bearer until its replacement is complete.
-                state.dds_service_bearer = dds_service_bearer;
+                state.dds_service_bearer = Some(dds_service_bearer);
             }
             #[cfg(not(target_arch = "wasm32"))]
             PrincipalState::App(credentials) => {
                 let dds_service_bearer = self
                     .exchange_app_service_token(credentials, cancellation)
                     .await?;
-                state.dds_service_bearer = dds_service_bearer;
+                state.dds_service_bearer = Some(dds_service_bearer);
             }
+            PrincipalState::Zitadel(session) => {
+                let ready = session
+                    .ready(
+                        if *refresh_used {
+                            RefreshMode::Settle
+                        } else {
+                            RefreshMode::IfExpiring
+                        },
+                        cancellation,
+                    )
+                    .await?;
+                *refresh_used |= ready.refreshed;
+                let mut result = self
+                    .exchange_zitadel_service_token(ready.credentials.access_token(), cancellation)
+                    .await;
+                if result.as_ref().is_err_and(Error::is_unauthorized) && !*refresh_used {
+                    // One budget for this entire API/DDS operation, including
+                    // proactive refresh and any joined session-owned refresh.
+                    let ready = session.ready(RefreshMode::Force, cancellation).await?;
+                    *refresh_used = true;
+                    result = self
+                        .exchange_zitadel_service_token(
+                            ready.credentials.access_token(),
+                            cancellation,
+                        )
+                        .await;
+                }
+                if result.as_ref().is_err_and(Error::is_unauthorized) {
+                    session.require_login().await;
+                    return Err(Error::AuthenticationRequired);
+                }
+                state.dds_service_bearer = Some(result?);
+            }
+            PrincipalState::Closed => return Err(Error::SessionClosed),
         }
         Ok(())
     }
@@ -474,6 +574,20 @@ pub(crate) fn build_http_client(_limits: AuthLimits) -> Result<HttpClient> {
 }
 
 impl AuthSession {
+    /// Fence all clones, drain a running refresh/save, and drop credentials.
+    /// The host MUST await completion before clearing its secure storage.
+    /// If this future is cancelled, call/await it again; the session stays fenced.
+    /// A host save which never acknowledges also prevents safe logout completion.
+    pub async fn close(&self) {
+        self.inner.closed.cancel();
+        let mut state = self.inner.state.lock().await;
+        if let PrincipalState::Zitadel(session) = &state.principal {
+            session.close().await;
+        }
+        state.dds_service_bearer = None;
+        state.principal = PrincipalState::Closed;
+    }
+
     pub fn principal_kind(&self) -> PrincipalKind {
         self.inner.principal_kind
     }
@@ -496,15 +610,29 @@ impl AuthSession {
         &self,
         cancellation: &CancellationToken,
     ) -> Result<Vec<DomainChoice>> {
+        tokio::select! {
+            biased;
+            _ = self.inner.closed.cancelled() => Err(Error::SessionClosed),
+            result = self.accessible_domains_operation(cancellation) => result,
+        }
+    }
+
+    async fn accessible_domains_operation(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<DomainChoice>> {
         let mut state = self
             .lock_state(cancellation, DDS_ACCESSIBLE_DOMAINS)
+            .await?;
+        let mut refresh_used = false;
+        self.prepare_session(&mut state, &mut refresh_used, cancellation)
             .await?;
         match self.fetch_accessible_domains(&state, cancellation).await {
             Ok(domains) => Ok(domains),
             Err(error) if error.is_unauthorized() => {
                 self.inner
                     .client
-                    .refresh_service_bearer(&mut state, cancellation)
+                    .refresh_service_bearer(&mut state, &mut refresh_used, cancellation)
                     .await?;
                 self.fetch_accessible_domains(&state, cancellation).await
             }
@@ -558,7 +686,23 @@ impl AuthSession {
         identity: &PeerIdentityProof,
         cancellation: &CancellationToken,
     ) -> Result<AuthorizedMaterial> {
+        tokio::select! {
+            biased;
+            _ = self.inner.closed.cancelled() => Err(Error::SessionClosed),
+            result = self.authorize_operation(selection, identity, cancellation) => result,
+        }
+    }
+
+    async fn authorize_operation(
+        &self,
+        selection: DomainSelection,
+        identity: &PeerIdentityProof,
+        cancellation: &CancellationToken,
+    ) -> Result<AuthorizedMaterial> {
         let mut state = self.lock_state(cancellation, DDS_P2P_CHALLENGE).await?;
+        let mut refresh_used = false;
+        self.prepare_session(&mut state, &mut refresh_used, cancellation)
+            .await?;
         match self
             .authorize_attempt(&state, selection, identity, cancellation)
             .await
@@ -569,13 +713,36 @@ impl AuthSession {
                 // 401, rotate the bearer and restart the whole one-time flow.
                 self.inner
                     .client
-                    .refresh_service_bearer(&mut state, cancellation)
+                    .refresh_service_bearer(&mut state, &mut refresh_used, cancellation)
                     .await?;
                 self.authorize_attempt(&state, selection, identity, cancellation)
                     .await
             }
             Err(error) => Err(error),
         }
+    }
+
+    async fn prepare_session(
+        &self,
+        state: &mut SessionState,
+        refresh_used: &mut bool,
+        cancellation: &CancellationToken,
+    ) -> Result<()> {
+        if let PrincipalState::Zitadel(session) = &state.principal {
+            // A cached DDS bearer must not bypass an unacknowledged save or a
+            // terminal session failure left by a cancelled earlier operation.
+            *refresh_used |= session
+                .ready(RefreshMode::Settle, cancellation)
+                .await?
+                .refreshed;
+        }
+        if state.dds_service_bearer.is_none() {
+            self.inner
+                .client
+                .refresh_service_bearer(state, refresh_used, cancellation)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn authorize_attempt(
@@ -609,7 +776,7 @@ impl AuthSession {
                 .header(ACCEPT, "application/json")
                 .json(&request_body),
             state,
-        );
+        )?;
         let challenge: PeerChallengeResponse = self
             .inner
             .client
@@ -640,7 +807,7 @@ impl AuthSession {
                 .header(ACCEPT, "application/json")
                 .json(&verify_body),
             state,
-        );
+        )?;
         let verified: PeerVerifyResponse = self
             .inner
             .client
@@ -701,7 +868,7 @@ impl AuthSession {
                     .get(url)
                     .header(ACCEPT, "application/json"),
                 state,
-            );
+            )?;
             let response: AccessibleDomainsResponse = self
                 .inner
                 .client
@@ -752,12 +919,16 @@ impl AuthSession {
         &self,
         request: RequestBuilder,
         state: &SessionState,
-    ) -> RequestBuilder {
-        let request = request.bearer_auth(state.dds_service_bearer.expose());
-        match state.gateway_mac() {
+    ) -> Result<RequestBuilder> {
+        let bearer = state
+            .dds_service_bearer
+            .as_ref()
+            .ok_or(Error::AuthenticationRequired)?;
+        let request = request.bearer_auth(bearer.expose());
+        Ok(match state.gateway_mac() {
             Some(gateway_mac) => request.header("Posemesh-Gateway-MAC", gateway_mac),
             None => request,
-        }
+        })
     }
 
     async fn lock_state<'a>(
@@ -767,6 +938,7 @@ impl AuthSession {
     ) -> Result<MutexGuard<'a, SessionState>> {
         tokio::select! {
             biased;
+            _ = self.inner.closed.cancelled() => Err(Error::SessionClosed),
             _ = cancellation.cancelled() => Err(Error::Cancelled { endpoint }),
             state = self.inner.state.lock() => Ok(state),
         }

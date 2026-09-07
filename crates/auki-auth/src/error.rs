@@ -2,12 +2,36 @@ use thiserror::Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Recovery action shared by sessions, peer supervisors, and host adapters.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthFailureKind {
+    AuthenticationRequired,
+    Configuration,
+    AuthorizationDenied,
+    Persistence,
+    Transient,
+    Cancelled,
+    Closed,
+}
+
 /// Fail-closed authentication and authority-preparation failures.
 ///
 /// Response bodies, credentials, and bearer tokens are deliberately absent
 /// from every variant.
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("authentication is required; sign in again")]
+    AuthenticationRequired,
+
+    #[error("the auth session is closed")]
+    SessionClosed,
+
+    #[error("the session operation is still running; retry waiting without another refresh")]
+    SessionOperationPending,
+
+    #[error("the principal has no readable Domains")]
+    AuthorizationDenied,
+
     #[error("ZITADEL rejected refresh: {0:?}")]
     ZitadelOAuth(crate::ZitadelOAuthError),
 
@@ -67,6 +91,31 @@ pub enum Error {
 }
 
 impl Error {
+    pub fn kind(&self) -> AuthFailureKind {
+        use crate::ZitadelOAuthError as OAuth;
+        match self {
+            Self::AuthenticationRequired
+            | Self::RefreshOutcomeUnknown
+            | Self::ZitadelOAuth(OAuth::InvalidGrant | OAuth::Other)
+            | Self::HttpStatus { status: 401, .. } => AuthFailureKind::AuthenticationRequired,
+            Self::InvalidConfiguration(_)
+            | Self::InvalidInput { .. }
+            | Self::ZitadelOAuth(
+                OAuth::InvalidClient
+                | OAuth::UnauthorizedClient
+                | OAuth::InvalidRequest
+                | OAuth::InvalidScope,
+            ) => AuthFailureKind::Configuration,
+            Self::AuthorizationDenied
+            | Self::DomainNotAccessible
+            | Self::HttpStatus { status: 403, .. } => AuthFailureKind::AuthorizationDenied,
+            Self::Persistence => AuthFailureKind::Persistence,
+            Self::Cancelled { .. } => AuthFailureKind::Cancelled,
+            Self::SessionClosed => AuthFailureKind::Closed,
+            _ => AuthFailureKind::Transient,
+        }
+    }
+
     pub(crate) fn invalid_response(endpoint: &'static str, reason: &'static str) -> Self {
         Self::InvalidResponse { endpoint, reason }
     }

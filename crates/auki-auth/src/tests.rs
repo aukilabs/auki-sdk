@@ -165,6 +165,7 @@ impl MockServer {
 }
 
 mod zitadel;
+mod zitadel_session;
 
 async fn read_request(stream: &mut TcpStream) -> RecordedRequest {
     let mut bytes = Vec::new();

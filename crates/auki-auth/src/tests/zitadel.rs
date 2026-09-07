@@ -5,7 +5,7 @@ use reqwest::Url;
 use serde_json::{Value, json};
 use std::time::Duration;
 
-fn credentials(issuer: &str) -> ZitadelSessionCredentials {
+pub(super) fn credentials(issuer: &str) -> ZitadelSessionCredentials {
     ZitadelSessionCredentials::new(
         "opaque.access+/=",
         "rotate+me&next=1",
@@ -16,12 +16,12 @@ fn credentials(issuer: &str) -> ZitadelSessionCredentials {
     .unwrap()
 }
 
-fn discovery(base: &str) -> Value {
+pub(super) fn discovery(base: &str) -> Value {
     json!({"issuer":base, "token_endpoint":format!("{base}/oauth/v2/token"),
         "token_endpoint_auth_methods_supported":["none"], "grant_types_supported":["refresh_token"]})
 }
 
-fn token() -> Value {
+pub(super) fn token() -> Value {
     json!({"access_token":"replacement-opaque", "refresh_token":"replacement-refresh", "expires_in":3600, "token_type":"Bearer"})
 }
 

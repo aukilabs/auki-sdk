@@ -27,7 +27,9 @@ for TARGET in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
 done
 
 DEVICE_LIB="target/aarch64-apple-ios/release/lib${LIB_NAME}.a"
-SIM_FAT="$OUT/lib${LIB_NAME}-sim.a"
+# CocoaPods requires identical static library basenames across XCFramework slices.
+mkdir -p "$OUT/sim"
+SIM_FAT="$OUT/sim/lib${LIB_NAME}.a"
 lipo -create \
   "target/aarch64-apple-ios-sim/release/lib${LIB_NAME}.a" \
   "target/x86_64-apple-ios/release/lib${LIB_NAME}.a" \

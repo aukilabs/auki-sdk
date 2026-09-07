@@ -70,6 +70,7 @@ auki-datatypes = { path = "../../../crates/auki-datatypes", optional = true }
 auki-protocols = { path = "../../../crates/auki-protocols", optional = true }
 auki-registry = { path = "../../../crates/auki-registry", optional = true }
 auki-sdk-rs = { package = "auki-sdk", path = "../../../crates/auki-sdk" }
+chrono.workspace = true
 futures = { workspace = true, optional = true }
 parking_lot.workspace = true
 prost = { version = "0.13", optional = true }
@@ -81,6 +82,5 @@ tokio = { workspace = true, features = ["sync"] }
 uuid.workspace = true
 
 [dev-dependencies]
-chrono.workspace = true
 jsonwebtoken = "9.3.1"
 pyo3 = { version = "0.22", features = ["abi3-py38", "auto-initialize"] }

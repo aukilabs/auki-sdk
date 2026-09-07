@@ -213,6 +213,7 @@ impl AuthorityInstaller for FixedDomainAuthority {
 /// Debug output and getters deliberately omit the signed credential and PEM
 /// verification-key material. Constructing an update transfers those secrets
 /// into the runtime's authority supervisor.
+#[derive(Clone)]
 pub struct ExternalAuthorityUpdate {
     domain_id: Uuid,
     peer_id: PeerId,

@@ -227,6 +227,8 @@ mod facade {
         served_protocols: Vec<String>,
         expires_at: String,
         source: String,
+        subject_id: Option<String>,
+        peer_type: Option<String>,
     }
 
     impl From<SdkDiscoveryCandidate> for AukiDiscoveryCandidate {
@@ -239,6 +241,8 @@ mod facade {
                 source: match candidate.source() {
                     AukiDiscoverySource::DdsTracker => "dds_tracker".into(),
                 },
+                subject_id: candidate.subject_id().map(|id| id.to_string()),
+                peer_type: candidate.peer_type().map(str::to_owned),
             }
         }
     }
@@ -268,6 +272,16 @@ mod facade {
         #[wasm_bindgen(getter)]
         pub fn source(&self) -> String {
             self.source.clone()
+        }
+
+        #[wasm_bindgen(getter, js_name = subjectId)]
+        pub fn subject_id(&self) -> Option<String> {
+            self.subject_id.clone()
+        }
+
+        #[wasm_bindgen(getter, js_name = peerType)]
+        pub fn peer_type(&self) -> Option<String> {
+            self.peer_type.clone()
         }
     }
 

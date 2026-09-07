@@ -21,3 +21,5 @@ mod registry;
 mod standard;
 #[cfg(feature = "stream")]
 mod stream;
+#[cfg(feature = "urdf-fk")]
+mod urdf_fk;

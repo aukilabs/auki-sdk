@@ -1,10 +1,14 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use auki_sdk_rs::{
     AukiDiscovery, AukiDiscoveryCandidate, AukiDiscoveryError, AukiDiscoverySource, AukiPeer,
-    AukiPeerBootstrap, AukiPeerExit, AukiPeerLifecycle, AukiPeerProtocols, AukiPeerRoutes,
-    Credentials, DdsTrackerMode, DomainDescriptor, DomainSelection,
+    AukiPeerBootstrap, AukiPeerConfig, AukiPeerExit, AukiPeerLifecycle, AukiPeerProtocols,
+    AukiPeerRoutes, Credentials, DdsTrackerConfig, DdsTrackerMode, DdsVerificationKeys,
+    DomainDescriptor, DomainSelection, ExternalAuthorityControl, ExternalAuthorityUpdate, Identity,
+    Multiaddr, SignedP2pCredential,
 };
+use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
@@ -30,6 +34,28 @@ fn parse_discovery_mode(mode: Option<String>) -> PyResult<Option<DdsTrackerMode>
     .transpose()
 }
 
+fn parse_uuid(value: &str, label: &str) -> PyResult<Uuid> {
+    Uuid::parse_str(value).map_err(|_| PyValueError::new_err(format!("{label} must be a UUID")))
+}
+
+fn parse_peer_id(value: &str) -> PyResult<auki_sdk_rs::PeerId> {
+    value
+        .parse()
+        .map_err(|error| PyValueError::new_err(format!("invalid Peer ID: {error}")))
+}
+
+fn parse_multiaddr(value: &str) -> PyResult<Multiaddr> {
+    value
+        .parse()
+        .map_err(|error| PyValueError::new_err(format!("invalid multiaddr: {error}")))
+}
+
+fn parse_rfc3339(value: &str) -> PyResult<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|error| PyValueError::new_err(format!("invalid RFC3339 timestamp: {error}")))
+}
+
 struct PeerOwner {
     peer: Mutex<Option<AukiPeer>>,
     cleanup: DetachedCleanup,
@@ -41,6 +67,14 @@ impl PeerOwner {
             peer: Mutex::new(Some(peer)),
             cleanup: DetachedCleanup::default(),
         }
+    }
+
+    fn with_peer<R>(&self, f: impl FnOnce(&AukiPeer) -> R) -> PyResult<R> {
+        let guard = self.peer.lock();
+        let peer = guard
+            .as_ref()
+            .ok_or_else(|| PyRuntimeError::new_err("AukiPeer has been shut down"))?;
+        Ok(f(peer))
     }
 
     fn begin_shutdown(
@@ -155,6 +189,8 @@ struct PyAukiDiscoveryCandidate {
     served_protocols: Vec<String>,
     expires_at: String,
     source: String,
+    subject_id: Option<String>,
+    peer_type: Option<String>,
 }
 
 impl From<AukiDiscoveryCandidate> for PyAukiDiscoveryCandidate {
@@ -167,6 +203,8 @@ impl From<AukiDiscoveryCandidate> for PyAukiDiscoveryCandidate {
             source: match candidate.source() {
                 AukiDiscoverySource::DdsTracker => "dds_tracker".into(),
             },
+            subject_id: candidate.subject_id().map(|id| id.to_string()),
+            peer_type: candidate.peer_type().map(str::to_owned),
         }
     }
 }
@@ -198,12 +236,256 @@ impl PyAukiDiscoveryCandidate {
         self.source.clone()
     }
 
+    #[getter]
+    fn subject_id(&self) -> Option<String> {
+        self.subject_id.clone()
+    }
+
+    #[getter]
+    fn peer_type(&self) -> Option<String> {
+        self.peer_type.clone()
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "AukiDiscoveryCandidate(peer_id={:?}, protocols={})",
             self.peer_id,
             self.served_protocols.len()
         )
+    }
+}
+
+#[pyclass(name = "Identity", frozen)]
+struct PyIdentity {
+    inner: Identity,
+}
+
+#[pymethods]
+impl PyIdentity {
+    #[staticmethod]
+    fn from_ed25519_seed(seed: Vec<u8>) -> PyResult<Self> {
+        let seed: [u8; 32] = seed.try_into().map_err(|seed: Vec<u8>| {
+            PyValueError::new_err(format!(
+                "ed25519 seed must be exactly 32 bytes (got {})",
+                seed.len()
+            ))
+        })?;
+        Ok(Self {
+            inner: Identity::from_ed25519_seed(&seed),
+        })
+    }
+
+    #[staticmethod]
+    fn generate() -> Self {
+        Self {
+            inner: Identity::generate(),
+        }
+    }
+
+    #[staticmethod]
+    fn load_or_create(path: PathBuf) -> PyResult<Self> {
+        Identity::load_or_create(path)
+            .map(|inner| Self { inner })
+            .map_err(|error| runtime_error("load or create Identity", error))
+    }
+
+    #[getter]
+    fn peer_id(&self) -> String {
+        self.inner.peer_id().to_string()
+    }
+
+    /// libp2p public key protobuf bytes (DDS p2p challenge).
+    fn public_key_protobuf(&self) -> Vec<u8> {
+        self.inner.public_key_protobuf()
+    }
+
+    /// Sign exact DDS challenge bytes (no hashing / prefix).
+    fn sign_challenge(&self, challenge: Vec<u8>) -> PyResult<Vec<u8>> {
+        self.inner
+            .proof()
+            .sign_challenge(&challenge)
+            .map_err(|error| runtime_error("Identity.sign_challenge", error))
+    }
+
+    fn __repr__(&self) -> String {
+        format!("Identity(peer_id={:?})", self.inner.peer_id())
+    }
+}
+
+#[pyclass(name = "DdsVerificationKeys", frozen)]
+struct PyDdsVerificationKeys {
+    inner: DdsVerificationKeys,
+}
+
+#[pymethods]
+impl PyDdsVerificationKeys {
+    #[new]
+    #[pyo3(signature = (generation, current_key_pem, previous_key_pem=None))]
+    fn new(
+        generation: u64,
+        current_key_pem: Vec<u8>,
+        previous_key_pem: Option<Vec<u8>>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: DdsVerificationKeys::new(generation, current_key_pem, previous_key_pem),
+        })
+    }
+}
+
+#[pyclass(name = "SignedP2pCredential", frozen)]
+struct PySignedP2pCredential {
+    inner: SignedP2pCredential,
+}
+
+#[pymethods]
+impl PySignedP2pCredential {
+    #[new]
+    fn new(compact: String) -> PyResult<Self> {
+        SignedP2pCredential::new(compact)
+            .map(|inner| Self { inner })
+            .map_err(|error| runtime_error("SignedP2pCredential", error))
+    }
+}
+
+#[pyclass(name = "ExternalAuthorityUpdate", frozen)]
+struct PyExternalAuthorityUpdate {
+    inner: ExternalAuthorityUpdate,
+}
+
+#[pymethods]
+impl PyExternalAuthorityUpdate {
+    #[new]
+    fn new(
+        domain_id: String,
+        peer_id: String,
+        verification_keys: &PyDdsVerificationKeys,
+        credential: &PySignedP2pCredential,
+        credential_expires_at: String,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: ExternalAuthorityUpdate::new(
+                parse_uuid(&domain_id, "Domain ID")?,
+                parse_peer_id(&peer_id)?,
+                verification_keys.inner.clone(),
+                credential.inner.clone(),
+                parse_rfc3339(&credential_expires_at)?,
+            ),
+        })
+    }
+
+    #[getter]
+    fn domain_id(&self) -> String {
+        self.inner.domain_id().to_string()
+    }
+
+    #[getter]
+    fn peer_id(&self) -> String {
+        self.inner.peer_id().to_string()
+    }
+}
+
+#[pyclass(name = "ExternalAuthorityControl")]
+struct PyExternalAuthorityControl {
+    inner: Arc<ExternalAuthorityControl>,
+}
+
+#[pymethods]
+impl PyExternalAuthorityControl {
+    /// Install a newer authority update. Returns the credential revision.
+    fn replace<'py>(
+        &self,
+        py: Python<'py>,
+        update: &PyExternalAuthorityUpdate,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let control = Arc::clone(&self.inner);
+        let update = update.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let outcome = control
+                .replace(update)
+                .await
+                .map_err(|error| runtime_error("ExternalAuthorityControl.replace", error))?;
+            Ok(outcome.credential_revision())
+        })
+    }
+}
+
+#[pyclass(name = "AukiPeerConfig")]
+#[derive(Clone)]
+struct PyAukiPeerConfig {
+    inner: AukiPeerConfig,
+}
+
+#[pymethods]
+impl PyAukiPeerConfig {
+    #[staticmethod]
+    fn dev() -> Self {
+        Self {
+            inner: AukiPeerConfig::dev(),
+        }
+    }
+
+    #[staticmethod]
+    fn new(dms_base_url: String) -> PyResult<Self> {
+        AukiPeerConfig::new(dms_base_url)
+            .map(|inner| Self { inner })
+            .map_err(|error| runtime_error("AukiPeerConfig", error))
+    }
+
+    fn direct_only(&self) -> Self {
+        Self {
+            inner: self.inner.clone().direct_only(),
+        }
+    }
+
+    fn with_listen_addresses(&self, addresses: Vec<String>) -> PyResult<Self> {
+        let parsed = addresses
+            .into_iter()
+            .map(|s| parse_multiaddr(&s))
+            .collect::<PyResult<Vec<_>>>()?;
+        self.inner
+            .clone()
+            .with_listen_addresses(parsed)
+            .map(|inner| Self { inner })
+            .map_err(|error| runtime_error("with_listen_addresses", error))
+    }
+
+    fn with_advertised_direct_routes(&self, addresses: Vec<String>) -> PyResult<Self> {
+        let parsed = addresses
+            .into_iter()
+            .map(|s| parse_multiaddr(&s))
+            .collect::<PyResult<Vec<_>>>()?;
+        self.inner
+            .clone()
+            .with_advertised_direct_routes(parsed)
+            .map(|inner| Self { inner })
+            .map_err(|error| runtime_error("with_advertised_direct_routes", error))
+    }
+
+    fn with_peer_routes(&self, peer_id: String, addresses: Vec<String>) -> PyResult<Self> {
+        let peer = parse_peer_id(&peer_id)?;
+        let parsed = addresses
+            .into_iter()
+            .map(|s| parse_multiaddr(&s))
+            .collect::<PyResult<Vec<_>>>()?;
+        self.inner
+            .clone()
+            .with_peer_routes(peer, parsed)
+            .map(|inner| Self { inner })
+            .map_err(|error| runtime_error("with_peer_routes", error))
+    }
+
+    #[pyo3(signature = (mode, dds_url=None))]
+    fn with_dds_tracker(&self, mode: String, dds_url: Option<String>) -> PyResult<Self> {
+        let mode = parse_discovery_mode(Some(mode))?
+            .expect("discovery mode is required");
+        let tracker = match dds_url.filter(|s| !s.is_empty()) {
+            Some(url) => DdsTrackerConfig::for_trusted_dds(url, mode)
+                .map_err(|error| runtime_error("with_dds_tracker", error))?,
+            None => DdsTrackerConfig::dev(mode),
+        };
+        Ok(Self {
+            inner: self.inner.clone().with_dds_tracker(tracker),
+        })
     }
 }
 
@@ -343,6 +625,36 @@ impl PyAukiPeer {
 
 #[pymethods]
 impl PyAukiPeer {
+    /// Join with product-managed machine authority (robot / compute).
+    ///
+    /// Returns ``(AukiPeer, ExternalAuthorityControl)``.
+    #[staticmethod]
+    fn start_external<'py>(
+        py: Python<'py>,
+        identity: &PyIdentity,
+        update: &PyExternalAuthorityUpdate,
+        config: &PyAukiPeerConfig,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let identity = identity.inner.clone();
+        let update = update.inner.clone();
+        let config = config.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let (peer, control) = AukiPeer::start_external(identity, update, config)
+                .await
+                .map_err(|error| runtime_error("start_external AukiPeer", error))?;
+            Python::with_gil(|py| {
+                let peer = Py::new(py, PyAukiPeer::new(peer))?;
+                let control = Py::new(
+                    py,
+                    PyExternalAuthorityControl {
+                        inner: Arc::new(control),
+                    },
+                )?;
+                Ok((peer, control).into_py(py))
+            }) as PyResult<PyObject>
+        })
+    }
+
     #[getter]
     fn peer_id(&self) -> String {
         self.peer_id.clone()
@@ -358,24 +670,47 @@ impl PyAukiPeer {
         self.listen_addresses.clone()
     }
 
-    /// One atomic snapshot of the required TCP/WSS routes from one relay slot.
+    /// Relay TCP/WSS pair when booked; otherwise the first advertised/direct TCP route.
     #[getter]
     fn routes(&self, py: Python<'_>) -> PyResult<Py<PyAukiPeerRoutes>> {
-        let route = self
+        let snapshot = self
             .routes
             .snapshot()
-            .map_err(|error| runtime_error("read Auki peer routes", error))?
-            .relay_routes
+            .map_err(|error| runtime_error("read Auki peer routes", error))?;
+        if let Some(route) = snapshot.relay_routes.into_iter().next() {
+            return Py::new(
+                py,
+                PyAukiPeerRoutes {
+                    tcp: route.routes.tcp().to_string(),
+                    wss: route.routes.wss().to_string(),
+                },
+            );
+        }
+        let tcp = snapshot
+            .direct_routes
             .into_iter()
             .next()
-            .ok_or_else(|| PyRuntimeError::new_err("Auki peer has no confirmed relay route"))?;
+            .map(|addr| addr.to_string())
+            .unwrap_or_default();
         Py::new(
             py,
             PyAukiPeerRoutes {
-                tcp: route.routes.tcp().to_string(),
-                wss: route.routes.wss().to_string(),
+                tcp: tcp.clone(),
+                wss: String::new(),
             },
         )
+    }
+
+    fn known_peer_ids(&self) -> PyResult<Vec<String>> {
+        self.owner.with_peer(|runtime| {
+            runtime
+                .known_peers()
+                .snapshot()
+                .peers()
+                .iter()
+                .map(|peer| peer.peer_id().to_string())
+                .collect()
+        })
     }
 
     /// Fetch every fresh same-Domain DDS candidate.
@@ -455,6 +790,12 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyAukiDomain>()?;
     module.add_class::<PyAukiPeerRoutes>()?;
     module.add_class::<PyAukiDiscoveryCandidate>()?;
+    module.add_class::<PyIdentity>()?;
+    module.add_class::<PyDdsVerificationKeys>()?;
+    module.add_class::<PySignedP2pCredential>()?;
+    module.add_class::<PyExternalAuthorityUpdate>()?;
+    module.add_class::<PyExternalAuthorityControl>()?;
+    module.add_class::<PyAukiPeerConfig>()?;
     module.add_class::<PyAukiSession>()?;
     module.add_class::<PyAukiPeer>()?;
     Ok(())
@@ -477,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn module_exposes_only_the_small_peer_facade() {
+    fn module_exposes_peer_external_authority_and_discovery_facade() {
         Python::with_gil(|py| {
             let module = PyModule::new_bound(py, "auki_sdk").unwrap();
             register(&module).unwrap();
@@ -485,6 +826,9 @@ mod tests {
             assert!(module.getattr("AukiDomain").is_ok());
             assert!(module.getattr("AukiPeer").is_ok());
             assert!(module.getattr("AukiDiscoveryCandidate").is_ok());
+            assert!(module.getattr("Identity").is_ok());
+            assert!(module.getattr("AukiPeerConfig").is_ok());
+            assert!(module.getattr("ExternalAuthorityUpdate").is_ok());
         });
     }
 

@@ -661,6 +661,30 @@ fn write_device_model(
 }
 
 #[pyfunction]
+fn read_device_model(
+    py: Python<'_>,
+    app_root: PathBuf,
+    peer_id: &str,
+    device_model_id: &str,
+    hash: &str,
+) -> PyResult<PyObject> {
+    match registry::read_device_model(&app_root, peer_id, device_model_id, hash)
+        .map_err(map_registry_error)?
+    {
+        Some(entry) => struct_to_pyobject(py, &entry),
+        None => Ok(py.None()),
+    }
+}
+
+#[pyfunction]
+fn canonical_json_device_model(py: Python<'_>, entry: &Bound<'_, PyAny>) -> PyResult<String> {
+    let entry: registry::DeviceModelRegistryEntry = parse_py(py, entry, "device model")?;
+    entry.validate().map_err(map_registry_error)?;
+    String::from_utf8(entry.canonical_bytes())
+        .map_err(|e| PyRuntimeError::new_err(format!("internal registry utf8: {e}")))
+}
+
+#[pyfunction]
 fn put_blob(app_root: PathBuf, bytes: &[u8]) -> PyResult<String> {
     registry::put_blob(&app_root, bytes).map_err(map_registry_error)
 }
@@ -856,6 +880,8 @@ fn auki_registry(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(write_clock, m)?)?;
     m.add_function(wrap_pyfunction!(write_map, m)?)?;
     m.add_function(wrap_pyfunction!(write_device_model, m)?)?;
+    m.add_function(wrap_pyfunction!(read_device_model, m)?)?;
+    m.add_function(wrap_pyfunction!(canonical_json_device_model, m)?)?;
     m.add_function(wrap_pyfunction!(put_blob, m)?)?;
     m.add_function(wrap_pyfunction!(get_blob, m)?)?;
     m.add_function(wrap_pyfunction!(sha256_hex, m)?)?;

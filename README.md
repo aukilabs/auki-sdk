@@ -10,6 +10,8 @@ Start here:
 - [Build a P2P application](docs/p2p/README.md)
 - [Run the native echo example](docs/p2p/getting-started.md)
 - [Author a portable protocol](docs/p2p/authoring-protocols.md)
+- [Import a ZITADEL session](crates/auki-auth/README.md#zitadel-sessions)
+- [Verify the local ZITADEL service chain](docs/zitadel-local-acceptance.md)
 - [Choose a runnable example](examples/README.md)
 - [Understand the longer-term direction](VISION.md)
 - [Look up terminology](GLOSSARY.md)
@@ -94,6 +96,12 @@ Robot and Compute products that already manage machine authority use
 `AukiPeer::start_external`. They keep task, capability, heartbeat, and safety
 policy; the SDK still owns transport, relay/routes, protocol hosting, and
 shutdown.
+
+Rust, Web/Wasm, Swift and Expo Web/iOS also accept an existing ZITADEL
+public-client session. The host owns PKCE and atomic secure storage; the SDK owns
+refresh after handoff. Readable Domains permit authenticated P2P participation
+without granting HTTP writes. See the [Expo handoff example](bindings/expo/example)
+for persistence acknowledgement and login-required recovery.
 
 Native applications should persist `auki_p2p::Identity` and run only one live
 process or pod for that Peer ID. Web generates a new in-memory identity on each

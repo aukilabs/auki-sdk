@@ -178,6 +178,13 @@ between rotation and durable storage can require login. Provider refresh-token
 idle/absolute limits must cover expected inactive periods; the SDK cannot extend
 them. There is no additional auth scheduler or shorter revocation lifetime.
 
+An active peer is not a provider-refresh heartbeat: the cached one-hour Auki
+service bearer can remain usable until a later P2P renewal needs API access.
+Consequently, ZITADEL refreshes can be more than an hour apart even without
+suspension. Configure the provider's refresh-token idle lifetime for that gap
+plus expected inactive periods; a shorter idle limit can require login despite
+ongoing P2P traffic. The local acceptance harness preserves these normal timers.
+
 ## Web/Wasm
 
 User authentication and authority preparation compile to Wasm. The generic Web

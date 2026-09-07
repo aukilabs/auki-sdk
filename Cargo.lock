@@ -881,12 +881,15 @@ name = "auki-standard-protocols-native"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "auki-datatypes",
  "auki-protocols",
  "auki-registry",
  "auki-sdk",
+ "chrono",
  "futures",
  "hex",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",

@@ -422,11 +422,9 @@ async fn user_flow_starts_peer_and_explicitly_renews_authority_in_place() {
         login_response("api-access", "api-refresh"),
         service_response("dds-service"),
         domains_response(domain_id, organization_id),
-        domains_response(domain_id, organization_id),
         challenge_response("challenge-1", first_challenge),
         signed_peer_response(&identity, domain_id, "user", now),
         keys_response(),
-        domains_response(domain_id, organization_id),
         challenge_response("challenge-2", second_challenge),
         signed_peer_response_with_key(
             &identity,
@@ -436,7 +434,7 @@ async fn user_flow_starts_peer_and_explicitly_renews_authority_in_place() {
             ROTATED_DDS_PRIVATE_KEY,
         ),
         verification_keys_response(2, ROTATED_DDS_PUBLIC_KEY, Some(TEST_DDS_PUBLIC_KEY)),
-        domains_page_response(&[], organization_id, 0, 100, 0),
+        MockResponse::status(404),
     ])
     .await;
     let client = client_for(&server);
@@ -500,7 +498,7 @@ async fn user_flow_starts_peer_and_explicitly_renews_authority_in_place() {
     std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, listener_port)).unwrap();
 
     let requests = server.finish().await;
-    assert_eq!(requests.len(), 12);
+    assert_eq!(requests.len(), 10);
     assert_eq!(requests[0].method, "POST");
     assert_eq!(requests[0].target, "/user/login");
     assert_eq!(
@@ -519,18 +517,18 @@ async fn user_flow_starts_peer_and_explicitly_renews_authority_in_place() {
         "/api/v1/accessible-domains?limit=100&offset=0"
     );
     assert_eq!(
-        requests[4].target,
+        requests[3].target,
         format!("/api/v1/domains/{domain_id}/p2p/challenge")
     );
     assert_eq!(
-        requests[5].target,
+        requests[4].target,
         format!("/api/v1/domains/{domain_id}/p2p/verify")
     );
-    assert_peer_signature(&identity, first_challenge, &requests[5]);
-    assert_peer_signature(&identity, second_challenge, &requests[9]);
+    assert_peer_signature(&identity, first_challenge, &requests[4]);
+    assert_peer_signature(&identity, second_challenge, &requests[7]);
     assert_eq!(
-        requests[11].target,
-        "/api/v1/accessible-domains?limit=100&offset=0"
+        requests[9].target,
+        format!("/api/v1/domains/{domain_id}/p2p/challenge")
     );
 }
 
@@ -543,7 +541,6 @@ async fn two_user_peers_exchange_protocol_data_over_direct_tcp_across_live_renew
         let b_peer = b_identity.peer_id();
         assert_ne!(a_peer, b_peer);
         let domain_id = Uuid::from_u128(0xd1ec7);
-        let organization_id = Uuid::from_u128(0xa11ce);
         let now = u64::try_from(Utc::now().timestamp()).unwrap();
         let a_first_challenge = [0x73; 32];
         let b_challenge = [0x74; 32];
@@ -553,15 +550,12 @@ async fn two_user_peers_exchange_protocol_data_over_direct_tcp_across_live_renew
             service_response("dds-a"),
             login_response("api-b", "refresh-b"),
             service_response("dds-b"),
-            domains_response(domain_id, organization_id),
             challenge_response("challenge-a-1", a_first_challenge),
             signed_peer_response(&a_identity, domain_id, "user", now),
             keys_response(),
-            domains_response(domain_id, organization_id),
             challenge_response("challenge-b", b_challenge),
             signed_peer_response(&b_identity, domain_id, "user", now),
             keys_response(),
-            domains_response(domain_id, organization_id),
             challenge_response("challenge-a-2", a_renewal_challenge),
             signed_peer_response(&a_identity, domain_id, "user", now + 1),
             keys_response(),
@@ -665,7 +659,7 @@ async fn two_user_peers_exchange_protocol_data_over_direct_tcp_across_live_renew
             .expect("A listener must be reusable immediately after ordered leave");
 
         let requests = server.finish().await;
-        assert_eq!(requests.len(), 16);
+        assert_eq!(requests.len(), 13);
         assert_eq!(
             requests
                 .iter()
@@ -676,15 +670,12 @@ async fn two_user_peers_exchange_protocol_data_over_direct_tcp_across_live_renew
                 "/service/domains-access-token",
                 "/user/login",
                 "/service/domains-access-token",
-                "/api/v1/accessible-domains?limit=100&offset=0",
                 &format!("/api/v1/domains/{domain_id}/p2p/challenge"),
                 &format!("/api/v1/domains/{domain_id}/p2p/verify"),
                 "/service/p2p-verification-keys",
-                "/api/v1/accessible-domains?limit=100&offset=0",
                 &format!("/api/v1/domains/{domain_id}/p2p/challenge"),
                 &format!("/api/v1/domains/{domain_id}/p2p/verify"),
                 "/service/p2p-verification-keys",
-                "/api/v1/accessible-domains?limit=100&offset=0",
                 &format!("/api/v1/domains/{domain_id}/p2p/challenge"),
                 &format!("/api/v1/domains/{domain_id}/p2p/verify"),
                 "/service/p2p-verification-keys",
@@ -700,21 +691,21 @@ async fn two_user_peers_exchange_protocol_data_over_direct_tcp_across_live_renew
         );
         assert_eq!(requests[1].headers["authorization"], "Bearer api-a");
         assert_eq!(requests[3].headers["authorization"], "Bearer api-b");
-        for index in [4, 5, 6, 12, 13, 14] {
+        for index in [4, 5, 10, 11] {
             assert_eq!(requests[index].headers["authorization"], "Bearer dds-a");
         }
-        for index in [8, 9, 10] {
+        for index in [7, 8] {
             assert_eq!(requests[index].headers["authorization"], "Bearer dds-b");
         }
-        for index in [7, 11, 15] {
+        for index in [6, 9, 12] {
             assert!(!requests[index].headers.contains_key("authorization"));
         }
-        assert_peer_challenge(&a_identity, &requests[5]);
-        assert_peer_challenge(&b_identity, &requests[9]);
-        assert_peer_challenge(&a_identity, &requests[13]);
-        assert_peer_signature(&a_identity, a_first_challenge, &requests[6]);
-        assert_peer_signature(&b_identity, b_challenge, &requests[10]);
-        assert_peer_signature(&a_identity, a_renewal_challenge, &requests[14]);
+        assert_peer_challenge(&a_identity, &requests[4]);
+        assert_peer_challenge(&b_identity, &requests[7]);
+        assert_peer_challenge(&a_identity, &requests[10]);
+        assert_peer_signature(&a_identity, a_first_challenge, &requests[5]);
+        assert_peer_signature(&b_identity, b_challenge, &requests[8]);
+        assert_peer_signature(&a_identity, a_renewal_challenge, &requests[11]);
     })
     .await
     .expect("local two-peer auth and direct-TCP proof must remain bounded");
@@ -724,15 +715,12 @@ async fn two_user_peers_exchange_protocol_data_over_direct_tcp_across_live_renew
 async fn malformed_rotation_is_rejected_without_advancing_renewal_version() {
     let identity = Identity::from_ed25519_seed(&[0x34; 32]);
     let domain_id = Uuid::from_u128(0xd6);
-    let organization_id = Uuid::from_u128(0xa6);
     let now = u64::try_from(Utc::now().timestamp()).unwrap();
     let server = MockServer::start(vec![
         service_response("app-dds-service"),
-        domains_response(domain_id, organization_id),
         challenge_response("initial-challenge", [0x53; 32]),
         signed_peer_response(&identity, domain_id, "app", now),
         keys_response(),
-        domains_response(domain_id, organization_id),
         challenge_response("malformed-rotation", [0x54; 32]),
         signed_peer_response_with_key(
             &identity,
@@ -742,7 +730,6 @@ async fn malformed_rotation_is_rejected_without_advancing_renewal_version() {
             ROTATED_DDS_PRIVATE_KEY,
         ),
         verification_keys_response(2, ROTATED_DDS_PUBLIC_KEY, None),
-        domains_response(domain_id, organization_id),
         challenge_response("valid-rotation", [0x55; 32]),
         signed_peer_response_with_key(
             &identity,
@@ -783,15 +770,12 @@ async fn malformed_rotation_is_rejected_without_advancing_renewal_version() {
 async fn app_flow_uses_basic_exchange_and_starts_the_same_peer_shape() {
     let identity = Identity::from_ed25519_seed(&[0x32; 32]);
     let domain_id = Uuid::from_u128(0xd1);
-    let organization_id = Uuid::from_u128(0xa1);
     let now = u64::try_from(Utc::now().timestamp()).unwrap();
     let server = MockServer::start(vec![
         service_response("app-dds-service"),
-        domains_response(domain_id, organization_id),
         challenge_response("app-challenge", [0x51; 32]),
         signed_peer_response(&identity, domain_id, "app", now),
         keys_response(),
-        domains_response(domain_id, organization_id),
         challenge_response("app-renewal", [0x56; 32]),
         signed_peer_response(&identity, domain_id, "app", now + 1),
         keys_response_with_generation(2),
@@ -833,12 +817,12 @@ async fn app_flow_uses_basic_exchange_and_starts_the_same_peer_shape() {
         .unwrap();
 
     let requests = server.finish().await;
-    assert_eq!(requests.len(), 9);
+    assert_eq!(requests.len(), 7);
     assert_eq!(
         requests[0].headers.get("authorization").unwrap(),
         &format!("Basic {}", STANDARD.encode("app-key:app-secret"))
     );
-    for request_index in [1, 2, 3, 5, 6, 7] {
+    for request_index in [1, 2, 4, 5] {
         let request = &requests[request_index];
         assert_eq!(
             request.headers.get("posemesh-gateway-mac").unwrap(),
@@ -849,7 +833,7 @@ async fn app_flow_uses_basic_exchange_and_starts_the_same_peer_shape() {
             "Bearer app-dds-service"
         );
     }
-    for request_index in [4, 8] {
+    for request_index in [3, 6] {
         assert!(
             !requests[request_index]
                 .headers
@@ -861,22 +845,18 @@ async fn app_flow_uses_basic_exchange_and_starts_the_same_peer_shape() {
                 .contains_key("posemesh-gateway-mac")
         );
     }
-    assert_peer_signature(&identity, [0x51; 32], &requests[3]);
-    assert_peer_signature(&identity, [0x56; 32], &requests[7]);
+    assert_peer_signature(&identity, [0x51; 32], &requests[2]);
+    assert_peer_signature(&identity, [0x56; 32], &requests[5]);
 }
 
 #[tokio::test]
-async fn selected_domain_authorization_paginates_beyond_the_first_page() {
+async fn selected_domain_authorization_skips_accessible_domain_listing() {
     let identity = Identity::from_ed25519_seed(&[0x33; 32]);
-    let organization_id = Uuid::from_u128(0xa2);
-    let first_page: Vec<_> = (1..=100).map(Uuid::from_u128).collect();
     let selected_domain = Uuid::from_u128(101);
     let now = u64::try_from(Utc::now().timestamp()).unwrap();
     let server = MockServer::start(vec![
         service_response("app-dds-service"),
-        domains_page_response(&first_page, organization_id, 101, 100, 0),
-        domains_page_response(&[selected_domain], organization_id, 101, 100, 100),
-        challenge_response("page-two-challenge", [0x52; 32]),
+        challenge_response("direct-challenge", [0x52; 32]),
         signed_peer_response(&identity, selected_domain, "app", now),
         keys_response(),
     ])
@@ -891,15 +871,26 @@ async fn selected_domain_authorization_paginates_beyond_the_first_page() {
         .await
         .unwrap();
     assert_eq!(prepared.domain.id, selected_domain);
+    assert_eq!(prepared.domain.name, None);
+    assert_eq!(prepared.domain.organization_id, None);
 
     let requests = server.finish().await;
     assert_eq!(
-        requests[1].target,
-        "/api/v1/accessible-domains?limit=100&offset=0"
+        requests
+            .iter()
+            .map(|request| request.target.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "/service/domains-access-token",
+            &format!("/api/v1/domains/{selected_domain}/p2p/challenge"),
+            &format!("/api/v1/domains/{selected_domain}/p2p/verify"),
+            "/service/p2p-verification-keys",
+        ]
     );
-    assert_eq!(
-        requests[2].target,
-        "/api/v1/accessible-domains?limit=100&offset=100"
+    assert!(
+        requests
+            .iter()
+            .all(|request| { !request.target.starts_with("/api/v1/accessible-domains") })
     );
 }
 
@@ -1170,11 +1161,9 @@ async fn rotated_refresh_token_survives_failed_service_exchange() {
 async fn domain_race_and_signed_peer_mismatch_fail_closed() {
     let identity = Identity::from_ed25519_seed(&[0x61; 32]);
     let domain_id = Uuid::from_u128(0xd4);
-    let organization_id = Uuid::from_u128(0xa4);
     let race = MockServer::start(vec![
         login_response("access", "refresh"),
         service_response("dds"),
-        domains_response(domain_id, organization_id),
         MockResponse::status(404),
     ])
     .await;
@@ -1200,7 +1189,6 @@ async fn domain_race_and_signed_peer_mismatch_fail_closed() {
     let mismatch = MockServer::start(vec![
         login_response("access", "refresh"),
         service_response("dds"),
-        domains_response(domain_id, organization_id),
         challenge_response("mismatch", [0x63; 32]),
         mismatched,
         keys_response(),
@@ -1224,7 +1212,6 @@ async fn domain_race_and_signed_peer_mismatch_fail_closed() {
 async fn verification_key_id_must_match_the_canonical_pkix_fingerprint() {
     let identity = Identity::from_ed25519_seed(&[0x64; 32]);
     let domain_id = Uuid::from_u128(0xd5);
-    let organization_id = Uuid::from_u128(0xa5);
     let now = u64::try_from(Utc::now().timestamp()).unwrap();
     let mut mismatched_keys = keys_response();
     let mut key_set: Value = serde_json::from_slice(&mismatched_keys.body).unwrap();
@@ -1233,7 +1220,6 @@ async fn verification_key_id_must_match_the_canonical_pkix_fingerprint() {
     mismatched_keys.body = key_set.to_string().into_bytes();
     let server = MockServer::start(vec![
         service_response("dds"),
-        domains_response(domain_id, organization_id),
         challenge_response("fingerprint-challenge", [0x65; 32]),
         signed_peer_response(&identity, domain_id, "app", now),
         mismatched_keys,
@@ -1250,6 +1236,25 @@ async fn verification_key_id_must_match_the_canonical_pkix_fingerprint() {
             .await
             .unwrap_err(),
         Error::InvalidResponse { .. }
+    ));
+    server.finish().await;
+}
+
+#[tokio::test]
+async fn forbidden_selected_domain_challenge_is_not_accessible() {
+    let identity = Identity::from_ed25519_seed(&[0x66; 32]);
+    let domain_id = Uuid::from_u128(0xd7);
+    let server = MockServer::start(vec![service_response("dds"), MockResponse::status(403)]).await;
+    let session = client_for(&server)
+        .authenticate(Credentials::app("app-key", "app-secret"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        session
+            .authorize_peer(DomainSelection::new(domain_id), &identity.proof())
+            .await
+            .unwrap_err(),
+        Error::DomainNotAccessible
     ));
     server.finish().await;
 }

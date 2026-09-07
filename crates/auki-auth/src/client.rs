@@ -585,12 +585,7 @@ impl AuthSession {
         identity: &PeerIdentityProof,
         cancellation: &CancellationToken,
     ) -> Result<AuthorizedMaterial> {
-        let domains = self.fetch_accessible_domains(state, cancellation).await?;
-        let domain = domains
-            .into_iter()
-            .find(|choice| choice.domain.id == selection.domain_id)
-            .map(|choice| choice.domain)
-            .ok_or(Error::DomainNotAccessible)?;
+        let domain = DomainDescriptor::assigned(selection.domain_id);
 
         let peer_id = identity.peer_id();
         let peer_id_text = peer_id.to_string();
@@ -1249,7 +1244,9 @@ fn canonical_uuid(value: &str, endpoint: &'static str) -> Result<Uuid> {
 
 fn normalize_domain_selection_race(error: Error) -> Error {
     match error {
-        Error::HttpStatus { status: 404, .. } => Error::DomainNotAccessible,
+        Error::HttpStatus {
+            status: 403 | 404, ..
+        } => Error::DomainNotAccessible,
         error => error,
     }
 }

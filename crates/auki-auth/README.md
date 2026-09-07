@@ -10,7 +10,7 @@ credentials -> AuthSession -> selected Domain + identity proof -> PreparedPeer
                                                            AukiPeer::start
 ```
 
-The crate owns bounded API/DDS exchanges, accessible-Domain validation, Peer-ID
+The crate owns bounded API/DDS exchanges, accessible-Domain listing, Peer-ID
 proof, verification keys, and the initial signed credential. It deliberately
 does not discover peers, resolve or publish routes, contact DMS, book a relay,
 or spawn an authority-renewal task.
@@ -50,9 +50,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`authorize_peer` verifies that the authenticated principal can currently access
-the selected Domain. Call `accessible_domains()` first when the application
-needs to present a list to a person.
+`authorize_peer` proves access to the selected Domain through DDS challenge
+and verify. 403 and 404 on those endpoints map to `DomainNotAccessible`. Call
+`accessible_domains()` first when the application needs to present a list to a
+person.
 
 Identity material fails closed if it is missing in an unsafe state or corrupt;
 the SDK never silently replaces corrupt material with a new Peer ID. One
@@ -84,8 +85,8 @@ container image, or log.
 ## Web/Wasm
 
 User authentication and authority preparation compile to Wasm. The generic Web
-binding exposes them as `AukiUserSession`: JavaScript logs in a User, lists
-accessible Domains, and selects one before starting an `AukiPeer`.
+binding exposes them as `AukiUserSession`: JavaScript logs in a User, optionally
+lists accessible Domains, and starts an `AukiPeer` in a selected Domain.
 
 The Web `0.1` facade creates a fresh in-memory identity for each peer start.
 Relay-backed mode acquires one confirmed WSS relay reservation; outbound-only

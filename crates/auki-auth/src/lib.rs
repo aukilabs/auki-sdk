@@ -1,8 +1,9 @@
 //! Credential-to-authority preparation for an Auki P2P peer.
 //!
 //! This crate authenticates a User or trusted native App through the Auki API,
-//! asks DDS which Domains that principal may enter, proves ownership of one
-//! libp2p identity, and returns a validated [`PreparedPeer`].
+//! lists accessible Domains when an application needs a picker, proves ownership
+//! of one libp2p identity in a selected Domain via DDS challenge/verify, and
+//! returns a validated [`PreparedPeer`].
 //!
 //! The high-level `auki_sdk::AukiPeer::start` operation consumes the identity
 //! and prepared authority, then owns credential renewal, relay booking,

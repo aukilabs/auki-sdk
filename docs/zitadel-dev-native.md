@@ -96,3 +96,38 @@ Local harness validation: two Rust tests (private atomic replacement/reimport an
 unsafe-outcome replay guard), strict Clippy, package formatting, Node syntax,
 and `git diff --check` passed. This is evidence for the host's storage behavior,
 not a substitute for the blocked end-to-end peer test.
+
+### Retry with updated credentials and Domain: 2026-09-08
+
+The user replaced both the grant and selected Domain. The seed-mismatch guard
+stopped before authentication; the previous saved generation was retained in a
+private, ignored archive before starting the new grant. The new native run
+imported successfully, made no refresh, and again stopped at API admission with
+`AuthorizationDenied: the principal has no readable Domains`. Shutdown was
+clean, with no peer advertisements or relay bookings. The updated dotenv is
+still the current seed for this grant, not the archived previous generation.
+
+Authenticated checks narrowed the blocker:
+
+- The caller has an organization `admin` grant and no Domain-specific grants.
+- DDS lists 22 owned Domains for this organization; the new selected ID is not
+  among them. The active policy store has the same 22 organization-parent edges
+  and no parent edge for the selected Domain.
+- A known DDS-owned Domain passes `domain_metadata_read` through the normal
+  policy `/check`. Organization inheritance therefore works for this account.
+- That known DDS Domain returns 404 from the API's separate Domain registry.
+  The new API P2P exchange incorrectly enumerates that legacy API table through
+  `GetDomainsByOrganizationID`. The user confirmed API Domains are deprecated:
+  DDS, not the API table, is the authoritative Domain catalog.
+
+Fix candidate enumeration while retaining per-Domain policy checks before
+retrying admission. Merely changing the selected ID cannot fix the API's
+catalog error. No production code, policy grants or deployment was changed.
+
+The legacy API service-token exchange was used only for DDS catalog diagnosis,
+never to admit a peer. An initial DDS list request omitted a recognized SDK
+header: DDS's old-client compatibility behavior can override
+`issue_token=false`, issue Domain tokens and invoke dev DAU/credit accounting.
+Those tokens were not printed, persisted or used. A corrected request with
+`posemesh-sdk-version` confirmed all 22 owned Domains without returning any
+Domain tokens. Future catalog diagnostics must include that header.

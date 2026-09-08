@@ -10,6 +10,18 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { startIdentityFixture, identityBase } from './zitadel-local-fixture.mjs';
 
+const args = process.argv.slice(2);
+if (args.length === 1 && args[0] === '--help') {
+  console.log('Usage: node test-support/run-zitadel-local.mjs [--soak]\nDefault: short E2E smoke (two minutes of relay traffic after readiness).\n--soak: optional normal-lifetime renewal/expiry check (~68 minutes after readiness).');
+  process.exit(0);
+}
+if (args.length > 1 || (args.length === 1 && args[0] !== '--soak')) {
+  console.error('Expected no arguments (short smoke), --soak, or --help.');
+  process.exit(2);
+}
+const soak = args[0] === '--soak';
+const mode = soak ? 'soak' : 'smoke';
+
 const sdk = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const workspace = path.dirname(sdk);
 fs.mkdirSync(path.join(sdk, 'target'), {recursive:true});
@@ -125,6 +137,8 @@ async function tlsProxy() {
   return configFile;
 }
 async function wireCases(seed) {
+  check((await json('http://127.0.0.1:18120/__stats')).selectedDomainRows === 0,
+    'selected ZITADEL Domains must be absent from the API catalog');
   const credentials=await json(`${identityBase}/__credentials/wire-check`);
   const res=await fetch(`${identityBase}/token`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
     body:new URLSearchParams({grant_type:'refresh_token',client_id:credentials.clientId,refresh_token:credentials.refreshToken})});
@@ -137,12 +151,16 @@ async function wireCases(seed) {
   check(claims.sub===seed.subject && claims.exp-claims.iat===3600,'service subject or normal TTL changed');
   const domains=await http('http://127.0.0.1:18121/api/v1/accessible-domains',undefined,bearer);
   const allowed=await domains.json();
-  check(domains.ok && allowed.domains.length===1 && allowed.domains[0].id===seed.domainId,'DDS did not enforce explicit Domain read scope');
-  for (const [url,method] of [[`/api/v1/domains/${seed.domainId}/`,'PUT'],[`/api/v1/domains/${seed.domainId}/auth`,'POST']]) {
+  check(domains.ok && allowed.domains.length===1 && allowed.domains[0].id===seed.legacyDomainId,'DDS did not enforce legacy bridge read scope');
+  for (const [url,method] of [[`/api/v1/domains/${seed.legacyDomainId}/`,'PUT'],[`/api/v1/domains/${seed.legacyDomainId}/auth`,'POST']]) {
     const denied=await http('http://127.0.0.1:18121'+url,{},bearer,method);
     check([401,403].includes(denied.status),'peer read token gained HTTP write/data-token rights');
   }
-  notice('PASS real API issuance → DDS Domain filtering; HTTP write/data-token escalation denied');
+  for (const [url,method] of [[`/api/v1/domains/${seed.domainId}/`,'PUT'],[`/api/v1/domains/${seed.domainId}/auth`,'POST']]) {
+    const denied=await http('http://127.0.0.1:18121'+url,{},tokens.access_token,method);
+    check([401,403].includes(denied.status),'raw ZITADEL bearer gained legacy HTTP authority');
+  }
+  notice('PASS migration-only API bridge regression; selected SDK Domains absent from API; HTTP escalation denied');
   return bearer; // retained only in controller memory for literal expiry proof
 }
 async function cleanup() {
@@ -173,8 +191,8 @@ async function cleanup() {
 process.once('SIGINT',()=>{void cleanup().then(()=>process.exit(130));});
 process.once('SIGTERM',()=>{void cleanup().then(()=>process.exit(143));});
 try {
-  notice(`Z10 working directory: ${runDir}`);
-  for (const port of [18120,18121,18122,18123,18125,18126,18127,18128,18129,18130]) await freePort(port);
+  notice(`Z13 direct-DDS ${mode}; working directory: ${runDir}`);
+  for (const port of [18120,18121,18122,18123,18125,18126,18127,18128,18129,18130,18131]) await freePort(port);
   const {pg,names}=await setupDatabases();
   fixture=startIdentityFixture(runDir,sdk);
   await ready(`${identityBase}/__stats`);
@@ -188,10 +206,10 @@ try {
     command('native-build','cargo',['build','-p','auki-standard-protocols-native','--bin','zitadel_acceptance','--locked','--quiet']),
     command('web-build','npm',['run','check'],path.join(sdk,'bindings/web/auki-sdk-web')),
   ]);
-  service('api',path.join(runDir,'api.test'),['-test.run','^TestZitadelAcceptanceAPI$','-test.v','-test.timeout','100m'],path.join(workspace,'api'),
+  service('api',path.join(runDir,'api.test'),['-test.run','^TestZitadelAcceptanceAPI$','-test.v','-test.timeout',soak?'100m':'10m'],path.join(workspace,'api'),
     {APP_DIRECTORY:path.join(workspace,'api'),Z10_API_DATABASE_URL:`postgres://test:test@127.0.0.1:5432/${names.api}?sslmode=disable`});
   await ready('http://127.0.0.1:18120/__stats');
-  service('dds',path.join(runDir,'dds.test'),['-test.run','^TestZitadelAcceptanceDDS$','-test.v','-test.timeout','100m'],path.join(workspace,'domain-service'),
+  service('dds',path.join(runDir,'dds.test'),['-test.run','^TestZitadelAcceptanceDDS$','-test.v','-test.timeout',soak?'100m':'10m'],path.join(workspace,'domain-service'),
     {Z10_DDS_DATABASE_URL:`postgres://test:test@127.0.0.1:5432/${names.dds}?sslmode=disable`});
   await ready('http://127.0.0.1:18121/__stats');
   service('dms',path.join(workspace,'domain-manager-service/target/debug/examples/zitadel_acceptance'),[],path.join(workspace,'domain-manager-service'),
@@ -221,41 +239,62 @@ try {
     return fixture.state.events.some(e=>e.runtime==='browser'&&e.event==='ready');
   },'browser peers did not start',120);
   const readyEvents=fixture.state.events.filter(e=>e.event==='ready');
-  const ids=readyEvents.flatMap(e=>e.peerIds);check(ids.length===4,'expected two native and two browser peers');
-  notice('Four real SDK peers ready; beginning normal-lifetime renewal soak (~68 minutes)');
+  const ids=readyEvents.flatMap(e=>e.peerIds);check(ids.length===4&&new Set(ids).size===4,'expected four distinct native/browser peers');
+  // Exactly one deliberate bridge regression and two legacy password/app
+  // exchanges. ZITADEL SDK startup and all future renewals must add none.
+  const expectedApiExchanges = 3;
+  check((await json('http://127.0.0.1:18120/__stats')).exchanges === expectedApiExchanges,
+    'ZITADEL SDK unexpectedly called the API exchange');
+  notice(`Four direct-DDS SDK peers ready on a DDS-only Domain; ${soak?'optional normal-lifetime soak (~68 minutes)':'short smoke (two minutes of relay traffic)'}`);
   const started=Date.now();
   let lastNotice=0, lastSuccess={native:started,browser:started};
   for (;;) {
-    check(Date.now()-started < 80*60000,'normal-lifetime soak deadline');
-    for (const [name,child] of children) check(child.exitCode===null && child.signalCode===null,`${name} stopped during soak`);
-    check(!fixture.state.events.some(e=>e.event==='failed'),'host reported failure during soak');
+    check(Date.now()-started < (soak?80:5)*60000,`${mode} deadline`);
+    for (const [name,child] of children) check(child.exitCode===null && child.signalCode===null,`${name} stopped during ${mode}`);
+    check(!fixture.state.events.some(e=>e.event==='failed'),`host reported failure during ${mode}`);
+    const probeCounts = {};
     for (const runtime of ['native','browser']) {
+      const crossRuntimeField=runtime==='native'?'browserProbes':'nativeProbes';
+      probeCounts[runtime]=fixture.state.events.filter(e=>e.runtime===runtime&&e.event==='probe'&&e[crossRuntimeField]>0&&Date.parse(e.receivedAt)>=started).length;
       const latest=fixture.state.events.findLast(e=>e.runtime===runtime&&e.event==='probe');
-      if(latest && latest[runtime==='native'?'browserProbes':'nativeProbes']>0)lastSuccess[runtime]=Date.parse(latest.receivedAt);
+      if(latest && latest[crossRuntimeField]>0)lastSuccess[runtime]=Date.parse(latest.receivedAt);
       check(Date.now()-lastSuccess[runtime]<120000,`${runtime} has no successful cross-runtime relay probe for two minutes`);
     }
     const stats=await json('http://127.0.0.1:18121/__stats');
     const rounds=ids.map(id=>stats.issued[id]?.length??0);
-    for(const id of ids) for(const claims of stats.issued[id]??[])check(claims.subject===seed.subject&&claims.exp-claims.iat===1800,'DDS subject or 30-minute lifetime changed');
-    if(Date.now()-lastNotice>45000){notice(`soak ${Math.floor((Date.now()-started)/60000)}m; P2P generations ${rounds.join('/')}; native/browser relay probes current`);lastNotice=Date.now();}
-    if(rounds.every(n=>n>=4) && fixture.state.grants.get('native-live').refreshes>=2 && fixture.state.grants.get('browser-live').refreshes>=2)break;
+    for(const id of ids) for(const claims of stats.issued[id]??[])check(claims.direct===true&&claims.domainId===seed.domainId&&claims.subject===seed.subject&&claims.exp-claims.iat===1800,'direct DDS subject, Domain or 30-minute lifetime changed');
+    check((await json('http://127.0.0.1:18120/__stats')).exchanges === expectedApiExchanges,
+      'ZITADEL renewal unexpectedly called API');
+    if(Date.now()-lastNotice>45000){notice(`${mode} ${Math.floor((Date.now()-started)/1000)}s; P2P generations ${rounds.join('/')}; successful native/browser probe cycles ${probeCounts.native}/${probeCounts.browser}`);lastNotice=Date.now();}
+    if(Date.now()-started>=120000 && Object.values(probeCounts).every(n=>n>=3) &&
+      rounds.every(n=>n>=(soak?4:1)) &&
+      ['native-live','browser-live'].every(name=>fixture.state.grants.get(name).refreshes>=(soak?2:1)))break;
     await wait(5000);
   }
-  const expired=await http('http://127.0.0.1:18121/api/v1/accessible-domains',undefined,oldServiceBearer);
-  check(expired.status===401,'expired original API bearer accepted by DDS');
-  check((await json('http://127.0.0.1:18121/__expired-proof')).status===401,'expired original DDS P2P bearer accepted');
+  if (soak) {
+    const expired=await http('http://127.0.0.1:18121/api/v1/accessible-domains',undefined,oldServiceBearer);
+    check(expired.status===401,'expired original API bearer accepted by DDS');
+    check((await json('http://127.0.0.1:18121/__expired-proof')).status===401,'expired original DDS P2P bearer accepted');
+  }
   const rows=JSON.parse(await output('docker',['exec',pg,'psql','-U','test','-d',names.dms,'-At','-c',
     "SELECT COALESCE(json_agg(json_build_object('subject',requester_id,'peerId',target_peer_id,'domainId',domain_id,'state',state)), '[]'::json) FROM relay_bookings"]));
   check(ids.every(id=>rows.some(r=>r.peerId===id&&r.subject===seed.subject&&r.domainId===seed.domainId&&r.state==='active')),'DMS booking subject/owner changed');
   fixture.state.revoked=true;
-  await until(()=>fixture.state.events.some(e=>e.event==='revocation-checked'&&e.nativeProbes>0),'revocation delay case did not finish',90);
-  notice('PASS normal service/P2P/ZITADEL renewal, stable Peer IDs, live relay/discovery, literal expiry and accepted revocation delay');
+  await until(()=>{
+    check(!fixture.state.events.some(e=>e.event==='failed'),'host failed during revocation check');
+    return fixture.state.events.some(e=>e.event==='revocation-checked'&&e.nativeProbes>0);
+  },'revocation delay case did not finish',90);
+  notice('PASS direct DDS admission, no SDK API exchanges, stable Peer IDs, relay/discovery and accepted revocation delay');
+  notice(soak?'PASS normal-lifetime P2P/ZITADEL renewals and literal expiry':'NOT RUN in smoke: sustained P2P renewals and literal expiry; use focused lifecycle tests, with --soak optional');
   fixture.state.stop=true; finishing=true;
-  await until(()=>['native','browser'].every(runtime=>fixture.state.events.some(e=>e.runtime===runtime&&e.event==='stopped')),'hosts did not close cleanly',60);
+  await until(()=>{
+    check(!fixture.state.events.some(e=>e.event==='failed'),'host failed during shutdown');
+    return ['native','browser'].every(runtime=>fixture.state.events.some(e=>e.runtime===runtime&&e.event==='stopped'));
+  },'hosts did not close cleanly',60);
   await pw('snapshot');
-  fs.writeFileSync(path.join(runDir,'result.json'),JSON.stringify({passed:true,ids,elapsedSeconds:Math.round((Date.now()-started)/1000),
+  fs.writeFileSync(path.join(runDir,'result.json'),JSON.stringify({passed:true,mode,sustainedRenewalChecked:soak,literalExpiryChecked:soak,ids,elapsedSeconds:Math.round((Date.now()-started)/1000),
     rows,grants:Object.fromEntries(fixture.state.grants)},null,2),{mode:0o600});
-  notice('PASS Z10 real-service local acceptance');
+  notice(`PASS Z13 direct-DDS real-service local ${mode}`);
 } catch(error) {
   notice(`FAIL ${error.message}`);process.exitCode=1;
 } finally { await cleanup(); }

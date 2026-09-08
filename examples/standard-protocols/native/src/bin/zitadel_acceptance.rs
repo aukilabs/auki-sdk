@@ -3,7 +3,7 @@ use anyhow::{Result, ensure};
 use auki_protocols::info::{InfoClient, InfoEndpoint, v1::AuthenticatedParticipantInfo};
 use auki_sdk::{
     AukiPeerBootstrap, AukiPeerConfig, AuthClient, AuthEnvironment, AuthError, AuthFailureKind,
-    AuthSession, Credentials, DdsTrackerMode, DomainSelection, ZitadelSessionCredentials,
+    AuthSession, Credentials, DdsTrackerMode, DomainSelection, Identity, ZitadelSessionCredentials,
     ZitadelSessionStore,
 };
 use chrono::{DateTime, Utc};
@@ -119,8 +119,14 @@ async fn import(name: &str, path: PathBuf) -> Result<(AuthSession, Arc<Store>)> 
         store,
     ))
 }
-async fn expect_failure(session: &AuthSession, kind: AuthFailureKind) -> Result<()> {
-    let result = session.accessible_domains().await;
+async fn authorize(session: &AuthSession, domain: Uuid) -> Result<(), AuthError> {
+    session
+        .authorize_peer(domain.into(), &Identity::generate().proof())
+        .await
+        .map(|_| ())
+}
+async fn expect_failure(session: &AuthSession, domain: Uuid, kind: AuthFailureKind) -> Result<()> {
+    let result = authorize(session, domain).await;
     ensure!(result.is_err(), "expected auth failure");
     ensure!(
         result.unwrap_err().kind() == kind,
@@ -135,14 +141,14 @@ async fn refreshes(name: &str) -> Result<u64> {
 }
 
 async fn recovery_cases(dir: &std::path::Path, seed: &HashMap<String, String>) -> Result<()> {
+    let domain: Uuid = seed["domainId"].parse()?;
+    let other_domain: Uuid = seed["otherDomainId"].parse()?;
+    let foreign_domain: Uuid = seed["foreignDomainId"].parse()?;
     let (session, store) = import("native-save", dir.join("native-save.json")).await?;
     store.fail.store(true, Ordering::SeqCst);
-    expect_failure(&session, AuthFailureKind::Persistence).await?;
+    expect_failure(&session, domain, AuthFailureKind::Persistence).await?;
     store.fail.store(false, Ordering::SeqCst);
-    ensure!(
-        session.accessible_domains().await?.len() == 1,
-        "save retry Domain mismatch"
-    );
+    authorize(&session, domain).await?;
     ensure!(
         refreshes("native-save").await? == 1 && store.saves.load(Ordering::SeqCst) == 2,
         "persistence replayed refresh"
@@ -150,10 +156,13 @@ async fn recovery_cases(dir: &std::path::Path, seed: &HashMap<String, String>) -
     session.close().await;
     let saved: Payload = serde_json::from_slice(&fs::read(&store.path)?)?;
     let restarted = client()?.import_zitadel_session(saved.credentials()?, store.clone())?;
-    ensure!(
-        restarted.accessible_domains().await?.len() == 1,
-        "restart failed"
-    );
+    expect_failure(
+        &restarted,
+        other_domain,
+        AuthFailureKind::AuthorizationDenied,
+    )
+    .await?;
+    authorize(&restarted, domain).await?;
     ensure!(
         refreshes("native-save").await? == 1,
         "restart replayed refresh"
@@ -167,16 +176,13 @@ async fn recovery_cases(dir: &std::path::Path, seed: &HashMap<String, String>) -
         json!({"grant":"native-startup", "policy":"outage"}),
     )
     .await?;
-    expect_failure(&session, AuthFailureKind::Transient).await?;
+    expect_failure(&session, domain, AuthFailureKind::Transient).await?;
     post(
         "/__configure",
         json!({"grant":"native-startup", "policy":null}),
     )
     .await?;
-    ensure!(
-        session.accessible_domains().await?.len() == 1,
-        "startup retry failed"
-    );
+    authorize(&session, domain).await?;
     ensure!(
         refreshes("native-startup").await? == 1,
         "startup retry lost refresh owner"
@@ -191,7 +197,7 @@ async fn recovery_cases(dir: &std::path::Path, seed: &HashMap<String, String>) -
     )
     .await?;
     let observer_session = session.clone();
-    let observer = tokio::spawn(async move { observer_session.accessible_domains().await });
+    let observer = tokio::spawn(async move { authorize(&observer_session, domain).await });
     tokio::time::timeout(Duration::from_secs(5), async {
         while refreshes("native-cancel").await? == 0 {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -209,10 +215,7 @@ async fn recovery_cases(dir: &std::path::Path, seed: &HashMap<String, String>) -
         observer.await.unwrap_err().is_cancelled(),
         "observer was not cancelled"
     );
-    ensure!(
-        session.accessible_domains().await?.len() == 1,
-        "cancelled observer lost session owner"
-    );
+    authorize(&session, domain).await?;
     ensure!(
         refreshes("native-cancel").await? == 1,
         "cancellation replayed consumed refresh"
@@ -226,8 +229,8 @@ async fn recovery_cases(dir: &std::path::Path, seed: &HashMap<String, String>) -
         json!({"grant":"native-invalid", "error":"invalid_grant"}),
     )
     .await?;
-    expect_failure(&session, AuthFailureKind::AuthenticationRequired).await?;
-    expect_failure(&session, AuthFailureKind::AuthenticationRequired).await?;
+    expect_failure(&session, domain, AuthFailureKind::AuthenticationRequired).await?;
+    expect_failure(&session, domain, AuthFailureKind::AuthenticationRequired).await?;
     ensure!(
         refreshes("native-invalid").await? == 1,
         "terminal auth retried"
@@ -237,20 +240,33 @@ async fn recovery_cases(dir: &std::path::Path, seed: &HashMap<String, String>) -
     for (name, count) in [("denied-native", 0), ("org-native", 2)] {
         let (session, store) = import(name, dir.join(format!("{name}.json"))).await?;
         if count == 0 {
-            expect_failure(&session, AuthFailureKind::AuthorizationDenied).await?;
+            expect_failure(&session, domain, AuthFailureKind::AuthorizationDenied).await?;
         } else {
-            ensure!(
-                session.accessible_domains().await?.len() == count,
-                "org-wide scope mismatch"
-            );
             let boot = AukiPeerBootstrap::from_session(
                 session.clone(),
                 AukiPeerConfig::new(DMS)?.without_relay(),
             );
-            let peer = boot
-                .start_ephemeral_peer(DomainSelection::new(seed["otherDomainId"].parse::<Uuid>()?))
-                .await?;
-            peer.shutdown().await?;
+            // Two different Domains share this org user's one renewable session.
+            let (first, second) = tokio::try_join!(
+                boot.start_ephemeral_peer(domain.into()),
+                boot.start_ephemeral_peer(other_domain.into()),
+            )?;
+            ensure!(
+                first.peer_id() != second.peer_id(),
+                "Domain peers reused an identity"
+            );
+            ensure!(
+                refreshes(name).await? == 1,
+                "multi-Domain start duplicated rotation"
+            );
+            expect_failure(
+                &session,
+                foreign_domain,
+                AuthFailureKind::AuthorizationDenied,
+            )
+            .await?;
+            first.shutdown().await?;
+            second.shutdown().await?;
         }
         session.close().await;
         fs::remove_file(&store.path)?;

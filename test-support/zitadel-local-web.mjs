@@ -1,4 +1,4 @@
-import init, { AukiUserSession, AukiDiscoveryMode, AukiInfoClient, AukiInfoEndpoint } from './pkg/auki_sdk_web.js';
+import init, { AukiUserSession, AukiDiscoveryMode, AukiPeerReachabilityMode, AukiInfoClient, AukiInfoEndpoint } from './pkg/auki_sdk_web.js';
 const fixture = 'http://127.0.0.1:18123';
 const api = 'http://127.0.0.1:18120', dds = 'http://127.0.0.1:18121', dms = 'http://127.0.0.1:18122/v1/';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -30,6 +30,11 @@ async function fails(code, operation) {
   catch (error) { check(error.code === code, `expected ${code}, received ${error.code ?? 'untyped failure'}`); }
 }
 
+async function admit(session, domain) {
+  const peer = await session.startPeer(domain, AukiPeerReachabilityMode.OutboundOnly);
+  await peer.shutdown(); peer.free();
+}
+
 async function run() {
   await init();
   const seed = await request('/__config');
@@ -39,20 +44,19 @@ async function run() {
     if (rejectSave) throw Error('synthetic storage failure');
     await storage('recovery', replacement);
   });
-  await fails('persistence', () => recovery.accessibleDomains());
+  await fails('persistence', () => admit(recovery, seed.domainId));
   rejectSave = false;
-  for (const domain of await recovery.accessibleDomains()) domain.free();
+  await admit(recovery, seed.domainId);
   check(saves === 2 && (await request('/__stats')).grants['browser-save'].refreshes === 1, 'save retry replayed refresh');
   await recovery.close(); recovery.free();
   const restarted = AukiUserSession.importZitadelWithEnvironment(api, dds, dms, replacement, async () => { throw Error('unexpected rotation'); });
-  const choices = await restarted.accessibleDomains(); check(choices.length === 1 && choices[0].id === seed.domainId, 'restart scope mismatch');
-  for (const choice of choices) choice.free();
+  await admit(restarted, seed.domainId);
   await fails('authorization_denied', () => restarted.startPeer(seed.otherDomainId));
   await restarted.close(); restarted.free(); await storage('recovery', null);
   const invalid = await imported('browser-invalid', async () => { throw Error('must not save'); });
   await request('/__configure', {grant:'browser-invalid', error:'invalid_grant'});
-  await fails('authentication_required', () => invalid.accessibleDomains());
-  await fails('authentication_required', () => invalid.accessibleDomains());
+  await fails('authentication_required', () => admit(invalid, seed.domainId));
+  await fails('authentication_required', () => admit(invalid, seed.domainId));
   check((await request('/__stats')).grants['browser-invalid'].refreshes === 1, 'terminal failure retried');
   await invalid.close(); invalid.free();
   await event({event:'recovery-passed', cases:4});
@@ -76,7 +80,7 @@ async function run() {
     for (;;) {
       const config = await request('/__config');
       if (config.stop) break;
-      check(!terminal, 'terminal browser runtime');
+      if (terminal) throw terminal;
       check(Date.now()-started < 95*60000, 'browser acceptance deadline');
       let natives = 0;
       for (let i=0; i<peers.length; i++) {
@@ -99,7 +103,7 @@ async function run() {
         const fresh = await imported('browser-revoked', async c => {
           const value = extract(c); c.free(); await storage('revoked', value);
         });
-        await fails('authorization_denied', () => fresh.accessibleDomains());
+        await fails('authorization_denied', () => admit(fresh, seed.domainId));
         await fresh.close(); fresh.free(); await storage('revoked', null);
         await event({event:'revocation-checked', retainedPeerIds:ids, nativeProbes:natives});
         checkedRevocation = true;
@@ -108,6 +112,10 @@ async function run() {
       show(`RUNNING: 2 browser peers, ${successes} authenticated relay probes, ${liveSaves} durable saves\nPeer IDs unchanged\n${ids.join('\n')}`);
       await delay(10000);
     }
+  } catch (error) {
+    // Preserve the primary failure even if shutdown reports a second error.
+    await event({event:'failed', phase:'run', reason:error.message});
+    throw error;
   } finally {
     for (const endpoint of endpoints) { await endpoint.close(); endpoint.free(); }
     for (const client of clients) client.free();

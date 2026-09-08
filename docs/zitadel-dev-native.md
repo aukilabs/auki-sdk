@@ -1,6 +1,8 @@
 # Native ZITADEL smoke test against dev
 
-This runner uses the real dev identity provider, API, DDS, DMS and relay. It does
+This runner uses the real dev identity provider, DDS, DMS and relay. ZITADEL
+admission now goes directly to DDS; the retained API base config is unused by
+this login path. It does
 not run fixtures, change policy, deploy services, or modify Domain data. Once
 admission succeeds, it creates two ephemeral peers with five-minute relay
 bookings, advertises them through DDS, and requires three successful Info calls
@@ -28,6 +30,26 @@ The expiry is optional RFC3339; blank means unknown. No ID token, client secret,
 browser credentials or legacy password is used. The selected Domain must have
 effective `domain_metadata_read` permission for the authenticated user.
 
+DDS must first be deployed with direct admission enabled. All four server-side
+settings are required (do not put its private key in the SDK dotenv):
+
+```dotenv
+DDS_ZITADEL_ISSUER="https://auth.dev.aukiverse.com"
+DDS_ZITADEL_AUDIENCE="<trusted resource/project audience in the login grant>"
+DDS_ZITADEL_POLICY_URL="<trusted policy-service base URL>"
+DDS_ZITADEL_JWT_PROFILE="<secret introspection application key JSON>"
+```
+
+The backend introspection client/key is separate from the SDK public login
+`client_id`. Confirm the expected audience from trusted tenant configuration;
+do not select it by merely decoding an unverified token. The SDK grant needs
+`offline_access` and the authenticated Auki organization metadata mapping. DDS
+checks policy `/check` for the supplied Domain and live DDS ownership; it does
+not enumerate API Domains or use the compatibility policy `/domains` endpoint.
+No new API/DMS/relay deployment or migration is required beyond the previously
+implemented opaque-subject consumers. The direct DDS routes/configuration have
+not yet been verified against dev; the observation below predates this change.
+
 Before filling credentials, ensure `/.env.zitadel-dev` and
 `/.zitadel-dev-state/` are ignored by Git. The dotenv and credential files must
 have mode `0600`; the state directory must have mode `0700`. The launcher checks
@@ -46,7 +68,7 @@ node test-support/run-zitadel-dev-native.mjs --exercise-refresh
 The second command deliberately supplies an expired **local import hint** to
 exercise one SDK-owned provider refresh immediately. It does not shorten or
 prove survival across the provider's real token lifetime. The SDK saves the
-complete replacement before continuing to the API. The short smoke test is not
+complete replacement before continuing to DDS. The short smoke test is not
 a long-running authority-renewal soak and does not test browsers or revocation.
 
 Rotated credentials are saved atomically, with file and directory fsync, in
@@ -68,7 +90,7 @@ Only redacted event diagnostics are printed. Credentials pass to Rust on stdin,
 not through arguments or exported environment variables. Do not enable HTTP or
 credential tracing when running this test.
 
-## Dev observation: 2026-09-08
+## Historical dev observation: 2026-09-08, before direct DDS
 
 - Native import succeeded with the supplied five-field session payload.
 - The explicit SDK refresh succeeded against real ZITADEL. Both tokens changed,
@@ -120,9 +142,11 @@ Authenticated checks narrowed the blocker:
   `GetDomainsByOrganizationID`. The user confirmed API Domains are deprecated:
   DDS, not the API table, is the authoritative Domain catalog.
 
-Fix candidate enumeration while retaining per-Domain policy checks before
-retrying admission. Merely changing the selected ID cannot fix the API's
-catalog error. No production code, policy grants or deployment was changed.
+The proposed enumeration fix from that investigation was superseded by direct
+DDS admission: the current SDK no longer uses this API path. The next dev retry
+requires the new DDS routes/configuration and a readable DDS-owned Domain, not
+an API catalog repair. No production code, policy grants or deployment was
+changed during that diagnostic run.
 
 The legacy API service-token exchange was used only for DDS catalog diagnosis,
 never to admit a peer. An initial DDS list request omitted a recognized SDK

@@ -4,9 +4,15 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { generateKeyPairSync, verify } from 'node:crypto';
 
 export const identityBase = 'http://127.0.0.1:18123';
 export function startIdentityFixture(runDir, sdkRoot) {
+  const introspectionKey = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  fs.writeFileSync(path.join(runDir, 'dds-introspection-profile.json'), JSON.stringify({
+    type: 'application', clientId: 'z13-dds', keyId: 'z13-local-key',
+    key: introspectionKey.privateKey.export({ type: 'pkcs1', format: 'pem' }),
+  }), { mode: 0o600 });
   const state = { seed: null, grants: new Map(), events: [], stop: false, revoked: false };
   function grant(name) {
     if (!/^[a-z][a-z0-9-]{0,63}$/.test(name)) throw new Error('invalid synthetic grant name');
@@ -80,11 +86,22 @@ export function startIdentityFixture(runDir, sdkRoot) {
           refresh_token: token('refresh', parsed.name, g.generation), expires_in: 3600, token_type: 'Bearer' });
       }
       if (url.pathname === '/introspect' && request.method === 'POST') {
-        const parsed = parseToken(new URLSearchParams(body).get('token'), 'access');
+        const form = new URLSearchParams(body);
+        const parts = (form.get('client_assertion') ?? '').split('.');
+        if (parts.length !== 3) return send(401, {});
+        const header = JSON.parse(Buffer.from(parts[0], 'base64url'));
+        const client = JSON.parse(Buffer.from(parts[1], 'base64url'));
+        if (client.sub === 'z13-dds') {
+          const audience = Array.isArray(client.aud) ? client.aud : [client.aud];
+          if (header.alg !== 'RS256' || header.kid !== 'z13-local-key' || client.iss !== 'z13-dds'
+              || !audience.includes(identityBase) || client.exp <= Date.now()/1000
+              || !verify('sha256', Buffer.from(`${parts[0]}.${parts[1]}`), introspectionKey.publicKey, Buffer.from(parts[2], 'base64url'))) return send(401, {});
+        } else if (client.sub !== 'test-client-id') return send(401, {}); // existing API-only compatibility fixture
+        const parsed = parseToken(form.get('token'), 'access');
         if (!parsed || !state.grants.has(parsed.name)) return send(200, { active: false });
         const g = grant(parsed.name); g.introspections++;
         if (parsed.generation !== g.generation || g.expiresAt <= Date.now()/1000) return send(200, { active: false });
-        return send(200, { active: true, iss: identityBase, sub: subject(parsed.name), aud: ['z10-api'],
+        return send(200, { active: true, iss: identityBase, sub: subject(parsed.name), aud: ['z10-api', 'z13-dds'],
           exp: g.expiresAt, iat: g.expiresAt-3600, client_id: `z10-${parsed.name}`, scope: 'openid profile email',
           'urn:zitadel:iam:user:metadata': {
             'auki-api-organization': Buffer.from(state.seed.organizationId).toString('base64').replace(/=+$/, ''),
@@ -99,9 +116,10 @@ export function startIdentityFixture(runDir, sdkRoot) {
         const input = JSON.parse(body);
         if (input.sub !== subject(parsed.name) || input.permission !== 'domain_metadata_read') return send(400, {});
         if (g.policy === 'outage') return send(503, {});
-        const candidate = [state.seed.domainId, state.seed.otherDomainId].includes(input.domain_id);
+        const candidate = [state.seed.domainId, state.seed.otherDomainId, state.seed.legacyDomainId].includes(input.domain_id);
         const allowed = candidate && !state.revoked && g.policy !== 'deny' && !parsed.name.startsWith('denied-')
-          && (parsed.name.startsWith('org-') || input.domain_id === state.seed.domainId);
+          && (parsed.name.startsWith('org-') || input.domain_id === state.seed.domainId
+              || (parsed.name === 'wire-check' && input.domain_id === state.seed.legacyDomainId));
         return send(200, { allowed });
       }
       return send(404, {}); // In particular there is NO legacy /domains fixture.

@@ -15,7 +15,9 @@ type Session = Awaited<ReturnType<AukiSdkWasm["AukiUserSession"]["loginDev"]>>;
 type Peer = Awaited<ReturnType<Session["startPeer"]>>;
 type StreamClient = import("./web/generated/auki_sdk_web.js").AukiStreamClient;
 type CatalogClient = import("./web/generated/auki_sdk_web.js").AukiCatalogClient;
+type MessageClient = import("./web/generated/auki_sdk_web.js").AukiMessageClient;
 type StreamSub = Awaited<ReturnType<StreamClient["subscribeExact"]>>;
+type MessageSender = Awaited<ReturnType<MessageClient["openExact"]>>;
 
 function newId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`;
@@ -28,6 +30,18 @@ function bytesToBase64(bytes: Uint8Array): string {
     binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   }
   return btoa(binary);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  if (!b64) {
+    return new Uint8Array();
+  }
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
 }
 
 function mapCandidate(candidate: {
@@ -55,6 +69,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
   private sessions = new Map<string, Session>();
   private peers = new Map<string, Peer>();
   private streams = new Map<string, StreamSub>();
+  private messages = new Map<string, { peerHandle: string; sender: MessageSender }>();
   private saves = new Map<string, {
     requestId: string;
     snapshot: import("./web/generated/auki_sdk_web.js").ZitadelCredentialsSnapshot;
@@ -359,6 +374,44 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     this.streams.delete(subscriptionId);
   }
 
+  async messageOpenExact(
+    peerHandle: string,
+    target: AukiExactTarget,
+    channelJson: string,
+  ): Promise<string> {
+    const sdk = await this.sdk();
+    const channel = JSON.parse(channelJson);
+    const sender = await new sdk.AukiMessageClient(
+      this.peer(peerHandle),
+    ).openExact(target, channel);
+    const id = newId("message");
+    this.messages.set(id, { peerHandle, sender });
+    return id;
+  }
+
+  async messageSend(
+    senderHandle: string,
+    type: string,
+    timestampNs: string,
+    payloadBase64: string,
+  ): Promise<void> {
+    const entry = this.messages.get(senderHandle);
+    if (!entry) {
+      throw new Error(`unknown message sender: ${senderHandle}`);
+    }
+    await entry.sender.send(type, BigInt(timestampNs), base64ToBytes(payloadBase64));
+  }
+
+  async messageClose(senderHandle: string): Promise<void> {
+    const entry = this.messages.get(senderHandle);
+    if (!entry) {
+      return;
+    }
+    this.messages.delete(senderHandle);
+    await entry.sender.close();
+    entry.sender.free();
+  }
+
   async urdfModelFromXml(_xml: string): Promise<string> {
     throw new Error("urdfModelFromXml is native-only; use auki-urdf-fk wasm on web");
   }
@@ -383,6 +436,18 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     const peer = this.peers.get(peerHandle);
     if (!peer) {
       return;
+    }
+    const owned = [...this.messages.entries()].filter(
+      ([, entry]) => entry.peerHandle === peerHandle,
+    );
+    for (const [id, entry] of owned) {
+      this.messages.delete(id);
+      try {
+        await entry.sender.close();
+      } catch {
+        /* ignore */
+      }
+      entry.sender.free();
     }
     await peer.shutdown();
     this.peers.delete(peerHandle);

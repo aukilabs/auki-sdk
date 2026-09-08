@@ -90,6 +90,18 @@ class AukiSdkExpoModule : Module() {
       throw AndroidUnsupportedException()
     }
 
+    AsyncFunction("messageOpenExact") { _: String, _: Map<String, String>, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("messageSend") { _: String, _: String, _: String, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("messageClose") { _: String ->
+      throw AndroidUnsupportedException()
+    }
+
     AsyncFunction("urdfModelFromXml") { _: String ->
       throw AndroidUnsupportedException()
     }

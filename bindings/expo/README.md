@@ -55,6 +55,7 @@ await AukiSdkExpo.shutdown(peer);
 | `accessibleDomains` / `startPeer*` / `discover*` | yes | yes | throws |
 | `infoFetchExact` / catalog / registry / blob | yes | yes | throws |
 | `stream*` | yes | yes | throws |
+| `messageOpenExact` / `messageSend` / `messageClose` | yes | yes | throws |
 
 ## Metro (consumer)
 
@@ -148,3 +149,24 @@ exact, case-sensitive UTF-8, never trimmed/normalized or coerced to UUIDs.
 
 Web and iOS are implemented; Android remains unsupported. See the
 [minimal runtime example](example/README.md) for reproducible Web/iOS host tests.
+
+## Message (outbound)
+
+Handle-based like Stream. Open one receiver-owned Catalog `message_channel`
+through an exact advertised route, send typed payloads, and close.
+`messageSend` waits for the exact ACK. This Expo surface does not mount inbound
+Message or add `claim` / `connectRobot`.
+
+```ts
+const sender = await AukiSdkExpo.messageOpenExact(
+  peer,
+  { peerId, route },
+  channelJson,
+);
+await AukiSdkExpo.messageSend(sender, "example.event", timestampNs, payloadBase64);
+await AukiSdkExpo.messageClose(sender);
+```
+
+`channelJson` is a Catalog v3 `message_channel` row: `variant`, `owner_peer_id`,
+`resource_id`, and `clock` (`peer_id`, `id`, `hash`). `timestampNs` is a decimal
+integer string. `payloadBase64` may be empty.

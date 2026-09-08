@@ -11,6 +11,7 @@ public class AukiSdkExpoModule: Module {
   private var peers: [String: AukiPeer] = [:]
   private var identities: [String: AukiPeerIdentity] = [:]
   private var streams: [String: AukiStreamSubscription] = [:]
+  private var messageSenders: [String: AukiMessageSender] = [:]
   private var urdfModels: [String: AukiUrdfModel] = [:]
   #endif
 
@@ -283,6 +284,62 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
+    AsyncFunction("messageOpenExact") {
+      (peerHandle: String, target: [String: String], channelJson: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let peer = try self.requirePeer(peerHandle)
+      let exact = try Self.exactTarget(target, domainId: peer.domainId())
+      let channel = try Self.messageChannel(channelJson)
+      let sender = try await AukiMessageClient(peer: peer).openExact(
+        target: exact,
+        channel: channel
+      )
+      let id = self.newId("message")
+      self.messageSenders[id] = sender
+      return id
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("messageSend") {
+      (senderHandle: String, type: String, timestampNs: String, payloadBase64: String) in
+      #if canImport(auki_sdk_swiftFFI)
+      guard let sender = self.messageSenders[senderHandle] else {
+        throw unsupported("unknown message sender: \(senderHandle)")
+      }
+      guard let timestamp = Int64(timestampNs) else {
+        throw unsupported("timestampNs must be an integer string")
+      }
+      let payload: Data
+      if payloadBase64.isEmpty {
+        payload = Data()
+      } else if let decoded = Data(base64Encoded: payloadBase64) {
+        payload = decoded
+      } else {
+        throw unsupported("payloadBase64 is not valid base64")
+      }
+      try await sender.send(
+        messageType: type,
+        timestampNs: timestamp,
+        payload: payload
+      )
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("messageClose") { (senderHandle: String) in
+      #if canImport(auki_sdk_swiftFFI)
+      guard let sender = self.messageSenders.removeValue(forKey: senderHandle) else {
+        return
+      }
+      try await sender.close()
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
     AsyncFunction("urdfModelFromXml") { (xml: String) -> String in
       #if canImport(auki_sdk_swiftFFI)
       let model = try AukiUrdfModel.fromXml(xml: xml)
@@ -331,6 +388,11 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("shutdown") { (peerHandle: String) in
       #if canImport(auki_sdk_swiftFFI)
+      let leftover = self.messageSenders
+      self.messageSenders.removeAll()
+      for sender in leftover.values {
+        try? await sender.close()
+      }
       if let peer = self.peers.removeValue(forKey: peerHandle) {
         try await peer.shutdown()
       }
@@ -435,6 +497,36 @@ public class AukiSdkExpoModule: Module {
       domainId: target["domainId"] ?? domainId,
       peerId: peerId,
       route: route
+    )
+  }
+
+  private static func messageChannel(_ json: String) throws -> AukiMessageChannel {
+    guard let data = json.data(using: .utf8) else {
+      throw unsupported("message channel JSON is not UTF-8")
+    }
+    guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+      throw unsupported("message channel JSON must be an object")
+    }
+    guard
+      let ownerPeerId = object["owner_peer_id"] as? String,
+      let resourceId = object["resource_id"] as? String,
+      let clockObject = object["clock"] as? [String: Any],
+      let clockPeerId = clockObject["peer_id"] as? String,
+      let clockId = clockObject["id"] as? String,
+      let clockHash = clockObject["hash"] as? String
+    else {
+      throw unsupported(
+        "message channel JSON requires owner_peer_id, resource_id, and clock"
+      )
+    }
+    return AukiMessageChannel(
+      ownerPeerId: ownerPeerId,
+      resourceId: resourceId,
+      clock: AukiMessageClockReference(
+        peerId: clockPeerId,
+        id: clockId,
+        hash: clockHash
+      )
     )
   }
 

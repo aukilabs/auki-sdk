@@ -54,3 +54,23 @@ await secureStore.clear();
 
 See [authentication](../../../docs/how-to/authenticate.md#reuse-a-zitadel-login)
 for storage failures and DDS requirements.
+
+## Send a typed message
+
+Open one receiver-owned Catalog `message_channel` through an exact advertised
+route, send, and close. `messageSend` waits for the ACK. This surface does not
+mount inbound Message or add `claim` / `connectRobot`. Android throws.
+
+~~~ts
+const sender = await AukiSdkExpo.messageOpenExact(
+  peer,
+  { peerId, route },
+  channelJson,
+);
+await AukiSdkExpo.messageSend(sender, "example.event", timestampNs, payloadBase64);
+await AukiSdkExpo.messageClose(sender);
+~~~
+
+`channelJson` is a Catalog v3 `message_channel` row: `variant`, `owner_peer_id`,
+`resource_id`, and `clock` (`peer_id`, `id`, `hash`). `timestampNs` is a decimal
+integer string. `payloadBase64` may be empty.

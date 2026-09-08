@@ -36,6 +36,11 @@ use crate::wire::{
 
 const MAX_CONCURRENCY: usize = 32;
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
+// Observation payloads can be substantially larger than Catalog control
+// frames, especially while binary media is represented by a JSON payload.
+// Relayed routes must have enough time to make forward progress without
+// relaxing the fail-fast deadline used to open and close protocol streams.
+const OBSERVATION_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(not(target_arch = "wasm32"))]
 const OPERATION_WORKERS: usize = 4;
 
@@ -139,7 +144,12 @@ impl ComponentProtocolEndpoint {
                     NETWORK_TIMEOUT,
                 )
                 .await;
-                let _ = stream.close().await;
+                let _ = deadline(
+                    ComponentProtocolOperation::Close,
+                    stream.close(),
+                    NETWORK_TIMEOUT,
+                )
+                .await;
             }
         })?;
 
@@ -149,7 +159,12 @@ impl ComponentProtocolEndpoint {
                 let state = Arc::clone(&observation_state);
                 async move {
                     serve_observation_session(&mut stream, &state).await;
-                    let _ = stream.close().await;
+                    let _ = deadline(
+                        ComponentProtocolOperation::Close,
+                        stream.close(),
+                        NETWORK_TIMEOUT,
+                    )
+                    .await;
                 }
             })?;
 
@@ -164,7 +179,12 @@ impl ComponentProtocolEndpoint {
                         Duration::from_millis(MAX_OPERATION_DEADLINE_MS + 5_000),
                     )
                     .await;
-                    let _ = stream.close().await;
+                    let _ = deadline(
+                        ComponentProtocolOperation::Close,
+                        stream.close(),
+                        NETWORK_TIMEOUT,
+                    )
+                    .await;
                 }
             })?;
 
@@ -1053,7 +1073,7 @@ where
         match deadline(
             ComponentProtocolOperation::Exchange,
             serve_observation_request(stream, state),
-            NETWORK_TIMEOUT,
+            OBSERVATION_EXCHANGE_TIMEOUT,
         )
         .await
         {
@@ -1455,7 +1475,7 @@ where
                 gap,
             })
         },
-        NETWORK_TIMEOUT,
+        OBSERVATION_EXCHANGE_TIMEOUT,
     )
     .await
     .and_then(|result| result)

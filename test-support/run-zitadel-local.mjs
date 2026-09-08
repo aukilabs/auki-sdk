@@ -24,6 +24,11 @@ const mode = soak ? 'soak' : 'smoke';
 
 const sdk = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const workspace = path.dirname(sdk);
+const hagall = path.resolve(process.env.Z13_HAGALL_DIR ?? path.join(workspace, 'hagall'));
+if (!fs.existsSync(path.join(hagall, 'pkg/verification/keyring.go'))) {
+  console.error('A standalone-relay Hagall checkout is required at ../hagall, or set Z13_HAGALL_DIR to its path.');
+  process.exit(2);
+}
 fs.mkdirSync(path.join(sdk, 'target'), {recursive:true});
 const runDir = fs.mkdtempSync(path.join(sdk, 'target/zitadel-z10-'));
 fs.chmodSync(runDir, 0o700);
@@ -192,6 +197,8 @@ process.once('SIGINT',()=>{void cleanup().then(()=>process.exit(130));});
 process.once('SIGTERM',()=>{void cleanup().then(()=>process.exit(143));});
 try {
   notice(`Z13 direct-DDS ${mode}; working directory: ${runDir}`);
+  const relayRevision=(await output('git',['rev-parse','HEAD'],{},hagall)).trim();
+  notice(`Using Hagall relay source ${relayRevision}`);
   for (const port of [18120,18121,18122,18123,18125,18126,18127,18128,18129,18130,18131]) await freePort(port);
   const {pg,names}=await setupDatabases();
   fixture=startIdentityFixture(runDir,sdk);
@@ -201,7 +208,7 @@ try {
   await Promise.all([
     command('api-build','go',['test','-c','-tags','zitadel_acceptance','-o',path.join(runDir,'api.test'),'./pkg/api'],path.join(workspace,'api')),
     command('dds-build','go',['test','-c','-tags','zitadel_acceptance','-o',path.join(runDir,'dds.test'),'./dds/http'],path.join(workspace,'domain-service')),
-    command('relay-build','go',['build','-o',path.join(runDir,'relay'),'./relay-node/cmd'],path.join(workspace,'domain-service')),
+    command('relay-build','go',['build','-o',path.join(runDir,'relay'),'./cmd'],hagall),
     command('dms-build','cargo',['build','--example','zitadel_acceptance','--locked','--quiet'],path.join(workspace,'domain-manager-service'),{SQLX_OFFLINE:'true'}),
     command('native-build','cargo',['build','-p','auki-standard-protocols-native','--bin','zitadel_acceptance','--locked','--quiet']),
     command('web-build','npm',['run','check'],path.join(sdk,'bindings/web/auki-sdk-web')),
@@ -218,7 +225,7 @@ try {
       DDS_P2P_VERIFICATION_KEYS_URL:'http://127.0.0.1:18121/service/p2p-verification-keys',DDS_ADMIN_URL:'http://127.0.0.1:18121',CREDIT_LOCKING_ENABLED:'false'});
   await ready('http://127.0.0.1:18122/health');
   const relay=JSON.parse(fs.readFileSync(path.join(runDir,'relay.json')));
-  service('relay',path.join(runDir,'relay'),[],path.join(workspace,'domain-service'),{
+  service('relay',path.join(runDir,'relay'),[],hagall,{
     RELAY_DDS_URL:'http://127.0.0.1:18121',RELAY_DMS_URL:'http://127.0.0.1:18122/v1',RELAY_DDS_PUBLIC_KEY_URL:'http://127.0.0.1:18121/service/p2p-verification-keys',
     RELAY_LOCAL_TEST_ALLOW_HTTP:'true',RELAY_REGISTRATION_CREDENTIALS_FILE:path.join(runDir,'relay-registration'),
     RELAY_WALLET_PRIVATE_KEY_FILE:path.join(runDir,'relay-wallet'),RELAY_LIBP2P_PRIVATE_KEY_FILE:path.join(runDir,'relay-peer-key'),
@@ -292,7 +299,7 @@ try {
     return ['native','browser'].every(runtime=>fixture.state.events.some(e=>e.runtime===runtime&&e.event==='stopped'));
   },'hosts did not close cleanly',60);
   await pw('snapshot');
-  fs.writeFileSync(path.join(runDir,'result.json'),JSON.stringify({passed:true,mode,sustainedRenewalChecked:soak,literalExpiryChecked:soak,ids,elapsedSeconds:Math.round((Date.now()-started)/1000),
+  fs.writeFileSync(path.join(runDir,'result.json'),JSON.stringify({passed:true,mode,relayRevision,sustainedRenewalChecked:soak,literalExpiryChecked:soak,ids,elapsedSeconds:Math.round((Date.now()-started)/1000),
     rows,grants:Object.fromEntries(fixture.state.grants)},null,2),{mode:0o600});
   notice(`PASS Z13 direct-DDS real-service local ${mode}`);
 } catch(error) {

@@ -26,7 +26,7 @@ production handlers, authentication and database queries on loopback listeners.
 DMS runs its production router and database-clock relay sweeper through a
 loopback-only example entrypoint. These are not the complete production mains:
 unrelated data-storage, reward, notification and compute jobs are not started.
-The relay **is** the actual `relay-node/cmd` binary, including real DDS SIWE,
+The relay **is** Hagall's actual `cmd` binary, including real DDS SIWE,
 peer-key proof, provider-session renewal, booking claims and reservation handling.
 
 Only external ZITADEL/OIDC and policy-system are replaced by
@@ -50,6 +50,7 @@ workspace/
   api/
   domain-service/
   domain-manager-service/
+  hagall/                  # standalone relay, not the older WebSocket server
 ```
 
 Install the repositories' normal Go and Rust dependencies, the Rust
@@ -59,6 +60,15 @@ Unix APIs (verified on macOS). Private Go module access may be needed during
 the first build; no live Auki/ZITADEL credentials are needed. Run
 `npm ci` in `bindings/web/auki-sdk-web` before the first run. The runner builds
 the Wasm package and uses pinned `@playwright/cli@0.1.19` via `npx`.
+
+Hagall moved out of `domain-service/relay-node` in September 2026. Use a Hagall
+checkout containing `pkg/verification/keyring.go` (extraction commit `49c8f9b`
+or newer). To preserve an existing older Hagall checkout, supply a separate
+checkout/worktree with `Z13_HAGALL_DIR=/absolute/path/to/hagall`. The runner
+refuses an old/missing relay source before starting services, builds `./cmd`
+there, and records `relayRevision` in its result. It does not fetch, switch or
+modify the supplied checkout. The integrated check was updated for Hagall
+`b5ced90`; relay behavior and token verification are not replaced with fixtures.
 
 Ports 18120–18123 and 18125–18131 must be free. Postgres/PostGIS uses 5432 and
 Redis 6379, with all listeners bound to `127.0.0.1`. Run from a clean development
@@ -177,7 +187,7 @@ It checks:
 
 Artifacts are retained under `target/zitadel-z10-*/`: separate build/service logs,
 safe event records, database/container names and, on success, `result.json` with
-`passed: true`, `mode`, `sustainedRenewalChecked` and `literalExpiryChecked`.
+`passed: true`, `mode`, `relayRevision`, `sustainedRenewalChecked` and `literalExpiryChecked`.
 A passing `mode: "smoke"` is not a passing soak. Browser snapshots and CLI evidence live under
 `output/playwright/zitadel-z10-*/`. The target directory also contains synthetic
 private keys and credentials, is mode 0700, and must not be published. Generated
@@ -193,7 +203,8 @@ Compose project or kill processes by port.
 
 ## Known unresolved soak failure
 
-On 2026-09-08, run `target/zitadel-z10-UOC9Zx` passed direct admission and relay
+On 2026-09-08, run `target/zitadel-z10-UOC9Zx` used the pre-extraction relay in
+`domain-service/relay-node`. It passed direct admission and relay
 traffic, then failed approximately ten minutes after readiness, before P2P
 renewal. The browser reported `RelayReservationFailed`: the selected direct
 relay connection closed. Native peers continued until controller cleanup.

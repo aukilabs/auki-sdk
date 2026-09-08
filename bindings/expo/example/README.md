@@ -6,6 +6,10 @@ mock native module. It uses synthetic loopback IdP/API/DDS responses from
 a live ZITADEL login UI. Product PKCE/storage integration is illustrated in the
 [package README](../README.md).
 
+Lifecycle probes use an app-supplied Domain ID and deliberately end at DDS
+denial after refresh/save. They assert no API exchange or Domain listing; actual
+successful peer traffic and renewal belong to the cross-service acceptance suite.
+
 The app pins Expo 54.0.37, React 19.1.0 and React Native 0.81.5 (Expo 54's compatible
 versions). Existing package peer dependencies are not narrowed. Native test
 storage uses Expo SecureStore's real simulator Keychain. Browser test storage

@@ -42,7 +42,7 @@ pub enum Error {
     #[error("the session operation is still running; retry waiting without another refresh")]
     SessionOperationPending,
 
-    #[error("the principal has no readable Domains")]
+    #[error("Domain P2P admission was denied")]
     AuthorizationDenied,
 
     #[error("ZITADEL rejected refresh: {0:?}")]

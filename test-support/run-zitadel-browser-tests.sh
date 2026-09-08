@@ -19,7 +19,12 @@ z07_session="zitadel-z07-$$"
 z07_runner_pid=""
 z07_fixture_pid=""
 z07_browser_started=""
-pw() { npx --yes --package @playwright/cli@0.1.19 playwright-cli --session "$z07_session" "$@"; }
+pw() {
+  local z07_output
+  z07_output="$(npx --yes --package @playwright/cli@0.1.19 playwright-cli --session "$z07_session" "$@")" || return $?
+  printf '%s\n' "$z07_output"
+  if rg -q '^### Error' <<< "$z07_output"; then return 1; fi
+}
 cleanup() {
   if [[ -n "$z07_browser_started" ]]; then pw close >/dev/null 2>&1 || true; fi
   for z07_pid in "$z07_runner_pid" "$z07_fixture_pid"; do

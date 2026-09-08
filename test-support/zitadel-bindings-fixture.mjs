@@ -9,7 +9,7 @@ const base = `http://127.0.0.1:${port}`;
 let counts, generation, options;
 let phase = { phase: 'idle' };
 const reset = (settings = {}) => {
-  counts = { refresh: 0, exchange: 0, domains: 0 };
+  counts = { refresh: 0, exchange: 0, domains: 0, admission: 0 };
   generation = 0; options = settings;
 };
 reset();
@@ -63,15 +63,20 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === '/service/domains-access-token' && request.method === 'POST') {
       counts.exchange++;
-      if (options.exchangeFailure) return send(options.exchangeFailure, {});
-      if (url.search !== '?purpose=p2p' || request.headers.authorization !== `Bearer access-${generation}`) return send(401, {});
-      return send(200, { access_token: 'bindings-dds-bearer' });
+      return send(500, { error: 'unexpected legacy API exchange' });
     }
     if (url.pathname === '/api/v1/accessible-domains') {
       counts.domains++;
-      if (request.headers.authorization !== 'Bearer bindings-dds-bearer') return send(401, {});
-      const domains = [{ id: '00000000-0000-0000-0000-000000000001', name: 'Readable Domain', description: '', organization_id: '00000000-0000-0000-0000-000000000002' }];
-      return send(200, { domains, total: 1, limit: 100, offset: 0 });
+      return send(500, { error: 'unexpected Domain discovery' });
+    }
+    if (/^\/api\/v1\/domains\/00000000-0000-0000-0000-000000000099\/p2p\/zitadel\/challenge$/.test(url.pathname) && request.method === 'POST') {
+      counts.admission++;
+      if (options.admissionFailure) return send(options.admissionFailure, {});
+      if (request.headers.authorization !== `Bearer access-${generation}`) return send(401, {});
+      // Binding lifecycle probes deliberately stop at a denied Domain. They
+      // prove refresh/ACK/cancellation across FFI, not successful P2P admission.
+      // The isolated actual-service harness separately proves successful peers.
+      return send(403, {});
     }
     send(404, {});
   } catch { send(500, {}); }

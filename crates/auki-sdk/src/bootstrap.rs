@@ -180,10 +180,13 @@ mod zitadel_tests {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut request = [0u8; 4096];
             let n = stream.read(&mut request).await.unwrap();
+            let request = std::str::from_utf8(&request[..n]).unwrap();
+            assert!(request.starts_with("POST /api/v1/domains/"));
+            assert!(request.contains("/p2p/zitadel/challenge HTTP/1.1"));
             assert!(
-                std::str::from_utf8(&request[..n])
-                    .unwrap()
-                    .starts_with("POST /service/domains-access-token?purpose=p2p ")
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer opaque")
             );
             stream
                 .write_all(

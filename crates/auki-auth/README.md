@@ -92,7 +92,7 @@ Credential diagnostics are redacted. Reading tokens requires the explicit
 `access_token().expose_secret()` / `refresh_token().expose_secret()` accessors;
 never log those values.
 
-Configure initial login with `offline_access`, the Auki API's expected audience,
+Configure initial login with `offline_access`, DDS's configured ZITADEL audience,
 and the `auki-api-organization` metadata mapping. The SDK does not add scopes or
 change organizations during refresh. See the official ZITADEL
 [endpoint contract](https://zitadel.com/docs/apis/openidoauth/endpoints) and
@@ -137,7 +137,7 @@ async fn run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let session = client.import_zitadel_session(credentials, store)?;
     let bootstrap = AukiPeerBootstrap::from_session(session.clone(), AukiPeerConfig::dev());
-    // Optional: session.accessible_domains().await? for a selection UI.
+    // The application supplies the Domain ID; ZITADEL v1 does not list Domains.
     let result = bootstrap.start_peer(domain, identity).await;
     // Keep `session` available to retry after transient or persistence failure.
     if let Ok(peer) = result { peer.shutdown().await?; }
@@ -147,17 +147,22 @@ async fn run(
 }
 ```
 
-When API exchange is needed, known expiry within 30 seconds triggers refresh;
-unknown expiry first tries API and recovers from one 401. Both use the same
-one-refresh budget per operation. ZITADEL alone exchanges with `?purpose=p2p`;
-password/app flows retain the legacy exchange. A DDS 401 renews the API bearer and
-restarts the complete bearer-bound proof once, using the same Peer ID. Domain
-denial does not poison other Domains sharing the session.
+Before DDS admission, known expiry within 30 seconds triggers refresh; unknown
+expiry first tries DDS and recovers from one 401. Both share one refresh budget
+per operation. ZITADEL uses the access token directly on DDS's
+`/api/v1/domains/{domainID}/p2p/zitadel/challenge` and `/verify` routes. DDS verifies
+the identity, checks effective Domain `domain_metadata_read` through policy
+`/check`, verifies live DDS ownership, and binds its final token to the peer key.
+No API exchange, API Domain catalog, or policy legacy listing participates.
+`accessible_domains()` returns a configuration error for ZITADEL sessions;
+password/app discovery and exchanges are unchanged. A DDS 401 rotates the access
+token and restarts the complete bearer-bound proof once, using the same Peer ID.
+Domain denial does not poison other Domains sharing the session.
 
 One session-owned refresh/save task survives caller cancellation and supervisor
 timeouts. Replacements enter memory before storage is awaited. A rejected save
 returns `Error::Persistence`; the next operation saves that same generation
-before any rotation or API/DDS request (including with a cached DDS bearer).
+before any rotation or DDS admission request.
 `Error::kind()` exposes login-required, configuration, Domain denial, persistence,
 transient, cancelled and closed recovery categories. Invalid grants, ambiguous
 refresh submissions, or a rejected freshly refreshed access token latch a
@@ -179,12 +184,11 @@ between rotation and durable storage can require login. Provider refresh-token
 idle/absolute limits must cover expected inactive periods; the SDK cannot extend
 them. There is no additional auth scheduler or shorter revocation lifetime.
 
-An active peer is not a provider-refresh heartbeat: the cached one-hour Auki
-service bearer can remain usable until a later P2P renewal needs API access.
-Consequently, ZITADEL refreshes can be more than an hour apart even without
-suspension. Configure the provider's refresh-token idle lifetime for that gap
-plus expected inactive periods; a shorter idle limit can require login despite
-ongoing P2P traffic. The local acceptance harness preserves these normal timers.
+An active peer is not a provider-refresh heartbeat. Each P2P renewal rechecks DDS
+admission using the current ZITADEL access token, refreshing it only when needed.
+Configure the provider's refresh-token idle lifetime for the access-token lifetime
+plus expected inactive periods. Already-issued 30-minute P2P tokens retain their
+existing expiry/revocation delays; this release adds no immediate revocation hook.
 
 ## Web/Wasm
 

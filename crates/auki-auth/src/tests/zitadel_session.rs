@@ -120,7 +120,32 @@ async fn wait_requests(server: &MockServer, count: usize) {
     .unwrap();
 }
 
-fn assert_counts(requests: &[RecordedRequest], refresh: usize, exchange: usize) {
+const DOMAIN: Uuid = Uuid::from_u128(0xdddd);
+
+fn test_identity() -> Identity {
+    Identity::from_ed25519_seed(&[42; 32])
+}
+
+async fn authorize(session: &AuthSession) -> crate::Result<PreparedPeer> {
+    session
+        .authorize_peer(DOMAIN.into(), &test_identity().proof())
+        .await
+}
+
+fn admitted() -> Vec<MockResponse> {
+    vec![
+        challenge_response("proof", [1; 32]),
+        signed_peer_response(
+            &test_identity(),
+            DOMAIN,
+            "user",
+            Utc::now().timestamp() as u64,
+        ),
+        keys_response(),
+    ]
+}
+
+fn assert_counts(requests: &[RecordedRequest], refresh: usize, challenges: usize) {
     assert_eq!(
         requests
             .iter()
@@ -131,25 +156,48 @@ fn assert_counts(requests: &[RecordedRequest], refresh: usize, exchange: usize) 
     assert_eq!(
         requests
             .iter()
-            .filter(|r| r.target == "/service/domains-access-token?purpose=p2p")
+            .filter(|r| r.target.ends_with("/p2p/zitadel/challenge"))
             .count(),
-        exchange
+        challenges
     );
-    assert!(requests.iter().all(|r| r.target != "/user/refresh"));
+    assert!(
+        requests
+            .iter()
+            .all(|r| !r.target.starts_with("/service/domains-access-token")
+                && r.target != "/user/refresh"
+                && !r.target.starts_with("/api/v1/accessible-domains"))
+    );
+}
+
+#[tokio::test]
+async fn zitadel_discovery_is_explicitly_unsupported_without_io_or_refresh() {
+    let server = MockServer::start(vec![]).await;
+    let store = Store::new(false, 0);
+    let session = import(&server, store.clone(), true);
+    assert!(matches!(
+        session.accessible_domains().await,
+        Err(Error::InvalidConfiguration(_))
+    ));
+    assert!(server.requests.lock().await.is_empty());
+    assert!(store.attempts.lock().unwrap().is_empty());
+    session.close().await;
+    assert!(matches!(
+        session.accessible_domains().await,
+        Err(Error::SessionClosed)
+    ));
+    server.finish().await;
 }
 
 #[tokio::test]
 async fn import_is_local_and_failed_startup_retains_recoverable_session() {
-    let domain = Uuid::new_v4();
-    let org = Uuid::new_v4();
     let server = MockServer::start_with(|base| {
-        vec![
+        let mut responses = vec![
             MockResponse::json(discovery(base)),
             MockResponse::json(token()),
             MockResponse::status(503),
-            service_response("dds-new"),
-            domains_response(domain, org),
-        ]
+        ];
+        responses.extend(admitted());
+        responses
     })
     .await;
     let store = Store::new(false, 0);
@@ -157,29 +205,24 @@ async fn import_is_local_and_failed_startup_retains_recoverable_session() {
     assert!(server.requests.lock().await.is_empty());
     assert!(store.attempts.lock().unwrap().is_empty());
     assert!(matches!(
-        session.accessible_domains().await,
+        authorize(&session).await,
         Err(Error::HttpStatus { status: 503, .. })
     ));
-    assert_eq!(
-        session.accessible_domains().await.unwrap()[0].domain.id,
-        domain
-    );
+    assert_eq!(authorize(&session).await.unwrap().domain.id, DOMAIN);
     let requests = server.finish().await;
     assert_counts(&requests, 1, 2);
-    assert_eq!(
-        requests[2].headers["authorization"],
-        "Bearer replacement-opaque"
-    );
-    assert_eq!(
-        requests[3].headers["authorization"],
-        "Bearer replacement-opaque"
-    );
+    for i in [2, 3, 4] {
+        assert_eq!(
+            requests[i].headers["authorization"],
+            "Bearer replacement-opaque"
+        );
+    }
     let saved = store.durable.lock().unwrap().clone().unwrap();
     assert_eq!(saved.refresh, "replacement-refresh");
     assert!(saved.expiry.is_some());
     session.close().await;
     assert!(matches!(
-        session.accessible_domains().await,
+        authorize(&session).await,
         Err(Error::SessionClosed)
     ));
 }
@@ -202,11 +245,11 @@ async fn unknown_expiry_recovers_once_and_proactive_refresh_consumes_same_budget
         .await;
         let session = import(&server, Store::new(false, 0), proactive);
         assert_eq!(
-            session.accessible_domains().await.unwrap_err().kind(),
+            authorize(&session).await.unwrap_err().kind(),
             AuthFailureKind::AuthenticationRequired
         );
         assert!(matches!(
-            session.accessible_domains().await,
+            authorize(&session).await,
             Err(Error::AuthenticationRequired)
         ));
         assert_counts(&server.finish().await, 1, if proactive { 1 } else { 2 });
@@ -216,45 +259,42 @@ async fn unknown_expiry_recovers_once_and_proactive_refresh_consumes_same_budget
 
 #[tokio::test]
 async fn concurrent_clones_share_one_refresh_and_cancellation_during_http_keeps_rotation() {
-    let domain = Uuid::new_v4();
-    let org = Uuid::new_v4();
     let server = MockServer::start_with(|base| {
-        vec![
+        let mut responses = vec![
             MockResponse::json(discovery(base)),
             MockResponse::json(token()).delayed(Duration::from_millis(100)),
-            service_response("dds-new"),
-            domains_response(domain, org),
-            domains_response(domain, org),
-        ]
+        ];
+        responses.extend(admitted());
+        responses.extend(admitted());
+        responses
     })
     .await;
     let store = Store::new(false, 0);
     let session = import(&server, store.clone(), true);
     let first = tokio::spawn({
         let session = session.clone();
-        async move { session.accessible_domains().await }
+        async move { authorize(&session).await }
     });
     wait_requests(&server, 2).await;
     first.abort();
     assert!(first.await.unwrap_err().is_cancelled());
-    let (a, b) = tokio::join!(session.accessible_domains(), session.accessible_domains());
-    assert_eq!(a.unwrap()[0].domain.id, domain);
-    assert_eq!(b.unwrap()[0].domain.id, domain);
+    let (a, b) = tokio::join!(authorize(&session), authorize(&session));
+    assert_eq!(a.unwrap().domain.id, DOMAIN);
+    assert_eq!(b.unwrap().domain.id, DOMAIN);
     assert_eq!(store.attempts.lock().unwrap().len(), 1);
-    assert_counts(&server.finish().await, 1, 1);
+    assert_counts(&server.finish().await, 1, 2);
     session.close().await;
 }
 
 #[tokio::test]
 async fn persistence_blocks_downstream_and_cancelled_waiter_does_not_repeat_save() {
-    let domain = Uuid::new_v4();
     let server = MockServer::start_with(|base| {
-        vec![
+        let mut responses = vec![
             MockResponse::json(discovery(base)),
             MockResponse::json(token()),
-            service_response("dds-new"),
-            domains_response(domain, Uuid::new_v4()),
-        ]
+        ];
+        responses.extend(admitted());
+        responses
     })
     .await;
     let store = Store::new(true, 0);
@@ -265,7 +305,11 @@ async fn persistence_blocks_downstream_and_cancelled_waiter_does_not_repeat_save
         let cancellation = cancellation.clone();
         async move {
             session
-                .accessible_domains_with_cancellation(&cancellation)
+                .authorize_peer_with_cancellation(
+                    DOMAIN.into(),
+                    &test_identity().proof(),
+                    &cancellation,
+                )
                 .await
         }
     });
@@ -275,51 +319,50 @@ async fn persistence_blocks_downstream_and_cancelled_waiter_does_not_repeat_save
     assert_eq!(server.requests.lock().await.len(), 2);
     let next = tokio::spawn({
         let session = session.clone();
-        async move { session.accessible_domains().await }
+        async move { authorize(&session).await }
     });
     tokio::task::yield_now().await;
     assert!(!next.is_finished());
     assert_eq!(store.attempts.lock().unwrap().len(), 1);
     store.allow_save();
-    assert_eq!(next.await.unwrap().unwrap()[0].domain.id, domain);
+    assert_eq!(next.await.unwrap().unwrap().domain.id, DOMAIN);
     assert_counts(&server.finish().await, 1, 1);
     session.close().await;
 }
 
 #[tokio::test]
 async fn rejected_persistence_retries_same_generation_and_restart_imports_latest() {
-    let domain = Uuid::new_v4();
-    let org = Uuid::new_v4();
     let server = MockServer::start_with(|base| {
-        vec![
+        let mut responses = vec![
             MockResponse::json(discovery(base)),
             MockResponse::json(token()),
-            service_response("dds-new"),
-            domains_response(domain, org),
-            service_response("dds-restarted"),
-            domains_response(domain, org),
-        ]
+        ];
+        responses.extend(admitted());
+        responses.extend(admitted());
+        responses
     })
     .await;
     let store = Store::new(false, 1);
     let session = import(&server, store.clone(), true);
-    let error = session.accessible_domains().await.unwrap_err();
+    let error = authorize(&session).await.unwrap_err();
     assert!(matches!(error, Error::Persistence));
     assert!(!format!("{error:?} {error}").contains("secret-host"));
     assert_eq!(server.requests.lock().await.len(), 2);
-    session.accessible_domains().await.unwrap();
+    authorize(&session).await.unwrap();
     let saved = store.durable.lock().unwrap().clone().unwrap();
-    let attempts = store.attempts.lock().unwrap().clone();
-    assert_eq!(attempts, vec![saved.clone(), saved.clone()]);
+    assert_eq!(
+        store.attempts.lock().unwrap().clone(),
+        vec![saved.clone(), saved.clone()]
+    );
     session.close().await;
     let restored = client(&server, AuthLimits::default())
         .import_zitadel_session(saved.import(), store)
         .unwrap();
-    restored.accessible_domains().await.unwrap();
+    authorize(&restored).await.unwrap();
     let requests = server.finish().await;
     assert_counts(&requests, 1, 2);
     assert_eq!(
-        requests[4].headers["authorization"],
+        requests[5].headers["authorization"],
         "Bearer replacement-opaque"
     );
     restored.close().await;
@@ -346,11 +389,11 @@ async fn bounded_wait_does_not_cancel_pending_host_write_or_allow_second_rotatio
         .import_zitadel_session(creds, store.clone())
         .unwrap();
     assert!(matches!(
-        session.accessible_domains().await,
+        authorize(&session).await,
         Err(Error::SessionOperationPending)
     ));
     assert!(matches!(
-        session.accessible_domains().await,
+        authorize(&session).await,
         Err(Error::SessionOperationPending)
     ));
     assert_eq!(store.attempts.lock().unwrap().len(), 1);
@@ -376,20 +419,23 @@ async fn logout_drains_running_save_even_when_first_close_waiter_is_cancelled() 
     .await;
     let store = Store::new(true, 0);
     let session = import(&server, store.clone(), true);
-    let listing = tokio::spawn({
+    let operation = tokio::spawn({
         let session = session.clone();
-        async move { session.accessible_domains().await }
+        async move { authorize(&session).await }
     });
     store.wait_for_save().await;
     let close = tokio::spawn({
         let session = session.clone();
         async move { session.close().await }
     });
-    assert!(matches!(listing.await.unwrap(), Err(Error::SessionClosed)));
+    assert!(matches!(
+        operation.await.unwrap(),
+        Err(Error::SessionClosed)
+    ));
     close.abort();
     let _ = close.await;
     assert!(matches!(
-        session.accessible_domains().await,
+        authorize(&session).await,
         Err(Error::SessionClosed)
     ));
     let close = tokio::spawn({
@@ -400,8 +446,7 @@ async fn logout_drains_running_save_even_when_first_close_waiter_is_cancelled() 
     assert!(!close.is_finished());
     store.allow_save();
     close.await.unwrap();
-    // Only NOW may the host clear storage. No worker can restore it afterwards.
-    *store.durable.lock().unwrap() = None;
+    *store.durable.lock().unwrap() = None; // Host clear is safe only after close.
     session.close().await;
     assert!(store.durable.lock().unwrap().is_none());
     assert_counts(&server.finish().await, 1, 0);
@@ -426,11 +471,11 @@ async fn invalid_grant_and_ambiguous_rotation_are_terminal_without_replay() {
         .await;
         let session = import(&server, Store::new(false, 0), true);
         assert_eq!(
-            session.accessible_domains().await.unwrap_err().kind(),
+            authorize(&session).await.unwrap_err().kind(),
             AuthFailureKind::AuthenticationRequired
         );
         assert!(matches!(
-            session.accessible_domains().await,
+            authorize(&session).await,
             Err(Error::AuthenticationRequired)
         ));
         assert_counts(&server.finish().await, 1, 0);
@@ -439,18 +484,20 @@ async fn invalid_grant_and_ambiguous_rotation_are_terminal_without_replay() {
 }
 
 #[tokio::test]
-async fn dds_401_reexchanges_and_restarts_entire_bearer_bound_proof_once() {
+async fn dds_401_refreshes_and_restarts_entire_bearer_bound_proof_once() {
     let domain = Uuid::new_v4();
     let identity = Identity::generate();
-    let server = MockServer::start(vec![
-        service_response("dds-old"),
-        challenge_response("first", [1; 32]),
-        MockResponse::status(401),
-        service_response("dds-new"),
-        challenge_response("second", [2; 32]),
-        signed_peer_response(&identity, domain, "user", Utc::now().timestamp() as u64),
-        keys_response(),
-    ])
+    let server = MockServer::start_with(|base| {
+        vec![
+            challenge_response("first", [1; 32]),
+            MockResponse::status(401),
+            MockResponse::json(discovery(base)),
+            MockResponse::json(token()),
+            challenge_response("second", [2; 32]),
+            signed_peer_response(&identity, domain, "user", Utc::now().timestamp() as u64),
+            keys_response(),
+        ]
+    })
     .await;
     let store = Store::new(false, 0);
     let session = import(&server, store.clone(), false);
@@ -460,50 +507,63 @@ async fn dds_401_reexchanges_and_restarts_entire_bearer_bound_proof_once() {
         .unwrap();
     assert_eq!(prepared.peer_id, identity.peer_id());
     let requests = server.finish().await;
-    assert_counts(&requests, 0, 2);
+    assert_counts(&requests, 1, 2);
     assert_eq!(
         requests
             .iter()
             .map(|r| r.target.as_str())
             .collect::<Vec<_>>(),
         [
-            "/service/domains-access-token?purpose=p2p",
-            &format!("/api/v1/domains/{domain}/p2p/challenge"),
-            &format!("/api/v1/domains/{domain}/p2p/verify"),
-            "/service/domains-access-token?purpose=p2p",
-            &format!("/api/v1/domains/{domain}/p2p/challenge"),
-            &format!("/api/v1/domains/{domain}/p2p/verify"),
+            &format!("/api/v1/domains/{domain}/p2p/zitadel/challenge"),
+            &format!("/api/v1/domains/{domain}/p2p/zitadel/verify"),
+            "/.well-known/openid-configuration",
+            "/oauth/v2/token",
+            &format!("/api/v1/domains/{domain}/p2p/zitadel/challenge"),
+            &format!("/api/v1/domains/{domain}/p2p/zitadel/verify"),
             "/service/p2p-verification-keys",
         ]
     );
-    for index in [1, 2] {
-        assert_eq!(requests[index].headers["authorization"], "Bearer dds-old");
+    for i in [0, 1] {
+        assert_eq!(
+            requests[i].headers["authorization"],
+            "Bearer opaque.access+/="
+        );
     }
-    for index in [4, 5] {
-        assert_eq!(requests[index].headers["authorization"], "Bearer dds-new");
+    for i in [4, 5] {
+        assert_eq!(
+            requests[i].headers["authorization"],
+            "Bearer replacement-opaque"
+        );
     }
-    assert_eq!(requests[1].body, requests[4].body); // same identity, new challenge
-    let first: Value = serde_json::from_slice(&requests[2].body).unwrap();
+    assert_eq!(requests[0].body, requests[4].body);
+    let first: Value = serde_json::from_slice(&requests[1].body).unwrap();
     let second: Value = serde_json::from_slice(&requests[5].body).unwrap();
     assert_eq!(first["challenge_id"], "first");
     assert_eq!(second["challenge_id"], "second");
     assert_ne!(first["signature"], second["signature"]);
-    assert!(store.attempts.lock().unwrap().is_empty());
+    assert_eq!(store.attempts.lock().unwrap().len(), 1);
     session.close().await;
 }
 
 #[tokio::test]
 async fn denied_domain_does_not_poison_other_peers_sharing_session() {
-    for (status, deny_during_verify) in [(403, false), (403, true), (404, false), (404, true)] {
-        let allowed = Uuid::new_v4();
+    for (status, deny_during_verify) in [
+        (403, false),
+        (403, true),
+        (404, false),
+        (404, true),
+        (503, false),
+        (503, true),
+    ] {
         let denied = Uuid::new_v4();
+        let allowed = Uuid::new_v4();
         let identity = Identity::generate();
-        let mut responses = vec![service_response("dds")];
+        let mut responses = vec![];
         if deny_during_verify {
             responses.push(challenge_response("denied", [4; 32]));
         }
+        responses.push(MockResponse::status(status));
         responses.extend([
-            MockResponse::status(status),
             challenge_response("allowed", [3; 32]),
             signed_peer_response(&identity, allowed, "user", Utc::now().timestamp() as u64),
             keys_response(),
@@ -514,34 +574,20 @@ async fn denied_domain_does_not_poison_other_peers_sharing_session() {
             .authorize_peer(denied.into(), &Identity::generate().proof())
             .await
             .unwrap_err();
-        assert_eq!(error.kind(), AuthFailureKind::AuthorizationDenied);
-        assert!(
-            matches!(error, Error::DomainNotAccessible),
-            "status {status}, during verify: {deny_during_verify}: {error:?}"
+        assert_eq!(
+            error.kind(),
+            if status == 503 {
+                AuthFailureKind::Transient
+            } else {
+                AuthFailureKind::AuthorizationDenied
+            }
         );
         let prepared = session
             .authorize_peer(allowed.into(), &identity.proof())
             .await
             .unwrap();
         assert_eq!(prepared.domain.id, allowed);
-        let requests = server.finish().await;
-        assert_counts(&requests, 0, 1);
-        let mut expected = vec![
-            "/service/domains-access-token?purpose=p2p".to_owned(),
-            format!("/api/v1/domains/{denied}/p2p/challenge"),
-        ];
-        if deny_during_verify {
-            expected.push(format!("/api/v1/domains/{denied}/p2p/verify"));
-        }
-        expected.extend([
-            format!("/api/v1/domains/{allowed}/p2p/challenge"),
-            format!("/api/v1/domains/{allowed}/p2p/verify"),
-            "/service/p2p-verification-keys".to_owned(),
-        ]);
-        assert_eq!(
-            requests.iter().map(|r| &r.target).collect::<Vec<_>>(),
-            expected.iter().collect::<Vec<_>>()
-        );
+        assert_counts(&server.finish().await, 0, 2);
         session.close().await;
     }
 }
@@ -552,67 +598,67 @@ async fn proactive_refresh_budget_is_not_reset_by_dds_recovery() {
         vec![
             MockResponse::json(discovery(base)),
             MockResponse::json(token()),
-            service_response("dds-first"),
-            MockResponse::status(401),
             MockResponse::status(401),
         ]
     })
     .await;
     let session = import(&server, Store::new(false, 0), true);
     assert!(matches!(
-        session.accessible_domains().await,
+        authorize(&session).await,
         Err(Error::AuthenticationRequired)
     ));
     assert!(matches!(
-        session.accessible_domains().await,
+        authorize(&session).await,
         Err(Error::AuthenticationRequired)
     ));
-    assert_counts(&server.finish().await, 1, 2);
+    assert_counts(&server.finish().await, 1, 1);
     session.close().await;
 }
 
 #[tokio::test]
-async fn pending_save_is_retried_before_reusing_even_a_cached_dds_bearer() {
-    let domain = Uuid::new_v4();
-    let org = Uuid::new_v4();
+async fn pending_save_is_retried_before_reusing_a_previous_bearer_snapshot() {
     let server = MockServer::start_with(|base| {
-        vec![
-            service_response("dds-original"),
-            domains_response(domain, org),
-            MockResponse::status(401),
+        let mut responses = admitted();
+        responses.extend([
             MockResponse::status(401),
             MockResponse::json(discovery(base)),
             MockResponse::json(token()),
-            domains_response(domain, org),
-        ]
+        ]);
+        responses.extend(admitted());
+        responses
     })
     .await;
     let store = Store::new(true, 1);
     let session = import(&server, store.clone(), false);
-    session.accessible_domains().await.unwrap();
+    authorize(&session).await.unwrap();
     let failing = tokio::spawn({
         let session = session.clone();
-        async move { session.accessible_domains().await }
+        async move { authorize(&session).await }
     });
     store.wait_for_save().await;
     store.allow_save();
     assert!(matches!(failing.await.unwrap(), Err(Error::Persistence)));
     let retry = tokio::spawn({
         let session = session.clone();
-        async move { session.accessible_domains().await }
+        async move { authorize(&session).await }
     });
     store.wait_for_save().await;
     assert_eq!(
         server.requests.lock().await.len(),
         6,
-        "cached bearer cannot bypass storage acknowledgement"
+        "old snapshot cannot bypass pending persistence"
     );
     store.allow_save();
     retry.await.unwrap().unwrap();
     let attempts = store.attempts.lock().unwrap().clone();
     assert_eq!(attempts.len(), 2);
     assert_eq!(attempts[0], attempts[1]);
-    assert_counts(&server.finish().await, 1, 2);
+    let requests = server.finish().await;
+    assert_counts(&requests, 1, 3);
+    assert_eq!(
+        requests[6].headers["authorization"],
+        "Bearer replacement-opaque"
+    );
     session.close().await;
 }
 
@@ -636,19 +682,18 @@ async fn lost_refresh_response_is_not_replayed_after_wait_timeout() {
     let session = client(&server, limits)
         .import_zitadel_session(creds, store.clone())
         .unwrap();
-    let first = session.accessible_domains().await.unwrap_err();
+    let first = authorize(&session).await.unwrap_err();
     assert!(matches!(
         first,
         Error::SessionOperationPending | Error::RefreshOutcomeUnknown
     ));
-    // The server processed the POST but the response exceeded its HTTP deadline.
     let requests = server.finish().await;
     assert_eq!(
-        session.accessible_domains().await.unwrap_err().kind(),
+        authorize(&session).await.unwrap_err().kind(),
         AuthFailureKind::AuthenticationRequired
     );
     assert!(matches!(
-        session.accessible_domains().await,
+        authorize(&session).await,
         Err(Error::AuthenticationRequired)
     ));
     assert_counts(&requests, 1, 0);
@@ -669,7 +714,7 @@ async fn close_during_refresh_drains_response_without_starting_a_save() {
     let session = import(&server, store.clone(), true);
     let operation = tokio::spawn({
         let session = session.clone();
-        async move { session.accessible_domains().await }
+        async move { authorize(&session).await }
     });
     wait_requests(&server, 2).await;
     session.close().await;
@@ -694,27 +739,27 @@ async fn transient_discovery_recovers_but_invalid_client_is_latched() {
                     },
                 ]
             } else {
-                vec![
+                let mut responses = vec![
                     MockResponse::status(503),
                     MockResponse::json(discovery(base)),
                     MockResponse::json(token()),
-                    service_response("dds"),
-                    domains_response(Uuid::new_v4(), Uuid::new_v4()),
-                ]
+                ];
+                responses.extend(admitted());
+                responses
             }
         })
         .await;
         let session = import(&server, Store::new(false, 0), true);
-        let error = session.accessible_domains().await.unwrap_err();
+        let error = authorize(&session).await.unwrap_err();
         if configuration {
             assert_eq!(error.kind(), AuthFailureKind::Configuration);
             assert_eq!(
-                session.accessible_domains().await.unwrap_err().kind(),
+                authorize(&session).await.unwrap_err().kind(),
                 AuthFailureKind::Configuration
             );
         } else {
             assert_eq!(error.kind(), AuthFailureKind::Transient);
-            session.accessible_domains().await.unwrap();
+            authorize(&session).await.unwrap();
         }
         assert_counts(&server.finish().await, 1, if configuration { 0 } else { 1 });
         session.close().await;
@@ -722,8 +767,9 @@ async fn transient_discovery_recovers_but_invalid_client_is_latched() {
 }
 
 #[tokio::test]
-async fn two_peers_share_initial_and_later_rotation_without_changing_peer_ids() {
-    let domain = Uuid::new_v4();
+async fn two_domains_and_peers_share_rotations_without_changing_peer_ids() {
+    let domain_a = Uuid::new_v4();
+    let domain_b = Uuid::new_v4();
     let a = Identity::generate();
     let b = Identity::generate();
     let now = Utc::now().timestamp() as u64;
@@ -734,23 +780,20 @@ async fn two_peers_share_initial_and_later_rotation_without_changing_peer_ids() 
         vec![
             MockResponse::json(discovery(base)),
             MockResponse::json(token()),
-            service_response("dds-first"),
             challenge_response("initial-a", [1; 32]),
-            signed_peer_response(&a, domain, "user", now - 2),
+            signed_peer_response(&a, domain_a, "user", now - 2),
             keys_response(),
             challenge_response("initial-b", [2; 32]),
-            signed_peer_response(&b, domain, "user", now - 2),
+            signed_peer_response(&b, domain_b, "user", now - 2),
             keys_response(),
-            MockResponse::status(401),
             MockResponse::status(401),
             MockResponse::json(discovery(base)),
             MockResponse::json(next),
-            service_response("dds-second"),
             challenge_response("renew-a", [3; 32]),
-            signed_peer_response(&a, domain, "user", now),
+            signed_peer_response(&a, domain_a, "user", now),
             keys_response(),
             challenge_response("renew-b", [4; 32]),
-            signed_peer_response(&b, domain, "user", now),
+            signed_peer_response(&b, domain_b, "user", now),
             keys_response(),
         ]
     })
@@ -760,8 +803,8 @@ async fn two_peers_share_initial_and_later_rotation_without_changing_peer_ids() 
     let a_proof = a.proof();
     let b_proof = b.proof();
     let (prepared_a, prepared_b) = tokio::join!(
-        session.authorize_peer(domain.into(), &a_proof),
-        session.authorize_peer(domain.into(), &b_proof),
+        session.authorize_peer(domain_a.into(), &a_proof),
+        session.authorize_peer(domain_b.into(), &b_proof)
     );
     let prepared_a = prepared_a.unwrap();
     let prepared_b = prepared_b.unwrap();
@@ -770,12 +813,7 @@ async fn two_peers_share_initial_and_later_rotation_without_changing_peer_ids() 
     assert_eq!(renewed_a.unwrap().peer_id, a.peer_id());
     assert_eq!(renewed_b.unwrap().peer_id, b.peer_id());
     let requests = server.finish().await;
-    assert_counts(&requests, 2, 3);
-    assert!(
-        requests
-            .iter()
-            .all(|r| !r.target.starts_with("/api/v1/accessible-domains"))
-    );
+    assert_counts(&requests, 2, 5);
     let rotations: Vec<_> = requests
         .iter()
         .filter(|r| r.target == "/oauth/v2/token")

@@ -22,7 +22,8 @@ The host owns PKCE login and secure storage. After login, stop other refresh
 owners and import the five-field result. `issuer`/`clientId` are trusted app
 configuration, not values inferred from an unverified token. Import returns an
 `AukiSession` synchronously, without network I/O; keep it in app state before
-calling Domain lookup/startup so that later failures do not lose a rotated token.
+starting a peer so that later failures do not lose a rotated token. The app supplies
+a known Domain ID; ZITADEL v1 does not support `accessibleDomains()`.
 
 ```swift
 let credentials = try AukiZitadelCredentials(
@@ -32,7 +33,6 @@ let credentials = try AukiZitadelCredentials(
 )
 let session = try AukiSession.importZitadelDev(credentials: credentials, store: store)
 // Retain session BEFORE this await. Store implements AukiZitadelSessionStore.
-let domains = try await session.accessibleDomains()
 let peer = try await session.startPeer(domainId: selectedDomainId, identity: identity)
 // Observe try await peer.waitStopped() for terminal failure.
 try await peer.shutdown()
@@ -56,7 +56,7 @@ Do not launch detached writes or reenter the same session from the callback.
 An event announcing new tokens is not persistence acknowledgement. Rust awaits
 the Swift callback and retains the replacement before invoking it. A rejected
 save retries the **same generation** on the next session operation, with no
-service exchange or further rotation until acknowledged.
+DDS admission or further rotation until acknowledged.
 
 `close()` fences new session work and drains outstanding host storage. If its
 observing Swift Task was cancelled, await `close()` again before clearing storage.

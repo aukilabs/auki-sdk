@@ -98,7 +98,7 @@ const session = await importZitadelSession(credentials, async replacement => {
   });
 });
 // Retain session in app state BEFORE the first auth operation.
-const domains = await AukiSdkExpo.accessibleDomains(session);
+// The application supplies selectedDomainId; no ZITADEL Domain listing in v1.
 const peer = await AukiSdkExpo.startPeer(session, selectedDomainId);
 // Observe AukiSdkExpo.waitStopped(peer) for terminal peer failures.
 await AukiSdkExpo.shutdown(peer);
@@ -108,8 +108,10 @@ await yourSecureStore.clear();
 
 `importZitadelSession(credentials, store, {apiBaseUrl, ddsBaseUrl, dmsBaseUrl})`
 accepts explicit service bases; omitting the last argument uses SDK development
-defaults. Those services must run the coordinated new P2P-read admission contract
-(`?purpose=p2p`); building this package does not deploy or upgrade shared services.
+defaults. DDS must run and be configured for direct ZITADEL P2P admission; the
+new SDK does not use API's legacy token exchange. Building this package does not
+deploy or upgrade shared services. `accessibleDomains()` remains available for
+password sessions, but returns `configuration` for ZITADEL sessions.
 Import may await Web Wasm loading, but returns a retained session ID before any
 auth request/rotation. Startup failures do not discard that ID or its replacement
 credentials. `closeSession` also works for password sessions.

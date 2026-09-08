@@ -22,9 +22,17 @@ const failure = async (code, operation) => {
 };
 const importSession = (store, saved = credentials()) => importZitadelSession(saved, store, environment);
 
+// This host suite probes refresh/persistence using a deliberately denied Domain.
+// The actual-service acceptance suite covers successful P2P startup and renewal.
+const admissionProbe = async session => {
+  try { await Auki.startPeer(session, '00000000-0000-0000-0000-000000000099'); }
+  catch (error) { if (error.code === 'authorization_denied') return; throw error; }
+  throw new Error('fixture unexpectedly admitted denied Domain');
+};
+
 export async function runCases(report) {
   let passed = 0;
-  const test = async (name, fn) => { await fn(); passed++; report(`PASS ${name}`); };
+  const test = async (name, fn) => { await fn(); const stats = await fixture('/__stats'); check(stats.exchange === 0 && stats.domains === 0, 'legacy exchange or listing called'); passed++; report(`PASS ${name}`); };
   await test('import before I/O, durable ACK, concurrent waiters, restart', async () => {
     await fixture('/__reset', {}); await durable.clear();
     const entered = gate(), release = gate(); let saves = 0;
@@ -32,20 +40,20 @@ export async function runCases(report) {
       saves++; check(!JSON.stringify(c).includes('access-1') && String(c).includes('redacted'), 'snapshot must redact');
       entered.resolve(); await release.promise; await durable.save(extract(c));
     });
-    const zero = await fixture('/__stats'); check(zero.refresh === 0 && zero.exchange === 0, 'import performed auth I/O');
-    const calls = [Auki.accessibleDomains(session), Auki.accessibleDomains(session)];
+    const zero = await fixture('/__stats'); check(zero.refresh === 0 && zero.admission === 0, 'import performed auth I/O');
+    await failure('configuration', () => Auki.accessibleDomains(session));
+    const calls = [admissionProbe(session), admissionProbe(session)];
     await entered.promise;
-    check((await fixture('/__stats')).exchange === 0 && await durable.load() === null, 'exchange before durable ACK');
+    check((await fixture('/__stats')).admission === 0 && await durable.load() === null, 'admission before durable ACK');
     // A stale ACK must not release this generation.
     check(await Auki._ackZitadelSave(session, 'stale-request', true) === false, 'stale ACK accepted');
     release.resolve();
-    const results = await Promise.all(calls);
-    check(results.every(d => d.length === 1 && d[0].name === 'Readable Domain'), 'Domain result changed');
+    await Promise.all(calls);
     check(saves === 1 && (await fixture('/__stats')).refresh === 1, 'single flight lost across Expo');
     const saved = await durable.load(); check(saved.refreshToken === 'refresh-1' && saved.accessTokenExpiresAt.endsWith('Z'), 'durable snapshot lost rotation or timestamp');
     await closeSession(session);
     const restarted = await importSession(async () => { throw new Error('unexpected refresh'); }, saved);
-    check((await Auki.accessibleDomains(restarted)).length === 1, 'restart failed');
+    await admissionProbe(restarted);
     check((await fixture('/__stats')).refresh === 1, 'restart rotated saved generation');
     await closeSession(restarted); await durable.clear();
   });
@@ -56,27 +64,27 @@ export async function runCases(report) {
       if (fail) throw new Error('DO_NOT_LEAK_HOST_SECRET');
       await durable.save(extract(c));
     });
-    await failure('persistence', () => Auki.accessibleDomains(session));
-    check((await fixture('/__stats')).exchange === 0, 'rejected save allowed exchange');
+    await failure('persistence', () => admissionProbe(session));
+    check((await fixture('/__stats')).admission === 0, 'rejected save allowed admission');
     fail = false;
-    check((await Auki.accessibleDomains(session)).length === 1, 'save retry failed');
+    await admissionProbe(session);
     check(generations.join(',') === 'refresh-1,refresh-1' && (await fixture('/__stats')).refresh === 1, 'save retry replayed refresh');
     await closeSession(session); await durable.clear();
   });
   await test('missing Promise is failure, not an implicit ACK', async () => {
     await fixture('/__reset', {}); let correct = false;
     const session = await importSession(c => correct ? durable.save(extract(c)).then(() => {}) : undefined);
-    await failure('persistence', () => Auki.accessibleDomains(session));
-    correct = true; await Auki.accessibleDomains(session);
+    await failure('persistence', () => admissionProbe(session));
+    correct = true; await admissionProbe(session);
     check((await fixture('/__stats')).refresh === 1, 'missing-Promise recovery replayed refresh');
     await closeSession(session); await durable.clear();
   });
   await test('startup failure keeps session usable; unreadable Domain denied', async () => {
-    await fixture('/__reset', { exchangeFailure: 503 }); let saves = 0;
+    await fixture('/__reset', { admissionFailure: 503 }); let saves = 0;
     const session = await importSession(async c => { saves++; await durable.save(extract(c)); });
-    await failure('transient', () => Auki.accessibleDomains(session));
-    await fixture('/__configure', { exchangeFailure: null });
-    await Auki.accessibleDomains(session);
+    await failure('transient', () => admissionProbe(session));
+    await fixture('/__configure', { admissionFailure: null });
+    await admissionProbe(session);
     await failure('authorization_denied', () => Auki.startPeer(session, '00000000-0000-0000-0000-000000000099'));
     check(saves === 1, 'startup retry lost replacement');
     await closeSession(session); await durable.clear();
@@ -85,20 +93,20 @@ export async function runCases(report) {
     await fixture('/__reset', {});
     const entered = gate(), release = gate(); let closed = false;
     const session = await importSession(async c => { entered.resolve(); await release.promise; await durable.save(extract(c)); });
-    const lookup = failure('closed', () => Auki.accessibleDomains(session));
+    const lookup = failure('closed', () => admissionProbe(session));
     await entered.promise;
     const closing = closeSession(session).then(() => { closed = true; });
     await delay(150); check(!closed, 'close returned before outstanding write settled');
     release.resolve(); await Promise.all([lookup, closing]);
     await durable.clear(); await closeSession(session); await delay(50);
-    check(await durable.load() === null && (await fixture('/__stats')).exchange === 0, 'late write or exchange after logout');
-    await failure('closed', () => Auki.accessibleDomains(session));
+    check(await durable.load() === null && (await fixture('/__stats')).admission === 0, 'late write or admission after logout');
+    await failure('closed', () => admissionProbe(session));
   });
   await test('typed terminal failures latch and configuration stays redacted', async () => {
     for (const [tokenError, code] of [['invalid_grant', 'authentication_required'], ['invalid_client', 'configuration']]) {
       await fixture('/__reset', { tokenError });
       const session = await importSession(async () => { throw new Error('must not save'); });
-      await failure(code, () => Auki.accessibleDomains(session)); await failure(code, () => Auki.accessibleDomains(session));
+      await failure(code, () => admissionProbe(session)); await failure(code, () => admissionProbe(session));
       check((await fixture('/__stats')).refresh === 1, 'terminal error retried automatically');
       await closeSession(session);
     }
@@ -110,7 +118,7 @@ export async function runCases(report) {
     const session = await importSession(async c => { saves++; entered.resolve(); await release.promise; await durable.save(extract(c)); });
     const states = [];
     const subscription = AppState.addEventListener('change', value => states.push(value));
-    const lookup = Auki.accessibleDomains(session).then(value => ({ value }), error => ({ error }));
+    const lookup = admissionProbe(session).then(value => ({ value }), error => ({ error }));
     await entered.promise;
     await fixture('/__phase', { phase: 'suspend-ready' });
     // External harness freezes Chrome or backgrounds the actual simulator app.
@@ -127,14 +135,14 @@ export async function runCases(report) {
       check(states.includes('background') && AppState.currentState === 'active',
         `simulator lifecycle incomplete: ${states.join(',')}; current ${AppState.currentState}`);
     }
-    check((await fixture('/__stats')).exchange === 0, 'work crossed unacknowledged save while suspended');
+    check((await fixture('/__stats')).admission === 0, 'work crossed unacknowledged save while suspended');
     release.resolve();
     const result = await lookup;
     if (result.error) {
       check(result.error.code === 'transient', 'unexpected failure while suspended');
       // The bounded observing call can expire while suspended. Its native save
       // still belongs to this session; resume waiting without a new rotation.
-      await Auki.accessibleDomains(session);
+      await admissionProbe(session);
     }
     subscription.remove();
     check(saves === 1 && (await fixture('/__stats')).refresh === 1, 'resume duplicated refresh or save');

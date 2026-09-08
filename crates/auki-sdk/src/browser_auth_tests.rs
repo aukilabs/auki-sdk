@@ -319,7 +319,8 @@ async fn browser_owned_session_survives_cancelled_wait_and_rejected_persistence(
     }
     struct SessionRenewal {
         session: AuthSession,
-        material: RenewedAuthority,
+        domain: Uuid,
+        identity: auki_p2p::PeerIdentityProof,
     }
     #[async_trait(?Send)]
     impl AuthorityRenewalProvider for SessionRenewal {
@@ -327,10 +328,18 @@ async fn browser_owned_session_survives_cancelled_wait_and_rejected_persistence(
             &self,
             cancellation: &CancellationToken,
         ) -> auki_auth::Result<RenewedAuthority> {
-            self.session
-                .accessible_domains_with_cancellation(cancellation)
+            let prepared = self
+                .session
+                .authorize_peer_with_cancellation(self.domain.into(), &self.identity, cancellation)
                 .await?;
-            Ok(self.material.clone())
+            Ok(RenewedAuthority {
+                domain: prepared.domain,
+                peer_id: prepared.peer_id,
+                credential: prepared.initial_credential,
+                verification_keys: prepared.verification_keys,
+                credential_expires_at: prepared.credential_expires_at,
+                renew_at: prepared.renew_at,
+            })
         }
     }
     let http = reqwest::Client::new();
@@ -365,13 +374,15 @@ async fn browser_owned_session_survives_cancelled_wait_and_rejected_persistence(
             .unwrap();
         let identity = Identity::generate();
         let peer = identity.peer_id();
+        let proof = identity.proof();
         let domain = Uuid::new_v4();
         let now = Utc::now().timestamp();
         let (node, authority) =
             supervisor(material(peer, domain, now - 1), identity, Renewal::new([])).await;
         authority.state.lock().await.renewal = AuthorityRenewal::new(SessionRenewal {
             session: session.clone(),
-            material: material(peer, domain, now),
+            domain,
+            identity: proof,
         });
         let (abort, registration) = AbortHandle::new_pair();
         let (tx, rx) = oneshot::channel();
@@ -409,7 +420,10 @@ async fn browser_owned_session_survives_cancelled_wait_and_rejected_persistence(
             .json()
             .await
             .unwrap();
-        assert_eq!(counts, json!({"refresh":1,"exchange":0,"domains":0}));
+        assert_eq!(
+            counts,
+            json!({"refresh":1,"exchange":0,"domains":0,"challenge":0,"verify":0})
+        );
         if fail_first {
             store.release.add_permits(1);
             assert_eq!(
@@ -440,7 +454,10 @@ async fn browser_owned_session_survives_cancelled_wait_and_rejected_persistence(
             .json()
             .await
             .unwrap();
-        assert_eq!(counts, json!({"refresh":1,"exchange":0,"domains":0}));
+        assert_eq!(
+            counts,
+            json!({"refresh":1,"exchange":0,"domains":0,"challenge":0,"verify":0})
+        );
         store.release.add_permits(1);
         assert_eq!(rx.await.unwrap().unwrap(), AuthorityMaintenance::Renewed);
         let counts: serde_json::Value = http
@@ -451,7 +468,10 @@ async fn browser_owned_session_survives_cancelled_wait_and_rejected_persistence(
             .json()
             .await
             .unwrap();
-        assert_eq!(counts, json!({"refresh":1,"exchange":1,"domains":1}));
+        assert_eq!(
+            counts,
+            json!({"refresh":1,"exchange":0,"domains":0,"challenge":1,"verify":1})
+        );
         assert_eq!(node.peer_id(), peer);
         node.shutdown().await.unwrap();
         authority.stop().await;

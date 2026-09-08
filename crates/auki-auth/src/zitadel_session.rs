@@ -14,7 +14,6 @@ const SESSION_OPERATION: &str = "ZITADEL session operation";
 
 #[derive(Clone, Copy)]
 pub(crate) enum RefreshMode {
-    Settle,
     IfExpiring,
     Force,
 }
@@ -110,7 +109,6 @@ impl ZitadelSession {
             let credentials = state.credentials.as_ref().ok_or(Error::SessionClosed)?;
             let refresh = !refreshed
                 && match mode {
-                    RefreshMode::Settle => false,
                     RefreshMode::IfExpiring => credentials
                         .access_token_expires_at()
                         .is_some_and(|expiry| expiry <= Utc::now() + EXPIRY_MARGIN),

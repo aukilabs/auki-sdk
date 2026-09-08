@@ -22,7 +22,8 @@ The host performs PKCE login, obtains a refresh token, and stops all competing
 refresh owners (including other tabs and its OAuth library) before importing.
 `issuer` and `clientId` must come from trusted application configuration. Import
 is synchronous and performs no network I/O: retain the returned handle even if
-Domain lookup or peer startup subsequently fails.
+peer startup subsequently fails. The application supplies a known Domain ID;
+ZITADEL v1 does not support `accessibleDomains()`.
 
 ```ts
 const session = AukiUserSession.importZitadelDev({
@@ -42,8 +43,7 @@ const session = AukiUserSession.importZitadelDev({
   }
 });
 // Keep session in application state BEFORE the first await.
-const domains = await session.accessibleDomains();
-const peer = await session.startPeer(selectedDomainId); // explicit UI selection
+const peer = await session.startPeer(selectedDomainId); // supplied by the app
 // Observe peer.waitStopped() for unexpected terminal failures.
 // Logout: stop your peers, drain storage, then erase the durable session.
 await peer.shutdown();
@@ -57,7 +57,7 @@ the equivalent for explicit service bases. Existing password methods are unchang
 The store **must return a Promise** and acknowledge only after the whole snapshot
 is durably, atomically saved. A throw, rejection, or missing Promise is a
 `persistence` error; the SDK keeps the replacement in memory and retries saving
-that same generation on the next operation. It does not exchange a service bearer
+that same generation on the next operation. It does not request DDS admission
 or rotate again before acknowledgement. On success **or failure**, all writes
 started by the callback must have settled: no detached writes and no reentry into
 this session. A callback that never settles prevents a safe completed logout.

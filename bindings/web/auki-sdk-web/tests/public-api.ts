@@ -71,7 +71,7 @@ const store: ZitadelSessionStore = async (c) => {
 const imported: AukiUserSession = AukiUserSession.importZitadelDev(credentials, store);
 const closedSession: Promise<void> = imported.close();
 declare const authError: AukiAuthError;
-if (authError.code === "persistence") void imported.accessibleDomains();
+if (authError.code === "persistence") void imported.startPeer("00000000-0000-0000-0000-000000000001");
 void closedSession;
 
 declare const peer: AukiPeer;

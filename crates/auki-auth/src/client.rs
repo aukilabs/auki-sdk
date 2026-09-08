@@ -167,7 +167,7 @@ enum PrincipalState {
 
 struct SessionState {
     principal: PrincipalState,
-    dds_service_bearer: Option<SecretString>,
+    dds_bearer: Option<SecretString>,
 }
 
 impl SessionState {
@@ -220,7 +220,7 @@ impl AuthClient {
                 principal_kind: PrincipalKind::User,
                 state: Mutex::new(SessionState {
                     principal: PrincipalState::Zitadel(zitadel),
-                    dds_service_bearer: None,
+                    dds_bearer: None,
                 }),
                 closed,
             }),
@@ -262,23 +262,23 @@ impl AuthClient {
                     self.login_user(&credentials, cancellation).await?;
                 // The raw password is dropped here and is never retained by the session.
                 drop(credentials);
-                let dds_service_bearer = self
+                let dds_bearer = self
                     .exchange_user_service_token(&access_token, cancellation)
                     .await?;
                 SessionState {
                     principal: PrincipalState::User { refresh_token },
-                    dds_service_bearer: Some(dds_service_bearer),
+                    dds_bearer: Some(dds_bearer),
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]
             Credentials::AppCredentials(credentials) => {
                 validate_app_credentials(&credentials)?;
-                let dds_service_bearer = self
+                let dds_bearer = self
                     .exchange_app_service_token(&credentials, cancellation)
                     .await?;
                 SessionState {
                     principal: PrincipalState::App(credentials),
-                    dds_service_bearer: Some(dds_service_bearer),
+                    dds_bearer: Some(dds_bearer),
                 }
             }
         };
@@ -348,29 +348,6 @@ impl AuthClient {
         validated_token(response.access_token, API_SERVICE_TOKEN)
     }
 
-    async fn exchange_zitadel_service_token(
-        &self,
-        access_token: &SecretString,
-        cancellation: &CancellationToken,
-    ) -> Result<SecretString> {
-        let mut url = self.api_url("service/domains-access-token");
-        url.query_pairs_mut().append_pair("purpose", "p2p");
-        let request = self
-            .inner
-            .http
-            .post(url)
-            .header(ACCEPT, "application/json")
-            .bearer_auth(access_token.expose());
-        let response: ServiceTokenResponse = self
-            .send_json(request, API_SERVICE_TOKEN, cancellation)
-            .await
-            .map_err(|error| match error {
-                Error::HttpStatus { status: 403, .. } => Error::AuthorizationDenied,
-                other => other,
-            })?;
-        validated_token(response.access_token, API_SERVICE_TOKEN)
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     async fn exchange_app_service_token(
         &self,
@@ -403,51 +380,30 @@ impl AuthClient {
                 // replacement refresh token immediately; that external change
                 // cannot be rolled back if the following service exchange fails.
                 state.principal = PrincipalState::User { refresh_token };
-                let dds_service_bearer = self
+                let dds_bearer = self
                     .exchange_user_service_token(&access_token, cancellation)
                     .await?;
                 // Keep the former DDS bearer until its replacement is complete.
-                state.dds_service_bearer = Some(dds_service_bearer);
+                state.dds_bearer = Some(dds_bearer);
             }
             #[cfg(not(target_arch = "wasm32"))]
             PrincipalState::App(credentials) => {
-                let dds_service_bearer = self
+                let dds_bearer = self
                     .exchange_app_service_token(credentials, cancellation)
                     .await?;
-                state.dds_service_bearer = Some(dds_service_bearer);
+                state.dds_bearer = Some(dds_bearer);
             }
             PrincipalState::Zitadel(session) => {
-                let ready = session
-                    .ready(
-                        if *refresh_used {
-                            RefreshMode::Settle
-                        } else {
-                            RefreshMode::IfExpiring
-                        },
-                        cancellation,
-                    )
-                    .await?;
-                *refresh_used |= ready.refreshed;
-                let mut result = self
-                    .exchange_zitadel_service_token(ready.credentials.access_token(), cancellation)
-                    .await;
-                if result.as_ref().is_err_and(Error::is_unauthorized) && !*refresh_used {
-                    // One budget for this entire API/DDS operation, including
-                    // proactive refresh and any joined session-owned refresh.
-                    let ready = session.ready(RefreshMode::Force, cancellation).await?;
-                    *refresh_used = true;
-                    result = self
-                        .exchange_zitadel_service_token(
-                            ready.credentials.access_token(),
-                            cancellation,
-                        )
-                        .await;
-                }
-                if result.as_ref().is_err_and(Error::is_unauthorized) {
+                // Called only to recover a DDS authentication failure. A
+                // proactive/joined refresh already consumed this proof's budget.
+                if *refresh_used {
                     session.require_login().await;
                     return Err(Error::AuthenticationRequired);
                 }
-                state.dds_service_bearer = Some(result?);
+                let ready = session.ready(RefreshMode::Force, cancellation).await?;
+                *refresh_used = true;
+                state.dds_bearer =
+                    Some(SecretString::new(ready.credentials.access_token().expose()));
             }
             PrincipalState::Closed => return Err(Error::SessionClosed),
         }
@@ -584,7 +540,7 @@ impl AuthSession {
         if let PrincipalState::Zitadel(session) = &state.principal {
             session.close().await;
         }
-        state.dds_service_bearer = None;
+        state.dds_bearer = None;
         state.principal = PrincipalState::Closed;
     }
 
@@ -600,6 +556,8 @@ impl AuthSession {
         self.inner.client.inner.environment.dds_base_url()
     }
 
+    /// List Domain choices for legacy user/app sessions. ZITADEL v1 requires
+    /// an application-supplied Domain ID and returns InvalidConfiguration here.
     pub async fn accessible_domains(&self) -> Result<Vec<DomainChoice>> {
         let cancellation = CancellationToken::new();
         self.accessible_domains_with_cancellation(&cancellation)
@@ -624,6 +582,11 @@ impl AuthSession {
         let mut state = self
             .lock_state(cancellation, DDS_ACCESSIBLE_DOMAINS)
             .await?;
+        if matches!(state.principal, PrincipalState::Zitadel(_)) {
+            return Err(Error::InvalidConfiguration(
+                "ZITADEL Domain discovery is not supported; supply a Domain ID",
+            ));
+        }
         let mut refresh_used = false;
         self.prepare_session(&mut state, &mut refresh_used, cancellation)
             .await?;
@@ -715,8 +678,16 @@ impl AuthSession {
                     .client
                     .refresh_service_bearer(&mut state, &mut refresh_used, cancellation)
                     .await?;
-                self.authorize_attempt(&state, selection, identity, cancellation)
-                    .await
+                let result = self
+                    .authorize_attempt(&state, selection, identity, cancellation)
+                    .await;
+                if result.as_ref().is_err_and(Error::is_unauthorized)
+                    && let PrincipalState::Zitadel(session) = &state.principal
+                {
+                    session.require_login().await;
+                    return Err(Error::AuthenticationRequired);
+                }
+                result
             }
             Err(error) => Err(error),
         }
@@ -729,14 +700,15 @@ impl AuthSession {
         cancellation: &CancellationToken,
     ) -> Result<()> {
         if let PrincipalState::Zitadel(session) = &state.principal {
-            // A cached DDS bearer must not bypass an unacknowledged save or a
-            // terminal session failure left by a cancelled earlier operation.
-            *refresh_used |= session
-                .ready(RefreshMode::Settle, cancellation)
-                .await?
-                .refreshed;
+            // Settle pending saves/terminal failures before using credentials.
+            // Snapshot one access token for the entire bearer-bound DDS proof;
+            // no API service exchange or authorization cache participates.
+            let ready = session.ready(RefreshMode::IfExpiring, cancellation).await?;
+            *refresh_used |= ready.refreshed;
+            state.dds_bearer = Some(SecretString::new(ready.credentials.access_token().expose()));
+            return Ok(());
         }
-        if state.dds_service_bearer.is_none() {
+        if state.dds_bearer.is_none() {
             self.inner
                 .client
                 .refresh_service_bearer(state, refresh_used, cancellation)
@@ -757,7 +729,15 @@ impl AuthSession {
         let peer_id = identity.peer_id();
         let peer_id_text = peer_id.to_string();
         let public_key = URL_SAFE_NO_PAD.encode(identity.public_key_protobuf());
-        let challenge_path = format!("api/v1/domains/{}/p2p/challenge", selection.domain_id);
+        let proof_path = if matches!(state.principal, PrincipalState::Zitadel(_)) {
+            "p2p/zitadel"
+        } else {
+            "p2p"
+        };
+        let challenge_path = format!(
+            "api/v1/domains/{}/{proof_path}/challenge",
+            selection.domain_id
+        );
         let request_body = PeerChallengeRequest {
             peer_id: &peer_id_text,
             public_key: &public_key,
@@ -788,7 +768,7 @@ impl AuthSession {
         }
         let signature = URL_SAFE_NO_PAD.encode(signature);
 
-        let verify_path = format!("api/v1/domains/{}/p2p/verify", selection.domain_id);
+        let verify_path = format!("api/v1/domains/{}/{proof_path}/verify", selection.domain_id);
         let verify_body = PeerVerifyRequest {
             challenge_id: &challenge.challenge_id,
             signature: &signature,
@@ -916,7 +896,7 @@ impl AuthSession {
         state: &SessionState,
     ) -> Result<RequestBuilder> {
         let bearer = state
-            .dds_service_bearer
+            .dds_bearer
             .as_ref()
             .ok_or(Error::AuthenticationRequired)?;
         let request = request.bearer_auth(bearer.expose());

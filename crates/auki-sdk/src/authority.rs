@@ -1923,7 +1923,8 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
         }
         struct SessionRenewal {
             session: AuthSession,
-            update: RenewedAuthority,
+            domain: Uuid,
+            identity: Identity,
             calls: Arc<AtomicUsize>,
             entered: Arc<Semaphore>,
             dropped: Arc<Notify>,
@@ -1943,10 +1944,22 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
                 self.calls.fetch_add(1, Ordering::SeqCst);
                 self.entered.add_permits(1);
                 let _drop = AttemptDrop(self.dropped.clone());
-                self.session
-                    .accessible_domains_with_cancellation(cancellation)
+                let prepared = self
+                    .session
+                    .authorize_peer_with_cancellation(
+                        self.domain.into(),
+                        &self.identity.proof(),
+                        cancellation,
+                    )
                     .await?;
-                Ok(self.update.clone())
+                Ok(RenewedAuthority {
+                    domain: prepared.domain,
+                    peer_id: prepared.peer_id,
+                    credential: prepared.initial_credential,
+                    verification_keys: prepared.verification_keys,
+                    credential_expires_at: prepared.credential_expires_at,
+                    renew_at: prepared.renew_at,
+                })
             }
         }
         let server = MockServer::start();
@@ -1961,20 +1974,44 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
             when.method(POST).path("/token").body_includes("refresh_token=original-refresh");
             then.status(200).header("content-type", "application/json").json_body(json!({"access_token":"retained-access", "refresh_token":"retained-rotation", "expires_in":3600, "token_type":"Bearer"}));
         });
-        let exchange = server.mock(|when, then| {
+        let peer_id = identity().peer_id();
+        let domain = Uuid::new_v4();
+        let now = unix_time();
+        let next_expiry = DateTime::from_timestamp((now + 1800) as i64, 0).unwrap();
+        let token = encode(
+            &Header::new(Algorithm::ES256),
+            &json!({
+                "type":"p2p-access", "iss":"dds", "aud":["auki-p2p"],
+                "sub":"native-zitadel-user", "peer_type":"user", "peer_id":peer_id.to_string(),
+                "domain_ids":[domain], "scopes":["domain-data:r"], "iat":now, "exp":now+1800
+            }),
+            &EncodingKey::from_ec_pem(TEST_DDS_PRIVATE_KEY).unwrap(),
+        )
+        .unwrap();
+        let admission = server.mock(|when, then| {
             when.method(POST)
-                .path("/service/domains-access-token")
-                .query_param("purpose", "p2p")
+                .path(format!("/api/v1/domains/{domain}/p2p/zitadel/challenge"))
                 .header("authorization", "Bearer retained-access");
             then.status(200)
                 .header("content-type", "application/json")
-                .json_body(json!({"access_token":"dds"}));
+                .json_body(json!({"challenge_id":"native", "challenge":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "expires_at":Utc::now()+chrono::Duration::seconds(60)}));
         });
         server.mock(|when, then| {
-            when.method(GET).path("/api/v1/accessible-domains");
+            when.method(POST)
+                .path(format!("/api/v1/domains/{domain}/p2p/zitadel/verify"))
+                .header("authorization", "Bearer retained-access");
             then.status(200)
                 .header("content-type", "application/json")
-                .json_body(json!({"domains":[], "total":0, "limit":100, "offset":0}));
+                .json_body(
+                    json!({"p2p_access_token":token, "p2p_access_expires_at":next_expiry,
+                    "peer_id":peer_id.to_string(), "peer_type":"user", "domain_id":domain}),
+                );
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/service/p2p-verification-keys");
+            then.status(200).header("content-type", "application/json").json_body(json!({"version":1, "generation":1, "previous_key_overlap_seconds":1860,
+                "keys":[{"id":"2e49cac5c679f1dd72bad26460cb0215a79d9ef680b1ea0c16707d1cbc2b1054",
+                    "status":"current", "signing_method":"ES256", "public_key":std::str::from_utf8(TEST_DDS_PUBLIC_KEY).unwrap()}]}));
         });
         let store = Arc::new(Store {
             entered: Notify::new(),
@@ -1995,11 +2032,7 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
                 store.clone(),
             )
             .unwrap();
-        let peer_id = identity().peer_id();
-        let domain = Uuid::new_v4();
-        let now = unix_time();
         let (initial, expiry) = credential(peer_id, domain, now - 1);
-        let (replacement, next_expiry) = credential(peer_id, domain, now);
         let calls = Arc::new(AtomicUsize::new(0));
         let entered = Arc::new(Semaphore::new(0));
         let dropped = Arc::new(Notify::new());
@@ -2016,7 +2049,8 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
             calls: calls.clone(),
             entered: entered.clone(),
             dropped: dropped.clone(),
-            update: renewed_update(domain, peer_id, keys(), replacement, next_expiry),
+            domain,
+            identity: identity(),
         });
         let config = AuthoritySupervisorConfig::default();
         assert_eq!(config.renewal_attempt_timeout, Duration::from_secs(10));
@@ -2042,12 +2076,12 @@ O+4eTRPLA8IA+ibNtrfWbavOIYZEtwGneJvRTovHr5OUGFu3n/gXNqGbKw==
         tokio::time::resume();
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         assert_eq!(store.calls.load(Ordering::SeqCst), 1);
-        exchange.assert_calls(0);
+        admission.assert_calls(0);
         store.release.add_permits(1);
         wait_for_ready_revision(&supervisor, 2).await;
         discovery.assert_calls(1);
         rotation.assert_calls(1);
-        exchange.assert_calls(1);
+        admission.assert_calls(1);
         assert_eq!(store.calls.load(Ordering::SeqCst), 1);
         supervisor.shutdown().await;
         session.close().await;

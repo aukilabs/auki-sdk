@@ -20,9 +20,10 @@ The main browser suite exercises actual Wasm `BrowserNode` and supervisor code:
 terminal classifications and lifecycle delivery, transient/persistence backoff,
 the ten-second renewal bound, isolated Domain denial, stale pending installation,
 and stable Peer IDs. The session test uses real Fetch to a synthetic loopback
-IdP/API/DDS fixture, including cancellation after the server consumes the refresh
+IdP/DDS fixture, including cancellation after the server consumes the refresh
 grant and a rejected acknowledged save. Both cases assert one refresh and no
-API/DDS exchange before storage acknowledges. Rust implements this stage's store;
+DDS admission before storage acknowledges, then successful signed peer proof.
+API exchange and Domain listing must remain unused. Rust implements this stage's store;
 JavaScript/Swift host callback adapters are tested separately in the binding stage.
 
 The separately filtered suspension test installs a normally signed 30-minute

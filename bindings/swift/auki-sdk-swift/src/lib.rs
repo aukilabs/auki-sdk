@@ -514,7 +514,8 @@ impl AukiSession {
         Ok(Arc::new(Self { bootstrap }))
     }
 
-    /// List every Domain this User may explicitly select.
+    /// Domain choices for password sessions. ZITADEL sessions require an
+    /// application-supplied Domain ID and return a configuration error here.
     pub async fn accessible_domains(&self) -> Result<Vec<AukiDomain>, AukiSdkError> {
         self.bootstrap
             .accessible_domains()

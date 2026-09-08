@@ -15,10 +15,18 @@ const errorCode = async (operation, code) => {
   }
 };
 
+// Lifecycle-only probe: refresh and durable save must complete before DDS
+// returns this deliberate denial. Successful P2P is tested against real DDS.
+const admissionProbe = async s => {
+  try { await s.startPeer('00000000-0000-0000-0000-000000000099'); }
+  catch (error) { if (error.code === 'authorization_denied') return; throw error; }
+  throw new Error('fixture unexpectedly admitted denied Domain');
+};
+
 export async function run() {
   await init();
   const passed = [];
-  const test = async (name, fn) => { await fn(); passed.push(name); document.querySelector('#result').textContent = passed.join('\n'); };
+  const test = async (name, fn) => { await fn(); const counts = await api('/__stats'); assert(counts.exchange === 0 && counts.domains === 0, 'ZITADEL called a legacy exchange or Domain listing'); passed.push(name); document.querySelector('#result').textContent = passed.join('\n'); };
   await test('synchronous import, acknowledged save, concurrent waiters, restart', async () => {
     await api('/__reset', {});
     const entered = barrier(), release = barrier(); let saves = 0, durable;
@@ -30,17 +38,17 @@ export async function run() {
       entered.resolve(); await release.promise;
     });
     assert(!(s instanceof Promise) && (await api('/__stats')).refresh === 0, 'import must not perform I/O');
-    const calls = [s.accessibleDomains(), s.accessibleDomains()];
+    await errorCode(() => s.accessibleDomains(), 'configuration');
+    const calls = [admissionProbe(s), admissionProbe(s)];
     await entered.promise;
-    assert((await api('/__stats')).exchange === 0, 'must not exchange before durable ACK');
+    assert((await api('/__stats')).admission === 0, 'must not request admission before durable ACK');
     release.resolve();
-    const domains = await Promise.all(calls);
-    assert(domains.every(d => d.length === 1 && d[0].name === 'Readable Domain'), 'Domain result mismatch');
+    await Promise.all(calls);
     assert(saves === 1 && (await api('/__stats')).refresh === 1, 'refresh/save must be single flight');
     await errorCode(() => s.startPeer('00000000-0000-0000-0000-000000000099'), 'authorization_denied');
     await s.close();
     const restarted = session(async () => { throw new Error('unexpected refresh'); }, durable);
-    assert((await restarted.accessibleDomains()).length === 1, 'saved credentials must restart');
+    await admissionProbe(restarted);
     assert((await api('/__stats')).refresh === 1, 'restart must reuse saved generation');
     await restarted.close();
   });
@@ -56,52 +64,52 @@ export async function run() {
         }
         return Promise.resolve();
       });
-      await errorCode(() => s.accessibleDomains(), 'persistence');
-      assert((await api('/__stats')).exchange === 0, 'save failure must fence exchange');
+      await errorCode(() => admissionProbe(s), 'persistence');
+      assert((await api('/__stats')).admission === 0, 'save failure must fence admission');
       fail = false;
-      assert((await s.accessibleDomains()).length === 1, 'same handle must recover');
+      await admissionProbe(s);
       assert(saves === 2 && generations.join(',') === 'refresh-1,refresh-1', 'retry must save the replacement, not rotate again');
       assert((await api('/__stats')).refresh === 1, 'save retry replayed refresh');
       await s.close();
     }
   });
-  await test('startup exchange failure keeps imported handle recoverable', async () => {
-    await api('/__reset', { exchangeFailure: 503 }); let saves = 0;
+  await test('startup admission failure keeps imported handle recoverable', async () => {
+    await api('/__reset', { admissionFailure: 503 }); let saves = 0;
     const s = session(async () => { saves++; });
-    await errorCode(() => s.accessibleDomains(), 'transient');
-    await api('/__configure', { exchangeFailure: null });
-    assert((await s.accessibleDomains()).length === 1 && saves === 1, 'startup retry must keep rotated credentials');
+    await errorCode(() => admissionProbe(s), 'transient');
+    await api('/__configure', { admissionFailure: null });
+    await admissionProbe(s); assert(saves === 1, 'startup retry must keep rotated credentials');
     await s.close();
   });
   await test('close drains pending save, fences waiters, prevents late writes', async () => {
     await api('/__reset', {});
     const entered = barrier(), release = barrier(); let writes = 0, closed = false;
     const s = session(async () => { entered.resolve(); await release.promise; writes++; });
-    const operation = errorCode(() => s.accessibleDomains(), 'closed');
+    const operation = errorCode(() => admissionProbe(s), 'closed');
     await entered.promise;
     const closing = s.close().then(() => { closed = true; });
     await delay(100);
     assert(!closed && writes === 0, 'close must drain the host callback');
     release.resolve(); await Promise.all([closing, operation]);
-    assert(writes === 1 && (await api('/__stats')).exchange === 0, 'close must prevent downstream I/O');
+    assert(writes === 1 && (await api('/__stats')).admission === 0, 'close must prevent downstream I/O');
     writes = 0; // host clearing storage happens only now
-    await errorCode(() => s.accessibleDomains(), 'closed');
+    await errorCode(() => admissionProbe(s), 'closed');
     await s.close(); await delay(50); assert(writes === 0, 'late save after completed close');
   });
   await test('typed terminal auth failures and redacted validation', async () => {
     for (const [tokenError, code] of [['invalid_grant', 'authentication_required'], ['invalid_client', 'configuration']]) {
       await api('/__reset', { tokenError });
       const s = session(async () => { throw new Error('must not save'); });
-      await errorCode(() => s.accessibleDomains(), code);
-      await errorCode(() => s.accessibleDomains(), code);
+      await errorCode(() => admissionProbe(s), code);
+      await errorCode(() => admissionProbe(s), code);
       assert((await api('/__stats')).refresh === 1, 'terminal error must latch');
       await s.close();
     }
     await errorCode(() => session(async () => {}, { ...payload(), issuer: 'DO_NOT_LEAK_HOST_SECRET' }), 'configuration');
     await errorCode(() => session(async () => {}, { ...payload(), accessTokenExpiresAt: 'DO_NOT_LEAK_HOST_SECRET' }), 'configuration');
-    await api('/__reset', { exchangeFailure: 403 });
+    await api('/__reset', { admissionFailure: 403 });
     const s = session(async () => {});
-    await errorCode(() => s.accessibleDomains(), 'authorization_denied'); await s.close();
+    await errorCode(() => s.startPeer('00000000-0000-0000-0000-000000000099'), 'authorization_denied'); await s.close();
   });
   document.querySelector('#result').textContent = `PASS ${passed.length} Web binding cases\n${passed.join('\n')}`;
   return passed;

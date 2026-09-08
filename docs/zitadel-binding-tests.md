@@ -4,6 +4,11 @@ Run from the SDK root. These tests use synthetic credentials and a loopback-only
 IdP/API/DDS fixture. They verify actual generated Web/Wasm and Swift/UniFFI
 adapters, **not** the Z10 real Auki service chain or a live ZITADEL tenant.
 
+ZITADEL probes use a supplied Domain ID and deliberately stop at DDS denial after
+refresh/save acknowledgement. They do not claim successful P2P startup. Counters
+reject API exchange and Domain listing; the actual-service suite separately
+proves successful admission, traffic and renewal.
+
 ## Web
 
 Requires Node/npm, Chrome, wasm-pack, Rust's `wasm32-unknown-unknown` target, and

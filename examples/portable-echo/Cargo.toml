@@ -1,0 +1,18 @@
+[package]
+name = "auki-portable-echo"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+description = "Portable echo protocol and cross-platform AukiPeer endpoint."
+readme = "README.md"
+
+[dependencies]
+async-channel = { workspace = true }
+auki-sdk = { path = "../../crates/auki-sdk" }
+futures = { workspace = true }
+futures-timer = { workspace = true }
+thiserror = { workspace = true }

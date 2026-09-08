@@ -20,7 +20,7 @@ Detection Log without needing the detector code.
 | SDK runner | Contract validation, cadence, provenance, bounded scheduling, isolation, lifecycle, counters, output plumbing |
 | Application | Which implementation runs, concrete Resource inputs and output, live or replay mode, cadence, start/stop policy, resource budget |
 
-Discovery and automatic source-selection helpers are conveniences. They may
+Catalog-query and automatic source-selection helpers are conveniences. They may
 filter for compatible Resources and return one unambiguous candidate, but they
 must fail closed on ambiguity. They do not move policy ownership from the
 application into a Mapper or Detector.
@@ -54,7 +54,7 @@ runner must therefore:
 For camera detection and voxel mapping, the default overload policy is a
 single pending sample: while the worker is busy, a newer ready-to-process sample
 replaces the older one. This is **latest-wins**. It bounds memory and latency and
-prevents a slow component from starving membership, heartbeat, stream, or UI
+prevents a slow component from starving authenticated protocol, stream, or UI
 tasks. The item currently executing is allowed to finish; cancellation discards
 pending work and prevents another item from starting.
 

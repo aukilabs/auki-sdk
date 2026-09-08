@@ -1,17 +1,17 @@
 //! Peer — the stable, long-lived identity and registries for the Auki SDK.
 //!
 //! A `Peer` owns `peer_id`, `app_id`, `storage_root`, and the eternal
-//! sensor / frame / detector registries. It persists across session
-//! restarts; each restart starts a fresh [`crate::Session`] via
-//! [`Peer::start_session`]. See #274 Phase 1.
+//! sensor / frame / detector / map / device-model registries. It persists
+//! across session restarts; each restart starts a fresh [`crate::Session`] via
+//! [`Peer::start_session`].
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use auki_registry::{
-    AxisConvention, DetectorBody, DetectorRegistryEntry, FrameRegistryEntry, Handedness,
-    LengthUnit, MapBody, MapRegistryEntry, RegistryRef, DeviceModelBody, DeviceModelRegistryEntry,
-    SensorBody, SensorRegistryEntry,
+    AxisConvention, DetectorBody, DetectorRegistryEntry, DeviceModelBody, DeviceModelRegistryEntry,
+    FrameRegistryEntry, Handedness, LengthUnit, MapBody, MapRegistryEntry, RegistryRef, SensorBody,
+    SensorRegistryEntry,
 };
 use parking_lot::RwLock;
 
@@ -342,9 +342,18 @@ impl Peer {
         Session::start(self.inner.clone())
     }
 
-    /// A cheaply-cloneable read handle over this peer's registries, for
-    /// `auki-domain` to resolve registry entries (e.g. a sensor's kind/type)
-    /// while building the resource catalog. See [`PeerRegistries`].
+    /// Return whether `session` was created by this exact peer instance.
+    ///
+    /// Comparing peer IDs is insufficient because two independent [`Peer`]
+    /// values may carry the same ID while owning different registries.
+    pub fn owns_session(&self, session: &Session) -> bool {
+        Arc::ptr_eq(&self.inner, &session.peer)
+    }
+
+    /// A cheaply-cloneable read handle over this peer's registries.
+    ///
+    /// Protocol adapters use it to resolve exact metadata while building
+    /// catalog rows. See [`PeerRegistries`].
     pub fn registries(&self) -> PeerRegistries {
         PeerRegistries {
             inner: self.inner.clone(),
@@ -354,10 +363,9 @@ impl Peer {
 
 /// A cheaply-cloneable read handle over a [`Peer`]'s registries.
 ///
-/// Obtained via [`Peer::registries`]. `auki-domain` holds one to look up
-/// registry entries when building catalog rows (the eternal capabilities a
-/// session's logs reference). Each accessor takes a brief read lock and
-/// returns an owned clone.
+/// Obtained via [`Peer::registries`]. Protocol adapters retain it to resolve
+/// registry entries referenced by a Session's logs while building catalog
+/// rows. Each accessor takes a brief read lock and returns an owned clone.
 #[derive(Clone)]
 pub struct PeerRegistries {
     inner: Arc<RwLock<PeerInner>>,
@@ -380,7 +388,12 @@ impl PeerRegistries {
         self.inner.read().device_models.get(id).cloned()
     }
     pub fn device_models(&self) -> Vec<DeviceModelRegistryEntry> {
-        self.inner.read().device_models.iter().map(|(_, entry)| entry.clone()).collect()
+        self.inner
+            .read()
+            .device_models
+            .iter()
+            .map(|(_, entry)| entry.clone())
+            .collect()
     }
 }
 
@@ -414,6 +427,18 @@ mod tests {
         assert_eq!(p.peer_id(), "galbot");
         assert_eq!(p.app_id(), "galbot-ctrl");
         assert_eq!(p.storage_root(), tmp.path());
+    }
+
+    #[test]
+    fn peer_recognizes_only_sessions_from_the_same_instance() {
+        let tmp = tempdir().unwrap();
+        let peer = Peer::new("galbot", "galbot-ctrl").with_storage_root(tmp.path().join("peer"));
+        let session = peer.start_session().unwrap();
+        let lookalike =
+            Peer::new("galbot", "galbot-ctrl").with_storage_root(tmp.path().join("lookalike"));
+
+        assert!(peer.owns_session(&session));
+        assert!(!lookalike.owns_session(&session));
     }
 
     #[test]

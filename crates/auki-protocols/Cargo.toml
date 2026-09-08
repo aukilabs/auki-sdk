@@ -1,0 +1,135 @@
+[package]
+name = "auki-protocols"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Opt-in wire contracts and portable AukiPeer protocol APIs."
+readme = "README.md"
+
+[features]
+default = []
+info = [
+    "dep:auki-datatypes",
+    "dep:futures",
+    "dep:libp2p-identity",
+    "dep:prost",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:thiserror",
+]
+info-endpoint = ["info", "dep:auki-sdk", "dep:futures-timer"]
+catalog = [
+    "dep:auki-jcs",
+    "dep:auki-manifests",
+    "dep:auki-registry",
+    "dep:futures",
+    "dep:libp2p-identity",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:thiserror",
+]
+catalog-endpoint = ["catalog", "dep:auki-sdk", "dep:futures-timer"]
+registry = [
+    "dep:futures",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:thiserror",
+]
+registry-endpoint = [
+    "registry",
+    "dep:auki-hash",
+    "dep:auki-registry",
+    "dep:auki-sdk",
+    "dep:futures-timer",
+]
+registry-fs-provider = ["registry-endpoint"]
+blob = [
+    "dep:auki-datatypes",
+    "dep:auki-registry",
+    "dep:futures",
+    "dep:prost",
+    "dep:thiserror",
+]
+blob-endpoint = ["blob", "dep:auki-sdk", "dep:futures-timer"]
+blob-fs-provider = ["blob-endpoint"]
+message = [
+    "dep:auki-datatypes",
+    "dep:auki-registry",
+    "dep:futures",
+    "dep:libp2p-identity",
+    "dep:prost",
+    "dep:thiserror",
+]
+message-endpoint = [
+    "message",
+    "dep:async-channel",
+    "dep:auki-sdk",
+    "dep:futures-timer",
+    "dep:tokio",
+]
+stream = [
+    "dep:auki-datatypes",
+    "dep:futures",
+    "dep:prost",
+    "dep:serde",
+    "dep:thiserror",
+]
+stream-endpoint = ["stream", "dep:auki-sdk", "dep:futures-timer"]
+session-adapter = [
+    "catalog-endpoint",
+    "stream-endpoint",
+    "dep:auki-session",
+    "dep:tokio",
+]
+
+[dependencies]
+async-channel = { workspace = true, optional = true }
+auki-datatypes = { path = "../auki-datatypes", optional = true }
+auki-hash = { path = "../auki-hash", optional = true }
+auki-jcs = { path = "../auki-jcs", optional = true }
+auki-manifests = { path = "../auki-manifests", optional = true }
+auki-registry = { path = "../auki-registry", optional = true }
+auki-sdk = { path = "../auki-sdk", optional = true }
+futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
+futures-timer = { workspace = true, optional = true }
+libp2p-identity = { version = "0.2", default-features = false, features = ["peerid", "serde"], optional = true }
+prost = { version = "0.13", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+thiserror = { version = "2", optional = true }
+tokio = { workspace = true, features = ["sync"], optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+auki-session = { path = "../auki-session", optional = true }
+
+[dev-dependencies]
+futures = "0.3"
+serde_json = "1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+auki-p2p = { path = "../auki-p2p" }
+hex = { workspace = true }
+jsonwebtoken = "9.3.0"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt", "time"] }
+
+[[bin]]
+name = "regen_protocol_fixtures"
+path = "src/bin/regen_locked_fixtures.rs"
+required-features = ["catalog", "stream"]
+
+[[test]]
+name = "locked_json"
+path = "tests/locked_json.rs"
+required-features = ["catalog", "stream"]
+
+[[test]]
+name = "stage1_release_vector"
+path = "tests/stage1_release_vector.rs"
+required-features = ["catalog"]

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package auki.stream;
 
-// libp2p substream protocol envelope for `/auki/stream/0.2.0`.
+// libp2p substream protocol envelope for `/auki/auth/1/stream/0.2.0`.
 //
 // Each substream is a sequence of length-prefixed [`StreamMessage`]
 // values (4-byte big-endian u32 length + protobuf-encoded body). The

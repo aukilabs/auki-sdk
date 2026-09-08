@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <title>Auki echo peer</title>
+  </head>
+  <body>
+    <main>
+      <h1>Auki echo peer</h1>
+      <form id="login">
+        <input id="email" type="email" autocomplete="username" placeholder="Email" required />
+        <input
+          id="password"
+          type="password"
+          autocomplete="current-password"
+          placeholder="Password"
+          required
+        />
+        <button id="login-button" type="submit" disabled>Log in</button>
+      </form>
+
+      <form id="start" hidden>
+        <select id="domain" aria-label="Accessible Domain" required></select>
+        <select id="reachability-mode" aria-label="Peer reachability mode">
+          <option value="outbound_only" selected>Outbound only (no relay booking)</option>
+          <option value="relay_backed">Inbound + outbound (book relay)</option>
+        </select>
+        <select id="discovery-mode" aria-label="DDS discovery mode">
+          <option value="discover_only" selected>Discover only (stay hidden)</option>
+          <option value="discover_and_advertise">Discover + advertise</option>
+        </select>
+        <button id="start-button" type="submit">Start peer</button>
+      </form>
+
+      <pre id="local">Not connected</pre>
+
+      <fieldset id="discovery" hidden>
+        <legend>Discovered Echo peers — untrusted until exact dial</legend>
+        <button id="refresh-button" type="button">Refresh Echo peers</button>
+        <select id="candidates" aria-label="Discovered Echo peers" disabled>
+          <option value="">No discovered peers</option>
+        </select>
+        <button id="use-candidate-button" type="button" disabled>Use selected peer</button>
+      </fieldset>
+
+      <p>Exact target (also supports manual fallback):</p>
+      <form id="send">
+        <input id="remote-peer" placeholder="Remote Peer ID" required />
+        <input id="remote-route" placeholder="Remote WSS route" required />
+        <input id="message" placeholder="Message" required />
+        <button id="send-button" type="submit" disabled>Send echo</button>
+      </form>
+
+      <button id="stop-button" type="button" disabled>Stop peer</button>
+      <pre id="log" aria-live="polite"></pre>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

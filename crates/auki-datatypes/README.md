@@ -21,7 +21,7 @@ Each module exposes a canonical payload shape used on both disk and wire. The pr
   ignore it instead of adding absolute evidence.
 - `time_transform::TimeTransformEntry`
 - `stream::{StreamMessage, StreamRequest, StreamManifest, StreamEntry, DeclineReason, EndReason}`
-  - `StreamRequest` fields (field-number ledger — never reuse or renumber): legacy `sensor_id` (1), `resource_id` (2), `source_peer_id` (3), `read_from` oneof (`latest` = 4, `from_start` = 5, `from_timestamp` = 6 with `int64 timestamp_ns`). New `/auki/stream/0.2.0` opens identify logs by `source_peer_id + resource_id`.
+  - `StreamRequest` fields (field-number ledger — never reuse or renumber): legacy `sensor_id` (1), `resource_id` (2), `source_peer_id` (3), `read_from` oneof (`latest` = 4, `from_start` = 5, `from_timestamp` = 6 with `int64 timestamp_ns`). Authenticated `/auki/auth/1/stream/0.2.0` opens identify logs by `source_peer_id + resource_id`.
   - Map-update manifests pin the Map Registry identity (`map_peer_id`, `map_id`, `map_hash`) and explicit clock owner (`clock_peer_id`).
 - Locked wire-byte vectors pin every payload across language reimplementations.
 

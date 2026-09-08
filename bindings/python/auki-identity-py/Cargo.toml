@@ -2,10 +2,11 @@
 name = "auki-identity-py"
 version = "0.0.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "PyO3 bindings for a tiny slice of the Auki SDK — `load_or_mint_seed`, wallet/peer identity, and `app_instance.derive`. A stepping stone for Boosterapp's Python sidecar to build its SDK identity (`ParticipantInfo` fields) ahead of the full `auki-py` MVP."
+description = "PyO3 bindings for persistent Auki wallet identity, canonical P2P seed derivation, and native app-instance identifiers."
 
 [lib]
 # `cdylib` makes the crate build as a Python native extension.
@@ -34,8 +35,8 @@ extension-module = ["pyo3/extension-module"]
 # Renamed via `package =` so the upstream crate's name doesn't collide
 # with our own lib name `auki_identity` (which is also the Python
 # module name the `#[pymodule]` macro generates the entry point for).
-auki-identity-rs = { package = "auki-identity", path = "../../../crates/auki-identity" }
-auki-network = { path = "../../../crates/auki-network", features = ["app_instance"] }
+auki-identity-rs = { package = "auki-identity", path = "../../../crates/auki-identity", features = ["app-instance"] }
+auki-p2p = { path = "../../../crates/auki-p2p" }
 # `abi3-py38` builds a stable-ABI extension that works on Python 3.8+
 # without rebuilding per minor version.
 pyo3 = { version = "0.22", features = ["abi3-py38"] }

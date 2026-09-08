@@ -1,0 +1,7 @@
+.build-bindings/
+.build/
+*.xcodeproj/
+DerivedData/
+Package.resolved
+Package/Artifacts/
+Package/Sources/AukiCameraMesh/Generated/

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package auki.info;
 
-// libp2p substream protocol messages for `/auki/info/0.0.1`.
+// libp2p substream protocol messages for `/auki/auth/1/info/1.0.0`.
 
 message InfoRequest {}
 

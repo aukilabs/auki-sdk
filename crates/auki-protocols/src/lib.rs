@@ -1,0 +1,35 @@
+//! Opt-in wire contracts and portable `auki_sdk::AukiPeer` protocol APIs.
+//!
+//! Every protocol family is compile-time opt-in and the default feature set is
+//! empty. Exact wire versions are explicit in module paths, for example
+//! `catalog::v3` and `stream::v2`. Wire features expose bounded codecs;
+//! `*-endpoint` features add Clients and inbound Endpoints, plus Provider
+//! traits where the protocol delegates data or policy. Applications still own
+//! authorization policy and endpoint lifecycle.
+
+#![forbid(unsafe_code)]
+
+#[cfg(any(
+    feature = "blob-endpoint",
+    feature = "catalog-endpoint",
+    feature = "info-endpoint",
+    feature = "message-endpoint",
+    feature = "registry-endpoint",
+    feature = "stream-endpoint",
+))]
+mod endpoint_support;
+
+#[cfg(feature = "blob")]
+pub mod blob;
+#[cfg(feature = "catalog")]
+pub mod catalog;
+#[cfg(feature = "info")]
+pub mod info;
+#[cfg(any(feature = "catalog", feature = "message"))]
+pub mod message;
+#[cfg(feature = "registry")]
+pub mod registry;
+#[cfg(all(feature = "session-adapter", not(target_arch = "wasm32")))]
+pub mod session_adapter;
+#[cfg(feature = "stream")]
+pub mod stream;

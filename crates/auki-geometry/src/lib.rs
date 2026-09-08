@@ -720,9 +720,9 @@ mod tests {
     }
 
     fn apply_transform_to_point(transform: &SpatialTransform, point: Vec3) -> Vec3 {
-        let rotation = quat_to_matrix(transform.orientation.clone().unwrap());
+        let rotation = quat_to_matrix(transform.orientation.unwrap());
         let rotated = apply_matrix3_to_vec3(rotation, point).unwrap();
-        let translation = transform.translation.clone().unwrap();
+        let translation = transform.translation.unwrap();
         vec3(
             rotated.x + translation.x,
             rotated.y + translation.y,
@@ -915,7 +915,7 @@ mod tests {
         };
         let pose = SpatialTransform {
             translation: None,
-            orientation: Some(source_q.clone()),
+            orientation: Some(source_q),
         };
         let converted = convert_pose_convention(&pose, &from, &to).unwrap();
         let source_vector = Vec3 {
@@ -924,7 +924,7 @@ mod tests {
             z: 0.0,
         };
 
-        let source_after = apply_matrix(quat_to_matrix(source_q), source_vector.clone());
+        let source_after = apply_matrix(quat_to_matrix(source_q), source_vector);
         let expected_target_after = convert_direction_convention(source_after, &from, &to).unwrap();
 
         let target_vector = convert_direction_convention(source_vector, &from, &to).unwrap();
@@ -967,7 +967,7 @@ mod tests {
         // feeding the equivalent `from`-convention point through the
         // original transform.
         let point_in_to = vec3(4.0, -1.0, 2.0);
-        let point_in_from = convert_point_convention(point_in_to.clone(), &to, &from).unwrap();
+        let point_in_from = convert_point_convention(point_in_to, &to, &from).unwrap();
 
         let via_original = apply_transform_to_point(&a_to_b, point_in_from);
         let via_converted = apply_transform_to_point(&converted, point_in_to);
@@ -987,7 +987,7 @@ mod tests {
         // produce target-side points that are the same physical point, just
         // re-expressed in the new target convention.
         let point_in_from = vec3(4.0, -1.0, 2.0);
-        let via_original = apply_transform_to_point(&a_to_b, point_in_from.clone());
+        let via_original = apply_transform_to_point(&a_to_b, point_in_from);
         let via_converted = apply_transform_to_point(&converted, point_in_from);
 
         let expected = convert_point_convention(via_original, &from, &to).unwrap();
@@ -1044,7 +1044,7 @@ mod tests {
         let slam_to_camera = inverse_spatial_transform(&camera_to_slam).unwrap();
 
         let camera_point = vec3(4.0, -1.0, 2.0);
-        let slam_point = apply_transform_to_point(&camera_to_slam, camera_point.clone());
+        let slam_point = apply_transform_to_point(&camera_to_slam, camera_point);
         let round_tripped = apply_transform_to_point(&slam_to_camera, slam_point);
 
         assert_vec3_close(round_tripped, camera_point);
@@ -1058,10 +1058,8 @@ mod tests {
         let a_to_c = compose_spatial_transforms(&a_to_b, &b_to_c).unwrap();
 
         let point_in_a = vec3(3.0, 4.0, 5.0);
-        let via_b = apply_transform_to_point(
-            &b_to_c,
-            apply_transform_to_point(&a_to_b, point_in_a.clone()),
-        );
+        let via_b =
+            apply_transform_to_point(&b_to_c, apply_transform_to_point(&a_to_b, point_in_a));
         let direct = apply_transform_to_point(&a_to_c, point_in_a);
 
         assert_vec3_close(direct, via_b);

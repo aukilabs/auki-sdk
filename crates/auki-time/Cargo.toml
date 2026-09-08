@@ -2,10 +2,11 @@
 name = "auki-time"
 version = "0.0.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Auki SDK time primitives: session clocks, time transforms, NTP-style samples, and TimeTransform Log sampling."
+description = "Auki SDK time primitives: session clocks, affine time transforms, and TimeTransform Log sampling."
 
 [dependencies]
 auki-registry = { path = "../auki-registry" }

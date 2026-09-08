@@ -1,0 +1,7 @@
+Package/Artifacts/
+Package/Sources/AukiPortableEcho/Generated/
+Package/.build/
+.build-bindings/
+*.xcodeproj/
+DerivedData/
+.mint/

@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#070a0d" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230d1419'/%3E%3Ccircle cx='16' cy='16' r='7' fill='none' stroke='%2359e3ad' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='2' fill='%2359e3ad'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <title>Auki Camera Mesh</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#runtime-main">Skip to cameras</a>
+
+    <main class="gate" id="auth-section">
+      <section class="auth-card" aria-labelledby="welcome-title">
+        <header class="auth-intro">
+          <div class="brand brand-large">
+            <span class="brand-mark" aria-hidden="true"></span>
+            <span>Camera <strong>Mesh</strong></span>
+          </div>
+          <div>
+            <p class="eyebrow">Authenticated camera monitoring</p>
+            <h1 id="welcome-title">Your camera wall,<br />without the control-room clutter.</h1>
+            <p>Sign in, choose a Domain, and monitor the peers you trust.</p>
+          </div>
+          <p class="auth-footnote">Browser identities and camera approvals are ephemeral.</p>
+        </header>
+
+        <div class="auth-controls">
+          <form id="login">
+            <div class="form-heading">
+              <p class="step">Step 1 of 2</p>
+              <h2>Sign in</h2>
+            </div>
+            <label>Email
+              <input id="email" name="email" type="email" autocomplete="username" placeholder="you@example.com" required />
+            </label>
+            <label>Password
+              <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Your password" required />
+            </label>
+            <button id="login-button" class="primary wide" type="submit" disabled>Sign in</button>
+          </form>
+
+          <div class="peer-config" id="peer-config" hidden>
+            <div class="form-heading">
+              <p class="step">Step 2 of 2</p>
+              <h2>Open Camera Mesh</h2>
+            </div>
+            <label>Domain
+              <select id="domain" name="domain" required></select>
+            </label>
+            <label>Mode
+              <select id="role" name="role">
+                <option value="viewer">Monitor cameras</option>
+                <option value="publisher">Share this camera</option>
+              </select>
+            </label>
+            <details class="advanced-field">
+              <summary>Advanced</summary>
+              <label>Display name
+                <input id="display-name" name="display-name" autocomplete="nickname" placeholder="Camera Mesh browser" maxlength="80" />
+              </label>
+              <label class="checkbox-field" id="viewer-inbound-relay-field">
+                <input id="viewer-inbound-relay" name="viewer-inbound-relay" type="checkbox" />
+                <span>
+                  Enable an inbound relay
+                  <small>Optional for monitoring; required for verified snapshots.</small>
+                </span>
+              </label>
+            </details>
+            <button id="start-peer-button" class="primary wide" type="button">Continue</button>
+          </div>
+          <p class="inline-alert" id="auth-error" role="alert" hidden></p>
+        </div>
+      </section>
+    </main>
+
+    <section class="app-shell" id="runtime-section" hidden>
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">Camera <strong>Mesh</strong></span>
+        </div>
+
+        <div class="domain-status" aria-live="polite">
+          <span class="status-dot" id="peer-status-dot"></span>
+          <span class="domain-name" id="domain-name">Starting…</span>
+          <span class="status-copy" id="wall-status">Connecting</span>
+        </div>
+
+        <div class="monitor-actions" id="viewer-toolbar" hidden>
+          <div class="density-picker" role="group" aria-label="Camera wall columns">
+            <span aria-hidden="true">Columns</span>
+            <button type="button" data-column-count="1" aria-label="One column focus mode" title="Focus mode">1</button>
+            <button type="button" data-column-count="2" aria-label="Two camera columns">2</button>
+            <button type="button" data-column-count="3" aria-label="Three camera columns">3</button>
+            <button type="button" data-column-count="4" aria-label="Four camera columns">4</button>
+          </div>
+          <div class="focus-controls" id="focus-controls" aria-label="Focused camera navigation" hidden>
+            <button id="previous-camera-button" class="icon-button" type="button" aria-label="Previous camera">‹</button>
+            <span id="focus-label">1 / 1</span>
+            <button id="next-camera-button" class="icon-button" type="button" aria-label="Next camera">›</button>
+          </div>
+          <button id="record-performance-button" class="secondary performance-button" type="button" aria-label="Record performance statistics">
+            <span class="performance-symbol" aria-hidden="true">●</span>
+            <span id="record-performance-label">Record stats</span>
+          </button>
+          <button id="open-performance-report-button" class="secondary performance-button" type="button" aria-label="Open performance report" hidden>
+            <span aria-hidden="true">⇩</span>
+            <span>Report</span>
+          </button>
+          <button id="add-camera-button" class="primary add-camera" type="button"><span aria-hidden="true">＋</span> Add camera</button>
+        </div>
+
+        <details class="session-menu">
+          <summary class="icon-button" aria-label="Open session menu">•••</summary>
+          <div class="menu-popover">
+            <p class="menu-label">This peer</p>
+            <code id="peer-id-label">Starting…</code>
+            <button id="copy-card-button" class="menu-action" type="button" disabled>Copy peer card</button>
+            <button id="open-diagnostics-button" class="menu-action" type="button">Diagnostics</button>
+            <button id="remove-all-cameras-button" class="menu-action danger" type="button" hidden disabled>Disconnect and remove all cameras</button>
+            <button id="stop-peer-button" class="menu-action danger" type="button">Stop peer</button>
+          </div>
+        </details>
+      </header>
+
+      <main id="runtime-main" class="runtime-main">
+        <section class="monitor" id="viewer-panel" aria-label="Camera wall" hidden>
+          <div class="camera-grid" id="camera-grid" data-column-count="2"></div>
+        </section>
+
+        <section class="publisher" id="publisher-panel" hidden>
+          <div class="publisher-stage">
+            <div class="publisher-heading">
+              <div>
+                <p class="eyebrow">Local camera</p>
+                <h2 id="publisher-title">Ready to publish</h2>
+              </div>
+              <span class="camera-spec" id="camera-spec">Low, medium, and high</span>
+            </div>
+            <div class="publisher-preview">
+              <canvas id="preview" width="480" height="270" aria-label="Local camera preview">
+                Your browser does not support the camera preview canvas.
+              </canvas>
+              <div class="preview-empty" id="preview-empty">
+                <span class="camera-glyph" aria-hidden="true"></span>
+                <p>Choose a source and start sharing.</p>
+              </div>
+              <span class="feed-badge" id="publisher-badge">OFFLINE</span>
+            </div>
+            <div class="publisher-controls">
+              <label>Source
+                <select id="capture-source">
+                  <option value="webcam">Webcam</option>
+                  <option value="synthetic">Synthetic test camera</option>
+                </select>
+              </label>
+              <div class="button-row">
+                <button id="publish-button" class="primary" type="button">Start sharing</button>
+                <button id="stop-publish-button" class="secondary" type="button" disabled>Stop</button>
+              </div>
+            </div>
+          </div>
+
+          <aside class="approval-panel">
+            <div>
+              <p class="eyebrow">Access requests</p>
+              <h2>Pending viewers</h2>
+              <p>Every viewer is authenticated to this Domain. You still approve camera access explicitly.</p>
+            </div>
+            <ul id="pending-list" aria-live="polite"><li class="empty-row">No pending viewers.</li></ul>
+          </aside>
+        </section>
+      </main>
+
+      <pre id="local-card" class="automation-state" aria-live="polite">Starting authenticated peer…</pre>
+      <p id="metrics" class="automation-state">Stream idle</p>
+    </section>
+
+    <dialog class="sheet add-sheet" id="add-camera-dialog" aria-labelledby="add-camera-title">
+      <div class="sheet-shell">
+        <header class="sheet-header">
+          <div>
+            <p class="eyebrow">Camera wall</p>
+            <h2 id="add-camera-title">Add a camera</h2>
+          </div>
+          <button class="icon-button" id="close-add-camera-button" type="button" aria-label="Close add camera">×</button>
+        </header>
+        <div class="sheet-body">
+          <section class="add-quality" aria-labelledby="add-quality-title">
+            <div>
+              <h3 id="add-quality-title">New camera quality</h3>
+              <p>Used for one camera, a peer card, or the full discovered set.</p>
+            </div>
+            <label>Resolution
+              <select id="add-camera-quality">
+                <option value="low">Low · 480×270 @ 5 fps</option>
+                <option value="medium">Medium · 960×540 @ 15 fps</option>
+                <option value="high">High · 1920×1080 @ 30 fps</option>
+              </select>
+            </label>
+          </section>
+          <div class="discovery-heading">
+            <div>
+              <h3>Available in this Domain</h3>
+              <p>Camera publishers advertising through DDS.</p>
+            </div>
+            <div class="discovery-actions">
+              <button id="discover-button" class="secondary compact" type="button">Refresh</button>
+              <button
+                id="add-all-cameras-button"
+                class="primary compact"
+                type="button"
+                title="Connect to every discovered camera concurrently"
+                disabled
+              >Add all</button>
+            </div>
+          </div>
+          <div class="camera-results" id="camera-results" aria-live="polite">
+            <p class="empty-message">Open this panel to discover cameras.</p>
+          </div>
+
+          <details class="manual-target">
+            <summary>Connect with a peer card</summary>
+            <div class="manual-card-form">
+              <label>Publisher peer card
+                <textarea id="manual-card" spellcheck="false" placeholder="Paste the publisher’s JSON peer card"></textarea>
+              </label>
+              <button id="add-card-button" class="secondary" type="button">Add from peer card</button>
+            </div>
+          </details>
+          <p class="inline-alert" id="add-camera-error" role="alert" hidden></p>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog class="sheet diagnostics-sheet" id="diagnostics-dialog" aria-labelledby="diagnostics-title">
+      <div class="sheet-shell">
+        <header class="sheet-header">
+          <div>
+            <p class="eyebrow">Developer tools</p>
+            <h2 id="diagnostics-title">Diagnostics</h2>
+          </div>
+          <button class="icon-button" id="close-diagnostics-button" type="button" aria-label="Close diagnostics">×</button>
+        </header>
+        <div class="sheet-body diagnostics-body">
+          <section aria-labelledby="live-stream-diagnostics-title">
+            <h3 id="live-stream-diagnostics-title">Live stream</h3>
+            <div class="stream-diagnostic-grid">
+              <article>
+                <span>Profile</span>
+                <output id="diagnostic-profile">—</output>
+                <small>verified wire contract</small>
+              </article>
+              <article>
+                <span>Capture</span>
+                <output id="diagnostic-capture-fps">—</output>
+                <small id="diagnostic-capture-detail">publisher only</small>
+              </article>
+              <article>
+                <span>Receive</span>
+                <output id="diagnostic-fps">—</output>
+                <small>rolling 5 seconds</small>
+              </article>
+              <article>
+                <span>Display</span>
+                <output id="diagnostic-display-fps">—</output>
+                <small>decoded image paints</small>
+              </article>
+              <article>
+                <span>Bandwidth</span>
+                <output id="diagnostic-bandwidth">—</output>
+                <small id="diagnostic-frame-size">Waiting for frames</small>
+              </article>
+              <article>
+                <span>Frame age</span>
+                <output id="diagnostic-frame-age">—</output>
+                <small>capture to rendered image</small>
+              </article>
+            </div>
+          </section>
+          <div class="protocol-strip" aria-label="Protocols in use">
+            <span>INFO</span><span>CATALOG</span><span>REGISTRY</span>
+            <span>BLOB</span><span>MESSAGE</span><span>STREAM</span>
+          </div>
+          <section>
+            <h3>Selected camera</h3>
+            <pre id="inspector-details">Select a connected camera to inspect it.</pre>
+          </section>
+          <section>
+            <h3>Timeline</h3>
+            <pre id="timeline" aria-live="polite"></pre>
+          </section>
+          <section>
+            <h3>Recent events</h3>
+            <pre id="events" aria-live="polite"></pre>
+          </section>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog class="snapshot-dialog" id="snapshot-dialog" aria-labelledby="snapshot-title">
+      <div class="snapshot-shell">
+        <header class="sheet-header">
+          <div>
+            <p class="eyebrow">SHA-256 verified</p>
+            <h2 id="snapshot-title">Camera snapshot</h2>
+          </div>
+          <button class="icon-button" id="close-snapshot-button" type="button" aria-label="Close snapshot">×</button>
+        </header>
+        <img id="snapshot-image" alt="Verified camera snapshot" hidden />
+        <p id="snapshot-status">No snapshot requested.</p>
+      </div>
+    </dialog>
+
+    <dialog class="camera-actions-dialog" id="camera-actions-dialog" aria-labelledby="camera-actions-title">
+      <div class="camera-actions-shell">
+        <header class="sheet-header">
+          <div>
+            <p class="eyebrow">Camera controls</p>
+            <h2 id="camera-actions-title">Selected camera</h2>
+          </div>
+          <button class="icon-button" id="close-camera-actions-button" type="button" aria-label="Close camera controls">×</button>
+        </header>
+        <div class="camera-action-list">
+          <section class="quality-picker" aria-labelledby="camera-quality-title">
+            <p id="camera-quality-title">Stream quality</p>
+            <div>
+              <button type="button" data-camera-action="quality-low">Low · 480×270 @ 5</button>
+              <button type="button" data-camera-action="quality-medium">Medium · 960×540 @ 15</button>
+              <button type="button" data-camera-action="quality-high">High · 1920×1080 @ 30</button>
+            </div>
+          </section>
+          <button type="button" data-camera-action="freeze">Freeze local view</button>
+          <button type="button" data-camera-action="snapshot">Verified snapshot</button>
+          <button type="button" data-camera-action="fullscreen">Full screen</button>
+          <button type="button" data-camera-action="source-pause">Pause camera for every viewer</button>
+          <button type="button" data-camera-action="retry">Retry connection</button>
+          <button type="button" data-camera-action="details">Connection details</button>
+          <button class="danger" type="button" data-camera-action="remove">Disconnect and remove</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog class="sheet performance-sheet" id="performance-report-dialog" aria-labelledby="performance-report-title">
+      <div class="sheet-shell">
+        <header class="sheet-header">
+          <div>
+            <p class="eyebrow">Camera wall measurements</p>
+            <h2 id="performance-report-title">Performance report</h2>
+          </div>
+          <button class="icon-button" id="close-performance-report-button" type="button" aria-label="Close performance report">×</button>
+        </header>
+        <div class="sheet-body performance-report-body">
+          <p id="performance-report-summary">No performance recording yet.</p>
+          <div class="performance-report-actions">
+            <button id="copy-performance-report-button" class="secondary" type="button">Copy JSON</button>
+            <button id="download-performance-report-button" class="primary" type="button">Download JSON</button>
+          </div>
+          <p class="performance-report-note">The report contains stream rates, bytes, frame age, quality changes, and runtime events. It never includes credentials.</p>
+        </div>
+      </div>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

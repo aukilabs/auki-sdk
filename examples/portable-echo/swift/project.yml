@@ -1,0 +1,55 @@
+name: AukiPortableEchoIOS
+
+options:
+  bundleIdPrefix: com.aukilabs.examples
+  deploymentTarget:
+    iOS: "17.0"
+
+packages:
+  AukiPortableEcho:
+    path: Package
+
+targets:
+  AukiPortableEchoIOS:
+    type: application
+    platform: iOS
+    sources:
+      - App
+    dependencies:
+      - package: AukiPortableEcho
+        product: AukiPortableEcho
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.aukilabs.examples.PortableEcho
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+
+  AukiPortableEchoIOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests
+    dependencies:
+      - target: AukiPortableEchoIOS
+      - package: AukiPortableEcho
+        product: AukiPortableEcho
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.aukilabs.examples.PortableEchoTests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+
+schemes:
+  AukiPortableEchoIOS:
+    build:
+      targets:
+        AukiPortableEchoIOS: all
+        AukiPortableEchoIOSTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - AukiPortableEchoIOSTests

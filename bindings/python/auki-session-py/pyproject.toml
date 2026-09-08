@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "auki-session-py"
-version = "0.0.0"
+version = "0.1.0"
 description = "PyO3 bindings for auki-session — transport-neutral in-process Python surface for opening sessions, registering sensors and clocks, writing/listing sensor and pose logs."
 readme = "README.md"
 license = { text = "MIT" }

@@ -2,6 +2,7 @@
 name = "auki-registry"
 version = "0.0.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
@@ -18,5 +19,8 @@ quick-xml = "0.37"
 thiserror = "1"
 
 [dev-dependencies]
-auki-logs = { path = "../auki-logs" }
 tempfile = "3"
+
+[[bin]]
+name = "regen_registry_fixtures"
+path = "src/bin/regen_locked_fixtures.rs"

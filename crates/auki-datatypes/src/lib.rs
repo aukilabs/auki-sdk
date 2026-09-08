@@ -45,7 +45,7 @@ pub mod camera {
 impl_log_payload!(camera::CameraFrame);
 
 /// `auki.point_cloud` — opaque-bytes point-cloud payload shared by disk
-/// (Sensor Log segment) and wire (`/auki/stream/0.2.0` substream). One
+/// (Sensor Log segment) and wire (`/auki/auth/1/stream/0.2.0` substream). One
 /// `Data` type, byte-identical encoding on both paths. Layout fields
 /// (`fields`, `point_step`, `is_bigendian`, `frame`) live on the
 /// SensorRegistryEntry's `Rangefinder` body (with `type: "point_cloud"`)
@@ -58,7 +58,7 @@ pub mod point_cloud {
 impl_log_payload!(point_cloud::Data);
 
 /// `auki.joint_encoders` — joint-encoder payload shared by disk
-/// (Sensor Log segment) and wire (`/auki/stream/0.2.0` substream). One
+/// (Sensor Log segment) and wire (`/auki/auth/1/stream/0.2.0` substream). One
 /// `Data` type, byte-identical encoding on both paths. Per-sample
 /// `repeated float angles_rad`; vector length pinned by the
 /// `SensorRegistryEntry`'s `JointEncoders { joint_count }` body via
@@ -72,7 +72,7 @@ pub mod joint_encoders {
 impl_log_payload!(joint_encoders::Data);
 
 /// `auki.scalar` — one non-spatial numeric measurement shared by disk
-/// (Sensor Log segment) and wire (`/auki/stream/0.2.0` substream). Quantity
+/// (Sensor Log segment) and wire (`/auki/auth/1/stream/0.2.0` substream). Quantity
 /// identity, unit, and expected cadence live on the Sensor Registry entry;
 /// the framing timestamp identifies the sample instant.
 pub mod scalar {
@@ -91,7 +91,7 @@ pub mod map {
 impl_log_payload!(map::MapUpdate);
 
 /// `auki.audio` — opaque-bytes audio payload shared by disk (Sensor Log
-/// segment) and wire (`/auki/stream/0.2.0` substream). One `Data` type,
+/// segment) and wire (`/auki/auth/1/stream/0.2.0` substream). One `Data` type,
 /// byte-identical encoding on both paths. `sample_format`, `channels`,
 /// `sample_rate_hz`, `channel_layout`, `frame` live on the
 /// SensorRegistryEntry's `Audio` body — interpretation comes from
@@ -144,31 +144,7 @@ pub mod time_transform {
 
 impl_log_payload!(time_transform::TimeTransformEntry);
 
-/// `auki.join` — `/auki/join/0.0.1` request/response messages.
-pub mod join {
-    include!(concat!(env!("OUT_DIR"), "/auki.join.rs"));
-
-    impl JoinResponse {
-        pub fn accept(membership_json: impl Into<String>, successor_token: Vec<u8>) -> Self {
-            Self {
-                kind: Some(join_response::Kind::Accept(join_response::Accept {
-                    membership_json: membership_json.into(),
-                    successor_token,
-                })),
-            }
-        }
-
-        pub fn reject(reason: impl Into<String>) -> Self {
-            Self {
-                kind: Some(join_response::Kind::Reject(join_response::Reject {
-                    reason: reason.into(),
-                })),
-            }
-        }
-    }
-}
-
-/// `auki.blob` — `/auki/blobs/0.1.0` request/response messages.
+/// `auki.blob` — `/auki/auth/1/blobs/0.1.0` request/response messages.
 pub mod blob {
     include!(concat!(env!("OUT_DIR"), "/auki.blob.rs"));
 
@@ -195,13 +171,13 @@ pub mod blob {
     }
 }
 
-/// `auki.info` — `/auki/info/0.0.1` request/response messages.
+/// `auki.info` — `/auki/auth/1/info/1.0.0` request/response messages.
 pub mod info {
     include!(concat!(env!("OUT_DIR"), "/auki.info.rs"));
 }
 
 /// `auki.message` — opaque typed-message envelope for
-/// `/auki/message/0.1.0`. Clock identity is declared out-of-band by the
+/// `/auki/auth/1/message/0.1.0`. Clock identity is declared out-of-band by the
 /// channel's Resource Catalog row.
 pub mod message {
     include!(concat!(env!("OUT_DIR"), "/auki.message.rs"));
@@ -565,7 +541,7 @@ mod tests {
     /// same input. Field 1 length-delimited: tag 0x0a, varint length
     /// 0x18 (24), then the 24 payload bytes. Same bytes whether the
     /// payload travels on disk (Sensor Log segment) or on the wire
-    /// (`/auki/stream/0.2.0` substream).
+    /// (`/auki/auth/1/stream/0.2.0` substream).
     #[test]
     fn point_cloud_data_serializes_to_locked_wire_bytes() {
         let bytes = step3_point_cloud_data().encode_to_vec();
@@ -663,7 +639,7 @@ mod tests {
     /// payload bytes (`0x00, 0x11, 0x22, ..., 0xff`). Cross-language
     /// readers MUST reproduce them. Same bytes whether the payload
     /// travels on disk (Sensor Log segment) or on the wire
-    /// (`/auki/stream/0.2.0` substream).
+    /// (`/auki/auth/1/stream/0.2.0` substream).
     #[test]
     fn audio_data_serializes_to_locked_wire_bytes() {
         let bytes = step4_audio_data().encode_to_vec();
@@ -1129,7 +1105,7 @@ mod tests {
     /// input. Field 1 packed-repeated float: tag 0x0a, varint length
     /// 0x18 (24 bytes = 6 × 4), then 6 little-endian f32s. Same bytes
     /// whether the payload travels on disk (Sensor Log segment) or on
-    /// the wire (`/auki/stream/0.2.0` substream).
+    /// the wire (`/auki/auth/1/stream/0.2.0` substream).
     #[test]
     fn joint_encoders_data_serializes_to_locked_wire_bytes() {
         let bytes = step_joint_encoders_data().encode_to_vec();

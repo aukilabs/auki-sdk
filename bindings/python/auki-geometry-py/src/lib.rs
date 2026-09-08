@@ -8,7 +8,7 @@
 //! [`auki-registry-py`](../../auki-registry-py).
 //!
 //! `GeometryError` is a `ValueError` subclass declared via PyO3's
-//! `create_exception!` macro, matching the pattern `auki-network-py`
+//! `create_exception!` macro, matching the other SDK Python bindings
 //! uses for its custom exception types.
 
 // PyO3 0.22 macro expansion emits a handful of lints we can't fix in

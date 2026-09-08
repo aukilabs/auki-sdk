@@ -1,108 +1,70 @@
 # For SDK Consumers
 
-This section is for engineers building products on top of the Auki SDK. If you're integrating the SDK into:
+Use the smallest SDK owner that matches the job. Local recording and
+authenticated networking are independent; applications compose them only when
+they need both.
 
-- **Booster** — the robot operator-facing visualizer / control surface
-- **Park** — the desktop / browser visualizer + scenegraph composition
-- **Galbot ROS adapters** — publishing pose, camera, point-cloud streams from a ROS environment
-- **Your own custom robot data plane consumer**
+| Goal | Start here |
+| --- | --- |
+| Start an authenticated Rust, Web, Python, or Swift peer | [Auki P2P](https://github.com/aukilabs/auki-sdk/blob/develop/docs/p2p/README.md) |
+| Use an existing protocol | [P2P getting started](https://github.com/aukilabs/auki-sdk/blob/develop/docs/p2p/getting-started.md) |
+| Author one portable protocol | [Protocol authoring](https://github.com/aukilabs/auki-sdk/blob/develop/docs/p2p/authoring-protocols.md) |
+| Record registries, manifests, and logs | [Quickstart](Quickstart) |
+| Understand source and writer identity | [Concept: peer-owned logs](Concept-Peer-Owned-Logs) |
 
-…you're in the right place.
+## Networking
 
-## Where to start
+`auki_sdk::AukiPeer` is the networking facade. It owns one authenticated Peer
+ID in one selected DDS Domain, credential renewal, transport, optional relay
+booking and routes, protocol registration, fencing, and shutdown.
 
-- [Quickstart](Quickstart) — boot a peer, register a sensor and log, inspect the catalog
-- [Concept: peer-owned logs](Concept-Peer-Owned-Logs) — the SDK's core data abstraction (source/writer split, materialization)
+An `AukiPeer` serves no application protocol by default. Enable only the
+`auki-protocols` families you need, then explicitly mount their `Endpoint`.
+Use the matching cloneable `Client` for outbound operations. Applications
+still provide the remote Peer ID and route; relay allocation is reachability,
+not discovery.
 
-## Pose log discovery and stream open
+The live resource service is Catalog v3. Its ordinary sensor, pose,
+time-transform, and detection rows retain the Catalog v2 JSON shape, while v3
+also adds message-channel rows. Catalog v2 remains a wire-compatibility schema,
+not a mounted endpoint. Map Logs use Catalog v4.
 
-Consumers such as Park should treat `/auki/resources/0.2.0` as the live
-catalog of requestable resources. Poll it, reconcile additions/removals, and
-open streams by the row's stable `resource_id`.
+## Local recording
 
-For a live movable pose stream:
+`auki_session::Peer` owns durable local registries. A `Session` is one recording
+timeline with clocks and log handles. Neither type starts networking.
 
-1. Fetch a peer's resources with a `pose_log` variant filter.
-2. Select rows where `state == "live"` and `pose.writer_mode == "movable"`.
-3. Dial the row's `writer_peer_id` peer and open `/auki/stream/0.2.0` with
-   `StreamRequest { source_peer_id: row.source_peer_id, resource_id:
-   row.resource_id, from: ReadFrom::Latest }`.
+Native Rust can project one `Peer`/`Session` pair into the Catalog and Stream
+endpoints with `auki_protocols::session_adapter::SessionProtocolProvider`.
+That adapter is mechanical; the application still decides which authenticated
+requesters may see or subscribe to its data.
 
-Rust shape:
+## Platform status
 
-```rust
-let response = cluster
-    .fetch_resources_catalog_with(
-        writer_peer_id,
-        ResourcesRequest {
-            variants: vec![Variant::PoseLog],
-        },
-    )
-    .await?;
+| Platform | Authenticated peer facade |
+| --- | --- |
+| Native Rust | Available: User/App auth, persistent identity, TCP/WSS relay routes, endpoints, shutdown |
+| Web/Wasm | Available: User auth, ephemeral identity, TCP/WSS relay routes, endpoints, shutdown |
+| Python | Available: User/App auth, persistent identity, TCP/WSS relay routes, same-module protocol adapters, shutdown |
+| Swift/iOS | Available: User auth, ephemeral or app-persisted identity, TCP/WSS relay routes, all six standard protocol adapters, same-artifact custom adapters, shutdown |
 
-for row in response.resources {
-    let is_live_pose = row.state == "live"
-        && row
-            .pose
-            .as_ref()
-            .is_some_and(|pose| pose.writer_mode == PoseWriterMode::Movable);
-    if !is_live_pose {
-        continue;
-    }
+Info, Catalog, Registry, Blob, Message, and Stream expose client and serving
+roles in Rust, Web/Wasm, Python, and Swift/iOS over the same Rust
+implementations. The standard playground is the cross-runtime interoperability
+proof; portable echo remains the small custom-protocol reference.
 
-    let request = StreamRequest {
-        source_peer_id: row.source_peer_id.clone(),
-        resource_id: row.resource_id.clone(),
-        from: ReadFrom::Latest,
-    };
-    let subscription = cluster
-        .open_stream::<auki_datatypes::pose::SpatialTransform>(writer_peer_id, request)
-        .await?;
-}
-```
+Do not start a new integration on the removed Manager or `Domain` runtime.
+Historical behavior remains documented in [Release history](Release-History)
+and old tags.
 
-Python shape:
+## Keep these boundaries
 
-```python
-from auki_domain import ReadFrom, StreamRequest
+- A route says where to dial; it grants no authority.
+- An authenticated peer shares a Domain; product policy still decides what it
+  may do.
+- A protocol ID names one immutable wire contract.
+- Close mounted endpoints before awaiting `peer.shutdown()`.
+- Use one live runtime per persisted Peer ID.
 
-for row in manager.fetch_resources_catalog(peer_id, variants=["pose_log"]):
-    pose = row.pose
-    if row.state != "live":
-        continue
-    if pose is None or pose.get("writer_mode") != "movable":
-        continue
-
-    request = StreamRequest(
-        resource_id=row.resource_id,
-        source_peer_id=row.source_peer_id,
-        from_=ReadFrom.latest(),
-    )
-    sub = manager.open_stream_with_request(row.writer_peer_id, request)
-```
-
-`writer_peer_id` chooses which peer to dial. `StreamRequest` identifies the
-data by `source_peer_id` and `resource_id`; it does not carry `writer_peer_id`.
-
-More concept primers and recipes coming as follow-up cards land:
-
-- The three IDs (peer / app / session)
-- Materialization (how Park copies Galbot's stream)
-- Register a sensor and publish frames (recipe)
-- Consume another peer's stream (recipe)
-- Materialize a remote log with custom retention (recipe)
-- Migrate from pre-#216 SDK to v0.0.53+ (recipe)
-- Troubleshooting common errors
-
-## API surface
-
-Apps use `auki-session` as the entry point. See:
-
-- [auki-session crate README](https://github.com/aukilabs/auki-sdk/blob/develop/crates/auki-session/README.md) — Rust API
-- [auki-session-py README](https://github.com/aukilabs/auki-sdk/blob/develop/bindings/python/auki-session-py/README.md) — Python API
-
-## Release history
-
-- [Release history](Release-History) — what changed between SDK versions, what to expect when bumping pins *(stub)*
-
-For the immediate "what does this version break?" answer, the annotated git tag is authoritative: `git show v0.0.53` etc.
+For version-specific changes, consult [Release history](Release-History) and
+the exact tag or Git revision your application pins.

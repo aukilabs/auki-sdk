@@ -4,6 +4,9 @@
 
 - [Overview](For-SDK-Consumers)
 - [Quickstart](Quickstart)
+- [Auki P2P mental model](https://github.com/aukilabs/auki-sdk/blob/develop/docs/p2p/README.md)
+- [Build with an existing protocol](https://github.com/aukilabs/auki-sdk/blob/develop/docs/p2p/getting-started.md)
+- [Author a portable protocol](https://github.com/aukilabs/auki-sdk/blob/develop/docs/p2p/authoring-protocols.md)
 - [Concept: peer-owned logs](Concept-Peer-Owned-Logs)
 
 ### Design + Architecture

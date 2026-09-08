@@ -1,0 +1,9 @@
+node_modules/
+build/
+src/web/generated/*
+!src/web/generated/.gitkeep
+ios/AukiSDK.xcframework/
+ios/AukiSDK/
+ios/Frameworks/*.xcframework
+.DS_Store
+*.log

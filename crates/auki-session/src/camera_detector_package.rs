@@ -444,12 +444,11 @@ mod tests {
 
     fn wait_for_entry(log: &DetectionLogHandle) -> DetectionFrame {
         for _ in 0..100 {
-            if let Ok(reader) = Log::<DetectionFrame>::read(log.root()) {
-                if let Ok(mut entries) = reader.entries() {
-                    if let Some(entry) = entries.pop() {
-                        return entry.payload;
-                    }
-                }
+            if let Ok(reader) = Log::<DetectionFrame>::read(log.root())
+                && let Ok(mut entries) = reader.entries()
+                && let Some(entry) = entries.pop()
+            {
+                return entry.payload;
             }
             std::thread::sleep(Duration::from_millis(10));
         }

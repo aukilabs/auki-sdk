@@ -1,0 +1,48 @@
+{
+  "name": "@aukilabs/auki-sdk-expo",
+  "version": "0.1.0",
+  "description": "Expo module for authenticated Auki peers (Wasm web, Swift iOS, Android stub)",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "sideEffects": false,
+  "files": [
+    "android",
+    "build",
+    "ios",
+    "src/web/generated",
+    "expo-module.config.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build:wasm": "bash scripts/build-wasm.sh",
+    "build": "npm run build:wasm && tsc && node scripts/copy-web-artifacts.cjs",
+    "clean": "rm -rf build src/web/generated/*",
+    "prepare": "npm run build",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "react-native",
+    "expo",
+    "auki",
+    "auki-sdk",
+    "wasm"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aukilabs/auki-sdk.git",
+    "directory": "bindings/expo"
+  },
+  "license": "UNLICENSED",
+  "peerDependencies": {
+    "expo": "*",
+    "react": "*",
+    "react-native": "*"
+  },
+  "devDependencies": {
+    "expo": "~54.0.0",
+    "typescript": "~5.9.2"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  }
+}

@@ -29,6 +29,18 @@ pub const MAX_DEVICE_MODEL_TIP_BYTES: u64 = 64;
 /// Cap on a device-model registry entry JSON file (List/Get).
 pub const MAX_DEVICE_MODEL_ENTRY_BYTES: u64 = 1024 * 1024;
 
+/// Maximum filesystem entries inspected by one device-model List operation.
+pub const MAX_DEVICE_MODEL_LIST_VISITS: usize = 512;
+
+/// Maximum retained `(id, hash)` payload accumulated before wire framing.
+pub const MAX_DEVICE_MODEL_LIST_BYTES: usize = 64 * 1024;
+
+/// Cap on every non-device-model registry entry JSON file.
+///
+/// These entries are transported in the retained 64 KiB registry frame, so a
+/// larger on-disk value can never be served as one valid protocol response.
+pub const MAX_REGISTRY_ENTRY_BYTES: u64 = 64 * 1024;
+
 /// Filename under a device-model id directory that points at the List tip hash.
 const DEVICE_MODEL_TIP_FILE: &str = "TIP";
 
@@ -141,9 +153,10 @@ pub struct DeviceModelBody {
 impl DeviceModelBody {
     pub fn as_urdf(&self) -> Option<(&str, &[MeshBlobRef])> {
         match &self.format {
-            DeviceModelFormat::Urdf { urdf_sha256, meshes } => {
-                Some((urdf_sha256.as_str(), meshes.as_slice()))
-            }
+            DeviceModelFormat::Urdf {
+                urdf_sha256,
+                meshes,
+            } => Some((urdf_sha256.as_str(), meshes.as_slice())),
         }
     }
 }
@@ -184,15 +197,23 @@ impl DeviceModelRegistryEntry {
 
     pub fn validate(&self) -> Result<()> {
         if self.peer_id.is_empty() {
-            return Err(Error::InvalidDeviceModel("peer_id must not be empty".into()));
+            return Err(Error::InvalidDeviceModel(
+                "peer_id must not be empty".into(),
+            ));
         }
-        validate_registry_id(&self.device_model_id)
-            .map_err(|error| Error::InvalidDeviceModel(format!("invalid device_model_id: {error}")))?;
+        validate_registry_id(&self.device_model_id).map_err(|error| {
+            Error::InvalidDeviceModel(format!("invalid device_model_id: {error}"))
+        })?;
         if self.body.model_id.is_empty() {
-            return Err(Error::InvalidDeviceModel("model_id must not be empty".into()));
+            return Err(Error::InvalidDeviceModel(
+                "model_id must not be empty".into(),
+            ));
         }
         match &self.body.format {
-            DeviceModelFormat::Urdf { urdf_sha256, meshes } => {
+            DeviceModelFormat::Urdf {
+                urdf_sha256,
+                meshes,
+            } => {
                 if !is_sha256_hex(urdf_sha256) {
                     return Err(Error::InvalidDeviceModel(
                         "urdf_sha256 must be 64 lowercase hex characters".into(),
@@ -923,7 +944,7 @@ impl FrameRegistryEntry {
 ///
 /// * **`detector_id` + content-addressed hash** → provenance, stable
 ///   identity, "I want exactly this configured detector."
-/// * **`output_types`** → capability discovery, "who on the cluster
+/// * **`output_types`** → capability discovery, "which authenticated peer
 ///   emits `aruco`?" The Notion Detector concept doc's directive —
 ///   *advertise what you detect, not which implementation you're
 ///   running* — lives on this field.
@@ -1112,6 +1133,8 @@ pub enum Error {
     },
     /// A map registry entry declares an invalid voxel-grid contract.
     InvalidMap(String),
+    /// A device-model List exceeded its bounded source traversal or result.
+    RegistryListLimit,
     /// A device model entry has invalid metadata or blob references.
     InvalidDeviceModel(String),
     /// A blob SHA-256 is invalid or its on-disk size is out of bounds.
@@ -1145,6 +1168,7 @@ impl std::fmt::Display for Error {
                 "sensor {sensor_id:?} references missing frame ({frame_id:?}, {frame_hash:?})"
             ),
             Error::InvalidMap(msg) => write!(f, "invalid map: {msg}"),
+            Error::RegistryListLimit => write!(f, "device-model registry list limit exceeded"),
             Error::InvalidDeviceModel(msg) => write!(f, "invalid device model: {msg}"),
             Error::InvalidBlob(msg) => write!(f, "invalid blob: {msg}"),
             Error::BlobOffsetPastEnd => write!(f, "offset past end of blob"),
@@ -1177,6 +1201,7 @@ pub fn write_sensor(app_root: &Path, entry: &SensorRegistryEntry) -> Result<Writ
     }
     validate_sensor_frame_reference(app_root, entry)?;
     let bytes = entry.canonical_bytes();
+    validate_registry_entry_size(&bytes)?;
     let hash = auki_hash::hash_jcs_bytes(&bytes);
     let path = auki_layout::sensor_entry_path(app_root, &entry.peer_id, &entry.sensor_id, &hash);
     write_entry_at(&path, hash, &bytes)
@@ -1185,6 +1210,7 @@ pub fn write_sensor(app_root: &Path, entry: &SensorRegistryEntry) -> Result<Writ
 /// Write a clock registry entry under `<app_root>/registries/clocks/...`.
 pub fn write_clock(app_root: &Path, entry: &ClockRegistryEntry) -> Result<WriteOutcome> {
     let bytes = entry.canonical_bytes();
+    validate_registry_entry_size(&bytes)?;
     let hash = auki_hash::hash_jcs_bytes(&bytes);
     let path = auki_layout::clock_entry_path(app_root, &entry.peer_id, &entry.clock_id, &hash);
     write_entry_at(&path, hash, &bytes)
@@ -1199,12 +1225,19 @@ pub fn read_sensor(
     sensor_id: &str,
     hash: &str,
 ) -> Result<Option<SensorRegistryEntry>> {
+    validate_registry_read_hash(hash)?;
     let path = auki_layout::sensor_entry_path(app_root, peer_id, sensor_id, hash);
-    let Some(bytes) = read_at(&path)? else {
+    let Some(bytes) = read_at_capped(&path, MAX_REGISTRY_ENTRY_BYTES)? else {
         return Ok(None);
     };
     let entry: SensorRegistryEntry =
         serde_json::from_slice(&bytes).map_err(|e| Error::Json(e.to_string()))?;
+    if entry.peer_id != peer_id {
+        return Err(Error::IdMismatch {
+            expected: peer_id.to_string(),
+            found: entry.peer_id,
+        });
+    }
     if entry.sensor_id != sensor_id {
         return Err(Error::IdMismatch {
             expected: sensor_id.to_string(),
@@ -1221,12 +1254,19 @@ pub fn read_clock(
     clock_id: &str,
     hash: &str,
 ) -> Result<Option<ClockRegistryEntry>> {
+    validate_registry_read_hash(hash)?;
     let path = auki_layout::clock_entry_path(app_root, peer_id, clock_id, hash);
-    let Some(bytes) = read_at(&path)? else {
+    let Some(bytes) = read_at_capped(&path, MAX_REGISTRY_ENTRY_BYTES)? else {
         return Ok(None);
     };
     let entry: ClockRegistryEntry =
         serde_json::from_slice(&bytes).map_err(|e| Error::Json(e.to_string()))?;
+    if entry.peer_id != peer_id {
+        return Err(Error::IdMismatch {
+            expected: peer_id.to_string(),
+            found: entry.peer_id,
+        });
+    }
     if entry.clock_id != clock_id {
         return Err(Error::IdMismatch {
             expected: clock_id.to_string(),
@@ -1243,6 +1283,7 @@ pub fn read_clock(
 pub fn write_frame(app_root: &Path, entry: &FrameRegistryEntry) -> Result<WriteOutcome> {
     entry.validate()?;
     let bytes = entry.canonical_bytes();
+    validate_registry_entry_size(&bytes)?;
     let hash = auki_hash::hash_jcs_bytes(&bytes);
     let path = auki_layout::frame_entry_path(app_root, &entry.peer_id, &entry.frame_id, &hash);
     write_entry_at(&path, hash, &bytes)
@@ -1255,12 +1296,19 @@ pub fn read_frame(
     frame_id: &str,
     hash: &str,
 ) -> Result<Option<FrameRegistryEntry>> {
+    validate_registry_read_hash(hash)?;
     let path = auki_layout::frame_entry_path(app_root, peer_id, frame_id, hash);
-    let Some(bytes) = read_at(&path)? else {
+    let Some(bytes) = read_at_capped(&path, MAX_REGISTRY_ENTRY_BYTES)? else {
         return Ok(None);
     };
     let entry: FrameRegistryEntry =
         serde_json::from_slice(&bytes).map_err(|e| Error::Json(e.to_string()))?;
+    if entry.peer_id != peer_id {
+        return Err(Error::IdMismatch {
+            expected: peer_id.to_string(),
+            found: entry.peer_id,
+        });
+    }
     if entry.frame_id != frame_id {
         return Err(Error::IdMismatch {
             expected: frame_id.to_string(),
@@ -1274,6 +1322,7 @@ pub fn read_frame(
 /// Idempotent on hash: writing identical content is a no-op. Cuba T4.
 pub fn write_detector(app_root: &Path, entry: &DetectorRegistryEntry) -> Result<WriteOutcome> {
     let bytes = entry.canonical_bytes();
+    validate_registry_entry_size(&bytes)?;
     let hash = auki_hash::hash_jcs_bytes(&bytes);
     let path =
         auki_layout::detector_entry_path(app_root, &entry.peer_id, &entry.detector_id, &hash);
@@ -1289,12 +1338,19 @@ pub fn read_detector(
     detector_id: &str,
     hash: &str,
 ) -> Result<Option<DetectorRegistryEntry>> {
+    validate_registry_read_hash(hash)?;
     let path = auki_layout::detector_entry_path(app_root, peer_id, detector_id, hash);
-    let Some(bytes) = read_at(&path)? else {
+    let Some(bytes) = read_at_capped(&path, MAX_REGISTRY_ENTRY_BYTES)? else {
         return Ok(None);
     };
     let entry: DetectorRegistryEntry =
         serde_json::from_slice(&bytes).map_err(|e| Error::Json(e.to_string()))?;
+    if entry.peer_id != peer_id {
+        return Err(Error::IdMismatch {
+            expected: peer_id.to_string(),
+            found: entry.peer_id,
+        });
+    }
     if entry.detector_id != detector_id {
         return Err(Error::IdMismatch {
             expected: detector_id.to_string(),
@@ -1308,6 +1364,7 @@ pub fn read_detector(
 pub fn write_map(app_root: &Path, entry: &MapRegistryEntry) -> Result<WriteOutcome> {
     entry.validate()?;
     let bytes = entry.canonical_bytes();
+    validate_registry_entry_size(&bytes)?;
     let hash = auki_hash::hash_jcs_bytes(&bytes);
     let path = auki_layout::map_entry_path(app_root, &entry.peer_id, &entry.map_id, &hash);
     write_entry_at(&path, hash, &bytes)
@@ -1320,8 +1377,9 @@ pub fn read_map(
     map_id: &str,
     hash: &str,
 ) -> Result<Option<MapRegistryEntry>> {
+    validate_registry_read_hash(hash)?;
     let path = auki_layout::map_entry_path(app_root, peer_id, map_id, hash);
-    let Some(bytes) = read_at(&path)? else {
+    let Some(bytes) = read_at_capped(&path, MAX_REGISTRY_ENTRY_BYTES)? else {
         return Ok(None);
     };
     let entry: MapRegistryEntry =
@@ -1355,6 +1413,11 @@ pub fn write_device_model(
     entry.validate()?;
     ensure_device_model_blobs(app_root, entry)?;
     let bytes = entry.canonical_bytes();
+    if bytes.len() as u64 > MAX_DEVICE_MODEL_ENTRY_BYTES {
+        return Err(Error::InvalidDeviceModel(format!(
+            "entry exceeds size cap ({MAX_DEVICE_MODEL_ENTRY_BYTES} bytes)"
+        )));
+    }
     let hash = auki_hash::hash_jcs_bytes(&bytes);
     let path = auki_layout::device_model_entry_path(
         app_root,
@@ -1373,7 +1436,10 @@ pub fn write_device_model(
 
 fn ensure_device_model_blobs(app_root: &Path, entry: &DeviceModelRegistryEntry) -> Result<()> {
     match &entry.body.format {
-        DeviceModelFormat::Urdf { urdf_sha256, meshes } => {
+        DeviceModelFormat::Urdf {
+            urdf_sha256,
+            meshes,
+        } => {
             ensure_blob_verified(app_root, urdf_sha256)?;
             for mesh in meshes {
                 ensure_blob_verified(app_root, &mesh.sha256)?;
@@ -1462,7 +1528,8 @@ enum DeviceModelTipSource {
 /// siblings stay on disk but are omitted from List. Missing peer dirs yield
 /// an empty list; other peer-dir IO errors propagate. TIP/entry reads are
 /// size-capped; oversized, malformed, or tip entries whose referenced blobs
-/// are missing are skipped with no error.
+/// are missing are skipped with no error. Source visits and retained row bytes
+/// are bounded; exceeding either limit returns [`Error::RegistryListLimit`].
 pub fn list_device_models(app_root: &Path, peer_id: &str) -> Result<Vec<DeviceModelListEntry>> {
     let peer_dir = auki_layout::device_models_peer_dir(app_root, peer_id);
     let model_dirs = match fs::read_dir(&peer_dir) {
@@ -1471,42 +1538,51 @@ pub fn list_device_models(app_root: &Path, peer_id: &str) -> Result<Vec<DeviceMo
         Err(e) => return Err(Error::Io(e)),
     };
     let mut tips: HashMap<String, (DeviceModelTipSource, DeviceModelListEntry)> = HashMap::new();
+    let mut visits = 0_usize;
+    let mut retained_bytes = 0_usize;
     for model_dir in model_dirs {
+        consume_device_model_list_visit(&mut visits)?;
         let model_dir = model_dir?;
         if !model_dir.file_type()?.is_dir() {
             continue;
         }
         let model_path = model_dir.path();
-        if let Some(tip) = read_device_model_tip(app_root, &model_path, peer_id)? {
-            tips.insert(tip.id.clone(), (DeviceModelTipSource::Tip, tip));
+        if let Some(tip) = read_device_model_tip(app_root, &model_path, peer_id, &mut visits)? {
+            retain_device_model_list_entry(
+                &mut tips,
+                &mut retained_bytes,
+                DeviceModelTipSource::Tip,
+                tip,
+            )?;
             continue;
         }
+        consume_device_model_list_visit(&mut visits)?;
         let Ok(files) = fs::read_dir(&model_path) else {
             continue;
         };
         for file in files {
+            consume_device_model_list_visit(&mut visits)?;
             let file = file?;
             let path = file.path();
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                 continue;
             }
-            let Some(candidate) = load_device_model_list_candidate(app_root, &path, peer_id)? else {
+            let Some(candidate) =
+                load_device_model_list_candidate(app_root, &path, peer_id, &mut visits)?
+            else {
                 continue;
             };
+            consume_device_model_list_visit(&mut visits)?;
             let mtime = file
                 .metadata()
                 .and_then(|meta| meta.modified())
                 .unwrap_or(UNIX_EPOCH);
-            let id = candidate.id.clone();
-            match tips.get(&id) {
-                Some((DeviceModelTipSource::Tip, _)) => {}
-                Some((DeviceModelTipSource::Mtime(existing_mtime), existing))
-                    if *existing_mtime > mtime
-                        || (*existing_mtime == mtime && existing.hash >= candidate.hash) => {}
-                _ => {
-                    tips.insert(id, (DeviceModelTipSource::Mtime(mtime), candidate));
-                }
-            }
+            retain_device_model_list_entry(
+                &mut tips,
+                &mut retained_bytes,
+                DeviceModelTipSource::Mtime(mtime),
+                candidate,
+            )?;
         }
     }
     let mut entries: Vec<DeviceModelListEntry> =
@@ -1519,7 +1595,9 @@ fn read_device_model_tip(
     app_root: &Path,
     model_dir: &Path,
     peer_id: &str,
+    visits: &mut usize,
 ) -> Result<Option<DeviceModelListEntry>> {
+    consume_device_model_list_visit(visits)?;
     let tip_path = model_dir.join(DEVICE_MODEL_TIP_FILE);
     let raw = match read_at_capped(&tip_path, MAX_DEVICE_MODEL_TIP_BYTES) {
         Ok(raw) => raw,
@@ -1538,14 +1616,67 @@ fn read_device_model_tip(
         return Ok(None);
     }
     let entry_path = model_dir.join(format!("{hash}.json"));
-    Ok(load_device_model_list_candidate(app_root, &entry_path, peer_id)?)
+    load_device_model_list_candidate(app_root, &entry_path, peer_id, visits)
+}
+
+fn consume_device_model_list_visit(visits: &mut usize) -> Result<()> {
+    *visits = visits.checked_add(1).ok_or(Error::RegistryListLimit)?;
+    if *visits > MAX_DEVICE_MODEL_LIST_VISITS {
+        return Err(Error::RegistryListLimit);
+    }
+    Ok(())
+}
+
+fn retain_device_model_list_entry(
+    tips: &mut HashMap<String, (DeviceModelTipSource, DeviceModelListEntry)>,
+    retained_bytes: &mut usize,
+    source: DeviceModelTipSource,
+    candidate: DeviceModelListEntry,
+) -> Result<()> {
+    let replace = match (&source, tips.get(&candidate.id)) {
+        (DeviceModelTipSource::Tip, _) | (DeviceModelTipSource::Mtime(_), None) => true,
+        (DeviceModelTipSource::Mtime(_), Some((DeviceModelTipSource::Tip, _))) => false,
+        (
+            DeviceModelTipSource::Mtime(mtime),
+            Some((DeviceModelTipSource::Mtime(existing_mtime), existing)),
+        ) => {
+            *mtime > *existing_mtime
+                || (*mtime == *existing_mtime && candidate.hash > existing.hash)
+        }
+    };
+    if !replace {
+        return Ok(());
+    }
+
+    let previous_bytes = tips
+        .get(&candidate.id)
+        .map_or(0, |(_, entry)| device_model_list_entry_bytes(entry));
+    let next_bytes = retained_bytes
+        .saturating_sub(previous_bytes)
+        .saturating_add(device_model_list_entry_bytes(&candidate));
+    if next_bytes > MAX_DEVICE_MODEL_LIST_BYTES {
+        return Err(Error::RegistryListLimit);
+    }
+    *retained_bytes = next_bytes;
+    tips.insert(candidate.id.clone(), (source, candidate));
+    Ok(())
+}
+
+fn device_model_list_entry_bytes(entry: &DeviceModelListEntry) -> usize {
+    entry
+        .id
+        .len()
+        .saturating_add(entry.hash.len())
+        .saturating_add(32)
 }
 
 fn load_device_model_list_candidate(
     app_root: &Path,
     path: &Path,
     peer_id: &str,
+    visits: &mut usize,
 ) -> Result<Option<DeviceModelListEntry>> {
+    consume_device_model_list_visit(visits)?;
     let bytes = match read_at_capped(path, MAX_DEVICE_MODEL_ENTRY_BYTES) {
         Ok(bytes) => bytes,
         Err(Error::InvalidBlob(_)) => return Ok(None),
@@ -1579,7 +1710,7 @@ fn load_device_model_list_candidate(
     if file_stem != hash {
         return Ok(None);
     }
-    if !device_model_blobs_present(app_root, &entry)? {
+    if !device_model_blobs_present(app_root, &entry, visits)? {
         return Ok(None);
     }
     Ok(Some(DeviceModelListEntry {
@@ -1594,15 +1725,21 @@ fn load_device_model_list_candidate(
 fn device_model_blobs_present(
     app_root: &Path,
     entry: &DeviceModelRegistryEntry,
+    visits: &mut usize,
 ) -> Result<bool> {
     match &entry.body.format {
-        DeviceModelFormat::Urdf { urdf_sha256, meshes } => {
+        DeviceModelFormat::Urdf {
+            urdf_sha256,
+            meshes,
+        } => {
+            consume_device_model_list_visit(visits)?;
             match blob_exists(app_root, urdf_sha256) {
                 Ok(true) => {}
                 Ok(false) | Err(Error::InvalidBlob(_)) => return Ok(false),
                 Err(e) => return Err(e),
             }
             for mesh in meshes {
+                consume_device_model_list_visit(visits)?;
                 match blob_exists(app_root, &mesh.sha256) {
                     Ok(true) => {}
                     Ok(false) | Err(Error::InvalidBlob(_)) => return Ok(false),
@@ -1632,12 +1769,8 @@ pub fn put_blob(app_root: &Path, bytes: &[u8]) -> Result<String> {
     }
     let sha256 = sha256_hex(bytes);
     let path = auki_layout::blob_path(app_root, &sha256);
-    if path.exists() {
-        match get_blob(app_root, &sha256)? {
-            Some(_) => return Ok(sha256),
-            // exists() raced with a delete (or non-file) — fall through and write.
-            None => {}
-        }
+    if path.exists() && get_blob(app_root, &sha256)?.is_some() {
+        return Ok(sha256);
     }
     let dir = path.parent().expect("blob path has parent");
     fs::create_dir_all(dir)?;
@@ -1704,7 +1837,9 @@ pub fn read_blob_range(
 /// Fetch a blob only when the requested address is a valid lowercase SHA-256.
 pub fn get_blob(app_root: &Path, sha256: &str) -> Result<Option<Vec<u8>>> {
     if !is_sha256_hex(sha256) {
-        return Err(Error::InvalidBlob("sha256 must be 64 lowercase hex characters".into()));
+        return Err(Error::InvalidBlob(
+            "sha256 must be 64 lowercase hex characters".into(),
+        ));
     }
     let Some(bytes) = read_at_capped(&auki_layout::blob_path(app_root, sha256), MAX_BLOB_BYTES)?
     else {
@@ -1861,12 +1996,38 @@ pub(crate) fn read_at_capped(path: &Path, max: u64) -> Result<Option<Vec<u8>>> {
 }
 
 pub fn is_sha256_hex(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// Whether `value` is a 32-character lowercase hex XXH3-128 registry entry hash.
 pub fn is_registry_entry_hash(value: &str) -> bool {
-    value.len() == 32 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    value.len() == 32
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn validate_registry_read_hash(hash: &str) -> Result<()> {
+    if is_registry_entry_hash(hash) {
+        Ok(())
+    } else {
+        Err(Error::InvalidBlob(
+            "registry hash must be 32 lowercase hex characters".into(),
+        ))
+    }
+}
+
+fn validate_registry_entry_size(bytes: &[u8]) -> Result<()> {
+    if bytes.len() as u64 <= MAX_REGISTRY_ENTRY_BYTES {
+        Ok(())
+    } else {
+        Err(Error::InvalidBlob(format!(
+            "registry entry exceeds size cap ({MAX_REGISTRY_ENTRY_BYTES} bytes)"
+        )))
+    }
 }
 
 fn atomic_write(target: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -2578,7 +2739,7 @@ mod tests {
     /// Locks the JCS canonical bytes for the locked Frame Registry vector.
     /// Cross-language readers (Park's browser side, future Sentinel) MUST
     /// produce these exact bytes for the same input. Joins the
-    /// `auki-hash` / `auki-identity` / `auki-network` cross-language
+    /// `auki-hash` / `auki-identity` / `auki-protocols` cross-language
     /// conformance set.
     #[test]
     fn frame_entry_serializes_to_canonical_bytes_matching_locked_vector() {
@@ -2774,8 +2935,177 @@ mod tests {
     #[test]
     fn read_frame_returns_none_for_missing_entry() {
         let dir = tempfile::tempdir().unwrap();
-        let entry = read_frame(dir.path(), "galbot", "frame/missing", "deadbeef").unwrap();
+        let entry = read_frame(
+            dir.path(),
+            "galbot",
+            "frame/missing",
+            "00000000000000000000000000000000",
+        )
+        .unwrap();
         assert_eq!(entry, None);
+    }
+
+    #[test]
+    fn registry_reads_reject_malformed_hash_owner_mismatch_and_oversized_files() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            read_frame(dir.path(), "expected-peer", "world", "../outside"),
+            Err(Error::InvalidBlob(ref reason))
+                if reason == "registry hash must be 32 lowercase hex characters"
+        ));
+
+        let wrong_owner = FrameRegistryEntry::ros_body("wrong-peer", "world");
+        let hash = write_frame(dir.path(), &wrong_owner)
+            .unwrap()
+            .hash()
+            .to_owned();
+        let source = auki_layout::frame_entry_path(dir.path(), "wrong-peer", "world", &hash);
+        let wrong_owner_path =
+            auki_layout::frame_entry_path(dir.path(), "expected-peer", "world", &hash);
+        fs::create_dir_all(wrong_owner_path.parent().unwrap()).unwrap();
+        fs::copy(source, &wrong_owner_path).unwrap();
+        assert!(matches!(
+            read_frame(dir.path(), "expected-peer", "world", &hash),
+            Err(Error::IdMismatch { ref expected, ref found })
+                if expected == "expected-peer" && found == "wrong-peer"
+        ));
+
+        let oversized_hash = "a".repeat(32);
+        let oversized = auki_layout::frame_entry_path(
+            dir.path(),
+            "expected-peer",
+            "oversized",
+            &oversized_hash,
+        );
+        fs::create_dir_all(oversized.parent().unwrap()).unwrap();
+        File::create(&oversized)
+            .unwrap()
+            .set_len(MAX_REGISTRY_ENTRY_BYTES + 1)
+            .unwrap();
+        assert!(matches!(
+            read_frame(
+                dir.path(),
+                "expected-peer",
+                "oversized",
+                &oversized_hash,
+            ),
+            Err(Error::InvalidBlob(ref reason)) if reason.contains("size cap")
+        ));
+    }
+
+    #[test]
+    fn oversized_registry_write_is_rejected_before_touching_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let entry = DetectorRegistryEntry {
+            peer_id: "peer".into(),
+            detector_id: "oversized".into(),
+            body: DetectorBody::Custom(CustomDetector {
+                kind: "com.auki.test".into(),
+                configuration: serde_json::Value::String(
+                    "x".repeat(MAX_REGISTRY_ENTRY_BYTES as usize + 1),
+                ),
+            }),
+            input_types: vec![],
+            output_types: vec![],
+        };
+        let bytes = entry.canonical_bytes();
+        let hash = auki_hash::hash_jcs_bytes(&bytes);
+        let path =
+            auki_layout::detector_entry_path(dir.path(), &entry.peer_id, &entry.detector_id, &hash);
+
+        assert!(matches!(
+            write_detector(dir.path(), &entry),
+            Err(Error::InvalidBlob(ref reason)) if reason.contains("size cap")
+        ));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn device_model_list_source_and_retained_bytes_are_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let peer_dir = auki_layout::device_models_peer_dir(dir.path(), "peer");
+        for index in 0..=(MAX_DEVICE_MODEL_LIST_VISITS / 2) {
+            fs::create_dir_all(peer_dir.join(format!("model-{index}"))).unwrap();
+        }
+        assert!(matches!(
+            list_device_models(dir.path(), "peer"),
+            Err(Error::RegistryListLimit)
+        ));
+
+        let mut tips = HashMap::new();
+        let mut retained_bytes = 0;
+        let oversized = DeviceModelListEntry {
+            id: "x".repeat(MAX_DEVICE_MODEL_LIST_BYTES),
+            hash: "a".repeat(32),
+        };
+        assert!(matches!(
+            retain_device_model_list_entry(
+                &mut tips,
+                &mut retained_bytes,
+                DeviceModelTipSource::Tip,
+                oversized,
+            ),
+            Err(Error::RegistryListLimit)
+        ));
+        assert!(tips.is_empty());
+        assert_eq!(retained_bytes, 0);
+
+        let blob = put_blob(dir.path(), b"mesh").unwrap();
+        let mesh_heavy = DeviceModelRegistryEntry {
+            peer_id: "peer".into(),
+            device_model_id: "mesh-heavy".into(),
+            body: DeviceModelBody {
+                model_id: "robot".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: blob.clone(),
+                    meshes: (0..MAX_DEVICE_MODEL_LIST_VISITS)
+                        .map(|index| MeshBlobRef {
+                            path: format!("mesh-{index}.glb"),
+                            sha256: blob.clone(),
+                        })
+                        .collect(),
+                },
+                root_convention: None,
+            },
+        };
+        let mut visits = 0;
+        assert!(matches!(
+            device_model_blobs_present(dir.path(), &mesh_heavy, &mut visits),
+            Err(Error::RegistryListLimit)
+        ));
+    }
+
+    #[test]
+    fn oversized_device_model_write_is_rejected_before_tip_or_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let blob = put_blob(dir.path(), b"robot").unwrap();
+        let entry = DeviceModelRegistryEntry {
+            peer_id: "peer".into(),
+            device_model_id: "oversized-model".into(),
+            body: DeviceModelBody {
+                model_id: "robot".into(),
+                format: DeviceModelFormat::Urdf {
+                    urdf_sha256: blob,
+                    meshes: vec![],
+                },
+                root_convention: Some("x".repeat(MAX_DEVICE_MODEL_ENTRY_BYTES as usize + 1)),
+            },
+        };
+        let bytes = entry.canonical_bytes();
+        let hash = auki_hash::hash_jcs_bytes(&bytes);
+        let path = auki_layout::device_model_entry_path(
+            dir.path(),
+            &entry.peer_id,
+            &entry.device_model_id,
+            &hash,
+        );
+
+        assert!(matches!(
+            write_device_model(dir.path(), &entry),
+            Err(Error::InvalidDeviceModel(ref reason)) if reason.contains("size cap")
+        ));
+        assert!(!path.exists());
+        assert!(!path.parent().unwrap().join(DEVICE_MODEL_TIP_FILE).exists());
     }
 
     // `pose_log_manifest_opens_a_log_round_trip` moved to [`auki-manifests`]
@@ -3193,7 +3523,10 @@ mod id_charset_tests {
             read_device_model(tmp.path(), "galbot", "unitree/g1", outcome.hash()).unwrap(),
             Some(entry)
         );
-        assert_eq!(get_blob(tmp.path(), &mesh).unwrap(), Some(b"mesh bytes".to_vec()));
+        assert_eq!(
+            get_blob(tmp.path(), &mesh).unwrap(),
+            Some(b"mesh bytes".to_vec())
+        );
         assert!(blob_exists(tmp.path(), &urdf).unwrap());
         let listed = list_device_models(tmp.path(), "galbot").unwrap();
         assert_eq!(listed.len(), 1);
@@ -3237,19 +3570,29 @@ mod id_charset_tests {
                 root_convention: Some("ros_body".into()),
             },
         };
-        let older_hash = write_device_model(tmp.path(), &older).unwrap().hash().to_string();
-        let newer_hash = write_device_model(tmp.path(), &newer).unwrap().hash().to_string();
+        let older_hash = write_device_model(tmp.path(), &older)
+            .unwrap()
+            .hash()
+            .to_string();
+        let newer_hash = write_device_model(tmp.path(), &newer)
+            .unwrap()
+            .hash()
+            .to_string();
         assert_ne!(older_hash, newer_hash);
         let listed = list_device_models(tmp.path(), "galbot").unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, "k1");
         assert_eq!(listed[0].hash, newer_hash);
         // TIP pointer is what List prefers (last successful write).
-        let tip_path = auki_layout::device_model_entry_path(tmp.path(), "galbot", "k1", &newer_hash)
-            .parent()
-            .unwrap()
-            .join("TIP");
-        assert_eq!(std::fs::read_to_string(tip_path).unwrap().trim(), newer_hash);
+        let tip_path =
+            auki_layout::device_model_entry_path(tmp.path(), "galbot", "k1", &newer_hash)
+                .parent()
+                .unwrap()
+                .join("TIP");
+        assert_eq!(
+            std::fs::read_to_string(tip_path).unwrap().trim(),
+            newer_hash
+        );
     }
 
     fn plant_device_model_claiming_id(
@@ -3305,17 +3648,12 @@ mod id_charset_tests {
                 root_convention: Some("ros_body".into()),
             },
         };
-        let real_hash = write_device_model(tmp.path(), &real).unwrap().hash().to_string();
+        let real_hash = write_device_model(tmp.path(), &real)
+            .unwrap()
+            .hash()
+            .to_string();
         let evil_urdf = put_blob(tmp.path(), b"<robot name='evil'/>").unwrap();
-        plant_device_model_claiming_id(
-            tmp.path(),
-            "galbot",
-            "evil",
-            "k1",
-            &evil_urdf,
-            &mesh,
-            true,
-        );
+        plant_device_model_claiming_id(tmp.path(), "galbot", "evil", "k1", &evil_urdf, &mesh, true);
         let listed = list_device_models(tmp.path(), "galbot").unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, "k1");
@@ -3342,7 +3680,10 @@ mod id_charset_tests {
                 root_convention: Some("ros_body".into()),
             },
         };
-        let real_hash = write_device_model(tmp.path(), &real).unwrap().hash().to_string();
+        let real_hash = write_device_model(tmp.path(), &real)
+            .unwrap()
+            .hash()
+            .to_string();
         let evil_urdf = put_blob(tmp.path(), b"<robot name='evil'/>").unwrap();
         plant_device_model_claiming_id(
             tmp.path(),
@@ -3379,15 +3720,20 @@ mod id_charset_tests {
                 root_convention: None,
             },
         };
-        let hash = write_device_model(tmp.path(), &entry).unwrap().hash().to_string();
+        let hash = write_device_model(tmp.path(), &entry)
+            .unwrap()
+            .hash()
+            .to_string();
         let listed = list_device_models(tmp.path(), "galbot").unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, "unitree/g1");
         assert_eq!(listed[0].hash, hash);
-        assert!(auki_layout::device_model_entry_path(tmp.path(), "galbot", "unitree/g1", &hash)
-            .parent()
-            .unwrap()
-            .ends_with("unitree__g1"));
+        assert!(
+            auki_layout::device_model_entry_path(tmp.path(), "galbot", "unitree/g1", &hash)
+                .parent()
+                .unwrap()
+                .ends_with("unitree__g1")
+        );
     }
 
     #[test]
@@ -3410,7 +3756,10 @@ mod id_charset_tests {
                 root_convention: None,
             },
         };
-        let real_hash = write_device_model(tmp.path(), &real).unwrap().hash().to_string();
+        let real_hash = write_device_model(tmp.path(), &real)
+            .unwrap()
+            .hash()
+            .to_string();
         // Replace the honest TIP with a sparse oversized file; mtime fallback
         // on the same dir should still recover the real entry.
         let tip_path = auki_layout::device_model_entry_path(tmp.path(), "galbot", "k1", &real_hash)
@@ -3447,11 +3796,15 @@ mod id_charset_tests {
                 root_convention: None,
             },
         };
-        let real_hash = write_device_model(tmp.path(), &real).unwrap().hash().to_string();
+        let real_hash = write_device_model(tmp.path(), &real)
+            .unwrap()
+            .hash()
+            .to_string();
         let bomb_dir = auki_layout::device_models_peer_dir(tmp.path(), "galbot").join("bomb");
         fs::create_dir_all(&bomb_dir).unwrap();
         {
-            let f = fs::File::create(bomb_dir.join("deadbeefdeadbeefdeadbeefdeadbeef.json")).unwrap();
+            let f =
+                fs::File::create(bomb_dir.join("deadbeefdeadbeefdeadbeefdeadbeef.json")).unwrap();
             f.set_len(MAX_DEVICE_MODEL_ENTRY_BYTES + 1).unwrap();
         }
         let listed = list_device_models(tmp.path(), "galbot").unwrap();
@@ -3519,8 +3872,7 @@ mod id_charset_tests {
         let real_hash = entry.hash();
         let wrong_hash = "b".repeat(32);
         assert_ne!(real_hash, wrong_hash);
-        let path =
-            auki_layout::device_model_entry_path(tmp.path(), "galbot", "k1", &wrong_hash);
+        let path = auki_layout::device_model_entry_path(tmp.path(), "galbot", "k1", &wrong_hash);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, entry.canonical_bytes()).unwrap();
         assert!(matches!(
@@ -3584,16 +3936,16 @@ mod id_charset_tests {
         ));
     }
 
-
-
     #[test]
     fn read_blob_range_chunks_and_missing() {
         let tmp = tempfile::tempdir().unwrap();
         let payload = b"abcdefghij";
         let sha = put_blob(tmp.path(), payload).unwrap();
-        assert!(read_blob_range(tmp.path(), &"0".repeat(64), 0, 4)
-            .unwrap()
-            .is_none());
+        assert!(
+            read_blob_range(tmp.path(), &"0".repeat(64), 0, 4)
+                .unwrap()
+                .is_none()
+        );
         let range = read_blob_range(tmp.path(), &sha, 0, 4).unwrap().unwrap();
         assert_eq!(range.total_size, 10);
         assert_eq!(range.chunk, b"abcd");
@@ -3630,7 +3982,6 @@ mod id_charset_tests {
         assert_eq!(put_blob(tmp.path(), payload).unwrap(), sha);
         assert_eq!(get_blob(tmp.path(), &sha).unwrap().unwrap(), payload);
     }
-
 
     #[test]
     fn write_device_model_requires_blobs() {

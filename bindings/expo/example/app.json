@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "Zitadel Handoff Test",
+    "slug": "auki-zitadel-handoff-test",
+    "version": "0.1.0",
+    "platforms": ["ios", "web"],
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "com.auki.zitadeltodo.z09",
+      "infoPlist": {
+        "NSAppTransportSecurity": { "NSAllowsArbitraryLoads": true },
+        "NSLocalNetworkUsageDescription": "Connect to task-owned local authentication test fixtures."
+      }
+    },
+    "plugins": ["expo-secure-store"]
+  }
+}

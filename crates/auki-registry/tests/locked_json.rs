@@ -12,7 +12,7 @@
 //!
 //! To regenerate fixtures after an *intentional* schema change:
 //! ```sh
-//! cargo run -p auki-registry --bin regen_locked_fixtures
+//! cargo run -p auki-registry --bin regen_registry_fixtures
 //! ```
 
 use auki_registry::{

@@ -1,18 +1,18 @@
 [package]
 name = "auki-session-py"
-version = "0.0.0"
+version = "0.1.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "PyO3 bindings for `auki-session` — transport-neutral in-process Python surface for opening sessions, registering sensors and clocks, writing/listing sensor and pose logs. Source-of-truth API; the HTTP Control API (frozen at v0.0.23) and forthcoming libp2p control protocols both wrap this surface."
+description = "PyO3 bindings for `auki-session` — transport-neutral in-process Python surface for opening sessions, registering sensors and clocks, writing/listing sensor and pose logs."
 
 [lib]
 # `cdylib` makes the crate build as a Python native extension.
 # `rlib` keeps it usable from Rust (`cargo test` against the in-tree
 # crate, which links Python at test time via the `auto-initialize`
-# feature on dev-deps). Same pattern as `auki-network-py` /
-# `auki-identity-py`.
+# feature on dev-deps), matching the other SDK Python extensions.
 name = "auki_session"
 crate-type = ["cdylib", "rlib"]
 
@@ -20,8 +20,7 @@ crate-type = ["cdylib", "rlib"]
 # Default empty so `cargo test` can link Python via dev-dep
 # `auto-initialize`. `maturin develop` / `maturin build` enable
 # `extension-module` via `pyproject.toml` to skip linking and let the
-# host interpreter resolve symbols at import time. Same convention as
-# `auki-network-py`.
+# host interpreter resolve symbols at import time.
 default = []
 extension-module = ["pyo3/extension-module"]
 
@@ -37,12 +36,10 @@ auki-registry-rs = { package = "auki-registry", path = "../../../crates/auki-reg
 auki-registry-py = { path = "../auki-registry-py" }
 # Re-used for PoseSource / PoseWriterMode / TimeTransformSource Rust types.
 auki-manifests-rs = { package = "auki-manifests", path = "../../../crates/auki-manifests" }
-# ResourceEntry → serde_json serialization for catalog().
+# JSON conversion helpers for Python dictionaries and enum values.
 serde_json = "1"
 # JSON serialization helpers.
 serde = { version = "1", features = ["derive"] }
-# Mutex used to wrap the (non-Send) session for PyO3 thread safety.
-parking_lot = "0.12"
 
 [dev-dependencies]
 # `auto-initialize` lets `Python::with_gil` work in `#[test]`s without

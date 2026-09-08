@@ -441,15 +441,12 @@ async fn invalid_grant_and_ambiguous_rotation_are_terminal_without_replay() {
 #[tokio::test]
 async fn dds_401_reexchanges_and_restarts_entire_bearer_bound_proof_once() {
     let domain = Uuid::new_v4();
-    let org = Uuid::new_v4();
     let identity = Identity::generate();
     let server = MockServer::start(vec![
         service_response("dds-old"),
-        domains_response(domain, org),
         challenge_response("first", [1; 32]),
         MockResponse::status(401),
         service_response("dds-new"),
-        domains_response(domain, org),
         challenge_response("second", [2; 32]),
         signed_peer_response(&identity, domain, "user", Utc::now().timestamp() as u64),
         keys_response(),
@@ -464,11 +461,30 @@ async fn dds_401_reexchanges_and_restarts_entire_bearer_bound_proof_once() {
     assert_eq!(prepared.peer_id, identity.peer_id());
     let requests = server.finish().await;
     assert_counts(&requests, 0, 2);
-    assert_eq!(requests[2].headers["authorization"], "Bearer dds-old");
-    assert_eq!(requests[6].headers["authorization"], "Bearer dds-new");
-    assert_eq!(requests[2].body, requests[6].body); // same identity, new challenge
-    let first: Value = serde_json::from_slice(&requests[3].body).unwrap();
-    let second: Value = serde_json::from_slice(&requests[7].body).unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|r| r.target.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "/service/domains-access-token?purpose=p2p",
+            &format!("/api/v1/domains/{domain}/p2p/challenge"),
+            &format!("/api/v1/domains/{domain}/p2p/verify"),
+            "/service/domains-access-token?purpose=p2p",
+            &format!("/api/v1/domains/{domain}/p2p/challenge"),
+            &format!("/api/v1/domains/{domain}/p2p/verify"),
+            "/service/p2p-verification-keys",
+        ]
+    );
+    for index in [1, 2] {
+        assert_eq!(requests[index].headers["authorization"], "Bearer dds-old");
+    }
+    for index in [4, 5] {
+        assert_eq!(requests[index].headers["authorization"], "Bearer dds-new");
+    }
+    assert_eq!(requests[1].body, requests[4].body); // same identity, new challenge
+    let first: Value = serde_json::from_slice(&requests[2].body).unwrap();
+    let second: Value = serde_json::from_slice(&requests[5].body).unwrap();
     assert_eq!(first["challenge_id"], "first");
     assert_eq!(second["challenge_id"], "second");
     assert_ne!(first["signature"], second["signature"]);
@@ -478,33 +494,56 @@ async fn dds_401_reexchanges_and_restarts_entire_bearer_bound_proof_once() {
 
 #[tokio::test]
 async fn denied_domain_does_not_poison_other_peers_sharing_session() {
-    let allowed = Uuid::new_v4();
-    let denied = Uuid::new_v4();
-    let org = Uuid::new_v4();
-    let identity = Identity::generate();
-    let server = MockServer::start(vec![
-        service_response("dds"),
-        domains_response(allowed, org),
-        domains_response(allowed, org),
-        challenge_response("allowed", [3; 32]),
-        signed_peer_response(&identity, allowed, "user", Utc::now().timestamp() as u64),
-        keys_response(),
-    ])
-    .await;
-    let session = import(&server, Store::new(false, 0), false);
-    assert!(matches!(
-        session
+    for (status, deny_during_verify) in [(403, false), (403, true), (404, false), (404, true)] {
+        let allowed = Uuid::new_v4();
+        let denied = Uuid::new_v4();
+        let identity = Identity::generate();
+        let mut responses = vec![service_response("dds")];
+        if deny_during_verify {
+            responses.push(challenge_response("denied", [4; 32]));
+        }
+        responses.extend([
+            MockResponse::status(status),
+            challenge_response("allowed", [3; 32]),
+            signed_peer_response(&identity, allowed, "user", Utc::now().timestamp() as u64),
+            keys_response(),
+        ]);
+        let server = MockServer::start(responses).await;
+        let session = import(&server, Store::new(false, 0), false);
+        let error = session
             .authorize_peer(denied.into(), &Identity::generate().proof())
-            .await,
-        Err(Error::DomainNotAccessible)
-    ));
-    let prepared = session
-        .authorize_peer(allowed.into(), &identity.proof())
-        .await
-        .unwrap();
-    assert_eq!(prepared.domain.id, allowed);
-    assert_counts(&server.finish().await, 0, 1);
-    session.close().await;
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), AuthFailureKind::AuthorizationDenied);
+        assert!(
+            matches!(error, Error::DomainNotAccessible),
+            "status {status}, during verify: {deny_during_verify}: {error:?}"
+        );
+        let prepared = session
+            .authorize_peer(allowed.into(), &identity.proof())
+            .await
+            .unwrap();
+        assert_eq!(prepared.domain.id, allowed);
+        let requests = server.finish().await;
+        assert_counts(&requests, 0, 1);
+        let mut expected = vec![
+            "/service/domains-access-token?purpose=p2p".to_owned(),
+            format!("/api/v1/domains/{denied}/p2p/challenge"),
+        ];
+        if deny_during_verify {
+            expected.push(format!("/api/v1/domains/{denied}/p2p/verify"));
+        }
+        expected.extend([
+            format!("/api/v1/domains/{allowed}/p2p/challenge"),
+            format!("/api/v1/domains/{allowed}/p2p/verify"),
+            "/service/p2p-verification-keys".to_owned(),
+        ]);
+        assert_eq!(
+            requests.iter().map(|r| &r.target).collect::<Vec<_>>(),
+            expected.iter().collect::<Vec<_>>()
+        );
+        session.close().await;
+    }
 }
 
 #[tokio::test]
@@ -685,7 +724,6 @@ async fn transient_discovery_recovers_but_invalid_client_is_latched() {
 #[tokio::test]
 async fn two_peers_share_initial_and_later_rotation_without_changing_peer_ids() {
     let domain = Uuid::new_v4();
-    let org = Uuid::new_v4();
     let a = Identity::generate();
     let b = Identity::generate();
     let now = Utc::now().timestamp() as u64;
@@ -697,11 +735,9 @@ async fn two_peers_share_initial_and_later_rotation_without_changing_peer_ids() 
             MockResponse::json(discovery(base)),
             MockResponse::json(token()),
             service_response("dds-first"),
-            domains_response(domain, org),
             challenge_response("initial-a", [1; 32]),
             signed_peer_response(&a, domain, "user", now - 2),
             keys_response(),
-            domains_response(domain, org),
             challenge_response("initial-b", [2; 32]),
             signed_peer_response(&b, domain, "user", now - 2),
             keys_response(),
@@ -710,11 +746,9 @@ async fn two_peers_share_initial_and_later_rotation_without_changing_peer_ids() 
             MockResponse::json(discovery(base)),
             MockResponse::json(next),
             service_response("dds-second"),
-            domains_response(domain, org),
             challenge_response("renew-a", [3; 32]),
             signed_peer_response(&a, domain, "user", now),
             keys_response(),
-            domains_response(domain, org),
             challenge_response("renew-b", [4; 32]),
             signed_peer_response(&b, domain, "user", now),
             keys_response(),
@@ -737,6 +771,11 @@ async fn two_peers_share_initial_and_later_rotation_without_changing_peer_ids() 
     assert_eq!(renewed_b.unwrap().peer_id, b.peer_id());
     let requests = server.finish().await;
     assert_counts(&requests, 2, 3);
+    assert!(
+        requests
+            .iter()
+            .all(|r| !r.target.starts_with("/api/v1/accessible-domains"))
+    );
     let rotations: Vec<_> = requests
         .iter()
         .filter(|r| r.target == "/oauth/v2/token")

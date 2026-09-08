@@ -47,8 +47,9 @@ do not select it by merely decoding an unverified token. The SDK grant needs
 checks policy `/check` for the supplied Domain and live DDS ownership; it does
 not enumerate API Domains or use the compatibility policy `/domains` endpoint.
 No new API/DMS/relay deployment or migration is required beyond the previously
-implemented opaque-subject consumers. The direct DDS routes/configuration have
-not yet been verified against dev; the observation below predates this change.
+implemented opaque-subject consumers. Direct DDS admission and the full native
+smoke passed against dev on 2026-09-08; see the verified results below. Earlier
+blocked observations are retained separately as history.
 
 Before filling credentials, ensure `/.env.zitadel-dev` and
 `/.zitadel-dev-state/` are ignored by Git. The dotenv and credential files must
@@ -89,6 +90,54 @@ cancelled startup may need to expire by its authority TTL.
 Only redacted event diagnostics are printed. Credentials pass to Rust on stdin,
 not through arguments or exported environment variables. Do not enable HTTP or
 credential tracing when running this test.
+
+## Verified native dev acceptance: 2026-09-08
+
+Three sequential runs passed at 06:15–06:18 UTC using Domain
+`76b52614-116f-4467-bd5c-32bfd0aed119` (`Testasxfgg`). DDS owns the Domain under
+the authenticated user's org, and policy allows exact-Domain
+`domain_metadata_read`. No fixtures or API intermediate exchange were used by
+the native peer path.
+
+| Run | Command suffix | Durable credential saves | Successful Info calls, A→B / B→A |
+| --- | --- | --- | --- |
+| Initial import | none | 0 | 3 / 4 |
+| Real SDK-owned refresh | `--exercise-refresh` | 1 | 3 / 4 |
+| Fresh-process resume | none | 0 | 3 / 3 |
+
+All commands used `node test-support/run-zitadel-dev-native.mjs`, exited 0 and
+emitted `passed`, `cleanupOk:true`, and `canResume:true`. Each run booted two
+ephemeral SDK peers, obtained direct DDS user P2P credentials, booked dev DMS
+relay resources, advertised/discovered through DDS and exchanged authenticated
+Info requests in both directions using exact native TCP relay circuit routes.
+Only the two peers created by that run were contacted: six peers and 20
+successful authenticated exchanges in total. All endpoints/peers were shut down,
+sessions closed, runner processes exited, and the safety lock was removed.
+
+The refresh run changed both access and refresh tokens while preserving issuer
+and client ID. The complete replacement was durably saved before peer startup
+completed, with a future access expiry and mode `0600`. The final run explicitly
+loaded that saved generation and made no further refresh/save. The dotenv was
+not rewritten: keep `.zitadel-dev-state/native-session.json`, which now contains
+the current grant; reruns must not replay the original dotenv refresh token.
+
+SDK tested revision: `0ef7cacbdb1163cce68f681db668969358dc3437`. DDS image:
+`ee2dd9d355d03ffef96a1549f5e574b55a19e3ab`, configured through chart revision
+`3870f2dd4fc12f8ed481acfe371dc6f70cc326e2`. DDS reuses dev policy-service's
+introspection application, requiring project audience `329953242404356681`.
+The real Hagall relay image was
+`aukilabs/hagall@sha256:72550a08119d48e39b3d34d4e1a815624871a090a0b8a24b8f88ba2bcb00ba24`;
+DMS ran `latest`, resolved to
+`sha256:0e78687bab909c31e2688c94403a0292a0a8395fdd1ed4d8575a8bbee7a6cc65`.
+No deployments, policy changes or Domain
+data writes were performed during these runs. The only intended runtime writes
+were ephemeral peer advertisements/bookings and SDK-owned provider refresh.
+
+This passes the first-release **native dev acceptance gate**, including refresh
+and persisted resume. It does not prove survival across the normal 30-minute
+P2P authority lifetime or resolve the earlier long-lived browser relay closure.
+The hour-long soak remains opt-in. Browser/Swift/Expo evidence comes from the
+previous local gates, not these native dev runs.
 
 ## Historical dev observation: 2026-09-08, before direct DDS
 

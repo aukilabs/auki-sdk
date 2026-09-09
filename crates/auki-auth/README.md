@@ -10,7 +10,7 @@ credentials -> AuthSession -> selected Domain + identity proof -> PreparedPeer
                                                            AukiPeer::start
 ```
 
-The crate owns bounded API/DDS exchanges, accessible-Domain listing, Peer-ID
+The User/App preparation API owns bounded API/DDS exchanges, accessible-Domain listing, Peer-ID
 proof, verification keys, and the initial signed credential. It deliberately
 does not discover peers, resolve or publish routes, contact DMS, book a relay,
 or spawn an authority-renewal task.
@@ -220,3 +220,48 @@ for the complete public flow.
 Low-level hosts may consume `PreparedPeer::renewal` themselves, but ordinary
 User/App applications should use `AukiPeer::start` rather than reimplementing
 key rotation, credential expiry fencing, relay recovery, and cleanup.
+
+## Native machine operations
+
+`auki_auth::machine` contains the existing native Node/Robot building blocks.
+They take explicit inputs and do not depend on Posemesh configuration or a runner.
+
+| Module | Responsibility |
+| --- | --- |
+| `robot` | Registration-secret register/verify through `RobotAuthenticator` |
+| `token_manager` | Shared access cache, refresh/retry and `TokenProvider` |
+| `registration` | One-shot signed Node registration and crypto helpers |
+| `siwe` | Node nonce, message, wallet signature and verification |
+| `p2p` | Machine bearer/Peer ID proof, verification keys and Robot P2P exchange |
+
+The compile-checked [Robot example](examples/robot_token.rs) authenticates with
+`DDS_BASE_URL`, `ROBOT_REGISTRATION_CREDENTIALS` and `AUKI_CAPABILITY`.
+`bearer()` works on demand; `start_bg()` explicitly enables refresh and
+`stop_bg()` stops it. Authentication itself does not start a peer or poll DMS.
+
+The [Node example](examples/node_token.rs) takes `DDS_BASE_URL`, `REG_SECRET`,
+`SECP256K1_PRIVHEX` and `AUKI_CAPABILITY`. Node login still uses a wallet and
+SIWE after registration. A host owns readiness callbacks, registration-loop
+timing and re-arming after 403/404; SDK operations do not mutate global state.
+The example makes one registration attempt and one subsequent login attempt.
+
+`machine::p2p::PeerBindingClient` proves the same identity using the exact base
+bearer for both challenge and verify. Hosts compose it with their authenticator
+when peer-bound machine access is required, including after reauthentication.
+`DdsP2pClient::robot_p2p_token` uses the current assigned Domain as a request hint;
+DDS validates the signed token and assignment. `authority_material` returns keys
+and a credential for a host runtime to validate and install. It starts no renewal
+driver and does not grant access by itself.
+
+Run the auth examples explicitly with `cargo run -p auki-auth --example robot_token`
+or `--example node_token` after supplying the inputs. They contact DDS and never
+print credentials or returned tokens.
+
+Use `auki-dms` directly for task HTTP/polling in a custom native application.
+Use Posemesh's compute-node when its existing Runner, task supervision, heartbeat
+scheduling, storage ports and graceful shutdown fit the host. Its auth/token-manager
+and SIWE paths re-export SDK blocks; Robot/Node startup wrappers, registration
+readiness and the Robot peer-renewal driver remain in Posemesh.
+
+These machine APIs are native Rust only. Existing User/App/ZITADEL APIs and
+bindings retain their current behavior.

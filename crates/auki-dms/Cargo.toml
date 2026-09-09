@@ -1,0 +1,39 @@
+[package]
+name = "auki-dms"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "DMS task types and native client/polling building blocks"
+readme = "README.md"
+
+[[example]]
+name = "poll_noop"
+required-features = ["client"]
+
+[features]
+default = ["client"]
+client = ["dep:anyhow", "dep:auki-auth", "dep:reqwest", "dep:tokio", "dep:tracing"]
+
+[dependencies]
+chrono = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+url = { version = "2.5", features = ["serde"] }
+uuid = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+anyhow = { workspace = true, optional = true }
+auki-auth = { path = "../auki-auth", optional = true }
+reqwest = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["sync", "time", "macros"], optional = true }
+tracing = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+async-trait = { workspace = true }
+httpmock = "0.8.3"
+parking_lot = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tracing-subscriber = { version = "0.3", features = ["fmt"] }

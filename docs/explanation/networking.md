@@ -38,8 +38,10 @@ Tasks go through **DMS**, the source of truth for task state.
 [Posemesh runners](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
 handle orchestration, execution, heartbeats, and results.
 
-Use P2P for data exchange, never task dispatch. For robots, the runner must
-execute one task at a time and reject new tasks while busy.
+Use P2P for data exchange, never task dispatch. DMS currently permits one
+active task lease per node, for both compute and robot workers. A robot runner
+must also keep physical task execution exclusive and reject new tasks while busy.
 
-Applications and runners enforce these rules. The SDK does not inspect
-message contents or schedule tasks.
+The SDK does not inspect message contents or schedule tasks. See
+[apps, services, and workers](apps-and-workers.md) for authentication,
+Domain access, and runner requirements.

@@ -69,7 +69,7 @@ All work — questions, research, tasks, in-flight implementation — is tracked
 - **In progress → In review** — move the card manually right after opening the PR. Use `Closes #N` in the PR body to auto-link the PR to the issue (and auto-close on merge). Do not rely on automation to move the card.
 - **In review → Done** — verify after merge. If automation didn't fire, move it manually.
 
-Rules for AI agents touching the board are in [`CLAUDE.md`](CLAUDE.md#project-board).
+Rules for AI agents touching the board are in [`AGENTS.md`](AGENTS.md#project-board).
 
 ---
 

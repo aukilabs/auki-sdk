@@ -4,8 +4,7 @@ Run two apps and send `hello from Auki` from one to the other. The receiving
 app sends the same message back using the example's Echo protocol.
 
 You need Rust 1.89 or newer, this repository checked out, two terminals, and an
-Auki User with access to a development Domain. Have its Domain UUID ready. The
-example uses the shared development services and needs network access.
+Auki User with access to a Domain. Have its Domain UUID ready.
 
 ## Start the first peer
 
@@ -14,11 +13,15 @@ From the repository root in terminal A, set your credentials and Domain:
 ~~~sh
 export AUKI_EMAIL='you@example.com'
 export AUKI_PASSWORD='<your password>'
-export AUKI_DOMAIN_ID='<your development Domain UUID>'
+export AUKI_DOMAIN_ID='<your Domain UUID>'
 export AUKI_IDENTITY_FILE='/tmp/auki-echo-a/peer.identity'
 
+cargo run --locked -p auki-sdk --example generate_identity -- /tmp/auki-echo-a/peer.identity
 cargo run --locked -p auki-portable-echo-native
 ~~~
+
+The first command creates the identity file and its parent directory, or
+reuses the saved identity if it already exists. It prints the Peer ID.
 
 The app signs in, connects through a relay, and publishes its Echo address in
 Auki's DDS discovery service. After startup you will see:
@@ -41,6 +44,7 @@ export AUKI_PASSWORD='<your password>'
 export AUKI_DOMAIN_ID='<your development Domain UUID>'
 export AUKI_IDENTITY_FILE='/tmp/auki-echo-b/peer.identity'
 
+cargo run --locked -p auki-sdk --example generate_identity -- /tmp/auki-echo-b/peer.identity
 cargo run --locked -p auki-portable-echo-native -- \
   --discover '<Peer ID from terminal A>'
 ~~~

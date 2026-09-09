@@ -31,7 +31,7 @@ Commit messages should be clear, concise, and follow the [Conventional Commits](
 the body should follow the convention of answering the following questions:
 - why - what problem are we solving.
 - how - how are we approaching this.
-- what - what did we acctually do.
+- what - what did we actually do.
 
 ## Commit rules:
 before making a commit, ask the user for final clarification on the why.

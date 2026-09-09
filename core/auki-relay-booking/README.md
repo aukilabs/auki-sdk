@@ -1,6 +1,7 @@
 # auki-relay-booking
 
-Relay allocation used by `AukiPeer`.
+Book, renew, and release relay capacity through DMS. `AukiPeer` handles this
+for your app.
 
-Start with [Auki networking](../../README.md) and the
-[networking reference](../../docs/reference/networking.md).
+See [connection setup](../../docs/how-to/connect.md) and
+[relay settings](../../docs/reference/networking.md#configuration).

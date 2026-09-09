@@ -1,6 +1,6 @@
 # auki-auth
 
-Authentication and Domain authorization used by `AukiPeer`.
+Sign in with User or App credentials, or import a ZITADEL session, to access
+an Auki Domain. `auki-sdk` uses this crate when starting a peer.
 
-Start with [Auki networking](../../README.md) and the
-[networking reference](../../docs/reference/networking.md).
+See [Sign in and choose a Domain](../../docs/how-to/authenticate.md).

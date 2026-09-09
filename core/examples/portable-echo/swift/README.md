@@ -16,9 +16,10 @@ cd core/examples/portable-echo/swift
 
 Open `AukiPortableEchoIOS.xcodeproj` in Xcode and run
 `AukiPortableEchoIOS`. Log in, select the same Domain as another running Echo
-peer, start, refresh discovered peers, select one, and send a message.
+peer, start, refresh discovered peers, select one, and send a message. Check
+that the response matches what you sent.
 
-This example uses ephemeral identity and requests shutdown when backgrounded.
-It compiles the peer and Echo adapter into one framework. See
+Each start creates a new Peer ID. The app shuts down the peer when it goes
+into the background. It compiles the SDK and Echo code into one framework. See
 [peer lifetime](../../../../docs/how-to/lifecycle.md) and
 [custom protocols](../../../../docs/how-to/protocols.md).

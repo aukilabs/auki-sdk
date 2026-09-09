@@ -1,6 +1,7 @@
 # auki-p2p
 
-Low-level authenticated transport. Applications normally start with `auki-sdk`.
+TCP and relay transport with peer authentication. Most apps should use
+[`auki-sdk`](../auki-sdk/README.md), which also handles sign-in, discovery,
+and relay bookings.
 
-Start with [Auki networking](../../README.md) and the
-[networking reference](../../docs/reference/networking.md).
+See [How Auki networking works](../../docs/explanation/networking.md).

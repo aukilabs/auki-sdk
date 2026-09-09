@@ -1,57 +1,45 @@
 # How Auki networking works
 
-An `AukiPeer` is one running network participant with one Peer ID in one
-selected Domain. Your app starts it, mounts any application protocols it wants
-to serve, makes calls, and shuts it down.
+`AukiPeer` runs inside your app and handles network connections,
+authentication renewal, and relay bookings.
 
-## Identity and authority
+## Peers and Domains
 
-A **Peer ID** identifies a networking keypair. Persisting the key preserves
-the ID. A User or App login supplies authority to participate; several peers
-may belong to the same account.
+A **Peer ID** comes from a network keypair. Saving the key keeps the ID across
+restarts. Apps can share a User account, but each running peer needs its own key.
 
-A **Domain** is the DDS authority boundary selected for the peer. DDS admits
-the identity and supplies renewable signed authority. The SDK verifies the
-expected remote Peer ID and Domain before an application exchange.
+Peers communicate within a selected **Domain**. Your account needs access to
+that Domain. The SDK verifies the other peer's ID and Domain membership;
+your app decides which requests to allow.
 
-Successful peer authentication establishes who is connected. Your application
-still decides what that peer may do.
+## Discovery and connections
 
-## Finding and reaching another peer
+Get a peer's ID and address from your own discovery service, configuration,
+or Auki's DDS service. DDS discovery is off by default.
 
-**Discovery** supplies short-lived hints about Peer IDs, routes, and served
-protocols. The SDK can query and advertise through DDS when explicitly enabled.
-Applications may also exchange addresses through their own control plane.
+An address is called a **route** in the API. Native peers use TCP, directly or
+through a relay; browsers use WSS relay addresses. A relay accepts connections
+on your behalf, so you do not need a public port. The SDK books it through DMS.
 
-A **route** is an address to try. Native peers can connect directly over TCP or
-through a relay. Browser peers reach relay circuits over WSS. DMS allocates
-relay capacity; the SDK maintains its bookings, reservations, and route updates.
+Relay use and discovery are separate choices. You can use a relay and share
+its address yourself.
 
-Discovery and reachability are independent choices. A peer can have a relay
-without advertising, or discover other peers while only making outbound calls.
+## Messages and protocols
 
-## Application protocols
+Apps agree on a protocol ID and message format. The SDK opens an authenticated
+stream; your code reads and writes the bytes. You register the handlers to serve.
 
-Your application chooses its protocol ID, messages, codec, and permissions.
-The engine provides authenticated streams and bounded protocol registration;
-it does not interpret application payloads or mount endpoints automatically.
+You can implement your own protocol. The implementations in
+[`auki-protocols`](../../labs/auki-protocols/README.md) are optional and experimental.
 
-`auki-protocols` currently contains optional experimental implementations.
-It is the intended home for selected protocols once they are frozen as stable.
-An explicit version or a locked wire fixture does not itself make a protocol
-stable.
+## Robot and compute tasks
 
-## Where Posemesh fits
+Tasks go through **DMS**, the source of truth for task state.
+[Posemesh runners](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
+handle orchestration, execution, heartbeats, and results.
 
-| Layer | Responsibility |
-| --- | --- |
-| Auki networking engine | Authenticated peer lifetime, transport, relay reachability, discovery, and protocol hosting |
-| Your application/protocol | Message meaning, permissions, UI, and application behavior |
-| Posemesh runners | Robot and compute task execution, leases, heartbeats, and task input/output |
+Use P2P for data exchange, never task dispatch. For robots, the runner must
+execute one task at a time and reject new tasks while busy.
 
-Posemesh composes `AukiPeer` with externally managed machine authority. Robot
-peers live for the process; compute peers are scoped to tasks. The runner APIs
-and their capabilities belong in
-[Posemesh](https://github.com/aukilabs/posemesh/tree/main/core/compute-node),
-including its
-[runner interface](https://github.com/aukilabs/posemesh/tree/main/core/compute-node-runner-api).
+Applications and runners enforce these rules. The SDK does not inspect
+message contents or schedule tasks.

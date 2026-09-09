@@ -21,10 +21,10 @@ Open the printed local URL in two tabs:
 3. In tab B, keep **Outbound only** and **Discover only**.
 4. Start both peers. Refresh tab B's Echo peers and select A.
 5. Send a message; check that the echoed payload matches.
-6. Use **Stop peer** in both tabs to finish network cleanup.
+6. Use **Stop peer** in both tabs to close the connections and release the relays.
 
 Every start creates a fresh Peer ID. Tab B can also call a running native or
 Python Echo peer in the same Domain.
 
-The [TypeScript app](src/main.ts) uses a Rust protocol adapter in the same
-Wasm module as the peer. See [custom protocols](../../../../docs/how-to/protocols.md).
+The [TypeScript app](src/main.ts) calls Rust Echo code compiled into the same
+Wasm module as the SDK. See [custom protocols](../../../../docs/how-to/protocols.md).

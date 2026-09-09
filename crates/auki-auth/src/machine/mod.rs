@@ -4,6 +4,7 @@
 //! manager starts background refresh only when `start_bg` is called and must be
 //! stopped with `stop_bg`. No peer or DMS task loop is started here.
 
+pub mod p2p;
 pub mod registration;
 pub mod robot;
 pub mod siwe;

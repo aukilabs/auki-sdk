@@ -30,6 +30,130 @@ fn authenticator(server: &MockServer) -> RobotAuthenticator {
 
 const NODE_KEY: &str = "4c0883a69102937d6231471b5dbb6204fe5129617082798ce3f4fdf2548b6f90";
 
+#[tokio::test]
+async fn machine_peer_proof_keeps_the_exact_bearer_identity_and_signature() {
+    use crate::machine::{
+        AccessBundle,
+        p2p::{DdsP2pClient, PeerBindingClient},
+    };
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    let identity = auki_p2p::Identity::generate();
+    let proof = identity.proof();
+    let expires = chrono::Utc::now() + chrono::Duration::minutes(10);
+    let challenge = b"existing-machine-peer-challenge";
+    let server = MockServer::start(vec![
+        MockResponse::json(json!({"challenge_id": "challenge-1", "challenge": URL_SAFE_NO_PAD.encode(challenge), "expires_at": expires})),
+        MockResponse::json(json!({"peer_id": proof.peer_id().to_string(), "access_token": "peer-bound-machine", "access_expires_at": expires})),
+    ]).await;
+    let dds = DdsP2pClient::new(server.base_url.parse().unwrap(), Duration::from_secs(2)).unwrap();
+    let binding = PeerBindingClient::new(dds, proof.clone());
+    assert_eq!(
+        binding
+            .bind(&AccessBundle::new("exact-base-bearer", expires))
+            .await
+            .unwrap()
+            .token(),
+        "peer-bound-machine"
+    );
+    let requests = server.finish().await;
+    assert_eq!(requests[0].target, "/internal/v1/auth/p2p/challenge");
+    assert_eq!(requests[1].target, "/internal/v1/auth/p2p/verify");
+    for request in &requests {
+        assert_eq!(request.headers["authorization"], "Bearer exact-base-bearer");
+    }
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&requests[0].body).unwrap(),
+        json!({
+            "peer_id": proof.peer_id().to_string(), "public_key": URL_SAFE_NO_PAD.encode(proof.public_key_protobuf()),
+        })
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&requests[1].body).unwrap(),
+        json!({
+            "challenge_id": "challenge-1", "signature": URL_SAFE_NO_PAD.encode(proof.sign_challenge(challenge).unwrap()),
+        })
+    );
+}
+
+#[tokio::test]
+async fn machine_peer_challenge_expiry_stops_before_verify() {
+    use crate::machine::{
+        AccessBundle,
+        p2p::{DdsP2pClient, DdsP2pError, PeerBindingClient},
+    };
+    let server = MockServer::start(vec![MockResponse::json(json!({
+        "challenge_id": "expired", "challenge": "YQ", "expires_at": chrono::Utc::now() - chrono::Duration::minutes(1),
+    }))]).await;
+    let dds = DdsP2pClient::new(server.base_url.parse().unwrap(), Duration::from_secs(2)).unwrap();
+    let binding = PeerBindingClient::new(dds, auki_p2p::Identity::generate().proof());
+    assert!(matches!(
+        binding
+            .bind(&AccessBundle::new(
+                "base",
+                chrono::Utc::now() + chrono::Duration::hours(1)
+            ))
+            .await,
+        Err(DdsP2pError::InvalidExpiration)
+    ));
+    assert_eq!(server.finish().await.len(), 1);
+}
+
+#[tokio::test]
+async fn machine_verification_keys_keep_cache_and_body_bound() {
+    use crate::machine::p2p::{DdsP2pClient, DdsP2pError};
+    let server = MockServer::start(vec![super::keys_response()]).await;
+    let dds = DdsP2pClient::new(server.base_url.parse().unwrap(), Duration::from_secs(2)).unwrap();
+    assert_eq!(dds.token_verifier().await.unwrap().generation(), 1);
+    assert_eq!(dds.clone().token_verifier().await.unwrap().generation(), 1);
+    let requests = server.finish().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].target, "/service/p2p-verification-keys");
+    assert_eq!(requests[0].headers["cache-control"], "no-cache");
+    let mut response = super::keys_response();
+    response.body = vec![b'x'; auki_p2p::DDS_VERIFICATION_KEY_MAX_BYTES + 1];
+    let server = MockServer::start(vec![response]).await;
+    let dds = DdsP2pClient::new(server.base_url.parse().unwrap(), Duration::from_secs(2)).unwrap();
+    assert!(matches!(
+        dds.token_verifier().await,
+        Err(DdsP2pError::VerificationKeyResponseTooLarge)
+    ));
+    server.finish().await;
+}
+
+#[tokio::test]
+async fn robot_peer_exchange_requires_assignment_and_preserves_request() {
+    use crate::machine::p2p::{DdsP2pClient, DdsP2pError};
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    let domain_id = Uuid::new_v4();
+    let server = MockServer::start(vec![MockResponse::json(json!({
+        "p2p_access_token": "robot-peer-token", "p2p_access_expires_at": chrono::Utc::now() + chrono::Duration::minutes(10),
+    }))]).await;
+    let dds = DdsP2pClient::new(server.base_url.parse().unwrap(), Duration::from_secs(2)).unwrap();
+    assert!(matches!(
+        dds.robot_p2p_token("e30.e30.c2ln").await,
+        Err(DdsP2pError::MissingRobotAssignment)
+    ));
+    let bearer = format!(
+        "e30.{}.c2ln",
+        URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&json!({"assigned_domain_id": domain_id})).unwrap())
+    );
+    let token = dds.robot_p2p_token(&bearer).await.unwrap();
+    assert_eq!(token.domain_id, domain_id);
+    assert_eq!(token.token, "robot-peer-token");
+    let requests = server.finish().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].target, "/internal/v1/auth/robot/p2p-token");
+    assert_eq!(
+        requests[0].headers["authorization"],
+        format!("Bearer {bearer}")
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&requests[0].body).unwrap(),
+        json!({"domain_id": domain_id})
+    );
+}
+
 fn node_nonce() -> MockResponse {
     MockResponse::json(json!({
         "nonce": "abc12345", "domain": "dds.example.com",

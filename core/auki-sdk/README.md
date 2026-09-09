@@ -1,6 +1,6 @@
 # auki-sdk
 
-The public `AukiPeer` networking runtime for applications.
+Use `AukiPeer` to sign in, connect to peers, and exchange data inside your app.
 
-Start with [Auki networking](../../README.md) and the
-[networking reference](../../docs/reference/networking.md).
+Start with [Connect two peers](../../docs/tutorials/first-peer.md), then see the
+[API and configuration reference](../../docs/reference/networking.md).

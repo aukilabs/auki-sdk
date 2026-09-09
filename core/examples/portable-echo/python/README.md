@@ -21,8 +21,8 @@ export AUKI_IDENTITY_FILE='/tmp/auki-python-a/peer.identity'
 python main.py
 ~~~
 
-In another terminal, activate the same virtual environment and set the same
-credentials and Domain. Use a different identity:
+In another terminal, open the same example directory, activate `.venv`, and
+set the same credentials and Domain. Use a different identity file:
 
 ~~~sh
 export AUKI_IDENTITY_FILE='/tmp/auki-python-b/peer.identity'
@@ -31,5 +31,5 @@ python main.py --discover '<Peer ID from the serving terminal>'
 
 Expect `echo: hello from Auki`. Stop the server with Ctrl-C.
 
-The [Python app](main.py) uses the shared Rust endpoint through one extension;
-it does not implement a second wire codec.
+The [Python app](main.py) calls the shared Rust Echo implementation through a
+Python extension.

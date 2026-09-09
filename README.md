@@ -1,52 +1,46 @@
 # Auki SDK
 
-Build applications that authenticate, find peers, and exchange data over direct
-or relay connections. `AukiPeer` owns the networking runtime: identity binding,
-renewable authority, transport, reachability, and shutdown.
+Auki SDK lets your app sign in, find peers, and exchange data on the Auki
+network. Create an `AukiPeer` inside your existing app; no separate process
+is needed.
 
-Your application chooses what to send and which application protocols to
-implement. Starting a peer mounts no application protocol.
-
-The current protocols in [`auki-protocols`](labs/auki-protocols/README.md) are
-**optional and experimental**, so the crate lives in `labs/` for now. It remains
-the intended home for protocols we select and freeze as stable.
-
-| Directory | Contents |
-| --- | --- |
-| [`core/`](core/) | Stable SDK crates: `auki-sdk`, `auki-p2p`, `auki-auth`, `auki-relay-booking`, and `auki-dms` |
-| [`core/bindings/`](core/bindings/) | SDK bindings for Python, Web, Swift, and Expo |
-| [`core/examples/`](core/examples/README.md) | Networking applications; start with portable echo |
-| [`labs/`](labs/) | Experimental crates, including `auki-protocols`, `auki-identity`, and `auki-hash` |
-| [`labs/bindings/`](labs/bindings/) | Bindings for experimental crates |
-| [`labs/examples/`](labs/examples/) | Experimental protocol and application examples |
-
-Some SDK binding builds include experimental protocol features. Applications
-still choose which endpoints to mount.
+Use Auki's discovery service or supply peer IDs and addresses yourself. Your
+app chooses its message format and handles incoming requests.
 
 ## Start here
 
-[Connect two peers and exchange a message](docs/tutorials/first-peer.md).
-
-Use one reviewed source revision for your app and its bindings.
-See [platform support and installation](docs/reference/networking.md#platforms-and-installation)
-for Rust, Python, Web, Swift, and Expo.
+[Run two peers and send a message](docs/tutorials/first-peer.md) with the Rust
+Echo example. For Python, Web, Swift, or Expo, see
+[installation](docs/reference/networking.md#platforms-and-installation).
 
 ## Documentation
 
 | I want to… | Read |
 | --- | --- |
-| Learn by running an app | [Connect two peers](docs/tutorials/first-peer.md) |
 | Sign in and choose a Domain | [Authenticate](docs/how-to/authenticate.md) |
-| Find a peer or configure reachability | [Connect](docs/how-to/connect.md) |
+| Use discovery or connect to a known address | [Connect to a peer](docs/how-to/connect.md) |
 | Exchange my own messages | [Use a custom protocol](docs/how-to/protocols.md) |
-| Preserve identity and handle shutdown | [Manage a peer](docs/how-to/lifecycle.md) |
-| Understand the moving parts | [How networking works](docs/explanation/networking.md) |
+| Keep a Peer ID and stop cleanly | [Manage a peer](docs/how-to/lifecycle.md) |
+| Understand peers, Domains, and task handling | [How networking works](docs/explanation/networking.md) |
 | Look up APIs, defaults, or errors | [Networking reference](docs/reference/networking.md) |
 
 ## Robot and compute runners
 
-[Posemesh](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
-builds on this SDK to run robot and compute tasks. Runner behavior, task
-scheduling, heartbeats, and product permissions belong to that layer.
+Submit robot and compute tasks through **DMS**, the source of truth for task
+state. [Posemesh runners](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
+handle execution. Use P2P for data exchange; do not dispatch tasks over it.
+A robot runner must execute one task at a time and reject new tasks while busy.
+
+These are application rules. The SDK transports your bytes and does not enforce
+task scheduling.
+
+## Repository
+
+| Directory | Contents |
+| --- | --- |
+| [`core/`](core/) | Stable crates: `auki-sdk`, `auki-p2p`, `auki-auth`, `auki-relay-booking`, `auki-dms` |
+| [`core/bindings/`](core/bindings/) / [`core/examples/`](core/examples/README.md) | SDK bindings and networking examples |
+| [`labs/`](labs/) | Experimental crates, including the optional [`auki-protocols`](labs/auki-protocols/README.md) |
+| [`labs/bindings/`](labs/bindings/) / [`labs/examples/`](labs/examples/) | Experimental bindings and examples |
 
 [MIT license](LICENSE).

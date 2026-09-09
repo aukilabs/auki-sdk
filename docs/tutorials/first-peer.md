@@ -1,7 +1,7 @@
 # Connect two peers and exchange a message
 
-Run two applications in the same Domain and send an echo between them. This
-uses the small, application-owned Portable Echo protocol.
+Run two apps and send `hello from Auki` from one to the other. The receiving
+app sends the same message back using the example's Echo protocol.
 
 You need Rust 1.89 or newer, this repository checked out, two terminals, and an
 Auki User with access to a development Domain. Have its Domain UUID ready. The
@@ -20,8 +20,8 @@ export AUKI_IDENTITY_FILE='/tmp/auki-echo-a/peer.identity'
 cargo run --locked -p auki-portable-echo-native
 ~~~
 
-The app authenticates, starts a relay-backed peer, mounts Echo, and advertises
-it through DDS discovery. After startup you will see:
+The app signs in, connects through a relay, and publishes its Echo address in
+Auki's DDS discovery service. After startup you will see:
 
 ~~~text
 peer: 12D3KooW...
@@ -60,15 +60,15 @@ B's Peer ID the same.
 Press Ctrl-C in terminal A. The app closes its Echo endpoint and awaits peer
 shutdown.
 
-Open the [application source](../../core/examples/portable-echo/native/src/main.rs).
-The flow is: authenticate, select a Domain, start the peer, mount an endpoint,
-send or serve, and close both owners. The two identity files let the applications
-share a User account while remaining distinct peers.
+Open the [application source](../../core/examples/portable-echo/native/src/main.rs)
+to see how it signs in, starts `AukiPeer`, registers Echo, and sends a request.
+Both apps use the same User account; the separate identity files give them
+different Peer IDs.
 
 For another language, use the same Echo implementation through its
 [Python](../../core/examples/portable-echo/python/README.md),
 [Web](../../core/examples/portable-echo/web/README.md), or
-[Swift](../../core/examples/portable-echo/swift/README.md) host.
+[Swift](../../core/examples/portable-echo/swift/README.md) app.
 
 Continue with [your own protocol](../how-to/protocols.md), or consult
 [connection troubleshooting](../reference/networking.md#errors-and-recovery)

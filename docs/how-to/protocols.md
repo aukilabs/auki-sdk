@@ -1,84 +1,78 @@
 # Use a custom application protocol
 
-Choose an existing product protocol or define one in your own crate. Both ends
-must implement the same protocol ID and conversation. The networking engine
-does not require anything from `auki-protocols`.
+Both peers must agree on a protocol ID, message format, and response. Define
+these in your app; `auki-protocols` is optional.
 
-## Use an existing endpoint
+## Start with Echo
 
-The [Portable Echo application](../../core/examples/portable-echo/native/src/main.rs)
-shows the complete lifecycle. Its public application API is small:
+Use [Portable Echo](../../core/examples/portable-echo/README.md) as a template:
 
-~~~rust
-let endpoint = auki_portable_echo::EchoEndpoint::mount(peer.protocols())?;
-let result = endpoint.send_exact(remote_peer_id, remote_route, b"hello").await;
-let cleanup = endpoint.close().await;
-let receipt = result?;
-cleanup?;
-~~~
+| Part | Format |
+| --- | --- |
+| Protocol ID | `/example/echo/1.0.0` |
+| Request | Four-byte unsigned big-endian payload length, then 1–1,024 payload bytes |
+| Response | The same length and payload, then the stream closes |
 
-Keep the endpoint alive for as long as your app should accept requests. For
-outbound calls only, use its `EchoClient`; constructing a client does not mount
-an inbound handler.
-
-## Define your own contract
-
-Use [Portable Echo's wire module](../../core/examples/portable-echo/src/wire.rs) as a
-small reference. Define these in your product crate:
-
-1. An exact ID in your namespace, such as `/my-app/ping/1.0.0`.
-2. Request/response types, framing, and message-size limits.
-3. The conversation: who writes first, when a response ends, and how errors
-   and cancellation are handled.
-4. Deadlines and the permissions required for each operation.
-
-Keep your codec independent of the host language and transport. Reject an
-oversized length before allocating its payload. Change the protocol ID when
-the wire format or conversation becomes incompatible.
-
-## Register a handler
-
-After implementing your async `handle_request` function, mount it on the peer:
+Add the [Echo dependency](connect.md). This function serves requests on a
+running native peer until Ctrl-C or a peer failure:
 
 ~~~rust
-let registration = peer.protocols().register(
-    auki_sdk::AukiProtocolSpec::new("/my-app/ping/1.0.0", 8, 1024)?,
-    handle_request,
-)?;
+use auki_portable_echo::EchoEndpoint;
+use auki_sdk::AukiPeer;
+
+async fn serve_echo(peer: &AukiPeer) -> anyhow::Result<()> {
+    let endpoint = EchoEndpoint::mount(peer.protocols())?;
+    let result = tokio::select! {
+        signal = tokio::signal::ctrl_c() => signal.map_err(anyhow::Error::from),
+        stopped = peer.wait_stopped() => Err(anyhow::anyhow!("Peer stopped: {stopped:?}")),
+    };
+    let cleanup = endpoint.close().await;
+    result?;
+    cleanup?;
+    Ok(())
+}
 ~~~
 
-The handler receives an `AukiProtocolStream` and returns a future yielding
-`()`. Inspect `stream.remote_peer()` and apply your product's permissions
-before performing an operation. The stream is already authenticated to this
-Domain.
+Use [`EchoClient::send_exact`](connect.md#use-your-own-discovery-or-a-known-address)
+from the other peer to get the same bytes back. The client accepts no incoming
+requests. After serving, [shut down the peer](lifecycle.md#close-your-handlers-then-stop-the-peer),
+including on failure.
 
-The spec above permits eight concurrent inbound streams and declares a
-1,024-byte frame limit. **Your codec must enforce the frame limit.** The engine
-does not interpret your bytes. Bound the conversation's duration and attempt
-stream cleanup on success and failure.
+## Replace Echo with your messages
 
-Keep `registration` alive while serving; await `registration.close()` to stop.
-For a complete implementation with deadlines and cleanup, use the
-[Echo endpoint](../../core/examples/portable-echo/src/endpoint.rs).
+In your own Rust crate, adapt:
 
-## Call the protocol
+1. [wire.rs](../../core/examples/portable-echo/src/wire.rs): change the protocol
+   ID, request/response types, and the functions that encode and decode them.
+2. [endpoint.rs](../../core/examples/portable-echo/src/endpoint.rs): register
+   your handler and open outgoing streams. Keep the timeouts and cleanup.
 
-Use `peer.protocols().open_exact(remote_peer_id, route, protocol_id)`, then run
-your client codec on the returned stream. Apply deadlines to opening, exchange,
-and closure. Handle unsupported-protocol errors explicitly; the SDK does not
-choose an older application version for you.
+Register with `peer.protocols().register(spec, handler)`. For example,
+`AukiProtocolSpec::new("/my-app/ping/1.0.0", 8, 1024)` allows eight concurrent
+incoming streams and declares a 1,024-byte frame limit. **Your decoding code
+must enforce this limit** before allocating an incoming payload.
 
-## Use the protocol from another language
+The handler receives an `AukiProtocolStream` and returns a future yielding `()`.
+Check `stream.remote_peer()` against your app's permissions before handling
+a request. Keep the registration alive while serving; await
+`registration.close()` when finished.
 
-Share the Rust codec and endpoint. Add a thin adapter to the same Wasm module,
-Python extension, or Swift framework that owns the peer. Runtime handles from
-separate compiled artifacts are not interchangeable.
+Call `peer.protocols().open_exact(peer_id, address, protocol_id)` to open an
+outgoing stream with `futures::AsyncRead` and `AsyncWrite`. Set timeouts for
+opening, reading/writing, and closing; clean up after errors too. Change the
+protocol ID for incompatible changes; the SDK does not choose an older version.
 
-The [Web](../../core/examples/portable-echo/web/src/lib.rs),
-[Python](../../core/examples/portable-echo/python/src/lib.rs), and
-[Swift](../../core/examples/portable-echo/swift/ffi/src/lib.rs) Echo adapters demonstrate
-this boundary. Use portable async I/O and timers in code shared with the browser.
+## Call it from Python, JavaScript, or Swift
 
-The current `auki-protocols` implementations remain experimental, even where
-bindings expose features named `standard-protocols`. Enabling a feature or
-importing a type does not mount an endpoint.
+Compile your Rust adapter with the SDK in the same Python extension, Wasm
+module, or Swift framework. Peer handles cannot cross separately compiled
+copies of the SDK.
+
+Copy the structure of the Echo [Python](../../core/examples/portable-echo/python/src/lib.rs),
+[Web](../../core/examples/portable-echo/web/src/lib.rs), or
+[Swift](../../core/examples/portable-echo/swift/ffi/src/lib.rs) adapter. Code shared
+with browsers needs portable async I/O and timers, as used in Echo; the `tokio`
+example above is native only.
+
+The [`auki-protocols`](../../labs/auki-protocols/README.md) implementations are
+experimental, including those bundled by `standard-protocols` binding features.

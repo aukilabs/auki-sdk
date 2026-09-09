@@ -1,7 +1,7 @@
 # Auki networking for Expo
 
-`@aukilabs/auki-sdk-expo` exposes session and peer handles on Web and iOS.
-Android is currently unimplemented.
+Use `@aukilabs/auki-sdk-expo` to connect an Expo app on Web or iOS.
+Android is not implemented.
 
 From the SDK repository root, with the
 [platform toolchains](../../../docs/reference/networking.md#platforms-and-installation)
@@ -20,8 +20,14 @@ Add this package to your app as a local dependency. For Metro Web, include
 
 ## Import an existing login
 
-Your host supplies credentials from PKCE login and an atomic secure store.
-Stop competing token refresh before handing the session to the SDK.
+Your app supplies `credentials` from PKCE login and a known `selectedDomainId`.
+In this example, `secureStore` is your storage code: `saveAtomically` saves all
+credentials together, and `clear` deletes them. Both methods must finish their
+writes before returning.
+
+Stop your app's token refresh loop before importing; the SDK will refresh the
+tokens. Keep the returned session in app state, including when peer startup
+fails, so you can retry with it.
 
 ~~~ts
 import AukiSdkExpo, {
@@ -37,16 +43,14 @@ const session = await importZitadelSession(credentials, async replacement => {
     accessTokenExpiresAt: replacement.accessTokenExpiresAt,
   });
 });
-// Retain session in app state before starting any authentication operation.
+// Save session in app state before starting the peer.
 const peer = await AukiSdkExpo.startPeer(session, selectedDomainId);
 
-// On logout, after closing any application endpoints:
+// On logout, after closing your message handlers:
 await AukiSdkExpo.shutdown(peer);
 await closeSession(session);
 await secureStore.clear();
 ~~~
 
-`credentials`, `secureStore`, and `selectedDomainId` belong to your app.
-Imported sessions require a known Domain ID. See
-[authentication](../../../docs/how-to/authenticate.md) for persistence failures,
-session ownership, and service requirements.
+See [authentication](../../../docs/how-to/authenticate.md#reuse-a-zitadel-login)
+for storage failures and DDS requirements.

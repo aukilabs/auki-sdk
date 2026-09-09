@@ -2,6 +2,6 @@
 
 Follow [Connect two peers](../../../../docs/tutorials/first-peer.md) to run this app.
 
-The complete app is [src/main.rs](src/main.rs). It authenticates, selects a
-Domain, starts a persistent peer, mounts Echo, discovers or calls another peer,
-and shuts down in ownership order.
+The complete app is [src/main.rs](src/main.rs). It signs in, starts a peer,
+registers Echo, sends or answers requests, and shuts down. It saves its Peer
+ID in a file so you can reuse it after restarting.

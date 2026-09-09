@@ -1,14 +1,11 @@
 # auki-protocols
 
-Optional, **experimental** application protocols, kept in `labs/` for now.
-The networking engine does not require these implementations or mount them
-automatically.
+Optional, **experimental** application protocols. The SDK does not require
+them. This crate will also hold the protocols we select and freeze as stable.
 
-This crate is the intended home for the protocols selected and frozen as
-stable. Its current versioned implementations do not carry that commitment.
+The Rust crate has no default features. Some language bindings include these
+protocols, including builds with `standard-protocols`. Your app must still
+register the handlers it wants to serve.
 
-The Rust crate has no default features. Some language bindings bundle protocol
-features; an application still chooses which endpoints to mount.
-
-To build your own protocol, see
+To define your own messages, see
 [Use a custom application protocol](../../docs/how-to/protocols.md).

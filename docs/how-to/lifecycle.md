@@ -1,8 +1,9 @@
-# Preserve identity and manage peer lifetime
+# Keep a Peer ID and stop cleanly
 
-## Choose a Peer ID lifetime
+## Keep the same Peer ID across restarts
 
-Native Rust can preserve an identity across restarts:
+Use your authenticated [`bootstrap`](authenticate.md) and a `DomainSelection`
+named `selection` to start a native peer with an identity file:
 
 ~~~rust
 let peer = bootstrap
@@ -10,50 +11,48 @@ let peer = bootstrap
     .await?;
 ~~~
 
-The SDK loads the key or creates it and its parent directory. Keep the file in
-persistent private storage. Give each simultaneously running peer a different
-identity file; one live runtime owns a Peer ID.
+The SDK loads or creates the key and its parent directory. Store the file
+privately on persistent storage. Each running peer needs a different key.
 
-Use `start_ephemeral_peer(selection)` for a fresh in-memory identity.
-Browser peers currently use ephemeral identities. Python supports a persistent
-identity file. Swift exposes encoded identity bytes for app-managed persistence.
+Use `start_ephemeral_peer(selection)` when you want a new Peer ID on each start.
+Browsers currently use this option. Python supports an identity file; Swift
+lets your app save and restore encoded identity bytes.
 
-## React to readiness and failure
+## Handle connection failures
 
-Native Rust exposes `peer.status()` and `peer.subscribe_status()`. Accept new
-application work while the peer is ready. Temporary authority or relay
-unavailability may recover; a terminal failure needs application handling.
+In native Rust, read `peer.status()` or watch `peer.subscribe_status()`.
+Pause new network requests while authentication or the relay is unavailable.
+The SDK attempts recovery and reports status changes. See the
+[error reference](../reference/networking.md#errors-and-recovery) for when to
+retry or sign in again.
 
-Race your application loop against `peer.wait_stopped()`, or use a cloned
-`peer.lifecycle()` observer. A retained observer can outlive the peer owner.
-Web exposes `peer.waitStopped()` for terminal failures.
+Watch `peer.wait_stopped()` alongside your app's event loop so it can react
+when the peer stops permanently. The [Echo handler](protocols.md#start-with-echo)
+shows this with `tokio::select!`. Web exposes `peer.waitStopped()`.
 
-Use the [error reference](../reference/networking.md#errors-and-recovery) to
-decide whether to sign in again, fix configuration, or retry. The SDK owns
-authority renewal and relay recovery during a peer's lifetime.
+## Close your handlers, then stop the peer
 
-## Shut down in ownership order
-
-Stop new application work, close your endpoints, then await peer shutdown.
-Attempt cleanup even if application work failed:
+Stop sending new requests, close your handlers, and await peer shutdown.
+For an app using the [Echo endpoint](connect.md):
 
 ~~~rust
-let operation = run_application(&peer, &endpoint).await;
-let endpoint_cleanup = endpoint.close().await;
-let peer_cleanup = peer.shutdown().await;
+use auki_portable_echo::EchoEndpoint;
+use auki_sdk::AukiPeer;
 
-operation?;
-endpoint_cleanup?;
-peer_cleanup?;
+async fn stop_peer(peer: AukiPeer, endpoint: EchoEndpoint) -> anyhow::Result<()> {
+    let endpoint_cleanup = endpoint.close().await;
+    let peer_cleanup = peer.shutdown().await;
+    endpoint_cleanup?;
+    peer_cleanup?;
+    Ok(())
+}
 ~~~
 
-Here `run_application` is your app's work loop. Handle Ctrl-C, UI teardown, or
-host cancellation there. Await shutdown to release relay bookings and finish
-network cleanup; dropping handles alone is not a completed shutdown.
+Both cleanup steps run even if the first fails. Likewise, call your cleanup
+before returning an application error. Awaiting shutdown releases relay
+bookings and closes connections; dropping the peer is not sufficient.
 
-If logging out, stop all peers using the session, await
-`bootstrap.session().close()`, and then erase saved credentials. Session close
-and peer shutdown are separate operations.
+When logging out, stop all peers using the session, await
+`bootstrap.session().close()`, then erase saved credentials.
 
-To move an application to another Domain, shut down the old peer and start one
-with the new Domain selection.
+To switch Domains, stop the old peer and start one in the new Domain.

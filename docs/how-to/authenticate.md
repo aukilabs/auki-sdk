@@ -1,13 +1,14 @@
-# Authenticate and select a Domain
+# Sign in and choose a Domain
 
-Use an authentication session to authorize one peer identity in one selected
-Domain. Start with the [installation reference](../reference/networking.md#platforms-and-installation)
-if the SDK is not yet a dependency of your app.
+You need credentials and a Domain ID that the account can access.
+[Add the SDK to your app](../reference/networking.md#platforms-and-installation)
+before using these native Rust examples.
 
-## User or service credentials
+## Sign in with a User account
 
-This complete native Rust example reads a User login and a known Domain from
-the environment, starts a peer, and stops it:
+Set `AUKI_EMAIL`, `AUKI_PASSWORD`, and `AUKI_DOMAIN_ID` as in the
+[tutorial](../tutorials/first-peer.md). This complete program signs in to the
+development services, prints its Peer ID, and shuts down:
 
 ~~~rust
 use auki_sdk::{AukiPeerBootstrap, Credentials, DomainSelection};
@@ -33,24 +34,25 @@ async fn main() -> anyhow::Result<()> {
 }
 ~~~
 
-For a trusted backend service, replace `Credentials::user_password(...)` with
-`Credentials::app(access_key, secret)`. App secrets belong in trusted service
-storage; do not embed them in browser or mobile applications.
+To show a Domain picker, call `bootstrap.accessible_domains().await?` before
+starting the peer. Pass the selected `choice.domain.id` to `DomainSelection::new`.
 
-To offer a Domain picker, call `bootstrap.accessible_domains().await?` before
-starting. Pass the selected `choice.domain.id` to `DomainSelection::new`.
+For a backend service, use `Credentials::app(access_key, secret)` instead.
+Keep App secrets on the backend; do not embed them in browser or mobile apps.
 
-The `dev` constructor selects development services. To use your own environment,
-replace its construction with:
+## Connect to another environment
+
+Get the API, DDS, and DMS URLs from your environment administrator. Replace
+`AukiPeerBootstrap::dev` with this function:
 
 ~~~rust
-use auki_sdk::{AuthClient, AuthEnvironment, AukiPeerBootstrap, AukiPeerConfig};
+use auki_sdk::{AuthClient, AuthEnvironment, AukiPeerBootstrap, AukiPeerConfig, Credentials};
 
 async fn authenticate(
     api_base: &str,
     dds_base: &str,
     dms_base: &str,
-    credentials: auki_sdk::Credentials,
+    credentials: Credentials,
 ) -> anyhow::Result<AukiPeerBootstrap> {
     Ok(AukiPeerBootstrap::authenticate(
         AuthClient::new(AuthEnvironment::new(api_base, dds_base)?)?,
@@ -61,36 +63,31 @@ async fn authenticate(
 }
 ~~~
 
-Use service URLs supplied by your environment administrator.
+Replace `AukiPeerConfig::new(dms_base)?` with your
+[connection configuration](connect.md#accept-connections-directly-or-through-a-relay)
+if you need direct listeners or different relay settings.
 
-## An existing ZITADEL login
+## Reuse a ZITADEL login
 
-The host performs PKCE login and supplies its access token, refresh token,
-trusted issuer, client ID, and optional token expiry. Hand refresh ownership to
-the SDK and retain the imported session if startup fails.
+Import your app's PKCE login with its access token, refresh token, trusted
+issuer, client ID, and optional expiry. The SDK will refresh the tokens;
+stop any other refresh loop for that login.
 
-In Rust, use `AuthClient::import_zitadel_session` with a
-`ZitadelSessionStore`, then `AukiPeerBootstrap::from_session`. Web exposes
-`AukiUserSession.importZitadelDev`; Swift and Expo expose equivalent imports.
-See the [Expo import example](../../core/bindings/expo/README.md#import-an-existing-login).
+In Rust, call `AuthClient::import_zitadel_session` with a `ZitadelSessionStore`,
+then `AukiPeerBootstrap::from_session`. Web uses `AukiUserSession.importZitadelDev`;
+Swift and Expo also support import. See the
+[Expo example](../../core/bindings/expo/README.md#import-an-existing-login).
 
-The storage callback must atomically save the complete replacement credentials
-and finish all its writes before returning success or failure. Await persistence;
-keep only one refresh owner for a grant. On a `persistence` error, retry using
-the same session so its retained replacement can be saved.
+Your storage callback must save all replacement credentials together and await
+every write, including on failure. Keep the session if startup or saving fails.
+On a `persistence` error, retry with that session to save its retained tokens.
 
-Supply a known Domain ID: imported ZITADEL sessions currently do not support
-`accessible_domains`. The DDS environment must support direct ZITADEL P2P
-admission. On logout, stop peers, await session close, then clear stored
-credentials.
+Provide a known Domain ID: imported sessions cannot currently list Domains.
+Your DDS deployment must support ZITADEL login for P2P access. On logout, stop
+peers, close the session, then delete stored credentials.
 
-## A host that already manages machine authentication
+## Build a robot or compute worker
 
-Native hosts may call `AukiPeer::start_external(identity, update, config)`.
-Retain its returned authority-control handle, supply complete replacements with
-`replace`, and service `next_refresh_request`. The SDK still owns the
-networking lifecycle.
-
-Posemesh already composes this for its
-[robot and compute runners](https://github.com/aukilabs/posemesh/tree/main/core/compute-node).
-Use that runner layer when building a task worker.
+[Posemesh runners](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
+already manage machine authentication and execution for DMS tasks. Build your
+worker on that runner.

@@ -2,26 +2,25 @@
 
 ## Platforms and installation
 
-Use a reviewed SDK source revision consistently across your application,
-protocol crate, and bindings. The packages' `0.1.0` source version does not
-establish package-registry availability or make experimental protocols stable.
+These instructions build from source. Use the same SDK revision for your app,
+protocol crates, and bindings.
 
-| Platform | Peer API | Identity | Application protocols |
+| Platform | Peer API | Peer ID across restarts | Custom protocols |
 | --- | --- | --- | --- |
-| Rust | `AukiPeerBootstrap`, `AukiPeer` | Persistent or ephemeral | Native Rust handlers; shared Rust can target Wasm |
-| Python | `auki_sdk.AukiSession`, `AukiPeer` | Persistent file | Rust adapter in the same Python extension |
-| Web | `AukiUserSession`, `AukiPeer` | Ephemeral | Rust adapter in the same Wasm module |
-| Swift/iOS | `AukiUserSession`, `AukiPeer` | Ephemeral or app-persisted | Rust adapter in the same framework |
-| Expo Web/iOS | `@aukilabs/auki-sdk-expo` session/peer handles | Managed by the platform bridge | Only exported bridge operations |
-| Expo Android | Unimplemented | — | — |
+| Rust | `AukiPeerBootstrap`, `AukiPeer` | Saved file or new key | Rust handler |
+| Python | `auki_sdk.AukiSession`, `AukiPeer` | Saved file | Rust adapter in the same Python extension |
+| Web | `AukiUserSession`, `AukiPeer` | New key | Rust adapter in the same Wasm module |
+| Swift/iOS | `AukiUserSession`, `AukiPeer` | App can save identity bytes | Rust adapter in the same framework |
+| Expo Web/iOS | `@aukilabs/auki-sdk-expo` | Managed by the platform bridge | Use operations exported by the bridge |
+| Expo Android | Not implemented | — | — |
 
-User-password authentication is exposed on the supported platforms. App
-access-key/secret authentication is for trusted native Rust/Python hosts.
-ZITADEL session import is exposed in Rust, Web, Swift, and Expo Web/iOS.
+All supported platforms expose User-password login. Trusted Rust and Python
+services can use App access keys and secrets. Rust, Web, Swift, and Expo
+Web/iOS also support importing a ZITADEL session.
 
 ### Rust
 
-Requires Rust 1.89 or newer. For an app next to this checkout, use:
+Requires Rust 1.89 or newer. For an app next to this checkout, add to `Cargo.toml`:
 
 ~~~toml
 [dependencies]
@@ -30,93 +29,100 @@ anyhow = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 ~~~
 
-A downstream Git dependency can use the repository URL with an exact reviewed
-`rev`. The [tutorial](../tutorials/first-peer.md) runs directly from this
-workspace.
+You can also use a Git dependency with the repository URL and an exact `rev`.
+The [tutorial](../tutorials/first-peer.md) runs directly from this checkout.
 
-Generate the public Rust API reference locally:
+Generate the Rust API reference from the repository root:
 
 ~~~sh
-cargo doc --locked -p auki-sdk -p auki-auth -p auki-p2p --no-deps
+cargo doc --locked -p auki-sdk -p auki-auth -p auki-p2p -p auki-dms --no-deps
 ~~~
 
-The entry point is `target/doc/auki_sdk/index.html`.
+Open `target/doc/auki_sdk/index.html`.
 
-### Other hosts
+### Other platforms
 
-| Host | Source setup |
+| Platform | Build requirements and instructions |
 | --- | --- |
-| Python | Python 3.8+, Rust, and Maturin; [build the binding](../../core/bindings/python/auki-sdk-py/README.md) |
-| Web | Rust, `wasm32-unknown-unknown`, wasm-pack 0.13.1, Node 20.19+ on 20.x or 22.12+; [run the Web host](../../core/examples/portable-echo/web/README.md) |
-| Swift | Swift 6, Xcode, iOS 17+, and Apple Rust targets; [build the Swift host](../../core/examples/portable-echo/swift/README.md) |
-| Expo | Supported Web/iOS toolchains above and Expo; [package setup](../../core/bindings/expo/README.md) |
+| Python | Python 3.8+, Rust, Maturin; [build the binding](../../core/bindings/python/auki-sdk-py/README.md) |
+| Web | Rust, `wasm32-unknown-unknown`, wasm-pack 0.13.1, Node 20.19+ on 20.x or 22.12+; [run the Web example](../../core/examples/portable-echo/web/README.md) |
+| Swift | Swift 6, Xcode, iOS 17+, Apple Rust targets; [run the Swift example](../../core/examples/portable-echo/swift/README.md) |
+| Expo | Web/iOS toolchains above and Expo; [build the package](../../core/bindings/expo/README.md) |
 
 ## Public Rust entry points
 
-| API | Purpose |
+| API | Use it to… |
 | --- | --- |
-| `AukiPeerBootstrap` | Authenticate, select a Domain, and start an identity |
-| `AuthClient`, `AuthSession` | Explicit service environments and imported login sessions |
-| `AukiPeerConfig` | Reachability, initial routes, and discovery settings |
-| `AukiPeer::protocols()` | Register or open an application protocol |
-| `AukiProtocolSpec` | Exact protocol ID and inbound handler bounds |
-| `AukiProtocolRegistration::close()` | Stop a mounted handler |
-| `discover()`, `discover_protocol()` | Fresh untrusted discovery candidates |
-| `protocol_context().routes()` | Confirmed local routes and route changes |
-| `known_peers()` | Native observations of authenticated connections |
-| `status()`, `subscribe_status()` | Native readiness |
-| `wait_stopped()`, `lifecycle()` | Terminal lifecycle observation |
-| `shutdown()` | Await network cleanup |
-| `AukiPeer::start_external` | Native startup with host-managed machine authority |
+| `AukiPeerBootstrap` | Sign in and start a peer in a selected Domain |
+| `AuthClient`, `AuthSession` | Set service URLs or reuse a login session |
+| `AukiPeerConfig` | Configure relays, listeners, addresses, and discovery |
+| `AukiPeer::protocols()` | Register a handler or open an outgoing stream |
+| `AukiProtocolSpec` | Set protocol ID, concurrency, and declared frame-size limit |
+| `AukiProtocolRegistration::close()` | Stop accepting requests and wait for active handlers |
+| `discover()`, `discover_protocol()` | Look up peers and their advertised addresses |
+| `protocol_context().routes()` | Read your peer's addresses and watch for changes |
+| `known_peers()` | Inspect authenticated connections (native) |
+| `status()`, `subscribe_status()` | Check native peer readiness and watch for changes |
+| `wait_stopped()`, `lifecycle()` | Wait for the peer to stop |
+| `shutdown()` | Release relay bookings and close connections |
+| `AukiPeer::start_external` | Start a native peer using authentication managed by your host |
 
-The [public exports](../../core/auki-sdk/src/lib.rs) define the exact target
-availability. Low-level transport APIs live in `auki-p2p`.
+Native `protocols().open` uses addresses configured with
+`AukiPeerConfig::with_peer_routes`. DDS lookup does not add addresses there;
+pass a discovered address to `open_exact` instead.
+
+`start_external(identity, update, config)` returns a peer and an authentication
+control handle. Respond to `next_refresh_request` and pass complete
+`ExternalAuthorityUpdate` values to `replace`. Posemesh handles this for its
+[robot and compute runners](https://github.com/aukilabs/posemesh/tree/main/core/compute-node).
+
+See the [public exports](../../core/auki-sdk/src/lib.rs) for platform availability.
 
 ## Configuration
 
-Values below describe `AukiPeerConfig`, not example environment variables.
+These values describe `AukiPeerConfig` and protocol registration.
 
 | Setting | Default / constraint |
 | --- | --- |
 | Relay | Enabled; public pool, one provider |
 | Relay count | Native: 1–3; browser: one |
-| Booking duration | 86,400 seconds; accepted range 300–86,400 whole seconds |
-| Status polling | 30 seconds; accepted range 1–60 whole seconds |
+| Booking duration | 86,400 seconds; range 300–86,400 whole seconds |
+| Status polling | 30 seconds; range 1–60 whole seconds |
 | DDS discovery | Disabled |
 | Discovery modes | `DiscoverOnly` or `DiscoverAndAdvertise` |
 | Native listeners | None |
-| Native advertised direct routes | None; configure reachable, nonzero ports |
-| Initial remote routes | None; native `with_peer_routes` configures them |
-| Local route slots | 16; a relay provider consumes one slot for its TCP/WSS pair |
+| Advertised direct addresses | None; require reachable, nonzero ports |
+| Configured remote addresses | None; native `with_peer_routes` sets them |
+| Local address capacity | 16 entries; a relay's TCP/WSS pair uses one entry |
 | App protocol ID | At most 255 bytes; use your own namespace, e.g. `/my-app/ping/1.0.0` |
-| Inbound concurrency | Declared per protocol, 1–1,024 |
-| Declared frame bound | 1 byte–64 MiB; enforced by the application's codec |
+| Concurrent incoming streams | Set per protocol, 1–1,024 |
+| Declared frame-size limit | 1 byte–64 MiB; your decoding code must enforce it |
 
-Source: [peer configuration](../../core/auki-sdk/src/config.rs) and
+The `/auki/` protocol namespace is reserved. Source:
+[peer configuration](../../core/auki-sdk/src/config.rs) and
 [protocol constraints](../../core/auki-p2p/src/application_protocol.rs).
-The `/auki/` protocol namespace is reserved.
 
 `AuthEnvironment::dev()` and `AukiPeerConfig::dev()` select shared development
-services. Explicit API, DDS, and DMS bases are configurable; public endpoints
-require HTTPS. The SDK permits limited loopback HTTP configurations for local
-development.
+services. You can set API, DDS, and DMS URLs for your own environment. Public
+service URLs require HTTPS; limited loopback HTTP configurations are supported
+for local development.
 
 ## Errors and recovery
 
-| Symptom | Check or action |
+| Symptom | Action |
 | --- | --- |
-| Peer authorization fails | Credentials, selected Domain access, and service environment |
-| Discovery is disabled | Enable the tracker before startup |
-| No matching peers | Same Domain, exact protocol ID, mounted endpoint, and advertising mode; retry a fresh lookup |
-| `NoRoutes` | Configure native route hints or use `open_exact` with a selected route |
-| Invalid route / all routes fail | Expected Peer ID, current address, compatible TCP/WSS transport, reachability, and protocol support |
-| Duplicate protocol | Retain one registration for an exact ID; close it before replacing |
-| `AuthorityUnavailable` / `RelayUnavailable` | Pause new work and observe status for recovery or terminal failure |
-| `Failed`, `Stopping`, `Stopped` | Stop submitting work; complete cleanup and handle the terminal result |
+| Peer authorization fails | Check credentials, Domain access, and service URLs |
+| Discovery is disabled | Enable it before starting the peer |
+| No matching peers | Check the other peer's Domain, protocol ID, registered handler, and advertising mode; retry the lookup |
+| `NoRoutes` | Set native remote addresses or use `open_exact` with an address |
+| Invalid address / all addresses fail | Verify the Peer ID, current address, TCP/WSS support, and protocol ID; check that the peer is reachable |
+| Duplicate protocol | Close the previous registration before registering the same ID |
+| `AuthorityUnavailable` / `RelayUnavailable` | Pause new network requests and watch status for recovery or failure |
+| `Failed`, `Stopping`, `Stopped` | Stop sending requests and finish cleanup; inspect the stop result |
 | ZITADEL `authentication_required` | Sign in again |
-| ZITADEL `configuration` / `authorization_denied` | Fix session/service configuration or select a readable Domain |
-| ZITADEL `persistence` / `transient` | Retry on the retained session |
-| ZITADEL `closed` / `cancelled` | Handle the operation/session lifecycle termination |
+| ZITADEL `configuration` / `authorization_denied` | Check session/service settings and access to the selected Domain |
+| ZITADEL `persistence` / `transient` | Retry using the same session |
+| ZITADEL `closed` / `cancelled` | Stop using the closed session or handle the cancelled operation |
 
-Discovery candidates, routes, and `known_peers()` are not authorization lists.
-Use authenticated peer information inside your protocol's permission checks.
+Finding a peer does not grant it permission to call your app's operations.
+Check the authenticated peer in your handler.

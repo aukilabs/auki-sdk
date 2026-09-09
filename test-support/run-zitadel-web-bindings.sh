@@ -3,7 +3,7 @@ set -euo pipefail
 : "${WASM_BINDGEN_TEST_RUNNER:?Set to wasm-bindgen-test-runner 0.2.121, matching Cargo.lock}"
 test -x "$WASM_BINDGEN_TEST_RUNNER"
 z08_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$z08_root/bindings/web/auki-sdk-web"
+cd "$z08_root/core/bindings/web/auki-sdk-web"
 npm run check
 node -e '(async()=>{for(const port of [18111,18112])await new Promise((resolve,reject)=>{const s=require("node:net").createServer();s.once("error",reject);s.listen(port,"127.0.0.1",()=>s.close(resolve));});})().catch(()=>process.exit(1));'
 cd "$z08_root"

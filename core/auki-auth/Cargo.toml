@@ -1,0 +1,54 @@
+[package]
+name = "auki-auth"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Bounded API and DDS authority preparation for Auki P2P peers"
+readme = "README.md"
+
+[dependencies]
+async-trait = { workspace = true }
+auki-p2p = { path = "../auki-p2p" }
+base64 = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+futures-timer = { workspace = true }
+hex = { workspace = true }
+p256 = "0.13.2"
+reqwest = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
+uuid = { workspace = true }
+zeroize = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+anyhow = { workspace = true }
+k256 = { version = "0.13.4", features = ["ecdsa"] }
+secp256k1 = { version = "0.28.2", features = ["recovery"] }
+sha3 = "0.10.8"
+rand = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+web-sys = { version = "0.3.98", features = [
+    "AbortController", "AbortSignal", "Headers", "ReadableStream",
+    "ReadableStreamDefaultReader", "Request", "RequestInit", "RequestCache",
+    "RequestCredentials", "RequestMode", "RequestRedirect", "ReferrerPolicy",
+    "Response", "UrlSearchParams",
+] }
+
+[dev-dependencies]
+auki-protocols = { path = "../../labs/auki-protocols", features = ["info-endpoint"] }
+auki-sdk = { path = "../auki-sdk" }
+jsonwebtoken = "9.3.0"
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time", "test-util"] }

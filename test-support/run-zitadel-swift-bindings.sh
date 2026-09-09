@@ -4,7 +4,7 @@
 set -euo pipefail
 z08_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$z08_root"
-z08_crate="$z08_root/bindings/swift/auki-sdk-swift"
+z08_crate="$z08_root/core/bindings/swift/auki-sdk-swift"
 z08_headers="$z08_crate/target-xcframework/bindings"
 test -f "$z08_headers/module.modulemap"
 test -f "$z08_crate/Sources/AukiSDK/Generated/auki_sdk_swift.swift"

@@ -2,8 +2,8 @@
 # Actual Expo Web module + Metro, not a mocked Expo facade.
 set -euo pipefail
 z09_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-z09_example="$z09_root/bindings/expo/example"
-cd "$z09_root/bindings/expo"
+z09_example="$z09_root/core/bindings/expo/example"
+cd "$z09_root/core/bindings/expo"
 npm run build
 npm run typecheck
 node -e '(async()=>{for(const port of [18111,18113])await new Promise((resolve,reject)=>{const s=require("node:net").createServer();s.once("error",reject);s.listen(port,"127.0.0.1",()=>s.close(resolve));});})().catch(()=>process.exit(1));'

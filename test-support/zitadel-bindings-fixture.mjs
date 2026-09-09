@@ -27,8 +27,8 @@ const server = http.createServer(async (request, response) => {
     const files = new Map([
       ['/', ['zitadel-web-host.html', 'text/html']],
       ['/host.js', ['zitadel-web-host.mjs', 'text/javascript']],
-      ['/pkg/auki_sdk_web.js', ['../bindings/web/auki-sdk-web/pkg-test/auki_sdk_web.js', 'text/javascript']],
-      ['/pkg/auki_sdk_web_bg.wasm', ['../bindings/web/auki-sdk-web/pkg-test/auki_sdk_web_bg.wasm', 'application/wasm']],
+      ['/pkg/auki_sdk_web.js', ['../core/bindings/web/auki-sdk-web/pkg-test/auki_sdk_web.js', 'text/javascript']],
+      ['/pkg/auki_sdk_web_bg.wasm', ['../core/bindings/web/auki-sdk-web/pkg-test/auki_sdk_web_bg.wasm', 'application/wasm']],
     ]);
     if (files.has(url.pathname)) {
       const [file, type] = files.get(url.pathname);

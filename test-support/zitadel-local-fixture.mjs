@@ -130,8 +130,8 @@ export function startIdentityFixture(runDir, sdkRoot) {
     const files = {
       '/': ['test-support/zitadel-local-web.html', 'text/html'],
       '/host.mjs': ['test-support/zitadel-local-web.mjs', 'text/javascript'],
-      '/pkg/auki_sdk_web.js': ['bindings/web/auki-sdk-web/pkg-test/auki_sdk_web.js', 'text/javascript'],
-      '/pkg/auki_sdk_web_bg.wasm': ['bindings/web/auki-sdk-web/pkg-test/auki_sdk_web_bg.wasm', 'application/wasm'],
+      '/pkg/auki_sdk_web.js': ['core/bindings/web/auki-sdk-web/pkg-test/auki_sdk_web.js', 'text/javascript'],
+      '/pkg/auki_sdk_web_bg.wasm': ['core/bindings/web/auki-sdk-web/pkg-test/auki_sdk_web_bg.wasm', 'application/wasm'],
     };
     const file = files[pathname];
     if (!file) { response.writeHead(404); response.end(); return; }

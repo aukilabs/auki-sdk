@@ -17,6 +17,7 @@ members = [
     "bindings/web/auki-sdk-web",
     "crates/auki-p2p",
     "crates/auki-auth",
+    "crates/auki-dms",
     "crates/auki-relay-booking",
     "crates/auki-sdk",
     "bindings/python/auki-sdk-py",

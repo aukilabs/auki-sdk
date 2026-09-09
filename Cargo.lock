@@ -298,6 +298,7 @@ dependencies = [
 name = "auki-auth"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "auki-p2p",
  "auki-protocols",
@@ -309,7 +310,9 @@ dependencies = [
  "hex",
  "js-sys",
  "jsonwebtoken 9.3.1",
+ "k256",
  "p256",
+ "rand 0.8.6",
  "reqwest",
  "serde",
  "serde_json",
@@ -317,6 +320,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
+ "tracing",
  "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -2609,6 +2613,20 @@ dependencies = [
  "signature",
  "simple_asn1",
  "zeroize",
+]
+
+[[package]]
+name = "k256"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6e3919bbaa2945715f0bb6d3934a173d1e9a59ac23767fbaaef277265a7411b"
+dependencies = [
+ "cfg-if",
+ "ecdsa",
+ "elliptic-curve",
+ "once_cell",
+ "sha2",
+ "signature",
 ]
 
 [[package]]

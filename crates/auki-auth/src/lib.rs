@@ -9,7 +9,8 @@
 //! and prepared authority, then owns credential renewal, relay booking,
 //! authenticated transport, protocols, fencing, and shutdown. This crate alone
 //! does not discover peers, resolve or publish routes, contact DMS, book a
-//! relay, or spawn background tasks.
+//! relay, or spawn background tasks through the User/App preparation API. The
+//! native `machine` module separately exposes explicit machine token refresh.
 //!
 //! ```no_run
 //! use auki_auth::{AuthClient, AuthEnvironment, Credentials, DomainSelection};
@@ -45,6 +46,10 @@
 //! App credentials remain native-only because their secret must never ship to a
 //! browser. Optional discovery and route publication belong to the higher-level
 //! `auki-sdk` peer runtime, not this credential-preparation crate.
+
+/// Native Node/Robot authentication building blocks.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod machine;
 
 mod client;
 mod error;

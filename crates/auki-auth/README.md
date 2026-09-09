@@ -220,3 +220,11 @@ for the complete public flow.
 Low-level hosts may consume `PreparedPeer::renewal` themselves, but ordinary
 User/App applications should use `AukiPeer::start` rather than reimplementing
 key rotation, credential expiry fencing, relay recovery, and cleanup.
+
+## Native machine operations
+
+`auki_auth::machine` provides the existing Robot register/verify authenticator
+and shared machine token manager. Supply endpoint, credentials, version and
+capabilities explicitly; it has no dependency on Posemesh runner configuration.
+`TokenManager::bearer` obtains a token on demand. `start_bg` and `stop_bg` explicitly
+own optional background refresh. Existing User/App/ZITADEL APIs are unchanged.

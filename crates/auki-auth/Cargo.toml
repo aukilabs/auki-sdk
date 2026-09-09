@@ -28,6 +28,12 @@ tokio-util = { workspace = true, features = ["rt"] }
 uuid = { workspace = true }
 zeroize = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+anyhow = { workspace = true }
+k256 = { version = "0.13.4", features = ["ecdsa"] }
+rand = { workspace = true }
+tracing = { workspace = true }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }
 wasm-bindgen = { workspace = true }
@@ -43,4 +49,4 @@ web-sys = { version = "0.3.98", features = [
 auki-protocols = { path = "../auki-protocols", features = ["info-endpoint"] }
 auki-sdk = { path = "../auki-sdk" }
 jsonwebtoken = "9.3.0"
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time", "test-util"] }

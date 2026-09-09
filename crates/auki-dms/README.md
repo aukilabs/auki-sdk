@@ -29,3 +29,25 @@ These blocks are extracted from the existing Posemesh implementation:
   millisecond-derived jitter, which is not uniform across large delay ranges.
 
 No automatic task claim happens during authentication or peer startup.
+
+## Standalone Rust example
+
+[poll_noop.rs](examples/poll_noop.rs) constructs a client from a caller-provided
+`DMS_MACHINE_TOKEN` and `DMS_BASE_URL`, then runs a finite loop controlled by
+`DMS_POLL_COUNT` (default 1). It uses the existing `TokenProvider` interface and
+SDK poller delay helper without implementing any Posemesh runner traits.
+
+Run `cargo run -p auki-dms --example poll_noop` only against a queue dedicated to
+the example: it claims and completes `/example/noop/v1` tasks, and reports other
+capabilities as failed. The supplied bearer has no automatic refresh; replace
+that provider with a machine `TokenManager` for long-lived use. Long tasks need
+host-driven heartbeat and cancellation handling.
+
+For a callback loop, explicitly call `poller::run_poller(config, shutdown_rx,
+on_tick)`; retain the transmitter returned by `poller::shutdown_channel()` and
+call `shutdown()` when the host wants it to stop. The callback owns each request
+and its error handling. Auth, client and peer construction never call this helper.
+
+Posemesh preserves `dms::{client,types,DmsPaths}`, `poller`, and runner-api's
+`TaskSpec`/`LeaseEnvelope` through re-exports. Existing Runner and storage APIs
+remain in Posemesh; runner-api uses this crate without default features.

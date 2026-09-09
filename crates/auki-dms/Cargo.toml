@@ -9,6 +9,10 @@ authors.workspace = true
 description = "DMS task types and native client/polling building blocks"
 readme = "README.md"
 
+[[example]]
+name = "poll_noop"
+required-features = ["client"]
+
 [features]
 default = ["client"]
 client = ["dep:anyhow", "dep:auki-auth", "dep:reqwest", "dep:tokio", "dep:tracing"]

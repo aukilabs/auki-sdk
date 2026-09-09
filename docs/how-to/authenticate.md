@@ -37,7 +37,9 @@ async fn main() -> anyhow::Result<()> {
 To show a Domain picker, call `bootstrap.accessible_domains().await?` before
 starting the peer. Pass the selected `choice.domain.id` to `DomainSelection::new`.
 
-For a backend service, use `Credentials::app(access_key, secret)` instead.
+## Sign in as a backend service
+
+Use `Credentials::app(access_key, secret)` in place of User credentials above.
 Keep App secrets on the backend; do not embed them in browser or mobile apps.
 
 ## Connect to another environment

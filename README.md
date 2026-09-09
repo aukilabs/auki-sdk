@@ -1,11 +1,10 @@
 # Auki SDK
 
 Auki SDK lets your app sign in, find peers, and exchange data on the Auki
-network. Create an `AukiPeer` inside your existing app; no separate process
-is needed.
+network. Configure and create an `AukiPeer` inside your existing app to get started.
 
 Use Auki's discovery service or supply peer IDs and addresses yourself. Your
-app chooses its message format and handles incoming requests.
+app chooses which protocols to handle.
 
 ## Start here
 
@@ -24,15 +23,22 @@ Echo example. For Python, Web, Swift, or Expo, see
 | Understand peers, Domains, and task handling | [How networking works](docs/explanation/networking.md) |
 | Look up APIs, defaults, or errors | [Networking reference](docs/reference/networking.md) |
 
-## Robot and compute runners
+## What are you building?
 
-Submit robot and compute tasks through **DMS**, the source of truth for task
-state. [Posemesh runners](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
-handle execution. Use P2P for data exchange; do not dispatch tasks over it.
-A robot runner must execute one task at a time and reject new tasks while busy.
+| Build | Use | Start with |
+| --- | --- | --- |
+| User app, such as Web or iOS | Talk to peers with an email/password or ZITADEL user login | [User authentication](docs/how-to/authenticate.md) |
+| Backend service, such as Rust or Python | Talk to peers with an App access key and secret | [Service authentication](docs/how-to/authenticate.md#sign-in-as-a-backend-service) |
+| Compute worker | Use a Posemesh runner to process eligible DMS tasks across Domains | [Compute requirements](docs/explanation/apps-and-workers.md#compute-workers) |
+| Robot worker | Use Posemesh's robot entrypoint to process DMS tasks in its assigned Domain | [Robot requirements](docs/explanation/apps-and-workers.md#robot-workers) |
 
-These are application rules. The SDK transports your bytes and does not enforce
-task scheduling.
+Compute workers use a signing wallet and follow DDS staking requirements.
+SDK apps, services, and robot workers do not require a node wallet or stake.
+See [apps, services, and workers](docs/explanation/apps-and-workers.md) for
+authentication and Domain restrictions.
+
+Use P2P for data exchange. Submit tasks through **DMS**, the source of truth
+for task state; Posemesh runners handle execution.
 
 ## Repository
 

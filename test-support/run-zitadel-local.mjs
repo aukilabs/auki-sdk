@@ -211,7 +211,7 @@ try {
     command('relay-build','go',['build','-o',path.join(runDir,'relay'),'./cmd'],hagall),
     command('dms-build','cargo',['build','--example','zitadel_acceptance','--locked','--quiet'],path.join(workspace,'domain-manager-service'),{SQLX_OFFLINE:'true'}),
     command('native-build','cargo',['build','-p','auki-standard-protocols-native','--bin','zitadel_acceptance','--locked','--quiet']),
-    command('web-build','npm',['run','check'],path.join(sdk,'bindings/web/auki-sdk-web')),
+    command('web-build','npm',['run','check'],path.join(sdk,'core/bindings/web/auki-sdk-web')),
   ]);
   service('api',path.join(runDir,'api.test'),['-test.run','^TestZitadelAcceptanceAPI$','-test.v','-test.timeout',soak?'100m':'10m'],path.join(workspace,'api'),
     {APP_DIRECTORY:path.join(workspace,'api'),Z10_API_DATABASE_URL:`postgres://test:test@127.0.0.1:5432/${names.api}?sslmode=disable`});

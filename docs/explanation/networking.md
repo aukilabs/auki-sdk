@@ -39,9 +39,9 @@ Tasks go through **DMS**, the source of truth for task state.
 handle orchestration, execution, heartbeats, and results.
 
 Use P2P for data exchange, never task dispatch. DMS currently permits one
-active task lease per node, for both compute and robot workers. A robot runner
+active task lease per node, for both compute nodes and robots. A robot runner
 must also keep physical task execution exclusive and reject new tasks while busy.
 
 The SDK does not inspect message contents or schedule tasks. See
-[apps, services, and workers](apps-and-workers.md) for authentication,
-Domain access, and runner requirements.
+[apps, services, compute nodes, and robots](apps-nodes-and-robots.md) for
+authentication, Domain access, and runner requirements.

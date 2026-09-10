@@ -1,9 +1,9 @@
-# Apps, services, and workers
+# Apps, services, compute nodes, and robots
 
 Use `auki-sdk` to connect your app to peers. Use a
 [Posemesh runner](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
 to execute DMS tasks. These are different responsibilities: a service can
-exchange data with peers without becoming a task worker.
+exchange data with peers without executing tasks.
 
 ## User apps and backend services
 
@@ -18,9 +18,9 @@ For ZITADEL, your app completes login and supplies the session to the SDK.
 Supply a known Domain ID; imported sessions cannot currently list Domains.
 See [authentication](../how-to/authenticate.md).
 
-## Compute workers
+## Compute nodes
 
-A compute worker uses DDS node registration and wallet signatures (SIWE).
+A compute node uses DDS node registration and wallet signatures (SIWE).
 DDS checks the node's staking status; deployments can explicitly allow
 unstaked registration. Check the requirements of your DDS environment.
 
@@ -36,7 +36,7 @@ does not grant unrestricted access to Domains.
 
 See [Posemesh compute setup](https://github.com/aukilabs/posemesh/tree/main/core/compute-node#configuration-surface).
 
-## Robot workers
+## Robots
 
 A robot uses the same Posemesh task engine through its robot entrypoint.
 It authenticates with a robot registration credential provisioned in DDS,
@@ -55,8 +55,8 @@ See [Posemesh robot setup](https://github.com/aukilabs/posemesh/tree/main/core/c
 Implement a Posemesh `Runner` for the task capability you support. The shared
 engine handles polling, heartbeats, and reporting results to DMS.
 
-DMS currently allows **one active task lease per node**, for both compute and
-robot workers. A robot runner must keep physical task execution exclusive and
+DMS currently allows **one active task lease per node**, for both compute nodes
+and robots. A robot runner must keep physical task execution exclusive and
 reject new tasks while busy.
 
 P2P carries data; tasks go through DMS. Registering a P2P message handler does

@@ -3,8 +3,8 @@
 ## Required Reading & Repository Layout
 
 Before changing behavior, read [networking](docs/explanation/networking.md),
-[apps and workers](docs/explanation/apps-and-workers.md), and the affected crate or
-binding README. For identity or session changes, also read
+[apps, services, compute nodes, and robots](docs/explanation/apps-nodes-and-robots.md),
+and the affected crate or binding README. For identity or session changes, also read
 [authentication](docs/how-to/authenticate.md) and [peer lifecycle](docs/how-to/lifecycle.md).
 
 `core/` contains the stable SDK, authentication, P2P, relay-booking, and DMS crates;
@@ -113,9 +113,9 @@ make the app's backend local.
 
 Keep API, DDS, DMS, and separately configured discovery endpoints aligned to the
 intended environment. Never silently fall back from local fixtures to shared dev,
-staging, or production. Do not deploy, alter infrastructure, provision workers, or
-mutate shared data outside the approved test scope. Those actions require separate
-authorization; SDK validation is not deployment permission.
+staging, or production. Do not deploy, alter infrastructure, provision compute
+nodes or robots, or mutate shared data outside the approved test scope. Those
+actions require separate authorization; SDK validation is not deployment permission.
 
 ## Coding Style & Pull Requests
 

@@ -88,8 +88,8 @@ Provide a known Domain ID: imported sessions cannot currently list Domains.
 Your DDS deployment must support ZITADEL login for P2P access. On logout, stop
 peers, close the session, then delete stored credentials.
 
-## Build a robot or compute worker
+## Build a compute node or robot
 
 [Posemesh runners](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
-already manage machine authentication and execution for DMS tasks. Build your
-worker on that runner.
+already manage machine authentication and execution for DMS tasks. Use the
+entrypoint for your [compute node or robot](../explanation/apps-nodes-and-robots.md).

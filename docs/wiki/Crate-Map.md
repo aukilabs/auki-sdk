@@ -7,6 +7,9 @@ transport or relay machinery.
 ```text
 application / product protocol
           |
+          +-- auki-components       typed Components, Products, and buffers
+          +-- auki-component-protocol
+          |                         authenticated Component network layer
           +-- auki-session          local registries and recording timelines
           +-- auki-protocols        opt-in wire contracts + Endpoint/Client
           +-- auki-sdk              authenticated AukiPeer lifecycle
@@ -54,7 +57,21 @@ Catalog v3 is the live general resource endpoint. It carries unchanged Catalog
 v2 log rows plus v3 message-channel rows. Catalog v2 remains available as a
 wire-compatibility schema; Map Logs use Catalog v4.
 
+### [`auki-component-protocol`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-component-protocol)
+
+Standalone Catalog, observation, and operation protocols for the typed
+Component model. It mounts directly on `AukiPeer` and does not depend on
+`auki-protocols`. Remote Product mirrors preserve source identity and bind to
+ordinary typed Component inputs.
+
 ## Local data model
+
+### [`auki-components`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-components)
+
+Network-independent typed Components, configured Observables and Operables,
+retained Products, explicit Buffer policies, typed Product inputs, and a
+read-only local Catalog. Applications opt into networking separately through
+`auki-component-protocol`.
 
 ### [`auki-session`](https://github.com/aukilabs/auki-sdk/tree/develop/crates/auki-session)
 
@@ -107,6 +124,8 @@ state into Catalog and Stream providers.
 
 - Authenticated Rust networking: `auki-auth`, `auki-sdk`, and only the required
   `auki-protocols` endpoint features.
+- Typed Component networking: `auki-components`, `auki-sdk`, and
+  `auki-component-protocol`.
 - Local recording: `auki-session`, plus specific data or registry types needed
   by the product.
 - A product-specific protocol: one small Rust crate containing its private wire

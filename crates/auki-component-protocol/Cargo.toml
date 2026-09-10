@@ -1,0 +1,31 @@
+[package]
+name = "auki-component-protocol"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Portable AukiPeer protocols for Components, Products, and Operables"
+readme = "README.md"
+
+[dependencies]
+async-channel = { workspace = true }
+auki-components = { path = "../auki-components" }
+auki-sdk = { path = "../auki-sdk" }
+futures = { workspace = true }
+futures-timer = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+auki-p2p = { path = "../auki-p2p" }
+chrono = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
+jsonwebtoken = "10.4"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+uuid = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"

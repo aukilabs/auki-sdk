@@ -12,6 +12,7 @@ Start with the task you have:
 | Create a protocol once for every runtime | [Author a portable protocol](authoring-protocols.md) |
 | Find peers without exchanging routes manually | [DDS discovery](discovery.md) |
 | Understand mDNS, Rendezvous, and Kademlia | [Discovery providers](discovery-providers.md) |
+| Network typed Components and Products | [Component protocols](component-protocols.md) |
 | Compare the runnable examples | [Examples](../../examples/README.md) |
 
 ## The four pieces
@@ -120,6 +121,12 @@ The SDK currently provides these families:
 
 Catalog v2 remains wire-only because v3 embeds its locked log-row shape.
 Endpoints do not silently negotiate older versions.
+
+Typed Component applications can instead use the standalone
+`auki-component-protocol` family. It layers revisioned Component/Product
+discovery, retained observation reads, remote Product mirrors, and typed
+Operable invocation over the same authenticated peer without depending on
+`auki-protocols`. See [Network typed Components](component-protocols.md).
 
 ## Choose reachability and discovery separately
 

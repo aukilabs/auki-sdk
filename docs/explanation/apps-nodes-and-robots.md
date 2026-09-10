@@ -34,7 +34,7 @@ DMS selects tasks matching the node's registered capabilities and mode:
 DMS supplies access to the task's Domain through the lease. A node registration
 does not grant unrestricted access to Domains.
 
-See [Posemesh compute setup](https://github.com/aukilabs/posemesh/tree/main/core/compute-node#configuration-surface).
+See [Posemesh compute setup](https://github.com/aukilabs/posemesh/blob/main/docs/how-to/configure-workers.md#compute-node).
 
 ## Robots
 
@@ -48,7 +48,7 @@ matching **dedicated** tasks in that Domain. An unassigned robot can report
 presence but cannot claim tasks. Reassignment requires the robot to be offline
 and its active leases and tokens to expire.
 
-See [Posemesh robot setup](https://github.com/aukilabs/posemesh/tree/main/core/compute-node#hello-runner-entrypoints).
+See [Posemesh robot setup](https://github.com/aukilabs/posemesh/blob/main/docs/how-to/configure-workers.md#robot).
 
 ## Task execution
 

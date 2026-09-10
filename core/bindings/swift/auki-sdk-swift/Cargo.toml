@@ -60,7 +60,7 @@ auki-datatypes = { path = "../../../../labs/auki-datatypes", optional = true }
 auki-protocols = { path = "../../../../labs/auki-protocols", optional = true }
 auki-registry = { path = "../../../../labs/auki-registry", optional = true }
 auki-sdk-rs = { package = "auki-sdk", path = "../../../auki-sdk" }
-auki-urdf-fk = { path = "../../../../../auki-libs/crates/auki-urdf-fk", optional = true, default-features = false }
+auki-urdf-fk = { path = "../../../../labs/auki-urdf-fk", optional = true, default-features = false }
 futures = { workspace = true, optional = true }
 parking_lot.workspace = true
 prost = { version = "0.13", optional = true }

@@ -35,6 +35,7 @@ members = [
     "labs/auki-ros-adapter",
     "labs/auki-session",
     "labs/auki-time",
+    "labs/auki-urdf-fk",
 
     # Experimental bindings and examples.
     "labs/bindings/python/auki-geometry-py",

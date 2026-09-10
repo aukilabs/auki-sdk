@@ -49,7 +49,7 @@ for task state; Posemesh runners handle execution.
 | --- | --- |
 | [`core/`](core/) | Stable crates: `auki-sdk`, `auki-p2p`, `auki-auth`, `auki-relay-booking`, `auki-dms` |
 | [`core/bindings/`](core/bindings/) / [`core/examples/`](core/examples/README.md) | SDK bindings and networking examples |
-| [`labs/`](labs/) | Experimental crates, including the optional [`auki-protocols`](labs/auki-protocols/README.md) |
+| [`labs/`](labs/) | Experimental crates, including the optional [`auki-protocols`](labs/auki-protocols/README.md) and [`auki-urdf-fk`](labs/auki-urdf-fk/README.md) |
 | [`labs/bindings/`](labs/bindings/) / [`labs/examples/`](labs/examples/) | Experimental bindings and examples |
 
 To work on the SDK, see [Contributing](CONTRIBUTING.md).

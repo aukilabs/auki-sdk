@@ -13,6 +13,11 @@ bash core/bindings/swift/auki-sdk-swift/build-xcframework.sh
 Add this directory's local Swift package to your app. The build includes
 experimental protocol bindings. Register the handlers you want to use.
 
+The `urdf-fk` feature (included in `standard-protocols`) uses the in-repository
+[`auki-urdf-fk`](../../../../labs/auki-urdf-fk/README.md) crate to parse URDF XML
+and resolve link transforms. Supply robot descriptions and meshes from your app;
+no separate `auki-libs` checkout is needed.
+
 Compile the SDK and your Rust adapter into one framework, as in
 [Swift Echo](../../../examples/portable-echo/swift/README.md).
 See [custom protocols](../../../../docs/how-to/protocols.md).

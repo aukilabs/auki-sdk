@@ -1,0 +1,17 @@
+[package]
+name = "auki-urdf-fk"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Pure URDF parse + forward kinematics for articulated robots"
+readme = "README.md"
+
+[features]
+default = []
+
+[dependencies]
+glam = { version = "0.32", default-features = false, features = ["std"] }
+urdf-rs = "0.9"

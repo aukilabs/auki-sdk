@@ -104,8 +104,12 @@ def test_protocol_preparation_helpers_use_canonical_rust_codecs() -> None:
         auki_sdk.decode_camera_frame_image(b"not protobuf")
 
     assert auki_sdk.prepare_catalog_resources({"resources": []}) == {"resources": []}
+    # Match the canonical Rust decoder: ignore unknown fields when normalizing.
+    assert auki_sdk.prepare_catalog_resources(
+        {"resources": [], "unexpected": True}
+    ) == {"resources": []}
     with pytest.raises(ValueError, match="Catalog resources snapshot"):
-        auki_sdk.prepare_catalog_resources({"resources": [], "unexpected": True})
+        auki_sdk.prepare_catalog_resources({"resources": "invalid"})
 
     entry = {
         "peer_id": "12D3KooWH3okqZcRaHwy4keYWo9eAaCDwhePYajtHsCM4Egsptan",

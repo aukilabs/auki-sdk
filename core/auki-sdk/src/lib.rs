@@ -15,6 +15,12 @@ mod served_protocols;
 mod status;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub use auki_tasks::{
+    AukiComputeCredential, AukiDmsTasks, ComputeConfig, TaskContext, TaskCredential, TaskError,
+    TaskHandler, TaskLease, TaskOutcome, TaskResult, TaskSpec, TasksConfig,
+};
+
+#[cfg(not(target_arch = "wasm32"))]
 mod authorization;
 #[cfg(any(test, target_arch = "wasm32"))]
 mod browser_booking;

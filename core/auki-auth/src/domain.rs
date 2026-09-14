@@ -61,6 +61,31 @@ pub struct DomainAccess {
 }
 
 impl DomainAccess {
+    /// Validate a DDS-issued data grant delivered by an authenticated authority
+    /// such as a DMS lease. This checks routing and expiry, not the signature;
+    /// Domain Servers still verify the bearer and enforce resource permissions.
+    /// Never use this constructor to trust a token received from a remote peer.
+    pub fn from_issued_grant(
+        domain_id: Uuid,
+        server_url: &str,
+        token: SecretString,
+        expires_at: DateTime<Utc>,
+    ) -> Result<Self> {
+        let mut access = AccessResponse {
+            id: domain_id,
+            domain_server: ServerResponse {
+                url: server_url.into(),
+            },
+            access_token: token.expose().to_owned(),
+        }
+        .into_access(domain_id)?;
+        if expires_at <= Utc::now() {
+            return Err(Error::StaleAuthority);
+        }
+        access.expires_at = access.expires_at.min(expires_at);
+        Ok(access)
+    }
+
     pub fn domain_id(&self) -> Uuid {
         self.domain_id
     }

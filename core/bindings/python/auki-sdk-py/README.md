@@ -21,6 +21,19 @@ To run an app that sends and receives messages, use
 Compile custom Rust protocols into the same Python extension as the SDK. See
 [custom protocols](../../../../docs/how-to/protocols.md).
 
+## Compute task handlers
+
+`AukiComputeCredential` and `AukiDmsTasks` run native compute handlers on your
+asyncio loop using the shared Rust lifecycle. See [Run compute tasks](../../../../docs/how-to/run-compute-tasks.md)
+and the [compute example](examples/compute_task.py). Robot/task P2P integration
+remain follow-ups. Tasks also work with `--no-default-features`.
+
+After building, validate with local DDS/DMS/data fixtures:
+
+```sh
+python -m pytest core/bindings/python/auki-sdk-py/python_tests/test_tasks.py -q
+```
+
 ## Domain data without a peer
 
 The same session exposes `domains()` for ordinary Domain discovery and portal

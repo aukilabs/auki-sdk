@@ -93,6 +93,10 @@ peers, close the session, then delete stored credentials.
 
 ## Build a compute node or robot
 
+[Native SDK compute handlers](run-compute-tasks.md) use provisioned registration
+credentials and a wallet key from Rust or Python, without a peer. Robot and task
+P2P integration remain follow-ups for that API.
+
 [Posemesh runners](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
 already manage machine authentication and execution for DMS tasks. Use the
 entrypoint for your [compute node or robot](../explanation/apps-nodes-and-robots.md).

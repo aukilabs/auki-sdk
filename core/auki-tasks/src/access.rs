@@ -1,0 +1,207 @@
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use auki_auth::{DomainAccess, DomainAccessProvider, Error as AuthError, SecretString};
+use auki_dms::types::{HeartbeatResponse, LeaseEnvelope};
+use chrono::{DateTime, Utc};
+use tokio::sync::{Notify, watch};
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+use crate::{Result, TaskError};
+
+#[derive(Clone)]
+struct Grant {
+    access: Arc<DomainAccess>,
+    lease_expires: DateTime<Utc>,
+}
+
+/// Data authority supplied by the lease owner. It never logs in or heartbeats.
+#[derive(Clone)]
+pub struct TaskCredential {
+    domain: Uuid,
+    client_id: Arc<str>,
+    grant: Arc<watch::Sender<Option<Grant>>>,
+    pub(crate) changed: Arc<Notify>,
+    pub(crate) closed: CancellationToken,
+}
+
+impl TaskCredential {
+    pub(crate) fn new(lease: &LeaseEnvelope, client_id: &str) -> Result<Self> {
+        let domain = lease
+            .domain_id
+            .ok_or(TaskError::Authority("missing Domain"))?;
+        let server = lease
+            .domain_server_url
+            .as_ref()
+            .ok_or(TaskError::Authority("missing server URL"))?;
+        let token = lease
+            .access_token
+            .as_ref()
+            .ok_or(TaskError::Authority("missing data token"))?;
+        let expires = lease
+            .access_token_expires_at
+            .ok_or(TaskError::Authority("missing token expiry"))?;
+        let lease_expires = lease
+            .lease_expires_at
+            .or(lease.task.lease_expires_at)
+            .ok_or(TaskError::Authority("missing lease expiry"))?;
+        if lease.cancel || lease_expires <= Utc::now() {
+            return Err(TaskError::LeaseLost);
+        }
+        let access = DomainAccess::from_issued_grant(
+            domain,
+            server.as_str(),
+            SecretString::new(token),
+            expires,
+        )
+        .map_err(|_| TaskError::Authority("invalid data grant"))?;
+        let (grant, _) = watch::channel(Some(Grant {
+            access: Arc::new(access),
+            lease_expires,
+        }));
+        Ok(Self {
+            domain,
+            client_id: client_id.into(),
+            grant: Arc::new(grant),
+            changed: Arc::new(Notify::new()),
+            closed: CancellationToken::new(),
+        })
+    }
+
+    pub fn domain_id(&self) -> Uuid {
+        self.domain
+    }
+
+    pub(crate) fn deadline(&self) -> Result<DateTime<Utc>> {
+        let state = self.grant.borrow();
+        let grant = state.as_ref().ok_or(TaskError::LeaseLost)?;
+        Ok(grant.lease_expires.min(grant.access.expires_at()))
+    }
+
+    pub(crate) fn revoke(&self) {
+        self.closed.cancel();
+        self.grant.send_replace(None);
+    }
+
+    pub(crate) fn update(&self, task_id: Uuid, update: &HeartbeatResponse) -> Result<()> {
+        if update.cancel == Some(true)
+            || update
+                .status
+                .as_deref()
+                .is_some_and(|s| matches!(s, "cancelled" | "failed" | "completed"))
+        {
+            return Err(TaskError::Cancelled);
+        }
+        if update.domain_id.is_some_and(|id| id != self.domain)
+            || update.task_id.is_some_and(|id| id != task_id)
+            || update.task.as_ref().is_some_and(|task| task.id != task_id)
+        {
+            return Err(TaskError::Authority("heartbeat changed task or Domain"));
+        }
+        let previous = self.grant.borrow().clone().ok_or(TaskError::LeaseLost)?;
+        let server = update
+            .domain_server_url
+            .as_ref()
+            .unwrap_or(previous.access.server_url());
+        let token = update
+            .access_token
+            .as_deref()
+            .unwrap_or(previous.access.bearer().expose_secret());
+        let expires = update
+            .access_token_expires_at
+            .unwrap_or(previous.access.expires_at());
+        let lease_expires = update
+            .lease_expires_at
+            .or_else(|| update.task.as_ref().and_then(|t| t.lease_expires_at))
+            .unwrap_or(previous.lease_expires);
+        if lease_expires <= Utc::now() || self.closed.is_cancelled() {
+            return Err(TaskError::LeaseLost);
+        }
+        let access = DomainAccess::from_issued_grant(
+            self.domain,
+            server.as_str(),
+            SecretString::new(token),
+            expires,
+        )
+        .map_err(|_| TaskError::Authority("invalid rotated data grant"))?;
+        self.grant.send_replace(Some(Grant {
+            access: Arc::new(access),
+            lease_expires,
+        }));
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl DomainAccessProvider for TaskCredential {
+    fn client_id(&self) -> &str {
+        &self.client_id
+    }
+
+    async fn wait_closed(&self) {
+        let mut receiver = self.grant.subscribe();
+        loop {
+            let deadline = match self.deadline() {
+                Ok(value) => value,
+                Err(_) => return,
+            };
+            let remaining = deadline
+                .signed_duration_since(Utc::now())
+                .to_std()
+                .unwrap_or_default();
+            tokio::select! {
+                biased;
+                _ = self.closed.cancelled() => return,
+                changed = receiver.changed() => { if changed.is_err() { return; } }
+                _ = tokio::time::sleep(remaining) => { self.revoke(); return; }
+            }
+        }
+    }
+
+    async fn domain_access(
+        &self,
+        domain_id: Uuid,
+        rejected: Option<&DomainAccess>,
+        cancellation: &CancellationToken,
+    ) -> auki_auth::Result<Arc<DomainAccess>> {
+        if domain_id != self.domain {
+            return Err(AuthError::DomainNotAccessible);
+        }
+        let mut receiver = self.grant.subscribe();
+        let mut waited = false;
+        loop {
+            if self.closed.is_cancelled() {
+                return Err(AuthError::SessionClosed);
+            }
+            if cancellation.is_cancelled() {
+                return Err(AuthError::Cancelled {
+                    endpoint: "task data grant",
+                });
+            }
+            let state = receiver
+                .borrow_and_update()
+                .clone()
+                .ok_or(AuthError::SessionClosed)?;
+            if state.lease_expires.min(state.access.expires_at()) <= Utc::now() {
+                self.revoke();
+                return Err(AuthError::StaleAuthority);
+            }
+            if rejected.is_none_or(|old| old.bearer() != state.access.bearer()) {
+                return Ok(state.access);
+            }
+            if waited {
+                return Err(AuthError::AuthenticationRequired);
+            }
+            // Ask the sole lease owner for an early heartbeat; never renew here.
+            self.changed.notify_one();
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return Err(AuthError::Cancelled { endpoint: "task data grant" }),
+                _ = self.wait_closed() => return Err(AuthError::SessionClosed),
+                value = receiver.changed() => { if value.is_err() { return Err(AuthError::SessionClosed); } }
+            }
+            waited = true;
+        }
+    }
+}

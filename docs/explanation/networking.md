@@ -35,6 +35,8 @@ You can implement your own protocol. The implementations in
 ## Robot and compute tasks
 
 Tasks go through **DMS**, the source of truth for task state.
+[Native SDK compute handlers](../how-to/run-compute-tasks.md) can execute tasks
+from Rust or Python through a managed lease lifecycle. Existing
 [Posemesh runners](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
 handle orchestration, execution, heartbeats, and results.
 

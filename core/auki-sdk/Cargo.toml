@@ -34,6 +34,9 @@ async-channel = { workspace = true }
 uuid = { workspace = true, features = ["js"] }
 wasm-bindgen-futures = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+auki-tasks = { path = "../auki-tasks" }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 httpmock = "0.8.2"
 jsonwebtoken = "9.3.1"

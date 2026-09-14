@@ -16,6 +16,8 @@ mod facade;
     feature = "stream"
 ))]
 mod protocols;
+mod python_task;
+mod tasks;
 
 use pyo3::prelude::*;
 
@@ -24,7 +26,8 @@ pub use facade::PyAukiPeer;
 /// Register the generic facade in a larger, same-module protocol extension.
 pub fn register_facade(module: &Bound<'_, PyModule>) -> PyResult<()> {
     facade::register(module)?;
-    data::register(module)
+    data::register(module)?;
+    tasks::register(module)
 }
 
 /// Register every protocol role enabled by this crate's Cargo features.

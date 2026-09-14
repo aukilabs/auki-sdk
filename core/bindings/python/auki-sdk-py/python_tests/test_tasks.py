@@ -1,0 +1,387 @@
+"""Compute/handler acceptance tests. All DDS, DMS and data traffic is loopback."""
+import asyncio
+import base64
+import contextvars
+from datetime import datetime, timedelta, timezone
+from email.parser import BytesParser
+from email.policy import default
+import json
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
+
+import pytest
+import auki_sdk
+
+DOMAIN = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+TASK = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+DATA = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+CAPABILITY = "/example/uppercase/v1"
+TRACE = contextvars.ContextVar("task_trace", default="unset")
+
+
+def expires(seconds=60):
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+
+
+@pytest.fixture
+def worker_services():
+    state = {"calls": [], "heartbeats": [], "complete": [], "fail": [], "register": 0,
+             "verify": 0, "claims": 0, "generation": 0, "bytes": b"hello", "cancel": False,
+             "heartbeat_status": 200, "claim_status": 200, "registration_status": 200,
+             "data_status": 200, "rotate": False}
+
+    def token():
+        claims = {"iss": "dds", "domain_id": DOMAIN, "aud": [state["base"]],
+                  "exp": int(time.time()) + 120, "generation": state["generation"]}
+        claims.update(state.get("claims_override", {}))
+        body = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+        return "e30." + body + ".fixture"
+
+    def grant():
+        return {"domain_id": DOMAIN, "domain_server_url": state["base"], "access_token": token(),
+                "access_token_expires_at": expires(120), "lease_expires_at": expires(state.get("ttl", 60))}
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def reply(self, value=None, status=200):
+            body = value if isinstance(value, bytes) else json.dumps(value).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/octet-stream" if isinstance(value, bytes) else "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def handle_request(self):
+            path = urlparse(self.path)
+            query = parse_qs(path.query)
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            state["calls"].append((self.command, path.path))
+            if path.path.endswith("/siwe/request"):
+                return self.reply({"nonce": "local-fixture", "domain": "localhost", "uri": state["base"],
+                                   "version": "1", "chainId": 1, "issuedAt": expires(0)})
+            if path.path.endswith("/register-wallet"):
+                payload = json.loads(body)
+                assert payload["capabilities"] == [CAPABILITY]
+                assert payload["registration_credentials"] == "fixture-registration"
+                assert len(payload["signature"]) == 132
+                state["register"] += 1
+                return self.reply({}, state["registration_status"])
+            if path.path.endswith("/siwe/verify"):
+                assert len(json.loads(body)["signature"]) == 132
+                state["verify"] += 1
+                return self.reply({"access_token": "machine-fixture", "access_expires_at": expires(120)})
+            if path.path == "/tasks":
+                assert self.headers["Authorization"] == "Bearer machine-fixture"
+                assert query == {"capability": [CAPABILITY]}
+                state["claims"] += 1
+                if state.get("reject_claim_once") and state["claims"] == 1:
+                    return self.reply({}, 401)
+                return self.reply({**grant(), "task": {"id": TASK, "capability": CAPABILITY,
+                    "meta": {"input_id": DATA}, "inputs_cids": [DATA]}}, state["claim_status"])
+            if path.path.endswith("/heartbeat"):
+                state["heartbeats"].append(json.loads(body))
+                if state["rotate"]:
+                    state["generation"] += 1
+                response = {**grant(), "task_id": TASK, "cancel": state["cancel"]}
+                response.update(state.get("heartbeat_override", {}))
+                return self.reply(response, state["heartbeat_status"])
+            if path.path.endswith("/complete"):
+                state["complete"].append(json.loads(body))
+                return self.reply({})
+            if path.path.endswith("/fail"):
+                state["fail"].append(json.loads(body))
+                return self.reply({})
+            if path.path == "/api/v1/info":
+                assert "Authorization" not in self.headers
+                return self.reply({"upload": {"domain_data_max_bytes": 100000, "request_max_bytes": 100000,
+                    "multipart": {"enabled": False}}})
+            if "/data" in path.path:
+                if self.headers.get("Authorization") != "Bearer " + token():
+                    return self.reply({}, 401)
+                if state["data_status"] != 200:
+                    return self.reply({"error": "do not expose this fixture response"}, state["data_status"])
+                if query.get("raw") == ["true"]:
+                    return self.reply(state["bytes"])
+                if self.command == "PUT":
+                    message = BytesParser(policy=default).parsebytes(
+                        ("Content-Type: " + self.headers["Content-Type"] + "\r\n\r\n").encode() + body)
+                    state["bytes"] = next(message.iter_parts()).get_payload(decode=True)
+                metadata = {"id": DATA, "domain_id": DOMAIN, "name": "uppercase", "data_type": "text.v1",
+                    "size": len(state["bytes"]), "created_at": expires(0), "updated_at": expires(0)}
+                return self.reply({"data": [metadata]} if self.command == "PUT" else metadata)
+            return self.reply({}, 404)
+
+        do_POST = do_GET = do_PUT = do_DELETE = handle_request
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    state["base"] = f"http://127.0.0.1:{server.server_port}"
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield state
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+def runtime(services, handler):
+    credential = auki_sdk.AukiComputeCredential(
+        dds_url=services["base"], dms_url=services["base"],
+        registration="fixture-registration", wallet_key="01" * 32,
+        version="1.0.0", client_id="python-worker-fixture",
+        request_timeout=2, registration_interval=0.2)
+    tasks = auki_sdk.AukiDmsTasks(credential, {CAPABILITY: handler},
+        poll_interval=0.02, heartbeat_interval=0.05, request_timeout=2)
+    return credential, tasks
+
+
+def test_python_compute_data_progress_result_and_registration_shutdown(worker_services):
+    async def scenario():
+        TRACE.set("from-caller")
+        retained = []
+
+        async def handler(task):
+            assert TRACE.get() == "from-caller"
+            assert task.id == TASK and task.domain_id == DOMAIN
+            assert task.inputs_cids == [DATA]
+            data = task.data()
+            retained.append(data)
+            value = await data.read(task.meta["input_id"])
+            await task.progress({"phase": "writing"})
+            await data.write(value.upper(), data_id=DATA)
+            return {"output_cids": [DATA], "meta": {"done": True}}
+
+        credential, tasks = runtime(worker_services, handler)
+        assert worker_services["calls"] == []
+        try:
+            assert await tasks.run_once() == "completed"
+            assert worker_services["bytes"] == b"HELLO"
+            assert worker_services["complete"] == [{"output_cids": [DATA], "meta": {"done": True}}]
+            assert worker_services["heartbeats"][-1]["progress"] == {"phase": "writing"}
+            with pytest.raises(auki_sdk.DomainDataError):
+                await retained[0].read(DATA)
+            await asyncio.sleep(0.25)
+            assert worker_services["register"] >= 2
+        finally:
+            await tasks.close()
+            await credential.close()
+        counts = (worker_services["register"], len(worker_services["heartbeats"]))
+        await asyncio.sleep(0.25)
+        assert counts == (worker_services["register"], len(worker_services["heartbeats"]))
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("cause", ["python_cancel", "close", "dms_cancel", "lease_loss", "wrong_domain", "wrong_task", "registration_loss"])
+def test_cancellation_waits_for_python_finally_and_skips_completion(worker_services, cause):
+    async def scenario():
+        started = asyncio.Event()
+        cleaning = asyncio.Event()
+        release = asyncio.Event()
+        cleaned = asyncio.Event()
+
+        async def handler(task):
+            started.set()
+            try:
+                await asyncio.sleep(100)
+            finally:
+                assert task.is_cancelled()
+                cleaning.set()
+                await release.wait()
+                cleaned.set()
+
+        credential, tasks = runtime(worker_services, handler)
+        operation = asyncio.ensure_future(tasks.run_once())
+        closing = None
+        try:
+            await asyncio.wait_for(started.wait(), 3)
+            assert await tasks.run_once() == "busy"
+            if cause == "python_cancel":
+                operation.cancel()
+            elif cause == "close":
+                closing = asyncio.ensure_future(tasks.close())
+            elif cause == "dms_cancel":
+                worker_services["cancel"] = True
+            elif cause == "lease_loss":
+                worker_services["heartbeat_status"] = 409
+            elif cause == "registration_loss":
+                worker_services["registration_status"] = 403
+            else:
+                worker_services["heartbeat_override"] = {
+                    "domain_id" if cause == "wrong_domain" else "task_id": DATA}
+            await asyncio.wait_for(cleaning.wait(), 3)
+            if closing is None:
+                closing = asyncio.ensure_future(tasks.close())
+            await asyncio.sleep(0.05)
+            assert not closing.done() and not cleaned.is_set()
+            assert worker_services["claims"] == 1
+            release.set()
+            await asyncio.wait_for(closing, 3)
+            assert cleaned.is_set()
+            with pytest.raises((asyncio.CancelledError, auki_sdk.TaskRuntimeError)):
+                await operation
+            assert worker_services["complete"] == [] and worker_services["fail"] == []
+        finally:
+            release.set()
+            await tasks.close()
+            await credential.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("status,expected", [(204, "no_work"), (409, "busy"), (403, None)])
+def test_claim_distinguishes_no_work_busy_and_denied(worker_services, status, expected):
+    async def scenario():
+        worker_services["claim_status"] = status
+        async def handler(task):
+            pytest.fail("handler must not run without a lease")
+        credential, tasks = runtime(worker_services, handler)
+        try:
+            if expected is None:
+                with pytest.raises(auki_sdk.TaskRuntimeError) as denied:
+                    await tasks.run_once()
+                assert denied.value.status == 403
+            else:
+                assert await tasks.run_once() == expected
+            assert worker_services["claims"] == 1
+        finally:
+            await tasks.close()
+            await credential.close()
+    asyncio.run(scenario())
+
+
+def test_machine_unauthorized_refreshes_before_one_replay(worker_services):
+    async def scenario():
+        worker_services["reject_claim_once"] = True
+        async def handler(task):
+            return None
+        credential, tasks = runtime(worker_services, handler)
+        try:
+            assert await tasks.run_once() == "completed"
+            assert worker_services["claims"] == 2
+            assert worker_services["verify"] == 2
+        finally:
+            await tasks.close()
+            await credential.close()
+    asyncio.run(scenario())
+
+
+def test_registration_denial_never_authenticates_or_claims(worker_services):
+    async def scenario():
+        worker_services["registration_status"] = 403
+        async def handler(task):
+            pytest.fail("handler must not run without registration")
+        credential, tasks = runtime(worker_services, handler)
+        try:
+            with pytest.raises(auki_sdk.TaskRuntimeError) as denied:
+                await tasks.run_once()
+            assert denied.value.kind == "authentication"
+            assert worker_services["verify"] == 0 and worker_services["claims"] == 0
+        finally:
+            await tasks.close()
+            await credential.close()
+    asyncio.run(scenario())
+
+
+def test_managed_idle_loop_surfaces_registration_loss(worker_services):
+    async def scenario():
+        worker_services["claim_status"] = 204
+        async def handler(task):
+            pytest.fail("idle worker must not run a handler")
+        credential, tasks = runtime(worker_services, handler)
+        operation = asyncio.ensure_future(tasks.run())
+        try:
+            while worker_services["claims"] == 0:
+                await asyncio.sleep(0.01)
+            with pytest.raises(auki_sdk.TaskRuntimeError) as busy:
+                await tasks.run()
+            assert busy.value.kind == "busy"
+            worker_services["registration_status"] = 403
+            with pytest.raises(auki_sdk.TaskRuntimeError) as lost:
+                await asyncio.wait_for(operation, 3)
+            assert lost.value.kind == "authentication"
+        finally:
+            await tasks.close()
+            await credential.close()
+    asyncio.run(scenario())
+
+
+def test_one_task_runtime_per_compute_credential(worker_services):
+    async def scenario():
+        async def handler(task):
+            return None
+        credential, tasks = runtime(worker_services, handler)
+        try:
+            with pytest.raises(auki_sdk.TaskRuntimeError) as duplicate:
+                auki_sdk.AukiDmsTasks(credential, {CAPABILITY: handler})
+            assert duplicate.value.kind == "configuration"
+            assert worker_services["calls"] == []
+        finally:
+            await tasks.close()
+            await credential.close()
+    asyncio.run(scenario())
+
+
+def test_handler_exception_reports_failure_and_reaches_python(worker_services):
+    async def scenario():
+        async def handler(task):
+            raise ValueError("application-only exception")
+        credential, tasks = runtime(worker_services, handler)
+        try:
+            with pytest.raises(ValueError, match="application-only exception"):
+                await tasks.run_once()
+            assert worker_services["complete"] == []
+            assert worker_services["fail"] == [{"reason": "task handler failed", "details": None}]
+        finally:
+            await tasks.close()
+            await credential.close()
+    asyncio.run(scenario())
+
+
+def test_task_data_uses_rotated_tokens_and_preserves_denied_writes(worker_services):
+    async def scenario():
+        async def handler(task):
+            data = task.data()
+            # Reject the cached token; data requests wake the one heartbeat owner.
+            worker_services["generation"] += 1
+            assert await data.read(DATA) == b"hello"
+            worker_services["data_status"] = 403
+            with pytest.raises(auki_sdk.DomainDataError) as denied:
+                await data.write(b"denied", data_id=DATA)
+            assert denied.value.status == 403
+            assert "fixture response" not in str(denied.value)
+            worker_services["data_status"] = 200
+        credential, tasks = runtime(worker_services, handler)
+        try:
+            assert await tasks.run_once() == "completed"
+            assert len(worker_services["heartbeats"]) >= 3
+        finally:
+            await tasks.close()
+            await credential.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("override", [{"domain_id": DATA}, {"aud": ["https://wrong.example"]}, {"iss": "wrong"}, {"exp": 1}])
+def test_invalid_grants_never_reach_handler(worker_services, override):
+    async def scenario():
+        worker_services["claims_override"] = override
+        entered = False
+        async def handler(task):
+            nonlocal entered
+            entered = True
+        credential, tasks = runtime(worker_services, handler)
+        try:
+            with pytest.raises(auki_sdk.TaskRuntimeError):
+                await tasks.run_once()
+            assert not entered
+            assert worker_services["heartbeats"] == []
+        finally:
+            await tasks.close()
+            await credential.close()
+    asyncio.run(scenario())

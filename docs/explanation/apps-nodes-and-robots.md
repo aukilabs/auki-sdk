@@ -3,7 +3,9 @@
 Use `auki-sdk` to connect your app to peers. Use a
 [Posemesh runner](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
 to execute DMS tasks. These are different responsibilities: a service can
-exchange data with peers without executing tasks.
+exchange data with peers without executing tasks. The SDK also provides
+[native compute handlers](../how-to/run-compute-tasks.md) for Rust and Python;
+robot and task P2P integration remain follow-ups for that API.
 
 ## User apps and backend services
 

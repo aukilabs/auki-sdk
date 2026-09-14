@@ -802,6 +802,7 @@ dependencies = [
  "auki-domain-client",
  "auki-p2p",
  "auki-relay-booking",
+ "auki-tasks",
  "base64",
  "chrono",
  "futures",
@@ -829,6 +830,7 @@ dependencies = [
 name = "auki-sdk-py"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "auki-datatypes",
  "auki-protocols",
  "auki-registry",
@@ -949,6 +951,29 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "auki-tasks"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "auki-auth",
+ "auki-dms",
+ "auki-domain-client",
+ "base64",
+ "chrono",
+ "httpmock",
+ "parking_lot",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "url",
  "uuid",
 ]
 

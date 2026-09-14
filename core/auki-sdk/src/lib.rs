@@ -1,8 +1,10 @@
-//! Mechanical runtime facade for authenticated Auki peers.
+//! Shared credentials, Domain HTTP clients and authenticated Auki peers.
 //!
 //! [`AukiPeerConfig`] defines the intentionally small host contract and
 //! [`AukiPeer`] retains one authenticated transport, its renewable authority, and
 //! optional DMS-backed relay reachability for their complete shared lifetime.
+//! [`AukiDomains`] and [`AukiDomainData`] use the same [`AukiCredential`] without
+//! starting a peer or configuring DMS.
 
 mod bootstrap;
 mod config;
@@ -38,9 +40,13 @@ mod relay;
 #[cfg(not(target_arch = "wasm32"))]
 pub use auki_auth::AppCredentials;
 pub use auki_auth::{
-    AuthClient, AuthEnvironment, AuthFailureKind, AuthLimits, AuthSession, Credentials,
-    DomainChoice, DomainDescriptor, DomainSelection, Error as AuthError, PreparedPeer,
+    AukiCredential, AuthClient, AuthEnvironment, AuthFailureKind, AuthLimits, AuthSession,
+    Credentials, DomainChoice, DomainDescriptor, DomainSelection, Error as AuthError, PreparedPeer,
     PrincipalKind, SecretString, ZitadelSessionCredentials, ZitadelSessionStore,
+};
+pub use auki_domain_client::{
+    AukiDomainData, AukiDomains, DataError, DataLimits, DataListQuery, DataMetadata, DataWrite,
+    DomainDataClient, DomainListQuery, DomainPage, DomainSummary,
 };
 #[cfg(target_arch = "wasm32")]
 pub use auki_p2p::BrowserAuthenticatedRouteStream as AuthenticatedRouteStream;

@@ -1,0 +1,321 @@
+//! DDS data access using the same serialized refresh owner as P2P.
+
+use super::*;
+use serde::Deserialize;
+
+const DDS_DOMAINS: &str = "DDS /api/v1/domains";
+const DDS_DOMAIN_AUTH: &str = "DDS selected-Domain data auth";
+const MAX_CACHED_DOMAINS: usize = 64;
+
+/// An ordinary DDS metadata query. Visibility does not establish data permissions.
+#[derive(Clone, Debug)]
+pub struct DomainListQuery {
+    /// `own`, an organization UUID, or `all` with an owned Domain Server.
+    pub organization: String,
+    pub domain_server_id: Option<Uuid>,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+impl Default for DomainListQuery {
+    fn default() -> Self {
+        Self {
+            organization: "own".into(),
+            domain_server_id: None,
+            limit: 50,
+            offset: 0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct DomainSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub organization_id: Option<Uuid>,
+}
+
+/// One real DDS page; totals are advisory while the collection changes.
+#[derive(Clone, Debug, Deserialize)]
+pub struct DomainPage {
+    pub domains: Vec<DomainSummary>,
+    pub total: u64,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+/// Domain/server-bound bearer obtained from authenticated DDS, never a P2P token.
+/// Debug output redacts the token. Servers remain responsible for signature and
+/// permission verification; local claim checks protect routing and cache expiry.
+#[derive(Debug)]
+pub struct DomainAccess {
+    domain_id: Uuid,
+    server_url: Url,
+    token: SecretString,
+    expires_at: DateTime<Utc>,
+}
+
+impl DomainAccess {
+    pub fn domain_id(&self) -> Uuid {
+        self.domain_id
+    }
+    pub fn server_url(&self) -> &Url {
+        &self.server_url
+    }
+    pub fn bearer(&self) -> &SecretString {
+        &self.token
+    }
+    pub fn expires_at(&self) -> DateTime<Utc> {
+        self.expires_at
+    }
+}
+
+/// Supplies renewable data access without starting a peer or a task heartbeat.
+/// This boundary lets later machine/task adapters use the same data client.
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+pub trait DomainAccessProvider: Send + Sync {
+    fn client_id(&self) -> &str;
+    /// Completes when all work using this credential must stop.
+    async fn wait_closed(&self);
+    /// Renew after expiry, or after the server rejects `rejected` with HTTP 401.
+    /// Concurrent callers rejecting the same token share its replacement.
+    async fn domain_access(
+        &self,
+        domain_id: Uuid,
+        rejected: Option<&DomainAccess>,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<DomainAccess>>;
+}
+
+impl AuthSession {
+    pub fn client_id(&self) -> &str {
+        &self.inner.client.inner.environment.client_id
+    }
+
+    pub async fn list_domains(&self, query: &DomainListQuery) -> Result<DomainPage> {
+        self.list_domains_with_cancellation(query, &CancellationToken::new())
+            .await
+    }
+
+    pub async fn list_domains_with_cancellation(
+        &self,
+        query: &DomainListQuery,
+        cancellation: &CancellationToken,
+    ) -> Result<DomainPage> {
+        if !(1..=100).contains(&query.limit)
+            || !(matches!(query.organization.as_str(), "own" | "all")
+                || Uuid::parse_str(&query.organization).is_ok())
+            || (query.organization == "all" && query.domain_server_id.is_none())
+        {
+            return Err(Error::InvalidInput {
+                field: "Domain query",
+                reason: "use limit 1-100 and own, an organization UUID, or all with a Domain Server",
+            });
+        }
+        let operation = async {
+            let mut state = self.lock_state(cancellation, DDS_DOMAINS).await?;
+            self.require_data_session(&state)?;
+            let mut refresh_used = false;
+            self.prepare_session(&mut state, &mut refresh_used, cancellation)
+                .await?;
+            let mut url = self.inner.client.dds_url("api/v1/domains");
+            url.query_pairs_mut()
+                .append_pair("org", &query.organization)
+                .append_pair("issue_token", "false")
+                .append_pair("limit", &query.limit.to_string())
+                .append_pair("offset", &query.offset.to_string());
+            if let Some(server) = query.domain_server_id {
+                url.query_pairs_mut()
+                    .append_pair("domain_server_id", &server.to_string());
+            }
+            let page: DomainPage = self
+                .data_dds_json(&mut state, url, false, DDS_DOMAINS, cancellation)
+                .await?;
+            if page.limit != query.limit
+                || page.offset != query.offset
+                || page.domains.len() > query.limit as usize
+                || page
+                    .domains
+                    .iter()
+                    .map(|d| d.id)
+                    .collect::<HashSet<_>>()
+                    .len()
+                    != page.domains.len()
+            {
+                return Err(Error::invalid_response(
+                    DDS_DOMAINS,
+                    "inconsistent pagination",
+                ));
+            }
+            Ok(page)
+        };
+        tokio::select! {
+            biased;
+            _ = self.inner.closed.cancelled() => Err(Error::SessionClosed),
+            result = operation => result,
+        }
+    }
+
+    fn require_data_session(&self, state: &SessionState) -> Result<()> {
+        if matches!(state.principal, PrincipalState::Zitadel(_)) {
+            return Err(Error::InvalidConfiguration(
+                "imported ZITADEL data access is not supported in this milestone",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn data_dds_json<T: DeserializeOwned>(
+        &self,
+        state: &mut SessionState,
+        url: Url,
+        post: bool,
+        endpoint: &'static str,
+        cancellation: &CancellationToken,
+    ) -> Result<T> {
+        let mut refresh_used = false;
+        for attempt in 0..2 {
+            let http = &self.inner.client.inner.http;
+            let request = if post {
+                http.post(url.clone())
+            } else {
+                http.get(url.clone())
+            };
+            let request = self
+                .dds_authorized_request(request, state)?
+                .header(ACCEPT, "application/json")
+                .header("posemesh-client-id", self.client_id())
+                .header(
+                    "posemesh-sdk-version",
+                    concat!("auki-sdk/", env!("CARGO_PKG_VERSION")),
+                );
+            match self
+                .inner
+                .client
+                .send_json(request, endpoint, cancellation)
+                .await
+            {
+                Err(error) if attempt == 0 && error.is_unauthorized() => {
+                    self.inner
+                        .client
+                        .refresh_service_bearer(state, &mut refresh_used, cancellation)
+                        .await?;
+                }
+                result => return result,
+            }
+        }
+        unreachable!("second attempt always returns")
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+impl DomainAccessProvider for AuthSession {
+    fn client_id(&self) -> &str {
+        self.client_id()
+    }
+    async fn wait_closed(&self) {
+        self.inner.closed.cancelled().await;
+    }
+
+    async fn domain_access(
+        &self,
+        domain_id: Uuid,
+        rejected: Option<&DomainAccess>,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<DomainAccess>> {
+        let operation = async {
+            let mut state = self.lock_state(cancellation, DDS_DOMAIN_AUTH).await?;
+            self.require_data_session(&state)?;
+            if let Some(access) = state.domain_access.get(&domain_id)
+                && access.expires_at > Utc::now() + ChronoDuration::seconds(30)
+                && !rejected.is_some_and(|old| old.token == access.token)
+            {
+                return Ok(access.clone());
+            }
+            state.domain_access.remove(&domain_id);
+            let mut refresh_used = false;
+            self.prepare_session(&mut state, &mut refresh_used, cancellation)
+                .await?;
+            let url = self
+                .inner
+                .client
+                .dds_url(&format!("api/v1/domains/{domain_id}/auth"));
+            let response: AccessResponse = self
+                .data_dds_json(&mut state, url, true, DDS_DOMAIN_AUTH, cancellation)
+                .await?;
+            let access = Arc::new(response.into_access(domain_id)?);
+            // Bound cache retention. Outstanding clients hold their own immutable grants.
+            state
+                .domain_access
+                .retain(|_, grant| grant.expires_at > Utc::now());
+            if state.domain_access.len() >= MAX_CACHED_DOMAINS {
+                state.domain_access.clear();
+            }
+            state.domain_access.insert(domain_id, access.clone());
+            Ok(access)
+        };
+        tokio::select! {
+            biased;
+            _ = self.inner.closed.cancelled() => Err(Error::SessionClosed),
+            result = operation => result,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct AccessResponse {
+    id: Uuid,
+    domain_server: ServerResponse,
+    access_token: String,
+}
+#[derive(Deserialize)]
+struct ServerResponse {
+    url: String,
+}
+#[derive(Deserialize)]
+struct DataClaims {
+    iss: String,
+    domain_id: Uuid,
+    exp: i64,
+    aud: Vec<String>,
+}
+
+impl AccessResponse {
+    fn into_access(self, domain_id: Uuid) -> Result<DomainAccess> {
+        let invalid = || Error::invalid_response(DDS_DOMAIN_AUTH, "invalid Domain data grant");
+        if self.id != domain_id {
+            return Err(invalid());
+        }
+        let server_url = parse_base_url(&self.domain_server.url)?;
+        let token = validated_token(self.access_token, DDS_DOMAIN_AUTH)?;
+        // Read claims from the authenticated DDS response, not arbitrary peer input.
+        // This is a routing/cache check, not a substitute for server verification.
+        let mut parts = token.expose().split('.');
+        let _header = parts.next().ok_or_else(invalid)?;
+        let payload = parts.next().ok_or_else(invalid)?;
+        if parts.next().is_none_or(str::is_empty) || parts.next().is_some() {
+            return Err(invalid());
+        }
+        let bytes = URL_SAFE_NO_PAD.decode(payload).map_err(|_| invalid())?;
+        let claims: DataClaims = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+        let expires_at = DateTime::from_timestamp(claims.exp, 0).ok_or_else(invalid)?;
+        if claims.iss != "dds"
+            || claims.domain_id != domain_id
+            || expires_at <= Utc::now()
+            || !claims
+                .aud
+                .iter()
+                .any(|aud| parse_base_url(aud).is_ok_and(|url| url == server_url))
+        {
+            return Err(invalid());
+        }
+        Ok(DomainAccess {
+            domain_id,
+            server_url,
+            token,
+            expires_at,
+        })
+    }
+}

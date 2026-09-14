@@ -476,8 +476,7 @@ impl PyAukiPeerConfig {
 
     #[pyo3(signature = (mode, dds_url=None))]
     fn with_dds_tracker(&self, mode: String, dds_url: Option<String>) -> PyResult<Self> {
-        let mode = parse_discovery_mode(Some(mode))?
-            .expect("discovery mode is required");
+        let mode = parse_discovery_mode(Some(mode))?.expect("discovery mode is required");
         let tracker = match dds_url.filter(|s| !s.is_empty()) {
             Some(url) => DdsTrackerConfig::for_trusted_dds(url, mode)
                 .map_err(|error| runtime_error("with_dds_tracker", error))?,

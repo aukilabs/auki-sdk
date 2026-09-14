@@ -1,5 +1,8 @@
 # Sign in and choose a Domain
 
+For HTTP data access without networking, see [Work with Domain data](domain-data.md).
+Its User/App clients and peer bootstrap can share the same session.
+
 You need credentials and a Domain ID that the account can access.
 [Add the SDK to your app](../reference/networking.md#platforms-and-installation)
 before using these native Rust examples.

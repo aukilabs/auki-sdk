@@ -27,6 +27,9 @@ use tokio::sync::{Mutex, MutexGuard};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+#[path = "domain.rs"]
+pub(crate) mod domain;
+
 #[cfg(not(target_arch = "wasm32"))]
 use crate::AppCredentials;
 use crate::{
@@ -76,6 +79,7 @@ const MAX_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct AuthEnvironment {
     api_base: Url,
     dds_base: Url,
+    client_id: String,
 }
 
 impl AuthEnvironment {
@@ -86,6 +90,7 @@ impl AuthEnvironment {
                 .expect("static development API URL is valid"),
             dds_base: Url::parse("https://dds.dev.aukiverse.com/")
                 .expect("static development DDS URL is valid"),
+            client_id: Uuid::new_v4().to_string(),
         }
     }
 
@@ -93,7 +98,24 @@ impl AuthEnvironment {
         Ok(Self {
             api_base: parse_base_url(api_base.as_ref())?,
             dds_base: parse_base_url(dds_base.as_ref())?,
+            client_id: Uuid::new_v4().to_string(),
         })
+    }
+
+    /// Stable installation identifier used for Domain access accounting.
+    /// Persist this identifier across logins. The default lasts for this environment.
+    pub fn with_client_id(mut self, client_id: impl Into<String>) -> Result<Self> {
+        let client_id = client_id.into();
+        if client_id.is_empty()
+            || client_id.len() > 128
+            || !client_id.bytes().all(|b| b.is_ascii_graphic())
+        {
+            return Err(Error::InvalidConfiguration(
+                "client ID must be 1-128 visible ASCII bytes",
+            ));
+        }
+        self.client_id = client_id;
+        Ok(self)
     }
 
     pub fn api_base_url(&self) -> &str {
@@ -168,6 +190,7 @@ enum PrincipalState {
 struct SessionState {
     principal: PrincipalState,
     dds_bearer: Option<SecretString>,
+    domain_access: std::collections::HashMap<Uuid, Arc<domain::DomainAccess>>,
 }
 
 impl SessionState {
@@ -221,6 +244,7 @@ impl AuthClient {
                 state: Mutex::new(SessionState {
                     principal: PrincipalState::Zitadel(zitadel),
                     dds_bearer: None,
+                    domain_access: Default::default(),
                 }),
                 closed,
             }),
@@ -268,6 +292,7 @@ impl AuthClient {
                 SessionState {
                     principal: PrincipalState::User { refresh_token },
                     dds_bearer: Some(dds_bearer),
+                    domain_access: Default::default(),
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -279,6 +304,7 @@ impl AuthClient {
                 SessionState {
                     principal: PrincipalState::App(credentials),
                     dds_bearer: Some(dds_bearer),
+                    domain_access: Default::default(),
                 }
             }
         };
@@ -541,6 +567,7 @@ impl AuthSession {
             session.close().await;
         }
         state.dds_bearer = None;
+        state.domain_access.clear();
         state.principal = PrincipalState::Closed;
     }
 

@@ -1,9 +1,11 @@
-//! Credential-to-authority preparation for an Auki P2P peer.
+//! Shared User/App credentials for Domain data and Auki P2P peers.
 //!
 //! This crate authenticates a User or trusted native App through the Auki API,
 //! lists accessible Domains when an application needs a picker, proves ownership
 //! of one libp2p identity in a selected Domain via DDS challenge/verify, and
 //! returns a validated [`PreparedPeer`].
+//! The same [`AukiCredential`] also supplies paged Domain metadata and cached,
+//! renewable [`DomainAccess`] for HTTP data clients.
 //!
 //! The high-level `auki_sdk::AukiPeer::start` operation consumes the identity
 //! and prepared authority, then owns credential renewal, relay booking,
@@ -60,6 +62,11 @@ mod zitadel;
 mod zitadel_http;
 mod zitadel_session;
 
+/// Shared User/App credential used by Domain clients and peer bootstrap.
+pub use client::AuthSession as AukiCredential;
+pub use client::domain::{
+    DomainAccess, DomainAccessProvider, DomainListQuery, DomainPage, DomainSummary,
+};
 pub use client::{AuthClient, AuthEnvironment, AuthLimits, AuthSession};
 pub use error::{AuthFailureKind, Error, Result};
 pub use secret::SecretString;

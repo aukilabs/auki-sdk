@@ -411,6 +411,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-domain-client"
+version = "0.1.0"
+dependencies = [
+ "auki-auth",
+ "base64",
+ "chrono",
+ "futures",
+ "futures-timer",
+ "httpmock",
+ "js-sys",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
+]
+
+[[package]]
 name = "auki-geometry"
 version = "0.0.0"
 dependencies = [
@@ -774,6 +798,7 @@ dependencies = [
  "async-channel",
  "async-trait",
  "auki-auth",
+ "auki-domain-client",
  "auki-p2p",
  "auki-relay-booking",
  "base64",

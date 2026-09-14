@@ -1,47 +1,42 @@
 [package]
-name = "auki-sdk"
+name = "auki-domain-client"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Mechanical runtime facade for authenticated Auki peers"
+description = "Domain discovery and bounded data access with shared Auki credentials"
 readme = "README.md"
 
 [dependencies]
-async-trait = { workspace = true }
 auki-auth = { path = "../auki-auth" }
-auki-domain-client = { path = "../auki-domain-client" }
-auki-p2p = { path = "../auki-p2p" }
-auki-relay-booking = { path = "../auki-relay-booking" }
 chrono = { workspace = true }
 futures = { workspace = true }
 futures-timer = { workspace = true }
-parking_lot = { workspace = true }
-rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "sync"] }
 tokio-util = { workspace = true, features = ["rt"] }
-tracing = { workspace = true }
 uuid = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-async-channel = { workspace = true }
 uuid = { workspace = true, features = ["js"] }
+js-sys = { workspace = true }
+wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
+web-sys = { version = "0.3.98", features = [
+    "AbortController", "AbortSignal", "Headers", "ReadableStream",
+    "ReadableStreamDefaultReader", "Request", "RequestInit", "RequestCache",
+    "RequestCredentials", "RequestMode", "RequestRedirect", "ReferrerPolicy", "Response",
+] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+base64 = { workspace = true }
 httpmock = "0.8.2"
-jsonwebtoken = "9.3.1"
-tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "net", "io-util"] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
-wasm-bindgen = { workspace = true }
-js-sys = { workspace = true }
-base64 = { workspace = true }
-p256 = "0.13.2"

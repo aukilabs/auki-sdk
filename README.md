@@ -17,6 +17,7 @@ Echo example. For Python, Web, Swift, or Expo, see
 | I want to… | Read |
 | --- | --- |
 | Sign in and choose a Domain | [Authenticate](docs/how-to/authenticate.md) |
+| Read/write Domain data without starting a peer | [Domain data access](docs/how-to/domain-data.md) |
 | Use discovery or connect to a known address | [Connect to a peer](docs/how-to/connect.md) |
 | Exchange my own messages | [Use a custom protocol](docs/how-to/protocols.md) |
 | Keep a Peer ID and stop cleanly | [Manage a peer](docs/how-to/lifecycle.md) |
@@ -47,7 +48,7 @@ for task state; Posemesh runners handle execution.
 
 | Directory | Contents |
 | --- | --- |
-| [`core/`](core/) | Stable crates: `auki-sdk`, `auki-p2p`, `auki-auth`, `auki-relay-booking`, `auki-dms` |
+| [`core/`](core/) | Stable crates: `auki-sdk`, `auki-p2p`, `auki-auth`, `auki-domain-client`, `auki-relay-booking`, `auki-dms` |
 | [`core/bindings/`](core/bindings/) / [`core/examples/`](core/examples/README.md) | SDK bindings and networking examples |
 | [`labs/`](labs/) | Experimental crates, including the optional [`auki-protocols`](labs/auki-protocols/README.md) and [`auki-urdf-fk`](labs/auki-urdf-fk/README.md) |
 | [`labs/bindings/`](labs/bindings/) / [`labs/examples/`](labs/examples/) | Experimental bindings and examples |

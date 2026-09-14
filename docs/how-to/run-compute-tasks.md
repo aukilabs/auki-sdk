@@ -6,7 +6,7 @@ handlers run on the application's asyncio event loop, including its context
 variables. DMS schedules work; the SDK does not submit jobs or provision nodes.
 
 Native Rust and Python support HTTP-only tasks and optional task P2P. Robots can
-also read their assigned Domain while idle. Web task bindings are deferred.
+also read and stay connected to their assigned Domain while idle. Web task bindings are deferred.
 Existing User/App peer and data APIs remain available. There is no dependency on
 the Posemesh repository, executable or runners.
 
@@ -112,8 +112,9 @@ discovery stays off unless explicitly configured. DDS/DMS/discovery endpoints
 must match the machine's environment.
 
 The SDK binds the Peer ID during every machine login before claiming work.
-Compute credentials come from the DMS lease/heartbeat. Robot peer credentials
-come from the DDS assigned-Domain P2P exchange, driven by the task heartbeat.
+Compute peer credentials come from the DMS lease/heartbeat. Robot peer credentials
+come from the DDS assigned-Domain P2P exchange. One runtime-owned renewal driver
+keeps robot authority current while idle or busy, independently of DMS heartbeats.
 Signed credentials must match the machine type, Peer ID, Domain, issuer,
 audience, literal expiry and required `domain-data:r` scope. Verification keys
 and credentials rotate through the existing peer authority supervisor.
@@ -122,25 +123,48 @@ Missing peer authority fails the task startup instead of silently disabling P2P.
 Inside a Python handler, `task.peer()` returns an `AukiPeer` view, or `None` for
 HTTP-only tasks. Existing Info/Message/Blob/Stream adapters can use this view
 when those optional protocols are compiled into the binding. The task runtime
-owns peer shutdown; calling `shutdown()` on the view is rejected. Returning or
-cancelling the task fences retained views and awaits transport, discovery and
-relay cleanup. A retained view cannot keep a completed task connected.
+owns peer shutdown; calling `shutdown()` on the view is rejected. Compute task
+completion or cancellation fences retained peer views and awaits transport,
+discovery and relay cleanup. A robot task borrows the runtime's persistent peer;
+completing, failing or cancelling that task leaves the robot connected.
+
+Call `await tasks.start()` to register and start robot networking before polling.
+Then `tasks.peer()` returns its peer, or `None` for HTTP-only/unassigned robots.
+`run()` and `run_once()` also start it automatically. Startup is shared across
+callers and remains runtime-owned if a caller cancels its awaitable; await
+`tasks.close()` to stop and drain it. Compute `tasks.peer()` is always `None`;
+its peer is available only through the active task.
+
+```python
+await tasks.start()
+peer = tasks.peer()  # Robot peer: usable before and between tasks.
+await tasks.run()   # Reuses the same connection and renewal owner.
+```
+
+Applications own protocol registration lifetimes. Close task-specific endpoints
+in the handler's `finally` block; close process-wide endpoints before runtime
+shutdown. Retained robot peer views remain usable between tasks, while retained
+task data clients lose access when their lease ends. Task completion never grants
+idle writes. Robot authority/assignment loss fences the peer and stops work;
+changing assignment requires a fresh runtime and credential.
 
 Rust uses `AukiTaskPeerConfig`, its `identity_proof()` in the machine config,
-and `AukiDmsTasks::new_with_peer`. Import `TaskPeerContext` to call `task.peer()`;
+and `AukiDmsTasks::new_with_peer`. Import `TaskPeerContext` to call `task.peer()`
+or `tasks.peer()` after `tasks.start(&cancellation).await?`;
 the returned view exposes the existing protocol context without authority controls.
 The Rust robot example shows both HTTP-only and P2P construction.
 
-The task heartbeat is the sole renewal driver, including early peer/relay
-refresh requests. There is no P2P scheduler or task dispatch protocol. Peers
-live for one task; keeping an assigned robot peer connected between tasks is a
-separate follow-up. Application operations still require application authorization.
+Compute task heartbeats and the robot authority driver each service their own
+peer/relay refresh requests. There is no P2P scheduler or task dispatch protocol.
+Await `tasks.close()` to stop the robot peer and drain its discovery, relay and
+transport cleanup. Close the machine credential last. Application operations
+still require application authorization.
 
 ## Cancellation and authority
 
 Cancelling the run awaitable requests native cancellation. `close()` cancels
 active work and awaits the actual Python handler's `finally` blocks, data cleanup
-and compute registration shutdown. Keep the asyncio loop alive until it returns.
+and worker registration/peer shutdown. Keep the asyncio loop alive until it returns.
 Call close from the host, not the handler it is waiting for. Close is repeatable,
 including after cancellation of a previous close awaitable.
 
@@ -191,8 +215,7 @@ caller change with the dependency update and test multiple-capability dispatch.
 The current Posemesh checkout remains pinned to its earlier SDK revision.
 
 Follow-up in #375: adapt existing Runner/input/output conventions to this
-lifecycle, add persistent idle robot peers and expose custom lease operations in
-Python. Application runners,
+lifecycle. Python exposes managed task handlers. Application runners,
 configuration and hardware control stay outside the generic SDK lifecycle.
 Stable crates have no dependency on Posemesh or `labs/` runners.
 

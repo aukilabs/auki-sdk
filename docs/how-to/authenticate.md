@@ -96,7 +96,8 @@ peers, close the session, then delete stored credentials.
 [Native SDK task handlers](run-compute-tasks.md) use provisioned credentials from
 Rust or Python. Compute nodes additionally need a wallet key; robots need the
 deployment's exclusive robot audience. Robots can read their assigned Domain
-while idle. Both support optional task P2P with a separate persistent identity.
+while idle. Both support optional P2P with a separate persistent identity:
+compute peers follow task leases, while robot peers stay connected between tasks.
 
 [Posemesh runners](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
 already manage machine authentication and execution for DMS tasks. Use the

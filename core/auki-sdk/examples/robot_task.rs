@@ -64,9 +64,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?,
         None => AukiDmsTasks::new(robot.clone(), capabilities, TasksConfig::default())?,
     };
-    let outcome = tasks
-        .run_once(CAPABILITY, &Inspect, &CancellationToken::new())
-        .await;
+    let cancellation = CancellationToken::new();
+    let outcome = async {
+        tasks.start(&cancellation).await?;
+        if let Some(peer) = tasks.peer() {
+            println!("Robot peer ready: {}", peer.peer_id());
+        }
+        // The same peer stays connected after this task, until tasks.close().
+        tasks.run_once(CAPABILITY, &Inspect, &cancellation).await
+    }
+    .await;
     let cleanup = tasks.close().await;
     robot.close().await;
     cleanup?;

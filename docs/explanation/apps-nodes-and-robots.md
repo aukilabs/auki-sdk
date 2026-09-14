@@ -57,7 +57,10 @@ See [Posemesh robot setup](https://github.com/aukilabs/posemesh/blob/main/docs/h
 Implement an SDK task handler or a Posemesh `Runner` for the capability you
 support. The selected runtime handles polling, heartbeats and results. SDK robot
 credentials also supply assigned-Domain idle reads; writes use task credentials.
-Optional SDK task peers shut down with the task, including discovery and relays.
+Optional compute peers shut down with the task, including discovery and relays.
+Robot peers stay connected to their assigned Domain between tasks; runtime
+shutdown drains their peer, discovery and relay resources. Applications close
+task-specific protocol endpoints when the handler finishes.
 
 DMS currently allows **one active task lease per node**, for both compute nodes
 and robots. A robot runner must keep physical task execution exclusive and

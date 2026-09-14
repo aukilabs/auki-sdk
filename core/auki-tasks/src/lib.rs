@@ -7,6 +7,7 @@ mod compute;
 mod machine;
 mod peer;
 mod robot;
+mod robot_peer;
 mod runtime;
 
 pub use access::TaskCredential;
@@ -20,7 +21,7 @@ pub use runtime::{
 };
 
 /// Errors intentionally contain no response bodies, credentials or handler text.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, Copy, thiserror::Error)]
 pub enum TaskError {
     #[error("invalid task configuration: {0}")]
     Configuration(&'static str),

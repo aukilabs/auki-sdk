@@ -444,6 +444,20 @@ impl PyTasks {
         })
     }
 
+    /// Register and start optional robot networking without claiming a task.
+    fn start<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        owned(py, |cancellation| async move {
+            inner.start(&cancellation).await.map_err(error)?;
+            Ok(Python::with_gil(|py| py.None()))
+        })
+    }
+
+    /// The assigned robot's persistent peer, available after start/run starts it.
+    fn peer(&self) -> Option<PyAukiPeer> {
+        self.inner.peer().map(PyAukiPeer::from_task_peer)
+    }
+
     #[pyo3(signature = (capability=None))]
     fn run_once<'py>(
         &self,

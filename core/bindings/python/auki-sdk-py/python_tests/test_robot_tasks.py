@@ -288,14 +288,18 @@ def test_task_peer_binding_rotation_and_awaited_shutdown(worker_services, p2p, t
                 peer.shutdown()
             await task.progress({"phase": "peer-ready"})
             worker_services["peer_issued"] = int(time.time())
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.3)
             assert await task.data().read(DATA) == b"hello"
             return None
         machine, tasks = runtime(worker_services, handler, kind, tmp_path / "peer.identity")
         try:
             assert await asyncio.wait_for(tasks.run_once(), 8) == "completed"
-            await asyncio.wait_for(retained[0].wait_stopped(), 2)
-            with pytest.raises(RuntimeError):
+            if kind == "compute":
+                await asyncio.wait_for(retained[0].wait_stopped(), 2)
+                with pytest.raises(RuntimeError):
+                    _ = retained[0].routes
+            else:
+                assert retained[0].listen_addresses == tasks.peer().listen_addresses
                 _ = retained[0].routes
             paths = [path for _, path in worker_services["calls"]]
             assert paths.index("/internal/v1/auth/p2p/verify") < paths.index("/tasks")
@@ -304,6 +308,7 @@ def test_task_peer_binding_rotation_and_awaited_shutdown(worker_services, p2p, t
         finally:
             await tasks.close()
             await machine.close()
+        await asyncio.wait_for(retained[0].wait_stopped(), 2)
     asyncio.run(scenario())
 
 
@@ -366,6 +371,165 @@ def test_peer_failure_cancels_handler_and_awaits_cleanup(worker_services, p2p, t
             assert worker_services["complete"] == [] and worker_services["fail"] == []
         finally:
             release.set()
+            await tasks.close()
+            await machine.close()
+            await asyncio.gather(operation, return_exceptions=True)
+    asyncio.run(scenario())
+
+
+def test_robot_peer_persists_across_tasks_and_renews_while_idle(worker_services, p2p, tmp_path):
+    async def scenario():
+        worker_services["p2p"] = p2p
+        views, data = [], []
+        async def handler(task):
+            views.append(task.peer())
+            data.append(task.data())
+            await task.data().write(b"result", data_id=DATA)
+        machine, tasks = runtime(worker_services, handler, "robot", tmp_path / "peer.identity")
+        try:
+            assert tasks.peer() is None
+            await asyncio.gather(tasks.start(), tasks.start())
+            idle_peer = tasks.peer()
+            routes = idle_peer.listen_addresses
+            assert worker_services["claims"] == 0 and worker_services["heartbeats"] == []
+            for _ in range(2):
+                assert await tasks.run_once() == "completed"
+                assert views[-1].listen_addresses == routes == tasks.peer().listen_addresses
+                with pytest.raises(auki_sdk.DomainDataError):
+                    await data[-1].read(DATA)
+                _ = views[-1].routes
+            worker_services["claim_status"] = 204
+            assert await tasks.run_once() == "no_work"
+            heartbeats = len(worker_services["heartbeats"])
+            exchanges = worker_services["peer_exchanges"]
+            async def renewed():
+                while worker_services["peer_exchanges"] <= exchanges:
+                    await asyncio.sleep(0.01)
+            await asyncio.wait_for(renewed(), 3)
+            assert len(worker_services["heartbeats"]) == heartbeats
+            assert idle_peer.listen_addresses == tasks.peer().listen_addresses
+            _ = idle_peer.routes
+        finally:
+            await tasks.close()
+            await machine.close()
+        await asyncio.wait_for(idle_peer.wait_stopped(), 2)
+        assert tasks.peer() is None
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(not hasattr(auki_sdk, "AukiInfoEndpoint"), reason="Info is an optional application protocol")
+def test_robot_peer_accepts_connections_before_between_and_after_tasks(worker_services, p2p, tmp_path):
+    async def scenario():
+        worker_services["p2p"] = p2p
+        identity = auki_sdk.Identity.from_ed25519_seed(bytes([43]) * 32)
+        grant = p2p["grant"]({"peer_id": identity.peer_id})
+        update = auki_sdk.ExternalAuthorityUpdate(DOMAIN, identity.peer_id,
+            auki_sdk.DdsVerificationKeys(1, p2p["pem"]),
+            auki_sdk.SignedP2pCredential(grant["p2p_access_token"]), grant["p2p_access_expires_at"])
+        config = auki_sdk.AukiPeerConfig.new(worker_services["base"]).direct_only().with_listen_addresses(["/ip4/127.0.0.1/tcp/0"])
+        remote, control = await auki_sdk.AukiPeer.start_external(identity, update, config)
+        client = auki_sdk.AukiInfoClient(remote)
+        async def exchange(peer, name):
+            def info(_):
+                return {"app": "fixture", "app_version": "1", "name": name,
+                    "session_id": "session", "session_clock_id": "clock", "session_clock_hash": "00" * 32,
+                    "session_now_ns": 0, "peer_id": peer.peer_id, "app_instance": "fixture"}
+            endpoint = auki_sdk.AukiInfoEndpoint.mount(peer, info)
+            try:
+                result = await client.fetch_exact(peer.peer_id, peer.listen_addresses[0])
+                assert result["name"] == name
+            finally:
+                await endpoint.close()
+        async def handler(task):
+            await exchange(task.peer(), "busy")
+        machine, tasks = runtime(worker_services, handler, "robot", tmp_path / "peer.identity")
+        try:
+            await tasks.start()
+            peer = tasks.peer()
+            addresses = peer.listen_addresses
+            for _ in range(2):
+                await exchange(peer, "idle")
+                assert await tasks.run_once() == "completed"
+                assert tasks.peer().listen_addresses == addresses
+            await exchange(peer, "finished")
+        finally:
+            await tasks.close()
+            await machine.close()
+            await remote.shutdown()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("cause", ["denial", "bad_signature", "bad_rotation", "assignment", "registration", "credential_close"])
+def test_idle_robot_peer_stops_on_lost_authority(worker_services, p2p, tmp_path, cause):
+    async def scenario():
+        worker_services["p2p"] = p2p
+        async def handler(task):
+            pytest.fail("idle validation must not execute a task")
+        machine, tasks = runtime(worker_services, handler, "robot", tmp_path / "peer.identity")
+        try:
+            await tasks.start()
+            peer = tasks.peer()
+            if cause == "denial":
+                worker_services["peer_exchange_status"] = 403
+            elif cause == "bad_signature":
+                worker_services["bad_signature"] = True
+            elif cause == "bad_rotation":
+                worker_services["peer_claims_override"] = {"domain_ids": [DATA]}
+            elif cause == "assignment":
+                worker_services["assignment"] = DATA
+            elif cause == "registration":
+                worker_services["registration_status"] = 403
+            else:
+                await machine.close()
+            await asyncio.wait_for(peer.wait_stopped(), 5)
+            with pytest.raises(RuntimeError):
+                _ = peer.routes
+            with pytest.raises(auki_sdk.TaskRuntimeError):
+                await tasks.run_once()
+            assert worker_services["claims"] == 0 and worker_services["heartbeats"] == []
+        finally:
+            await tasks.close()
+            await machine.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("cause", ["cancel", "lease_loss", "handler_failure"])
+def test_robot_task_end_preserves_peer_but_revokes_task_data(worker_services, p2p, tmp_path, cause):
+    async def scenario():
+        worker_services["p2p"] = p2p
+        started, cleaned = asyncio.Event(), asyncio.Event()
+        retained = []
+        async def handler(task):
+            retained.append(task.data())
+            started.set()
+            try:
+                if cause == "handler_failure":
+                    raise ValueError("fixture failure")
+                await asyncio.sleep(60)
+            finally:
+                cleaned.set()
+        machine, tasks = runtime(worker_services, handler, "robot", tmp_path / "peer.identity")
+        operation = asyncio.ensure_future(tasks.run_once())
+        try:
+            await asyncio.wait_for(started.wait(), 8)
+            peer = tasks.peer()
+            if cause == "cancel":
+                operation.cancel()
+            elif cause == "lease_loss":
+                worker_services["heartbeat_status"] = 409
+            await asyncio.wait_for(cleaned.wait(), 3)
+            await asyncio.gather(operation, return_exceptions=True)
+            # Cancellation of a Python awaitable precedes native finally/data cleanup.
+            worker_services["claim_status"] = 204
+            async def drained():
+                while await tasks.run_once() == "busy":
+                    await asyncio.sleep(0.01)
+            await asyncio.wait_for(drained(), 3)
+            with pytest.raises(auki_sdk.DomainDataError):
+                await retained[0].read(DATA)
+            _ = peer.routes
+            assert tasks.peer().listen_addresses == peer.listen_addresses
+        finally:
             await tasks.close()
             await machine.close()
             await asyncio.gather(operation, return_exceptions=True)

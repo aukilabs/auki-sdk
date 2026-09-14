@@ -1,4 +1,4 @@
-"""Run a provisioned robot; optional task P2P uses a persistent identity.
+"""Run a provisioned robot; its optional peer remains connected between tasks.
 
 Live operation: registers /example/inspect-input/v1, claims work, reads input_id
 and writes a report. The submitter owns result cleanup. No hardware is controlled.
@@ -38,7 +38,15 @@ async def main():
         peer_identity_file=os.environ.get("AUKI_PEER_IDENTITY_FILE"),
     )
     tasks = auki_sdk.AukiDmsTasks(robot, {CAPABILITY: inspect_input})
-    running = asyncio.ensure_future(tasks.run())
+    async def serve():
+        await tasks.start()
+        peer = tasks.peer()
+        if peer is not None:
+            print(f"Robot peer ready: {peer.peer_id}")
+        # Process-wide endpoints may use this peer while idle. Close them before
+        # tasks.close(); task-specific endpoints belong in the handler's finally.
+        await tasks.run()
+    running = asyncio.ensure_future(serve())
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, running.cancel)

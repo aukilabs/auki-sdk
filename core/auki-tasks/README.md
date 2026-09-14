@@ -5,8 +5,16 @@
 `auki-domain-client` data transfers. DMS decides which machine receives work.
 
 Supports already-provisioned compute and robot credentials, HTTP-only handlers,
-assigned-robot idle reads and optional task P2P through the SDK peer adapter.
-Web task execution and persistent idle robot peers are not exposed.
+assigned-robot idle reads and optional P2P through the SDK peer adapter.
+Compute peers follow leases; robot peers remain connected between tasks.
+Web task execution is not exposed.
+
+`start()` registers/authenticates without claiming work and starts an assigned
+robot's peer. The SDK's `TaskPeerContext` trait exposes `tasks.peer()` for idle
+robot use. `run()`/`run_once()` start it automatically. Robot DDS peer renewal
+has one runtime-owned driver independent of task heartbeats. Await runtime close
+to drain peer, discovery and relay cleanup. Applications close task-specific
+protocol registrations when their handlers finish.
 
 `AukiDmsTasks::run` manages polling and heartbeats; `claim` returns a `TaskLease`
 for custom loops using the same `heartbeat`, `complete` and `fail` operations.

@@ -51,7 +51,8 @@ pub trait TaskPeerFactory: Send + Sync {
     ) -> Result<Arc<dyn TaskPeerSession>>;
 }
 
-/// One task's optional transport. Heartbeats supply all replacement credentials.
+/// SDK-owned transport. Compute heartbeats or the robot's independent DDS
+/// authority driver supply replacement credentials.
 #[async_trait]
 pub trait TaskPeerSession: Any + Send + Sync {
     fn as_any(&self) -> &dyn Any;

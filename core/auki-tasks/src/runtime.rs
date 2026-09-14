@@ -77,6 +77,7 @@ pub struct TaskContext {
     data: DomainDataClient,
     progress: Arc<Mutex<Value>>,
     peer: Arc<Mutex<Option<Arc<dyn TaskPeerSession>>>>,
+    owns_peer: bool,
 }
 impl TaskContext {
     pub fn data(&self) -> DomainDataClient {
@@ -90,7 +91,9 @@ impl TaskContext {
 
     fn revoke(&self) {
         self.credential.revoke();
-        if let Some(peer) = self.peer_session() {
+        if self.owns_peer
+            && let Some(peer) = self.peer_session()
+        {
             peer.fence();
         }
     }
@@ -133,6 +136,7 @@ struct Owner {
     client_id: String,
     machine: Option<MachineCredential>,
     peer: Option<Arc<dyn TaskPeerFactory>>,
+    robot_peer: Option<crate::robot_peer::RobotPeer>,
     capabilities: Vec<String>,
     config: TasksConfig,
     closed: CancellationToken,
@@ -245,11 +249,18 @@ impl AukiDmsTasks {
             .as_ref()
             .map(|m| m.cancellation().child_token())
             .unwrap_or_default();
+        let robot_peer = match (&machine, &peer) {
+            (Some(MachineCredential::Robot(robot)), Some(factory)) => Some(
+                crate::robot_peer::RobotPeer::new(robot.clone(), factory.clone(), closed.clone()),
+            ),
+            _ => None,
+        };
         Ok(Self(Arc::new(Owner {
             client,
             client_id,
             machine,
             peer,
+            robot_peer,
             capabilities,
             config,
             closed,
@@ -263,11 +274,39 @@ impl AukiDmsTasks {
         &self.0.capabilities
     }
 
+    /// Register/authenticate without claiming work. Robots also start their
+    /// assigned-Domain peer, which remains owned until runtime shutdown.
+    pub async fn start(&self, cancellation: &CancellationToken) -> Result<()> {
+        let operation = async {
+            if let Some(machine) = &self.0.machine {
+                machine.start(&self.0.capabilities, cancellation).await?;
+            }
+            if let Some(peer) = &self.0.robot_peer {
+                peer.start(cancellation).await?;
+            }
+            Ok(())
+        };
+        tokio::select! { biased;
+            _ = self.stopped() => Err(self.stopped_error()),
+            _ = cancellation.cancelled() => Err(TaskError::Cancelled),
+            result = operation => result,
+        }
+    }
+
+    /// SDK adapter for the persistent robot peer; compute peers belong to tasks.
+    #[doc(hidden)]
+    pub fn peer_session(&self) -> Option<Arc<dyn TaskPeerSession>> {
+        self.0.robot_peer.as_ref().and_then(|peer| peer.session())
+    }
+
     pub fn request_shutdown(&self) {
         self.0.closed.cancel();
     }
 
     fn stopped_error(&self) -> TaskError {
+        if let Some(error) = self.0.robot_peer.as_ref().and_then(|peer| peer.failure()) {
+            return error;
+        }
         if self
             .0
             .machine
@@ -306,9 +345,7 @@ impl AukiDmsTasks {
             .try_acquire_owned()
             .map_err(|_| TaskError::Busy)?;
         let operation = async {
-            if let Some(machine) = &self.0.machine {
-                machine.start(&self.0.capabilities, cancellation).await?;
-            }
+            self.start(cancellation).await?;
             let assignment = if let Some(MachineCredential::Robot(robot)) = &self.0.machine {
                 let Some(domain) = robot.assigned_domain_id(cancellation).await? else {
                     return Ok(None);
@@ -347,9 +384,10 @@ impl AukiDmsTasks {
                 credential,
                 data,
                 progress: Arc::new(Mutex::new(Value::Object(Default::default()))),
-                peer: Arc::new(Mutex::new(None)),
+                peer: Arc::new(Mutex::new(self.peer_session())),
+                owns_peer: self.0.robot_peer.is_none(),
             };
-            let peer_grant = if self.0.peer.is_some() {
+            let peer_grant = if self.0.peer.is_some() && self.0.robot_peer.is_none() {
                 TaskPeerGrant::from_wire(
                     context.credential.domain_id(),
                     lease.p2p_access_token.as_deref(),
@@ -441,13 +479,17 @@ impl AukiDmsTasks {
     pub async fn close(&self) -> Result<()> {
         self.0.closed.cancel();
         let _active = self.0.active.acquire().await;
+        let peer_cleanup = match &self.0.robot_peer {
+            Some(peer) => peer.close().await,
+            None => Ok(()),
+        };
         if let Some(machine) = &self.0.machine {
             machine.close().await;
         }
         if self.0.cleanup_failed.load(Ordering::Acquire) {
             return Err(TaskError::PeerCleanup);
         }
-        Ok(())
+        peer_cleanup
     }
 }
 
@@ -461,7 +503,9 @@ pub struct TaskLease {
 impl Drop for TaskLease {
     fn drop(&mut self) {
         self.context.revoke();
-        if let Some(peer) = self.context.peer.lock().take() {
+        if let Some(peer) = self.context.peer.lock().take()
+            && self.context.owns_peer
+        {
             // Drop cannot await. Managed execution and explicit close drain this
             // before releasing the lease; abandoned native leases get best effort.
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
@@ -498,11 +542,10 @@ impl TaskLease {
             _ = cancellation.cancelled() => { self.context.revoke(); startup.await },
             result = &mut startup => result,
         };
-        let peer = result.map_err(|error| {
+        let peer = result.inspect_err(|error| {
             if matches!(error, TaskError::PeerCleanup) {
                 self.runtime.0.cleanup_failed.store(true, Ordering::Release);
             }
-            error
         })?;
         *self.context.peer.lock() = Some(peer);
         if self.context.is_cancelled() {
@@ -516,7 +559,9 @@ impl TaskLease {
     async fn finish_resources(&self) -> Result<()> {
         self.context.data.close().await;
         let peer = self.context.peer.lock().take();
-        if let Some(peer) = peer {
+        if let Some(peer) = peer
+            && self.context.owns_peer
+        {
             peer.fence();
             peer.shutdown().await.map_err(|_| {
                 self.runtime.0.cleanup_failed.store(true, Ordering::Release);
@@ -569,20 +614,12 @@ impl TaskLease {
             self.context
                 .credential
                 .update(self.context.task.id, &response)?;
-            if self.runtime.0.peer.is_some() {
-                let grant = if let Some(MachineCredential::Robot(robot)) = &self.runtime.0.machine {
-                    Some(
-                        robot
-                            .peer_grant(self.context.credential.domain_id())
-                            .await?,
-                    )
-                } else {
-                    TaskPeerGrant::from_wire(
-                        self.context.credential.domain_id(),
-                        response.p2p_access_token.as_deref(),
-                        response.p2p_access_token_expires_at,
-                    )?
-                };
+            if self.runtime.0.peer.is_some() && self.context.owns_peer {
+                let grant = TaskPeerGrant::from_wire(
+                    self.context.credential.domain_id(),
+                    response.p2p_access_token.as_deref(),
+                    response.p2p_access_token_expires_at,
+                )?;
                 if let Some(grant) = grant {
                     if let Some(peer) = self.context.peer_session() {
                         peer.update(grant.clone()).await?;
@@ -615,7 +652,7 @@ impl TaskLease {
                 biased;
                 _ = self.context.credential.closed.cancelled() => return Err(TaskError::Cancelled),
                 _ = self.context.credential.changed.notified() => {},
-                _ = async { match &peer { Some(peer) => peer.refresh_requested().await, None => std::future::pending().await } } => {},
+                _ = async { match &peer { Some(peer) if self.context.owns_peer => peer.refresh_requested().await, _ => std::future::pending().await } } => {},
                 _ = async { match &peer { Some(peer) => peer.wait_stopped().await, None => std::future::pending().await } } => return Err(TaskError::Authority("task peer stopped")),
                 _ = tokio::time::sleep(delay) => {}
             }

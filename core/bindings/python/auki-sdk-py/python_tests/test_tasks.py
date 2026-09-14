@@ -120,7 +120,9 @@ def worker_services():
             if path.path == "/internal/v1/auth/robot/p2p-token":
                 assert json.loads(body) == {"domain_id": DOMAIN}
                 assert "Authorization" in self.headers
-                return self.reply(state["p2p"]["grant"](state))
+                state["peer_exchanges"] = state.get("peer_exchanges", 0) + 1
+                time.sleep(state.get("peer_exchange_delay", 0))
+                return self.reply(state["p2p"]["grant"](state), state.get("peer_exchange_status", 200))
             if path.path == "/service/p2p-verification-keys":
                 return self.reply(state["p2p"]["keys"])
             if path.path.endswith("/siwe/request"):

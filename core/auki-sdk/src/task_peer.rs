@@ -1,4 +1,4 @@
-//! Optional task networking. The DMS lifecycle supplies authority; AukiPeer owns transport.
+//! Compute peers follow DMS leases; robot peers follow their DDS Domain assignment.
 use crate::{
     AukiDiscovery, AukiKnownPeers, AukiPeer, AukiPeerConfig, AukiPeerLifecycle,
     AukiPeerProtocolContext, ExternalAuthorityControl, ExternalAuthorityUpdate, Identity,
@@ -7,12 +7,14 @@ use crate::{
 use async_trait::async_trait;
 use auki_auth::machine::p2p::DdsP2pClient;
 use auki_p2p::{DdsTokenVerifier, PeerIdentityProof};
-use auki_tasks::{TaskContext, TaskError, TaskPeerFactory, TaskPeerGrant, TaskPeerSession};
+use auki_tasks::{
+    AukiDmsTasks, TaskContext, TaskError, TaskPeerFactory, TaskPeerGrant, TaskPeerSession,
+};
 use parking_lot::Mutex;
 use std::{any::Any, ops::Deref, sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 
-/// Configure one persistent identity for task-scoped peers. No I/O until a task runs.
+/// Configure a persistent identity for worker networking. Construction does no I/O.
 #[derive(Clone)]
 pub struct AukiTaskPeerConfig {
     identity: Identity,
@@ -89,7 +91,8 @@ async fn authority(
     ))
 }
 
-/// Handler view of task-owned networking. Retaining it does not retain authority.
+/// Borrowed worker networking. Compute authority ends with its task; robot
+/// authority ends with its runtime or assigned-Domain authorization.
 #[derive(Clone)]
 pub struct AukiTaskPeer {
     context: AukiPeerProtocolContext,
@@ -119,11 +122,20 @@ impl AukiTaskPeer {
     }
 }
 
-/// Import this trait to call `task.peer()` from a Rust handler.
+/// Import to call `task.peer()` or access an idle robot using `tasks.peer()`.
 pub trait TaskPeerContext {
     fn peer(&self) -> Option<AukiTaskPeer>;
 }
 impl TaskPeerContext for TaskContext {
+    fn peer(&self) -> Option<AukiTaskPeer> {
+        self.peer_session()?
+            .as_any()
+            .downcast_ref::<Session>()
+            .map(|s| s.view.clone())
+    }
+}
+
+impl TaskPeerContext for AukiDmsTasks {
     fn peer(&self) -> Option<AukiTaskPeer> {
         self.peer_session()?
             .as_any()

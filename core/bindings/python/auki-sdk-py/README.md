@@ -30,6 +30,12 @@ Robots expose assigned-Domain idle reads. Both machine types support optional
 task P2P using `peer_identity_file=` and `task.peer()`. Tasks also work with
 `--no-default-features`; application protocols remain optional.
 
+Robot peers stay connected between tasks. `await tasks.start()` starts networking
+without claiming work, and `tasks.peer()` exposes the idle robot peer. Close
+task-specific endpoints in the handler's `finally` block; await `tasks.close()`
+to stop the persistent peer, then close the credential. Task data access still
+ends with each lease.
+
 After building, validate with local DDS/DMS/data fixtures:
 
 ```sh

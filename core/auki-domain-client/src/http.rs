@@ -14,7 +14,7 @@ fn check_headers(
     status: u16,
     content_type: Option<&str>,
     length: Option<u64>,
-    maximum: usize,
+    maximum: u64,
     json: bool,
 ) -> Result<(), DataError> {
     if !(200..300).contains(&status) {
@@ -27,26 +27,43 @@ fn check_headers(
     {
         return Err(DataError::InvalidResponse("expected application/json"));
     }
-    if length.is_some_and(|length| length > maximum as u64) {
-        return Err(DataError::TooLarge { maximum });
+    if length.is_some_and(|length| length > maximum) {
+        return Err(DataError::TooLarge {
+            maximum: usize::try_from(maximum).unwrap_or(usize::MAX),
+        });
     }
     Ok(())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) async fn send(
     request: reqwest::RequestBuilder,
     maximum: usize,
     json: bool,
 ) -> Result<Vec<u8>, DataError> {
+    let mut response = open(request, maximum as u64, json).await?;
+    let mut body = Vec::new();
+    while let Some(chunk) = response.next(64 * 1024).await? {
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn map_error(error: reqwest::Error) -> DataError {
+    if error.is_timeout() {
+        DataError::TimedOut
+    } else {
+        DataError::Transport
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) async fn open(
+    request: reqwest::RequestBuilder,
+    maximum: u64,
+    json: bool,
+) -> Result<ResponseBody, DataError> {
     use futures::StreamExt;
-    let map_error = |error: reqwest::Error| {
-        if error.is_timeout() {
-            DataError::TimedOut
-        } else {
-            DataError::Transport
-        }
-    };
     let response = request.send().await.map_err(map_error)?;
     check_headers(
         response.status().as_u16(),
@@ -58,34 +75,137 @@ pub(crate) async fn send(
         maximum,
         json,
     )?;
-    let mut chunks = response.bytes_stream();
-    let mut body = Vec::new();
-    while let Some(chunk) = chunks.next().await {
-        let chunk = chunk.map_err(map_error)?;
-        if chunk.len() > maximum.saturating_sub(body.len()) {
-            return Err(DataError::TooLarge { maximum });
+    Ok(ResponseBody {
+        chunks: response.bytes_stream().boxed(),
+        pending: None,
+        received: 0,
+        maximum,
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct ResponseBody {
+    chunks: futures::stream::BoxStream<'static, Result<bytes::Bytes, reqwest::Error>>,
+    pending: Option<bytes::Bytes>,
+    received: u64,
+    maximum: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ResponseBody {
+    pub async fn next(&mut self, chunk_size: usize) -> Result<Option<Vec<u8>>, DataError> {
+        use futures::StreamExt;
+        loop {
+            if let Some(bytes) = &mut self.pending {
+                let length = bytes.len().min(chunk_size);
+                let result = bytes.split_to(length).to_vec();
+                if bytes.is_empty() {
+                    self.pending = None;
+                }
+                return Ok(Some(result));
+            }
+            let Some(bytes) = self.chunks.next().await else {
+                return Ok(None);
+            };
+            let bytes = bytes.map_err(map_error)?;
+            if bytes.len() as u64 > self.maximum.saturating_sub(self.received) {
+                return Err(DataError::TooLarge {
+                    maximum: usize::try_from(self.maximum).unwrap_or(usize::MAX),
+                });
+            }
+            self.received += bytes.len() as u64;
+            if !bytes.is_empty() {
+                self.pending = Some(bytes);
+            }
         }
-        body.extend_from_slice(&chunk);
     }
-    Ok(body)
+}
+
+#[cfg(target_arch = "wasm32")]
+struct AbortOnDrop(web_sys::AbortController);
+#[cfg(target_arch = "wasm32")]
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) struct ResponseBody {
+    // Must remain alive until all bytes have been consumed, including sink waits.
+    abort: AbortOnDrop,
+    reader: Option<web_sys::ReadableStreamDefaultReader>,
+    pending: Option<js_sys::Uint8Array>,
+    offset: u32,
+    received: u64,
+    maximum: u64,
+}
+#[cfg(target_arch = "wasm32")]
+impl Drop for ResponseBody {
+    fn drop(&mut self) {
+        self.abort.0.abort();
+        if let Some(reader) = &self.reader {
+            reader.release_lock();
+        }
+    }
+}
+#[cfg(target_arch = "wasm32")]
+impl ResponseBody {
+    pub async fn next(&mut self, chunk_size: usize) -> Result<Option<Vec<u8>>, DataError> {
+        use wasm_bindgen::{JsCast, JsValue};
+        use wasm_bindgen_futures::JsFuture;
+        loop {
+            if let Some(bytes) = &self.pending {
+                let end = (self.offset as usize + chunk_size).min(bytes.length() as usize) as u32;
+                let result = bytes.subarray(self.offset, end).to_vec();
+                self.offset = end;
+                if end == bytes.length() {
+                    self.pending = None;
+                }
+                return Ok(Some(result));
+            }
+            let Some(reader) = &self.reader else {
+                return Ok(None);
+            };
+            let chunk = JsFuture::from(reader.read())
+                .await
+                .map_err(|_| DataError::Transport)?;
+            if js_sys::Reflect::get(&chunk, &JsValue::from_str("done"))
+                .map_err(|_| DataError::Transport)?
+                .as_bool()
+                == Some(true)
+            {
+                return Ok(None);
+            }
+            let bytes: js_sys::Uint8Array =
+                js_sys::Reflect::get(&chunk, &JsValue::from_str("value"))
+                    .map_err(|_| DataError::Transport)?
+                    .dyn_into()
+                    .map_err(|_| DataError::Transport)?;
+            if bytes.length() as u64 > self.maximum.saturating_sub(self.received) {
+                return Err(DataError::TooLarge {
+                    maximum: usize::try_from(self.maximum).unwrap_or(usize::MAX),
+                });
+            }
+            self.received += bytes.length() as u64;
+            self.offset = 0;
+            if bytes.length() > 0 {
+                self.pending = Some(bytes);
+            }
+        }
+    }
 }
 
 // reqwest's WASM Fetch adapter cannot disable redirects. Mirror the SDK's
 // ZITADEL transport policy here for Domain data requests.
 #[cfg(target_arch = "wasm32")]
-pub(crate) async fn send(
+pub(crate) async fn open(
     request: reqwest::RequestBuilder,
-    maximum: usize,
+    maximum: u64,
     json: bool,
-) -> Result<Vec<u8>, DataError> {
+) -> Result<ResponseBody, DataError> {
     use wasm_bindgen::{JsCast, JsValue};
     use wasm_bindgen_futures::JsFuture;
-    struct AbortOnDrop(web_sys::AbortController);
-    impl Drop for AbortOnDrop {
-        fn drop(&mut self) {
-            self.0.abort();
-        }
-    }
     let failure = |_| DataError::Transport;
     let request = request
         .build()
@@ -149,32 +269,21 @@ pub(crate) async fn send(
         maximum,
         json,
     )?;
-    let Some(stream) = response.body() else {
-        return Ok(Vec::new());
-    };
-    let reader: web_sys::ReadableStreamDefaultReader = stream
-        .get_reader()
-        .dyn_into()
+    let reader = response
+        .body()
+        .map(|stream| {
+            stream
+                .get_reader()
+                .dyn_into::<web_sys::ReadableStreamDefaultReader>()
+        })
+        .transpose()
         .map_err(|_| DataError::Transport)?;
-    let mut body = Vec::new();
-    loop {
-        let chunk = JsFuture::from(reader.read()).await.map_err(failure)?;
-        if js_sys::Reflect::get(&chunk, &JsValue::from_str("done"))
-            .map_err(failure)?
-            .as_bool()
-            == Some(true)
-        {
-            break;
-        }
-        let bytes: js_sys::Uint8Array = js_sys::Reflect::get(&chunk, &JsValue::from_str("value"))
-            .map_err(failure)?
-            .dyn_into()
-            .map_err(failure)?;
-        if bytes.length() as usize > maximum.saturating_sub(body.len()) {
-            return Err(DataError::TooLarge { maximum });
-        }
-        body.extend_from_slice(&bytes.to_vec());
-    }
-    reader.release_lock();
-    Ok(body)
+    Ok(ResponseBody {
+        abort,
+        reader,
+        pending: None,
+        offset: 0,
+        received: 0,
+        maximum,
+    })
 }

@@ -1,7 +1,11 @@
 //! DDS data access using the same serialized refresh owner as P2P.
 
 use super::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+#[path = "portals.rs"]
+mod portals;
+pub use portals::{Portal, PortalDomain, PortalId};
 
 const DDS_DOMAINS: &str = "DDS /api/v1/domains";
 const DDS_DOMAIN_AUTH: &str = "DDS selected-Domain data auth";
@@ -28,7 +32,7 @@ impl Default for DomainListQuery {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DomainSummary {
     pub id: Uuid,
     pub name: String,
@@ -36,7 +40,7 @@ pub struct DomainSummary {
 }
 
 /// One real DDS page; totals are advisory while the collection changes.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DomainPage {
     pub domains: Vec<DomainSummary>,
     pub total: u64,
@@ -53,6 +57,7 @@ pub struct DomainAccess {
     server_url: Url,
     token: SecretString,
     expires_at: DateTime<Utc>,
+    dds_audience: bool,
 }
 
 impl DomainAccess {
@@ -316,6 +321,7 @@ impl AccessResponse {
             server_url,
             token,
             expires_at,
+            dds_audience: claims.aud.iter().any(|aud| aud == "dds"),
         })
     }
 }

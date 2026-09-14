@@ -4,9 +4,9 @@ use std::sync::Arc;
 use auki_sdk_rs::{
     AukiDiscovery, AukiDiscoveryCandidate, AukiDiscoveryError, AukiDiscoverySource, AukiPeer,
     AukiPeerBootstrap, AukiPeerConfig, AukiPeerExit, AukiPeerLifecycle, AukiPeerProtocols,
-    AukiPeerRoutes, Credentials, DdsTrackerConfig, DdsTrackerMode, DdsVerificationKeys,
-    DomainDescriptor, DomainSelection, ExternalAuthorityControl, ExternalAuthorityUpdate, Identity,
-    Multiaddr, SignedP2pCredential,
+    AukiPeerRoutes, AuthClient, AuthEnvironment, Credentials, DdsTrackerConfig, DdsTrackerMode,
+    DdsVerificationKeys, DomainDescriptor, DomainSelection, ExternalAuthorityControl,
+    ExternalAuthorityUpdate, Identity, Multiaddr, SignedP2pCredential,
 };
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -495,32 +495,114 @@ struct PyAukiSession {
 
 #[pymethods]
 impl PyAukiSession {
+    fn domains(&self) -> crate::data::PyDomains {
+        crate::data::PyDomains {
+            inner: auki_sdk_rs::AukiDomains::new(self.bootstrap.session().clone()),
+        }
+    }
+    fn data(&self, domain_id: &str) -> PyResult<crate::data::PyData> {
+        Ok(crate::data::PyData {
+            inner: auki_sdk_rs::AukiDomainData::new(self.bootstrap.session().clone())
+                .map_err(|e| runtime_error("create data client", e))?
+                .in_domain(crate::data::id(domain_id)?),
+        })
+    }
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.bootstrap.session().clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            session.close().await;
+            Ok(())
+        })
+    }
+    /// Exact aligned endpoints, useful for private environments and local fixtures.
+    #[staticmethod]
+    #[pyo3(signature = (api_base_url, dds_base_url, dms_base_url, email, password, *, client_id=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn login_with_environment<'py>(
+        py: Python<'py>,
+        api_base_url: String,
+        dds_base_url: String,
+        dms_base_url: String,
+        email: String,
+        password: String,
+        client_id: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let mut environment = AuthEnvironment::new(api_base_url, dds_base_url)
+            .map_err(|e| runtime_error("configure authentication", e))?;
+        if let Some(id) = client_id {
+            environment = environment
+                .with_client_id(id)
+                .map_err(|e| runtime_error("configure client ID", e))?;
+        }
+        let client = AuthClient::new(environment)
+            .map_err(|e| runtime_error("configure authentication", e))?;
+        let config =
+            AukiPeerConfig::new(dms_base_url).map_err(|e| runtime_error("configure DMS", e))?;
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let bootstrap = AukiPeerBootstrap::authenticate(
+                client,
+                Credentials::user_password(email, password),
+                config,
+            )
+            .await
+            .map_err(|e| runtime_error("authenticate User", e))?;
+            Python::with_gil(|py| Py::new(py, Self { bootstrap }))
+        })
+    }
     /// Authenticate a User against the shared development environment.
     #[staticmethod]
+    #[pyo3(signature = (email, password, *, client_id=None))]
     fn login_dev<'py>(
         py: Python<'py>,
         email: String,
         password: String,
+        client_id: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let bootstrap = AukiPeerBootstrap::dev(Credentials::user_password(email, password))
-                .await
-                .map_err(|error| runtime_error("authenticate Auki User", error))?;
+            let mut environment = AuthEnvironment::dev();
+            if let Some(id) = client_id {
+                environment = environment
+                    .with_client_id(id)
+                    .map_err(|e| runtime_error("configure client ID", e))?;
+            }
+            let client = AuthClient::new(environment)
+                .map_err(|e| runtime_error("configure authentication", e))?;
+            let bootstrap = AukiPeerBootstrap::authenticate(
+                client,
+                Credentials::user_password(email, password),
+                AukiPeerConfig::dev(),
+            )
+            .await
+            .map_err(|error| runtime_error("authenticate Auki User", error))?;
             Python::with_gil(|py| Py::new(py, Self { bootstrap }))
         })
     }
 
     /// Authenticate a trusted native App against the development environment.
     #[staticmethod]
+    #[pyo3(signature = (access_key, secret, *, client_id=None))]
     fn login_app_dev<'py>(
         py: Python<'py>,
         access_key: String,
         secret: String,
+        client_id: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let bootstrap = AukiPeerBootstrap::dev(Credentials::app(access_key, secret))
-                .await
-                .map_err(|error| runtime_error("authenticate Auki App", error))?;
+            let mut environment = AuthEnvironment::dev();
+            if let Some(id) = client_id {
+                environment = environment
+                    .with_client_id(id)
+                    .map_err(|e| runtime_error("configure client ID", e))?;
+            }
+            let client = AuthClient::new(environment)
+                .map_err(|e| runtime_error("configure authentication", e))?;
+            let bootstrap = AukiPeerBootstrap::authenticate(
+                client,
+                Credentials::app(access_key, secret),
+                AukiPeerConfig::dev(),
+            )
+            .await
+            .map_err(|error| runtime_error("authenticate Auki App", error))?;
             Python::with_gil(|py| Py::new(py, Self { bootstrap }))
         })
     }

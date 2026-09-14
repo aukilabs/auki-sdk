@@ -11,9 +11,9 @@ use crate::{DataError, DataLimits, DataListQuery, DataMetadata, DataWrite};
 
 #[derive(Clone)]
 pub struct AukiDomainData {
-    provider: Arc<dyn DomainAccessProvider>,
-    http: Client,
-    limits: DataLimits,
+    pub(crate) provider: Arc<dyn DomainAccessProvider>,
+    pub(crate) http: Client,
+    pub(crate) limits: DataLimits,
 }
 
 impl AukiDomainData {
@@ -37,8 +37,7 @@ impl AukiDomainData {
         let builder = builder
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(5))
-            .timeout(limits.request_timeout);
+            .connect_timeout(Duration::from_secs(5));
         let http = builder
             .build()
             .map_err(|_| DataError::InvalidInput("cannot construct HTTP client"))?;
@@ -62,18 +61,18 @@ impl AukiDomainData {
     }
 }
 
-struct Lifetime {
-    closed: CancellationToken,
-    active: RwLock<()>,
+pub(crate) struct Lifetime {
+    pub(crate) closed: CancellationToken,
+    pub(crate) active: RwLock<()>,
 }
 
 /// A selected Domain. Clones share this client's close state; separately created
 /// clients and peers retain their shared credential until the host closes it.
 #[derive(Clone)]
 pub struct DomainDataClient {
-    client: AukiDomainData,
-    domain_id: Uuid,
-    lifetime: Arc<Lifetime>,
+    pub(crate) client: AukiDomainData,
+    pub(crate) domain_id: Uuid,
+    pub(crate) lifetime: Arc<Lifetime>,
 }
 
 impl DomainDataClient {
@@ -261,7 +260,7 @@ impl DomainDataClient {
         Ok(())
     }
 
-    fn data_url(&self, access: &DomainAccess, id: Option<Uuid>) -> reqwest::Url {
+    pub(crate) fn data_url(&self, access: &DomainAccess, id: Option<Uuid>) -> reqwest::Url {
         let path = format!("api/v1/domains/{}/data", self.domain_id);
         access
             .server_url()
@@ -272,7 +271,7 @@ impl DomainDataClient {
             .expect("UUID path")
     }
 
-    fn validate_metadata(
+    pub(crate) fn validate_metadata(
         &self,
         metadata: &DataMetadata,
         id: Option<Uuid>,
@@ -285,7 +284,7 @@ impl DomainDataClient {
         Ok(())
     }
 
-    async fn json_request<T: DeserializeOwned>(
+    pub(crate) async fn json_request<T: DeserializeOwned>(
         &self,
         make: impl Fn(&Client, &DomainAccess) -> RequestBuilder,
         cancellation: &CancellationToken,
@@ -398,12 +397,20 @@ impl DomainDataClient {
         unreachable!("second attempt returns")
     }
 
-    async fn run<T>(
+    pub(crate) async fn run<T>(
         &self,
         cancellation: &CancellationToken,
         operation: impl Future<Output = Result<T, DataError>>,
     ) -> Result<T, DataError> {
         let _active = self.lifetime.active.read().await;
+        self.run_transfer(cancellation, operation).await
+    }
+
+    pub(crate) async fn run_transfer<T>(
+        &self,
+        cancellation: &CancellationToken,
+        operation: impl Future<Output = Result<T, DataError>>,
+    ) -> Result<T, DataError> {
         tokio::select! {
             biased;
             _ = self.lifetime.closed.cancelled() => Err(DataError::Closed),
@@ -429,7 +436,7 @@ struct UploadLimits {
     request_max_bytes: i64,
 }
 
-fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, DataError> {
+pub(crate) fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, DataError> {
     serde_json::from_slice(bytes)
         .map_err(|_| DataError::InvalidResponse("unexpected JSON contract"))
 }
@@ -445,7 +452,10 @@ fn validate_text(value: &str) -> Result<(), DataError> {
 
 // Preserve the Posemesh/Domain Server multipart parameters, escaping quoted
 // values and choosing a fresh boundary absent from the payload.
-fn multipart(target: DataWrite<'_>, bytes: &[u8]) -> Result<(Vec<u8>, String), DataError> {
+pub(crate) fn multipart(
+    target: DataWrite<'_>,
+    bytes: &[u8],
+) -> Result<(Vec<u8>, String), DataError> {
     let disposition = match target {
         DataWrite::Named { name, data_type } => {
             validate_text(name)?;

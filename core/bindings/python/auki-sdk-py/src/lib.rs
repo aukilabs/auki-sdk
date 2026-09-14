@@ -5,6 +5,7 @@
 #![allow(clippy::useless_conversion)]
 
 pub mod cleanup;
+mod data;
 mod facade;
 #[cfg(any(
     feature = "info",
@@ -22,7 +23,8 @@ pub use facade::PyAukiPeer;
 
 /// Register the generic facade in a larger, same-module protocol extension.
 pub fn register_facade(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    facade::register(module)
+    facade::register(module)?;
+    data::register(module)
 }
 
 /// Register every protocol role enabled by this crate's Cargo features.

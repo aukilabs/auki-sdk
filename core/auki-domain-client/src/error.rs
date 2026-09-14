@@ -13,6 +13,13 @@ pub enum DataError {
     TimedOut,
     #[error("Domain data transport failed; a sent write may have completed")]
     Transport,
+    #[error("transfer source or destination failed")]
+    Callback,
+    #[error("multipart cleanup failed after {operation}; cleanup error: {cleanup}")]
+    Cleanup {
+        operation: Box<DataError>,
+        cleanup: Box<DataError>,
+    },
     #[error("Domain Server returned HTTP {status}")]
     HttpStatus { status: u16 },
     #[error("Domain Server returned an invalid response: {0}")]
@@ -27,6 +34,7 @@ impl DataError {
         match self {
             Self::HttpStatus { status }
             | Self::Auth(auki_auth::Error::HttpStatus { status, .. }) => Some(*status),
+            Self::Cleanup { operation, .. } => operation.status(),
             _ => None,
         }
     }

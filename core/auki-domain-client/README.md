@@ -6,10 +6,10 @@ List Domains and read/write Domain data using the same User/App session as
 Start with [Domain data access](../../docs/how-to/domain-data.md). The SDK facade
 reexports `AukiDomains`, `AukiDomainData` and their request/response types.
 
-This first milestone provides Rust APIs and compiles for native and WASM.
-JavaScript/Python/Swift/Expo data bindings, imported ZITADEL data access,
-machine/task adapters, portal/pose wrappers and streaming are follow-ups.
-Existing networking bindings remain compatible.
+Provides Rust, Web and Python APIs for metadata, portal/pose reads, buffered
+CRUD and streaming multipart transfers. Imported ZITADEL data access, machine/task
+adapters and Swift/Expo data bindings remain follow-ups. Existing networking
+bindings remain compatible.
 
 The metadata and multipart operations are adapted from Posemesh's
 [`core/domain-http`](https://github.com/aukilabs/posemesh/tree/37db36a50c8b6bacf471d5721e32cd1f88e0e552/core/domain-http).

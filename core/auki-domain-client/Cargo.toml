@@ -11,6 +11,7 @@ readme = "README.md"
 
 [dependencies]
 auki-auth = { path = "../auki-auth" }
+bytes = "1"
 chrono = { workspace = true }
 futures = { workspace = true }
 futures-timer = { workspace = true }

@@ -46,7 +46,8 @@ pub use auki_auth::{
 };
 pub use auki_domain_client::{
     AukiDomainData, AukiDomains, DataError, DataLimits, DataListQuery, DataMetadata, DataWrite,
-    DomainDataClient, DomainListQuery, DomainPage, DomainSummary,
+    DomainDataClient, DomainListQuery, DomainPage, DomainSummary, Portal, PortalDomain, PortalId,
+    PortalPose, TransferOptions,
 };
 #[cfg(target_arch = "wasm32")]
 pub use auki_p2p::BrowserAuthenticatedRouteStream as AuthenticatedRouteStream;

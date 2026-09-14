@@ -332,3 +332,23 @@ void [
   discoveredEchoPeers,
   checkDiscoveryCandidate,
 ];
+
+// Domain HTTP uses the existing login and can run without starting a peer.
+async function domainDataContract(session: import("../pkg-test/auki_sdk_web").AukiUserSession) {
+  const domains = session.domains();
+  const page = await domains.list({ limit: 10, offset: 0 });
+  const domainId: string = page.domains[0].id;
+  const data = session.data(domainId);
+  const controller = new AbortController();
+  const record = await data.write({ name: "report", dataType: "app.report.v1" }, new Uint8Array([1]), controller.signal);
+  await data.write({ id: record.id }, new Uint8Array([2]));
+  const poses = await data.poses();
+  const portals = await domains.portals(domainId);
+  if (portals.length) await domains.forPortal(portals[0].short_id, "own");
+  if (poses.length) await data.pose(poses[0].id);
+  await data.readTo(record.id, async bytes => { const length: number = bytes.length; void length; }, { maxBytes: 1_000_000 }, controller.signal);
+  await data.writeStream({ id: record.id }, 1, async maximum => new Uint8Array(Math.min(maximum, 1)), undefined, controller.signal);
+  await data.delete(record.id);
+  await data.close();
+}
+void domainDataContract;

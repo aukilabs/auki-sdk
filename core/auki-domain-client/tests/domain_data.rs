@@ -742,3 +742,6 @@ async fn upload_rechecks_limits_if_renewal_changes_the_domain_server() {
     renewed.assert_calls_async(1).await;
     upload.assert_calls_async(0).await;
 }
+
+#[path = "support/extended.rs"]
+mod extended;

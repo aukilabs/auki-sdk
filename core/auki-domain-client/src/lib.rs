@@ -6,12 +6,14 @@
 mod data;
 mod error;
 mod http;
+mod portals;
+mod transfer;
 mod types;
 
-pub use auki_auth::{DomainListQuery, DomainPage, DomainSummary};
+pub use auki_auth::{DomainListQuery, DomainPage, DomainSummary, Portal, PortalDomain, PortalId};
 pub use data::{AukiDomainData, DomainDataClient};
 pub use error::DataError;
-pub use types::{DataLimits, DataListQuery, DataMetadata, DataWrite};
+pub use types::{DataLimits, DataListQuery, DataMetadata, DataWrite, PortalPose, TransferOptions};
 
 use auki_auth::AuthSession;
 use tokio_util::sync::CancellationToken;
@@ -23,6 +25,35 @@ pub struct AukiDomains(AuthSession);
 impl AukiDomains {
     pub fn new(credential: AuthSession) -> Self {
         Self(credential)
+    }
+
+    pub async fn for_portal(
+        &self,
+        portal: &PortalId,
+        organization: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<PortalDomain>, DataError> {
+        Ok(self
+            .0
+            .domains_for_portal(portal, organization, cancellation)
+            .await?)
+    }
+
+    pub async fn portals(
+        &self,
+        domain: uuid::Uuid,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<Portal>, DataError> {
+        Ok(self.0.list_portals(domain, cancellation).await?)
+    }
+
+    pub async fn portal(
+        &self,
+        domain: uuid::Uuid,
+        portal: &PortalId,
+        cancellation: &CancellationToken,
+    ) -> Result<Portal, DataError> {
+        Ok(self.0.get_portal(domain, portal, cancellation).await?)
     }
 
     pub async fn list(&self, query: &DomainListQuery) -> Result<DomainPage, DataError> {

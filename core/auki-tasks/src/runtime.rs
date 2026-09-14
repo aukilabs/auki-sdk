@@ -398,6 +398,20 @@ impl AukiDmsTasks {
         if !self.0.capabilities.iter().any(|c| c == capability) {
             return Err(TaskError::Configuration("unregistered capability"));
         }
+        self.claim_selected(Some(capability), cancellation).await
+    }
+
+    /// Let DMS select across this machine's registered capabilities. A response
+    /// outside this runtime's capability set is rejected before entering a handler.
+    pub async fn claim_any(&self, cancellation: &CancellationToken) -> Result<Option<TaskLease>> {
+        self.claim_selected(None, cancellation).await
+    }
+
+    async fn claim_selected(
+        &self,
+        capability: Option<&str>,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<TaskLease>> {
         let permit = self
             .0
             .active
@@ -416,7 +430,7 @@ impl AukiDmsTasks {
             };
             let claimed = tokio::time::timeout(
                 self.0.config.request_timeout,
-                self.0.client.claim(capability),
+                self.0.client.claim(capability.unwrap_or_default()),
             )
             .await
             .map_err(|_| TaskError::Service("claim"))?
@@ -426,7 +440,9 @@ impl AukiDmsTasks {
                 ClaimOutcome::Busy => return Err(TaskError::Busy),
                 ClaimOutcome::Leased(lease) => lease,
             };
-            if lease.task.capability != capability {
+            if capability.is_some_and(|capability| lease.task.capability != capability)
+                || !self.0.capabilities.contains(&lease.task.capability)
+            {
                 return Err(TaskError::Authority("claim capability mismatch"));
             }
             if assignment.is_some_and(|domain| Some(domain) != lease.domain_id) {
@@ -680,6 +696,7 @@ impl TaskLease {
             self.context
                 .credential
                 .update(self.context.task.id, &response)?;
+            self.context.task = self.context.credential.task_snapshot()?;
             if self.runtime.0.peer.is_some() && self.context.owns_peer {
                 let grant = TaskPeerGrant::from_wire(
                     self.context.credential.domain_id(),
@@ -758,15 +775,45 @@ impl TaskLease {
         .map_err(|error| TaskError::dms("fail", error))
     }
 
-    async fn execute(
-        mut self,
+    /// Run a claimed lease with the same managed heartbeats, reporting and
+    /// awaited cleanup as `run_once`. Hosts may stop claiming with one token
+    /// and reserve this token for forced cancellation of the active handler.
+    pub async fn execute(
+        self,
         handler: &dyn TaskHandler,
         cancellation: &CancellationToken,
     ) -> Result<()> {
-        // Like the Posemesh host, validate current authority before starting work.
+        self.execute_managed(handler, cancellation, false).await
+    }
+
+    /// Managed execution for hosts accepting both HTTP-only and P2P tasks.
+    /// An absent compute peer grant leaves `task.peer()` empty. A partial,
+    /// invalid or expired grant still fails; configured robot peers are retained.
+    /// Runners requiring P2P must require a peer before performing their work.
+    pub async fn execute_with_optional_peer(
+        self,
+        handler: &dyn TaskHandler,
+        cancellation: &CancellationToken,
+    ) -> Result<()> {
+        self.execute_managed(handler, cancellation, true).await
+    }
+
+    async fn execute_managed(
+        mut self,
+        handler: &dyn TaskHandler,
+        cancellation: &CancellationToken,
+        optional_peer: bool,
+    ) -> Result<()> {
         let startup = async {
-            self.heartbeat().await?;
-            self.start_peer(cancellation).await
+            tokio::select! { biased;
+                _ = cancellation.cancelled() => return Err(TaskError::Cancelled),
+                result = self.heartbeat() => result?,
+            }
+            if optional_peer && self.peer_grant.is_none() && self.runtime.0.robot_peer.is_none() {
+                Ok(())
+            } else {
+                self.start_peer(cancellation).await
+            }
         }
         .await;
         if let Err(error) = startup {

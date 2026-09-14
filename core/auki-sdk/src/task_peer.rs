@@ -1,8 +1,8 @@
 //! Compute peers follow DMS leases; robot peers follow their DDS Domain assignment.
 use crate::{
     AukiDiscovery, AukiKnownPeers, AukiPeer, AukiPeerConfig, AukiPeerLifecycle,
-    AukiPeerProtocolContext, ExternalAuthorityControl, ExternalAuthorityUpdate, Identity,
-    Multiaddr, PeerId,
+    AukiPeerProtocolContext, AukiPeerStatus, ExternalAuthorityControl, ExternalAuthorityUpdate,
+    Identity, Multiaddr, PeerId,
 };
 use async_trait::async_trait;
 use auki_auth::machine::p2p::DdsP2pClient;
@@ -100,6 +100,7 @@ pub struct AukiTaskPeer {
     known_peers: AukiKnownPeers,
     discovery: Option<AukiDiscovery>,
     listen_addresses: Vec<Multiaddr>,
+    status: tokio::sync::watch::Receiver<AukiPeerStatus>,
 }
 impl Deref for AukiTaskPeer {
     type Target = AukiPeerProtocolContext;
@@ -108,6 +109,12 @@ impl Deref for AukiTaskPeer {
     }
 }
 impl AukiTaskPeer {
+    pub fn status(&self) -> AukiPeerStatus {
+        *self.status.borrow()
+    }
+    pub fn subscribe_status(&self) -> tokio::sync::watch::Receiver<AukiPeerStatus> {
+        self.status.clone()
+    }
     pub fn lifecycle(&self) -> AukiPeerLifecycle {
         self.lifecycle.clone()
     }
@@ -189,6 +196,7 @@ impl TaskPeerFactory for AukiTaskPeerConfig {
             known_peers: peer.known_peers(),
             discovery: peer.discovery_handle().ok(),
             listen_addresses: peer.listen_addresses().to_vec(),
+            status: peer.subscribe_status(),
         };
         Ok(Arc::new(Session {
             peer: Mutex::new(Some(peer)),

@@ -89,6 +89,14 @@ impl TaskPeerFactory for Factory {
 }
 
 fn fixture(server: &MockServer, cancel_start: bool) -> (AukiDmsTasks, Arc<Peer>, Uuid) {
+    fixture_with_grant(server, cancel_start, "valid")
+}
+
+fn fixture_with_grant(
+    server: &MockServer,
+    cancel_start: bool,
+    peer_grant: &str,
+) -> (AukiDmsTasks, Arc<Peer>, Uuid) {
     let task = Uuid::new_v4();
     let domain = Uuid::new_v4();
     let expires = Utc::now() + chrono::Duration::seconds(60);
@@ -97,9 +105,28 @@ fn fixture(server: &MockServer, cancel_start: bool) -> (AukiDmsTasks, Arc<Peer>,
         "e30.{}.fixture",
         URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
     );
-    let grant = json!({"task": {"id": task, "capability": "/example/v1"}, "domain_id": domain,
+    let mut grant = json!({"task": {"id": task, "capability": "/example/v1"}, "domain_id": domain,
         "domain_server_url": server.base_url(), "access_token": token, "access_token_expires_at": expires,
         "lease_expires_at": expires, "p2p_access_token": "mock-transport-only", "p2p_access_token_expires_at": expires});
+    match peer_grant {
+        "absent" => {
+            grant.as_object_mut().unwrap().remove("p2p_access_token");
+            grant
+                .as_object_mut()
+                .unwrap()
+                .remove("p2p_access_token_expires_at");
+        }
+        "partial" => {
+            grant
+                .as_object_mut()
+                .unwrap()
+                .remove("p2p_access_token_expires_at");
+        }
+        "expired" => {
+            grant["p2p_access_token_expires_at"] = json!(Utc::now() - chrono::Duration::seconds(1));
+        }
+        _ => {}
+    }
     server.mock(|when, then| {
         when.method(GET).path("/tasks");
         then.json_body(grant.clone());
@@ -251,4 +278,43 @@ async fn peer_cleanup_failure_is_reported_by_run_and_repeatable_close() {
         assert!(matches!(runtime.close().await, Err(TaskError::PeerCleanup)));
     }
     complete.assert_calls(0);
+}
+
+#[tokio::test]
+async fn optional_peer_execution_allows_absence_but_rejects_partial_or_expired_authority() {
+    for (grant, optional, succeeds) in [
+        ("absent", true, true),
+        ("absent", false, false),
+        ("partial", true, false),
+        ("expired", true, false),
+    ] {
+        let server = MockServer::start();
+        let (runtime, peer, task) = fixture_with_grant(&server, false, grant);
+        let complete = server.mock(|when, then| {
+            when.method(POST).path(format!("/tasks/{task}/complete"));
+            then.status(200);
+        });
+        let cancellation = CancellationToken::new();
+        let result = match runtime.claim_any(&cancellation).await {
+            Ok(Some(lease)) if optional => {
+                lease
+                    .execute_with_optional_peer(&Handler, &cancellation)
+                    .await
+            }
+            Ok(Some(lease)) => lease.execute(&Handler, &cancellation).await,
+            Err(error) => Err(error),
+            Ok(None) => panic!("fixture must supply a lease"),
+        };
+        assert_eq!(result.is_ok(), succeeds, "{grant}, optional={optional}");
+        if !succeeds {
+            assert!(matches!(result, Err(TaskError::Authority(_))));
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), peer.entered.notified())
+                .await
+                .is_err()
+        );
+        complete.assert_calls(usize::from(succeeds));
+        runtime.close().await.unwrap();
+    }
 }

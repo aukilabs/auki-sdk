@@ -23,6 +23,15 @@ awaiting runtime close. Each runtime permits one live lease across its clones.
 With P2P enabled, call `start_peer()` after the initial heartbeat; await
 `lease.close()` to cancel local work without reporting a remote result.
 
+Native hosts can use `claim_any()` to let DMS select among registered capabilities,
+then `lease.execute()` for the same managed lifecycle with a separate forced-stop
+token. `execute_with_optional_peer()` explicitly accepts compute leases without
+P2P authority as HTTP-only tasks; malformed or expired grants still fail. The
+ordinary managed APIs continue to require a peer grant when P2P is configured.
+`TaskCredential::lease_snapshot()` exposes current native lease metadata and the
+Domain bearer for existing runner interfaces, excluding transport credentials.
+Python custom lease operations remain unexposed.
+
 Handlers receive task metadata, renewable `TaskCredential`, a selected data
 client and cancellation. They must stop their work and await cleanup before
 returning. CPU work, threads, subprocesses and hardware require their own stop

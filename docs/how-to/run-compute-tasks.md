@@ -251,6 +251,27 @@ handles SIGINT/SIGTERM. It registers, claims real work and creates result data.
 Run only with approved endpoints, provisioned credentials, task/Domain scope and
 cleanup. The job submitter owns result cleanup. Tests use loopback fixtures.
 
+## Adapting an existing native host
+
+Use `claim_any()` to preserve DMS selection across the registered capability set,
+then `TaskLease::execute()` to retain managed heartbeats, events, reporting and
+awaited cleanup. This lets a host use one cancellation token to stop claiming
+and another to interrupt active work. Close the runtime after the lease ends.
+
+For hosts serving both HTTP-only and P2P compute tasks, explicitly choose
+`execute_with_optional_peer()`: an absent grant leaves `task.peer()` empty;
+a partial, expired or invalid grant still fails. Ordinary `execute()` and
+`run_once()` retain their requirement for peer authority when P2P is configured.
+Robot peers keep their runtime lifetime. A runner needing P2P must require a
+peer before starting its work.
+
+`task.credential.lease_snapshot()` supplies the current Domain bearer and initial
+heartbeat metadata to a legacy Rust runner. Do not log or report this snapshot;
+P2P credentials are removed. Continue reading `task.access_token.get()` for
+later HTTP requests. `AukiTaskPeer::subscribe_status()` permits a host to pause
+claims or stop application work when peer authority or relay readiness is lost.
+These adapters add no Python custom lease API or backend wire changes.
+
 ## Rust and existing Posemesh hosts
 
 The SDK reexports `AukiComputeCredential`, `AukiDmsTasks`, `TaskHandler`,

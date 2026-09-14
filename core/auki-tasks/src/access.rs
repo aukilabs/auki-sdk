@@ -14,6 +14,7 @@ use crate::{Result, TaskError};
 struct Grant {
     access: Arc<DomainAccess>,
     lease_expires: DateTime<Utc>,
+    lease: LeaseEnvelope,
 }
 
 /// Data authority supplied by the lease owner. It never logs in or heartbeats.
@@ -87,6 +88,7 @@ impl TaskCredential {
         let (grant, _) = watch::channel(Some(Grant {
             access: Arc::new(access),
             lease_expires,
+            lease: metadata_only(lease),
         }));
         Ok(Self {
             domain,
@@ -99,6 +101,34 @@ impl TaskCredential {
 
     pub fn domain_id(&self) -> Uuid {
         self.domain
+    }
+
+    /// Snapshot for native hosts adapting an existing lease-based runner API.
+    /// Contains the current Domain bearer; never log or serialize it into reports.
+    /// P2P credentials remain private to the transport owner.
+    pub fn lease_snapshot(&self) -> Result<LeaseEnvelope> {
+        let state = self.grant.borrow();
+        if self.closed.is_cancelled() {
+            return Err(TaskError::Cancelled);
+        }
+        let grant = state.as_ref().ok_or(TaskError::LeaseLost)?;
+        if grant.lease_expires.min(grant.access.expires_at()) <= Utc::now() {
+            return Err(TaskError::LeaseLost);
+        }
+        let mut lease = grant.lease.clone();
+        lease.access_token = Some(grant.access.bearer().expose_secret().to_owned());
+        lease.access_token_expires_at = Some(grant.access.expires_at());
+        lease.lease_expires_at = Some(grant.lease_expires);
+        lease.domain_server_url = Some(grant.access.server_url().clone());
+        Ok(lease)
+    }
+
+    pub(crate) fn task_snapshot(&self) -> Result<auki_dms::types::TaskSpec> {
+        self.grant
+            .borrow()
+            .as_ref()
+            .map(|grant| grant.lease.task.clone())
+            .ok_or(TaskError::LeaseLost)
     }
 
     pub(crate) fn deadline(&self) -> Result<DateTime<Utc>> {
@@ -128,6 +158,13 @@ impl TaskCredential {
             return Err(TaskError::Authority("heartbeat changed task or Domain"));
         }
         let previous = self.grant.borrow().clone().ok_or(TaskError::LeaseLost)?;
+        if update
+            .task
+            .as_ref()
+            .is_some_and(|task| task.capability != previous.lease.task.capability)
+        {
+            return Err(TaskError::Authority("heartbeat changed task capability"));
+        }
         let server = update
             .domain_server_url
             .as_ref()
@@ -153,12 +190,40 @@ impl TaskCredential {
             expires,
         )
         .map_err(|_| TaskError::Authority("invalid rotated data grant"))?;
+        let mut lease = previous.lease;
+        if let Some(task) = &update.task {
+            lease.task = task.clone();
+        }
+        if let Some(job) = update.job_id {
+            lease.task.job_id = Some(job);
+        }
+        if let Some(attempts) = update.attempts {
+            lease.task.attempts = Some(attempts);
+        }
+        if let Some(attempts) = update.max_attempts {
+            lease.task.max_attempts = Some(attempts);
+        }
+        if let Some(deps) = update.deps_remaining {
+            lease.task.deps_remaining = Some(deps);
+        }
+        if let Some(status) = &update.status {
+            lease.status = Some(status.clone());
+        }
         self.grant.send_replace(Some(Grant {
             access: Arc::new(access),
             lease_expires,
+            lease,
         }));
         Ok(())
     }
+}
+
+fn metadata_only(lease: &LeaseEnvelope) -> LeaseEnvelope {
+    let mut lease = lease.without_p2p_credentials();
+    // Keep one canonical, zeroizing copy of the current Domain bearer.
+    lease.access_token = None;
+    lease.access_token_expires_at = None;
+    lease
 }
 
 #[async_trait]

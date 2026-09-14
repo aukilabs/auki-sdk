@@ -33,6 +33,7 @@ async def main():
         wallet_key=os.environ["NODE_WALLET_KEY"],
         version="1.0.0",
         client_id=os.environ["AUKI_CLIENT_ID"],
+        peer_identity_file=os.environ.get("AUKI_PEER_IDENTITY_FILE"),
     )
     tasks = auki_sdk.AukiDmsTasks(credential, {CAPABILITY: uppercase})
     running = asyncio.ensure_future(tasks.run())

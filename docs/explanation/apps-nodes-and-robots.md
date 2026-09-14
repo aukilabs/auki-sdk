@@ -1,11 +1,11 @@
 # Apps, services, compute nodes, and robots
 
-Use `auki-sdk` to connect your app to peers. Use a
-[Posemesh runner](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
-to execute DMS tasks. These are different responsibilities: a service can
-exchange data with peers without executing tasks. The SDK also provides
-[native compute handlers](../how-to/run-compute-tasks.md) for Rust and Python;
-robot and task P2P integration remain follow-ups for that API.
+Use `auki-sdk` to connect your app to peers and run
+[compute or robot handlers](../how-to/run-compute-tasks.md) in Rust or Python.
+Task execution and peer communication have separate authority: a service can
+exchange data without executing tasks. Existing
+[Posemesh runners](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
+remain available for their application-specific execution and storage conventions.
 
 ## User apps and backend services
 
@@ -40,7 +40,7 @@ See [Posemesh compute setup](https://github.com/aukilabs/posemesh/blob/main/docs
 
 ## Robots
 
-A robot uses the same Posemesh task engine through its robot entrypoint.
+A robot can use the SDK task runtime or the existing Posemesh robot entrypoint.
 It authenticates with a robot registration credential provisioned in DDS,
 without a wallet or staking. If P2P is enabled, it also needs a separate
 network identity key.
@@ -54,8 +54,10 @@ See [Posemesh robot setup](https://github.com/aukilabs/posemesh/blob/main/docs/h
 
 ## Task execution
 
-Implement a Posemesh `Runner` for the task capability you support. The shared
-engine handles polling, heartbeats, and reporting results to DMS.
+Implement an SDK task handler or a Posemesh `Runner` for the capability you
+support. The selected runtime handles polling, heartbeats and results. SDK robot
+credentials also supply assigned-Domain idle reads; writes use task credentials.
+Optional SDK task peers shut down with the task, including discovery and relays.
 
 DMS currently allows **one active task lease per node**, for both compute nodes
 and robots. A robot runner must keep physical task execution exclusive and

@@ -7,8 +7,9 @@ Start with [Domain data access](../../docs/how-to/domain-data.md). The SDK facad
 reexports `AukiDomains`, `AukiDomainData` and their request/response types.
 
 Provides Rust, Web and Python APIs for metadata, portal/pose reads, buffered
-CRUD and streaming multipart transfers. Imported ZITADEL data access, machine/task
-adapters and Swift/Expo data bindings remain follow-ups. Existing networking
+CRUD and streaming multipart transfers. Native task grants and read-only robot
+credentials use the same client through `auki-tasks`. Imported ZITADEL data access
+and Swift/Expo data bindings remain follow-ups. Existing networking
 bindings remain compatible.
 
 The metadata and multipart operations are adapted from Posemesh's

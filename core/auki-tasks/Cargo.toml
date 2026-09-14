@@ -13,6 +13,8 @@ async-trait.workspace = true
 auki-auth = { path = "../auki-auth" }
 auki-dms = { path = "../auki-dms" }
 auki-domain-client = { path = "../auki-domain-client" }
+auki-p2p = { path = "../auki-p2p" }
+base64.workspace = true
 chrono.workspace = true
 parking_lot.workspace = true
 reqwest.workspace = true

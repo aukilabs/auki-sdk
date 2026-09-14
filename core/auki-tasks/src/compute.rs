@@ -15,7 +15,7 @@ use auki_auth::{
         siwe,
         token_manager::{
             AccessAuthenticator, SystemClock, TokenManager, TokenManagerConfig, TokenProvider,
-            TokenProviderError, TokenProviderResult,
+            TokenProviderResult,
         },
     },
 };
@@ -37,6 +37,7 @@ pub struct ComputeConfig {
     pub registration_interval: Duration,
     registration: SecretString,
     wallet_key: SecretString,
+    pub peer_identity: Option<auki_p2p::PeerIdentityProof>,
 }
 
 pub(crate) fn endpoint(raw: &str) -> Result<Url> {
@@ -95,6 +96,7 @@ impl ComputeConfig {
             version: version.into(),
             request_timeout: Duration::from_secs(30),
             registration_interval: Duration::from_secs(120),
+            peer_identity: None,
         })
     }
 }
@@ -111,7 +113,15 @@ impl AccessAuthenticator for ComputeAuthenticator {
             let meta = siwe::request_nonce(self.0.dds_url.as_str(), &address).await?;
             let message = siwe::compose_message(&meta, &address, None)?;
             let signature = siwe::sign_message(key, &message)?;
-            siwe::verify(self.0.dds_url.as_str(), &address, &message, &signature).await
+            let bundle =
+                siwe::verify(self.0.dds_url.as_str(), &address, &message, &signature).await?;
+            crate::machine::bind_peer(
+                &self.0.dds_url,
+                self.0.request_timeout,
+                self.0.peer_identity.as_ref(),
+                bundle,
+            )
+            .await
         };
         tokio::time::timeout(self.0.request_timeout, operation)
             .await
@@ -131,6 +141,7 @@ struct Owner {
     registrar: Mutex<Option<JoinHandle<()>>>,
     runtime_attached: AtomicBool,
     failed: Arc<AtomicBool>,
+    authentication: Arc<tokio::sync::RwLock<()>>,
 }
 
 impl Drop for Owner {
@@ -173,6 +184,7 @@ impl AukiComputeCredential {
             registrar: Mutex::new(None),
             runtime_attached: AtomicBool::new(false),
             failed: Arc::new(AtomicBool::new(false)),
+            authentication: Arc::new(tokio::sync::RwLock::new(())),
         })))
     }
 
@@ -191,6 +203,10 @@ impl AukiComputeCredential {
 
     pub async fn wait_closed(&self) {
         self.0.closed.cancelled().await;
+    }
+
+    pub(crate) fn cancellation(&self) -> CancellationToken {
+        self.0.closed.clone()
     }
 
     pub(crate) fn failed(&self) -> bool {
@@ -214,11 +230,7 @@ impl AukiComputeCredential {
                 };
             }
             register(&self.0.config, capabilities).await?;
-            self.0
-                .manager
-                .bearer()
-                .await
-                .map_err(|_| TaskError::Authentication)?;
+            self.bearer().await.map_err(|_| TaskError::Authentication)?;
             let config = self.0.config.clone();
             let caps = capabilities.to_vec();
             let closed = self.0.closed.clone();
@@ -262,17 +274,19 @@ impl AukiComputeCredential {
         }
         registrar.take();
         self.0.manager.stop().await;
+        let _authentication = self.0.authentication.write().await;
     }
 }
 
 #[async_trait]
 impl TokenProvider for AukiComputeCredential {
     async fn bearer(&self) -> TokenProviderResult<String> {
-        tokio::select! {
-            biased;
-            _ = self.0.closed.cancelled() => Err(TokenProviderError::Message("compute credential closed".into())),
-            token = self.0.manager.bearer() => token,
-        }
+        crate::machine::owned_bearer(
+            self.0.manager.clone(),
+            self.0.closed.clone(),
+            self.0.authentication.clone(),
+        )
+        .await
     }
     async fn on_unauthorized(&self) {
         self.0.manager.on_unauthorized().await;

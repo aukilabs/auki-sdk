@@ -106,6 +106,11 @@ impl DomainAccess {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait DomainAccessProvider: Send + Sync {
     fn client_id(&self) -> &str;
+    /// Local restriction for credentials that can only supply read grants.
+    /// Returning true prevents writes; false never bypasses server permissions.
+    fn read_only(&self) -> bool {
+        false
+    }
     /// Completes when all work using this credential must stop.
     async fn wait_closed(&self);
     /// Renew after expiry, or after the server rejects `rejected` with HTTP 401.

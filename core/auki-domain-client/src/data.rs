@@ -195,6 +195,7 @@ impl DomainDataClient {
         bytes: &[u8],
         cancellation: &CancellationToken,
     ) -> Result<DataMetadata, DataError> {
+        self.require_write_access()?;
         if bytes.len() > self.client.limits.max_data_bytes {
             return Err(DataError::TooLarge {
                 maximum: self.client.limits.max_data_bytes,
@@ -247,6 +248,7 @@ impl DomainDataClient {
         id: Uuid,
         cancellation: &CancellationToken,
     ) -> Result<(), DataError> {
+        self.require_write_access()?;
         self.run(
             cancellation,
             self.request(
@@ -257,6 +259,13 @@ impl DomainDataClient {
             ),
         )
         .await?;
+        Ok(())
+    }
+
+    pub(crate) fn require_write_access(&self) -> Result<(), DataError> {
+        if self.client.provider.read_only() {
+            return Err(DataError::InvalidInput("credential only permits reads"));
+        }
         Ok(())
     }
 

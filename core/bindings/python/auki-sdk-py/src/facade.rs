@@ -69,14 +69,6 @@ impl PeerOwner {
         }
     }
 
-    fn with_peer<R>(&self, f: impl FnOnce(&AukiPeer) -> R) -> PyResult<R> {
-        let guard = self.peer.lock();
-        let peer = guard
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("AukiPeer has been shut down"))?;
-        Ok(f(peer))
-    }
-
     fn begin_shutdown(
         &self,
     ) -> tokio::sync::watch::Receiver<Option<crate::cleanup::CleanupResult>> {
@@ -411,8 +403,8 @@ impl PyExternalAuthorityControl {
 
 #[pyclass(name = "AukiPeerConfig")]
 #[derive(Clone)]
-struct PyAukiPeerConfig {
-    inner: AukiPeerConfig,
+pub(crate) struct PyAukiPeerConfig {
+    pub(crate) inner: AukiPeerConfig,
 }
 
 #[pymethods]
@@ -654,7 +646,8 @@ impl PyAukiSession {
 /// One persistent relay-backed native peer.
 #[pyclass(name = "AukiPeer")]
 pub struct PyAukiPeer {
-    owner: PeerOwner,
+    owner: Option<PeerOwner>,
+    known_peers: auki_sdk_rs::AukiKnownPeers,
     peer_id: String,
     domain_id: String,
     listen_addresses: Vec<String>,
@@ -683,7 +676,26 @@ impl PyAukiPeer {
             lifecycle: peer.lifecycle(),
             protocols: context.protocols(),
             discovery,
-            owner: PeerOwner::new(peer),
+            known_peers: peer.known_peers(),
+            owner: Some(PeerOwner::new(peer)),
+        }
+    }
+
+    pub(crate) fn from_task_peer(peer: auki_sdk_rs::AukiTaskPeer) -> Self {
+        Self {
+            peer_id: peer.peer_id().to_string(),
+            domain_id: peer.domain_id().to_string(),
+            listen_addresses: peer
+                .listen_addresses()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            routes: peer.routes(),
+            lifecycle: peer.lifecycle(),
+            protocols: peer.protocols(),
+            discovery: peer.discovery(),
+            known_peers: peer.known_peers(),
+            owner: None,
         }
     }
 
@@ -783,15 +795,13 @@ impl PyAukiPeer {
     }
 
     fn known_peer_ids(&self) -> PyResult<Vec<String>> {
-        self.owner.with_peer(|runtime| {
-            runtime
-                .known_peers()
-                .snapshot()
-                .peers()
-                .iter()
-                .map(|peer| peer.peer_id().to_string())
-                .collect()
-        })
+        Ok(self
+            .known_peers
+            .snapshot()
+            .peers()
+            .iter()
+            .map(|peer| peer.peer_id().to_string())
+            .collect())
     }
 
     /// Fetch every fresh same-Domain DDS candidate.
@@ -824,7 +834,12 @@ impl PyAukiPeer {
 
     /// Fence immediately, then await one detached, replayable ordered cleanup.
     fn shutdown<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let cleanup = self.owner.begin_shutdown();
+        let owner = self.owner.as_ref().ok_or_else(|| {
+            PyRuntimeError::new_err(
+                "the task runtime owns this peer; stop the task to shut it down",
+            )
+        })?;
+        let cleanup = owner.begin_shutdown();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             wait_cleanup(cleanup)
                 .await

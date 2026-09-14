@@ -1,13 +1,14 @@
-# Run compute tasks from Python or Rust
+# Run compute and robot tasks from Python or Rust
 
-`AukiDmsTasks` runs handlers on an already-provisioned compute node. Rust owns
+`AukiDmsTasks` runs handlers on an already-provisioned compute node or robot. Rust owns
 registration, authentication, claiming, heartbeats and completion. Python
 handlers run on the application's asyncio event loop, including its context
 variables. DMS schedules work; the SDK does not submit jobs or provision nodes.
 
-This milestone supports native compute execution over HTTP. Robot credentials,
-idle robot data access and task P2P integration remain in #375. Web task bindings
-are deferred. Existing User/App peer and data APIs remain available.
+Native Rust and Python support HTTP-only tasks and optional task P2P. Robots can
+also read their assigned Domain while idle. Web task bindings are deferred.
+Existing User/App peer and data APIs remain available. There is no dependency on
+the Posemesh repository, executable or runners.
 
 ## Python
 
@@ -42,7 +43,8 @@ finally:
         await credential.close()
 ```
 
-Construction makes no requests. Running registers capabilities, authenticates
+Construction makes no network requests; optional peer setup loads or creates its
+private identity file. Running registers capabilities, authenticates
 and polls. A compute credential has one task-runtime owner; share that runtime
 rather than creating another execution owner. Registration repeats periodically;
 terminal failure stops authority. Transient registration failures have at most
@@ -63,6 +65,76 @@ renewal. Other claim/complete/fail failures may have an unknown outcome.
 `TaskRuntimeError.kind` distinguishes configuration, authentication, authority,
 lease loss, cancellation, busy/closed state, HTTP, service and data setup errors.
 HTTP failures retain `status`; data operations retain `DomainDataError`.
+Peer shutdown failures use kind `cleanup`. They are retained and reported by
+`tasks.close()` even if the Python run awaitable was cancelled. Rust callers
+must handle the `Result` returned by `AukiDmsTasks::close()`.
+
+## Robots and idle reads
+
+Create `AukiRobotCredential` with provisioned robot registration credentials,
+`version`, `client_id`, `dds_url`, `dms_url`, the deployment's exclusive robot
+`audience`, and a `capabilities` list matching the handlers. There is no wallet.
+Pass it to the same `AukiDmsTasks` constructor and use the same async handlers.
+The [Python robot example](../../core/bindings/python/auki-sdk-py/examples/robot_task.py)
+and [Rust robot example](../../core/auki-sdk/examples/robot_task.rs) show the complete setup.
+
+`await robot.assigned_domain_id()` registers/authenticates and returns a Domain
+ID or `None`. An unassigned robot continues registration presence but does not
+claim tasks. Assignment and machine identity remain pinned for the lifetime of
+the credential; a changed assignment requires shutdown and a fresh credential.
+DDS still verifies the persisted assignment on each token exchange.
+
+```python
+domain_id = await robot.assigned_domain_id()
+if domain_id is not None:
+    idle_data = robot.data(domain_id)
+    try:
+        configuration = await idle_data.read(configuration_id)
+    finally:
+        await idle_data.close()
+```
+
+Idle data uses DDS `/internal/v1/auth/robot/domain-token` and exactly `domain:r`.
+Buffered writes, streaming uploads and deletes fail locally before sending data.
+Use `task.data()` for task writes: its authority comes from the current lease.
+The same credential owns serialized robot token renewal and the Domain-grant
+cache. A 401 allows one renewal/replay; a 403 stays a denial. Robot registration
+repeats periodically; registration/authentication failure closes local authority.
+Close idle clients before closing the robot credential.
+
+## Optional task P2P
+
+In Python, add `peer_identity_file="./state/worker.identity"` to either machine
+credential. Protect this file and keep it across restarts; it is separate from a
+compute wallet. Optional `peer_config=` accepts the existing `AukiPeerConfig` for
+listeners, direct routes, relays and DDS discovery. The default books a relay;
+discovery stays off unless explicitly configured. DDS/DMS/discovery endpoints
+must match the machine's environment.
+
+The SDK binds the Peer ID during every machine login before claiming work.
+Compute credentials come from the DMS lease/heartbeat. Robot peer credentials
+come from the DDS assigned-Domain P2P exchange, driven by the task heartbeat.
+Signed credentials must match the machine type, Peer ID, Domain, issuer,
+audience, literal expiry and required `domain-data:r` scope. Verification keys
+and credentials rotate through the existing peer authority supervisor.
+Missing peer authority fails the task startup instead of silently disabling P2P.
+
+Inside a Python handler, `task.peer()` returns an `AukiPeer` view, or `None` for
+HTTP-only tasks. Existing Info/Message/Blob/Stream adapters can use this view
+when those optional protocols are compiled into the binding. The task runtime
+owns peer shutdown; calling `shutdown()` on the view is rejected. Returning or
+cancelling the task fences retained views and awaits transport, discovery and
+relay cleanup. A retained view cannot keep a completed task connected.
+
+Rust uses `AukiTaskPeerConfig`, its `identity_proof()` in the machine config,
+and `AukiDmsTasks::new_with_peer`. Import `TaskPeerContext` to call `task.peer()`;
+the returned view exposes the existing protocol context without authority controls.
+The Rust robot example shows both HTTP-only and P2P construction.
+
+The task heartbeat is the sole renewal driver, including early peer/relay
+refresh requests. There is no P2P scheduler or task dispatch protocol. Peers
+live for one task; keeping an assigned robot peer connected between tasks is a
+separate follow-up. Application operations still require application authorization.
 
 ## Cancellation and authority
 
@@ -100,7 +172,10 @@ cleanup before returning.
 
 Custom loops call `claim()` and the returned `TaskLease`'s `heartbeat()`,
 `complete()` and `fail()`. They own heartbeat timing; there is no automatic loop.
-Release the lease before awaiting runtime close. Drop revokes local data access;
+With P2P configured, call `start_peer()` after the first heartbeat. Await
+`lease.close()` on cancellation; it releases local resources without completing
+or failing the remote task. Release the lease before awaiting runtime close.
+Drop revokes local data access and initiates best-effort peer cleanup;
 await cancellation for orderly cleanup because dropped Rust futures cannot run
 async cleanup. The managed runner waits for handler cleanup on cancellation.
 
@@ -116,7 +191,8 @@ caller change with the dependency update and test multiple-capability dispatch.
 The current Posemesh checkout remains pinned to its earlier SDK revision.
 
 Follow-up in #375: adapt existing Runner/input/output conventions to this
-lifecycle, then integrate robot and optional P2P authority. Application runners,
+lifecycle, add persistent idle robot peers and expose custom lease operations in
+Python. Application runners,
 configuration and hardware control stay outside the generic SDK lifecycle.
 Stable crates have no dependency on Posemesh or `labs/` runners.
 
@@ -124,3 +200,11 @@ Contracts stay on DDS SIWE/register-wallet and DMS task/heartbeat/complete/fail
 routes. No provider or infrastructure deployment is required for this addition.
 Live support still depends on deployed versions and admission settings; fixtures
 do not establish deployed machine compatibility.
+
+Provider evidence: DDS robot registration/domain/P2P contracts at `b27c0804`
+and DMS `8088111` (compute task P2P across registered capabilities). Older DMS
+revisions issue compute P2P credentials only for specific built-in capabilities.
+Robots additionally require `DDS_ROBOT_WORKERS_ENABLED` in DDS,
+`ROBOT_WORKERS_ENABLED` in DMS and the same exclusive `DDS_ROBOT_AUDIENCE`.
+Local tests exercise these contracts and real local peer exchanges; live machine
+execution and deployment flags have not been validated by this change.

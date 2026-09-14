@@ -4,11 +4,17 @@
 
 mod access;
 mod compute;
+mod machine;
+mod peer;
+mod robot;
 mod runtime;
 
 pub use access::TaskCredential;
 pub use auki_dms::types::TaskSpec;
 pub use compute::{AukiComputeCredential, ComputeConfig};
+pub use machine::MachineCredential;
+pub use peer::{TaskPeerFactory, TaskPeerGrant, TaskPeerSession};
+pub use robot::{AukiRobotCredential, RobotConfig};
 pub use runtime::{
     AukiDmsTasks, TaskContext, TaskHandler, TaskLease, TaskOutcome, TaskResult, TasksConfig,
 };
@@ -41,6 +47,8 @@ pub enum TaskError {
     Handler,
     #[error("task data client could not be created")]
     Data,
+    #[error("task peer shutdown failed")]
+    PeerCleanup,
 }
 
 pub type Result<T> = std::result::Result<T, TaskError>;

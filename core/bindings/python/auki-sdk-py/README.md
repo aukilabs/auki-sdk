@@ -23,15 +23,18 @@ Compile custom Rust protocols into the same Python extension as the SDK. See
 
 ## Compute task handlers
 
-`AukiComputeCredential` and `AukiDmsTasks` run native compute handlers on your
+`AukiComputeCredential`, `AukiRobotCredential` and `AukiDmsTasks` run handlers on your
 asyncio loop using the shared Rust lifecycle. See [Run compute tasks](../../../../docs/how-to/run-compute-tasks.md)
-and the [compute example](examples/compute_task.py). Robot/task P2P integration
-remain follow-ups. Tasks also work with `--no-default-features`.
+and the [compute](examples/compute_task.py) and [robot](examples/robot_task.py) examples.
+Robots expose assigned-Domain idle reads. Both machine types support optional
+task P2P using `peer_identity_file=` and `task.peer()`. Tasks also work with
+`--no-default-features`; application protocols remain optional.
 
 After building, validate with local DDS/DMS/data fixtures:
 
 ```sh
-python -m pytest core/bindings/python/auki-sdk-py/python_tests/test_tasks.py -q
+python -m pip install -r core/bindings/python/auki-sdk-py/python_tests/requirements.txt
+python -m pytest core/bindings/python/auki-sdk-py/python_tests/test_tasks.py core/bindings/python/auki-sdk-py/python_tests/test_robot_tasks.py -q
 ```
 
 ## Domain data without a peer

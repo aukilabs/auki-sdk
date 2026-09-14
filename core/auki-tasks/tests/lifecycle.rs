@@ -104,7 +104,7 @@ async fn custom_loop_keeps_one_lease_and_revokes_retained_data_access() {
             .await
             .is_err()
     );
-    runtime.close().await;
+    runtime.close().await.unwrap();
     assert!(matches!(
         runtime.claim("/example/v1", &cancel).await,
         Err(TaskError::Closed)
@@ -139,6 +139,7 @@ async fn dropped_custom_lease_does_not_leave_a_heartbeat_owner() {
     assert!(context.is_cancelled());
     tokio::time::timeout(Duration::from_secs(1), runtime.close())
         .await
+        .unwrap()
         .unwrap();
     heartbeat.assert_calls(0);
 }
@@ -183,7 +184,7 @@ async fn heartbeat_cannot_replace_domain_or_task_identity() {
                 .await
                 .is_err()
         );
-        runtime.close().await;
+        runtime.close().await.unwrap();
         complete.assert_calls(0);
     }
 }
@@ -213,5 +214,5 @@ async fn runtime_close_immediately_revokes_a_custom_loops_authority() {
             .is_err()
     );
     drop(lease);
-    runtime.close().await;
+    runtime.close().await.unwrap();
 }

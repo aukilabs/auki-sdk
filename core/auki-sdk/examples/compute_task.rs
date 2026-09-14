@@ -64,8 +64,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &CancellationToken::new(),
         )
         .await;
-    tasks.close().await;
+    let cleanup = tasks.close().await;
     credential.close().await;
+    cleanup?;
     println!("{:?}", outcome?);
     Ok(())
 }

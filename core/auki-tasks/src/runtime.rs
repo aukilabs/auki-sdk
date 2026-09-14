@@ -19,9 +19,33 @@ use serde_json::Value;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
-use crate::{AukiComputeCredential, Result, TaskCredential, TaskError};
+use crate::{
+    MachineCredential, Result, TaskCredential, TaskError, TaskPeerFactory, TaskPeerGrant,
+    TaskPeerSession,
+};
+
+#[cfg(test)]
+#[path = "runtime_tests.rs"]
+mod tests;
 
 pub type TaskResult = CompleteTaskRequest;
+
+pub(crate) fn validate_capabilities(capabilities: &[String]) -> Result<()> {
+    if capabilities.is_empty()
+        || capabilities.len() > 100
+        || capabilities
+            .iter()
+            .any(|c| c.is_empty() || c.len() > 256 || c.chars().any(char::is_control))
+    {
+        return Err(TaskError::Configuration("provide 1-100 valid capabilities"));
+    }
+    let mut sorted = capabilities.to_vec();
+    sorted.sort();
+    if sorted.windows(2).any(|p| p[0] == p[1]) {
+        return Err(TaskError::Configuration("duplicate capability"));
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug)]
 pub struct TasksConfig {
@@ -52,10 +76,23 @@ pub struct TaskContext {
     pub credential: TaskCredential,
     data: DomainDataClient,
     progress: Arc<Mutex<Value>>,
+    peer: Arc<Mutex<Option<Arc<dyn TaskPeerSession>>>>,
 }
 impl TaskContext {
     pub fn data(&self) -> DomainDataClient {
         self.data.clone()
+    }
+    /// Transport adapter for the SDK's typed task peer view.
+    #[doc(hidden)]
+    pub fn peer_session(&self) -> Option<Arc<dyn TaskPeerSession>> {
+        self.peer.lock().clone()
+    }
+
+    fn revoke(&self) {
+        self.credential.revoke();
+        if let Some(peer) = self.peer_session() {
+            peer.fence();
+        }
     }
     pub fn cancellation(&self) -> CancellationToken {
         self.credential.closed.clone()
@@ -94,12 +131,14 @@ pub enum TaskOutcome {
 struct Owner {
     client: DmsClient,
     client_id: String,
-    machine: Option<AukiComputeCredential>,
+    machine: Option<MachineCredential>,
+    peer: Option<Arc<dyn TaskPeerFactory>>,
     capabilities: Vec<String>,
     config: TasksConfig,
     closed: CancellationToken,
     active: Arc<Semaphore>,
     running: AtomicBool,
+    cleanup_failed: AtomicBool,
 }
 impl Drop for Owner {
     fn drop(&mut self) {
@@ -113,22 +152,52 @@ pub struct AukiDmsTasks(Arc<Owner>);
 
 impl AukiDmsTasks {
     pub fn new(
-        machine: AukiComputeCredential,
+        machine: impl Into<MachineCredential>,
         capabilities: Vec<String>,
         config: TasksConfig,
     ) -> Result<Self> {
+        Self::new_with_optional_peer(machine.into(), capabilities, config, None)
+    }
+
+    pub fn new_with_peer(
+        machine: impl Into<MachineCredential>,
+        capabilities: Vec<String>,
+        config: TasksConfig,
+        peer: Arc<dyn TaskPeerFactory>,
+    ) -> Result<Self> {
+        Self::new_with_optional_peer(machine.into(), capabilities, config, Some(peer))
+    }
+
+    fn new_with_optional_peer(
+        machine: MachineCredential,
+        capabilities: Vec<String>,
+        config: TasksConfig,
+        peer: Option<Arc<dyn TaskPeerFactory>>,
+    ) -> Result<Self> {
+        if machine.peer_id() != peer.as_ref().map(|p| p.peer_id())
+            || peer.as_ref().is_some_and(|p| {
+                p.dds_url() != machine.dds_url()
+                    || p.dms_url().trim_end_matches('/')
+                        != machine.dms_url().as_str().trim_end_matches('/')
+            })
+        {
+            return Err(TaskError::Configuration(
+                "task peer must match the machine identity and DDS/DMS endpoints",
+            ));
+        }
         let client = DmsClient::new(
-            machine.config().dms_url.clone(),
+            machine.dms_url().clone(),
             config.request_timeout,
             Arc::new(machine.clone()),
         )
         .map_err(|_| TaskError::Configuration("cannot construct DMS client"))?;
         Self::build(
             client,
-            machine.config().client_id.clone(),
+            machine.client_id().into(),
             capabilities,
             config,
             Some(machine),
+            peer,
         )
     }
 
@@ -140,7 +209,7 @@ impl AukiDmsTasks {
         capabilities: Vec<String>,
         config: TasksConfig,
     ) -> Result<Self> {
-        Self::build(client, client_id, capabilities, config, None)
+        Self::build(client, client_id, capabilities, config, None, None)
     }
 
     fn build(
@@ -148,16 +217,10 @@ impl AukiDmsTasks {
         client_id: String,
         mut capabilities: Vec<String>,
         config: TasksConfig,
-        machine: Option<AukiComputeCredential>,
+        machine: Option<MachineCredential>,
+        peer: Option<Arc<dyn TaskPeerFactory>>,
     ) -> Result<Self> {
-        if capabilities.is_empty()
-            || capabilities.len() > 100
-            || capabilities
-                .iter()
-                .any(|c| c.is_empty() || c.len() > 256 || c.chars().any(char::is_control))
-        {
-            return Err(TaskError::Configuration("provide 1-100 valid capabilities"));
-        }
+        validate_capabilities(&capabilities)?;
         capabilities.sort();
         if capabilities.windows(2).any(|p| p[0] == p[1]) {
             return Err(TaskError::Configuration("duplicate capability"));
@@ -176,17 +239,23 @@ impl AukiDmsTasks {
             return Err(TaskError::Configuration("invalid client ID or task timing"));
         }
         if let Some(machine) = &machine {
-            machine.attach_runtime()?;
+            machine.attach_runtime(&capabilities)?;
         }
+        let closed = machine
+            .as_ref()
+            .map(|m| m.cancellation().child_token())
+            .unwrap_or_default();
         Ok(Self(Arc::new(Owner {
             client,
             client_id,
             machine,
+            peer,
             capabilities,
             config,
-            closed: CancellationToken::new(),
+            closed,
             active: Arc::new(Semaphore::new(1)),
             running: AtomicBool::new(false),
+            cleanup_failed: AtomicBool::new(false),
         })))
     }
 
@@ -203,7 +272,7 @@ impl AukiDmsTasks {
             .0
             .machine
             .as_ref()
-            .is_some_and(AukiComputeCredential::failed)
+            .is_some_and(MachineCredential::failed)
         {
             TaskError::Authentication
         } else {
@@ -240,6 +309,14 @@ impl AukiDmsTasks {
             if let Some(machine) = &self.0.machine {
                 machine.start(&self.0.capabilities, cancellation).await?;
             }
+            let assignment = if let Some(MachineCredential::Robot(robot)) = &self.0.machine {
+                let Some(domain) = robot.assigned_domain_id(cancellation).await? else {
+                    return Ok(None);
+                };
+                Some(domain)
+            } else {
+                None
+            };
             let claimed = tokio::time::timeout(
                 self.0.config.request_timeout,
                 self.0.client.claim(capability),
@@ -255,6 +332,11 @@ impl AukiDmsTasks {
             if lease.task.capability != capability {
                 return Err(TaskError::Authority("claim capability mismatch"));
             }
+            if assignment.is_some_and(|domain| Some(domain) != lease.domain_id) {
+                return Err(TaskError::Authority(
+                    "robot task is outside its assigned Domain",
+                ));
+            }
             let mut credential = TaskCredential::new(&lease, &self.0.client_id)?;
             credential.closed = self.0.closed.child_token();
             let data = AukiDomainData::new(credential.clone())
@@ -265,11 +347,22 @@ impl AukiDmsTasks {
                 credential,
                 data,
                 progress: Arc::new(Mutex::new(Value::Object(Default::default()))),
+                peer: Arc::new(Mutex::new(None)),
+            };
+            let peer_grant = if self.0.peer.is_some() {
+                TaskPeerGrant::from_wire(
+                    context.credential.domain_id(),
+                    lease.p2p_access_token.as_deref(),
+                    lease.p2p_access_token_expires_at,
+                )?
+            } else {
+                None
             };
             Ok(Some(TaskLease {
                 runtime: self.clone(),
                 context,
                 _permit: permit,
+                peer_grant,
             }))
         };
         tokio::select! {
@@ -342,14 +435,19 @@ impl AukiDmsTasks {
         }
     }
 
-    /// Stop claims, cancel active work and await handler/data cleanup and registration.
+    /// Stop claims, cancel work and await handler, data, peer and registration cleanup.
+    /// Retains peer cleanup failures so cancellation cannot hide them from the host.
     /// A custom loop must release its TaskLease before this can finish.
-    pub async fn close(&self) {
+    pub async fn close(&self) -> Result<()> {
         self.0.closed.cancel();
         let _active = self.0.active.acquire().await;
         if let Some(machine) = &self.0.machine {
             machine.close().await;
         }
+        if self.0.cleanup_failed.load(Ordering::Acquire) {
+            return Err(TaskError::PeerCleanup);
+        }
+        Ok(())
     }
 }
 
@@ -358,10 +456,20 @@ pub struct TaskLease {
     runtime: AukiDmsTasks,
     context: TaskContext,
     _permit: OwnedSemaphorePermit,
+    peer_grant: Option<TaskPeerGrant>,
 }
 impl Drop for TaskLease {
     fn drop(&mut self) {
-        self.context.credential.revoke();
+        self.context.revoke();
+        if let Some(peer) = self.context.peer.lock().take() {
+            // Drop cannot await. Managed execution and explicit close drain this
+            // before releasing the lease; abandoned native leases get best effort.
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(async move {
+                    let _ = peer.shutdown().await;
+                });
+            }
+        }
     }
 }
 
@@ -370,11 +478,66 @@ impl TaskLease {
         self.context.clone()
     }
 
+    /// Start optional task networking after the initial heartbeat. Custom loops
+    /// must await this call and close the lease; managed execution does both.
+    pub async fn start_peer(&mut self, cancellation: &CancellationToken) -> Result<()> {
+        let Some(factory) = self.runtime.0.peer.clone() else {
+            return Ok(());
+        };
+        if self.context.peer_session().is_some() {
+            return Ok(());
+        }
+        let grant = self.peer_grant.clone().ok_or(TaskError::Authority(
+            "task peer access is unavailable; check provider support",
+        ))?;
+        let token = self.context.cancellation();
+        let startup = factory.start(grant, &token);
+        tokio::pin!(startup);
+        let result = tokio::select! { biased;
+            _ = self.runtime.stopped() => { self.context.revoke(); startup.await },
+            _ = cancellation.cancelled() => { self.context.revoke(); startup.await },
+            result = &mut startup => result,
+        };
+        let peer = result.map_err(|error| {
+            if matches!(error, TaskError::PeerCleanup) {
+                self.runtime.0.cleanup_failed.store(true, Ordering::Release);
+            }
+            error
+        })?;
+        *self.context.peer.lock() = Some(peer);
+        if self.context.is_cancelled() {
+            return Err(TaskError::Cancelled);
+        }
+        // Startup can consume lease time; never enter a handler on expired authority.
+        self.remaining()?;
+        Ok(())
+    }
+
+    async fn finish_resources(&self) -> Result<()> {
+        self.context.data.close().await;
+        let peer = self.context.peer.lock().take();
+        if let Some(peer) = peer {
+            peer.fence();
+            peer.shutdown().await.map_err(|_| {
+                self.runtime.0.cleanup_failed.store(true, Ordering::Release);
+                TaskError::PeerCleanup
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Revoke local access and await peer/data cleanup without reporting success.
+    pub async fn close(self) -> Result<()> {
+        self.context.revoke();
+        self.finish_resources().await
+    }
+
     fn remaining(&self) -> Result<Duration> {
-        let duration = self
-            .context
-            .credential
-            .deadline()?
+        let mut deadline = self.context.credential.deadline()?;
+        if let Some(grant) = &self.peer_grant {
+            deadline = deadline.min(grant.expires_at);
+        }
+        let duration = deadline
             .signed_duration_since(Utc::now())
             .to_std()
             .map_err(|_| TaskError::LeaseLost)?;
@@ -385,6 +548,8 @@ impl TaskLease {
     }
 
     pub async fn heartbeat(&mut self) -> Result<()> {
+        let runtime = self.runtime.clone();
+        let context = self.context.clone();
         let progress = self.context.progress.lock().clone();
         let request = HeartbeatRequest {
             progress,
@@ -403,16 +568,38 @@ impl TaskLease {
             .map_err(|error| TaskError::dms("heartbeat", error))?;
             self.context
                 .credential
-                .update(self.context.task.id, &response)
+                .update(self.context.task.id, &response)?;
+            if self.runtime.0.peer.is_some() {
+                let grant = if let Some(MachineCredential::Robot(robot)) = &self.runtime.0.machine {
+                    Some(
+                        robot
+                            .peer_grant(self.context.credential.domain_id())
+                            .await?,
+                    )
+                } else {
+                    TaskPeerGrant::from_wire(
+                        self.context.credential.domain_id(),
+                        response.p2p_access_token.as_deref(),
+                        response.p2p_access_token_expires_at,
+                    )?
+                };
+                if let Some(grant) = grant {
+                    if let Some(peer) = self.context.peer_session() {
+                        peer.update(grant.clone()).await?;
+                    }
+                    self.peer_grant = Some(grant);
+                }
+            }
+            Ok(())
         };
         let result = tokio::select! {
             biased;
-            _ = self.runtime.stopped() => Err(self.runtime.stopped_error()),
-            _ = self.context.credential.closed.cancelled() => Err(TaskError::Cancelled),
+            _ = runtime.stopped() => Err(runtime.stopped_error()),
+            _ = context.credential.closed.cancelled() => Err(TaskError::Cancelled),
             result = operation => result,
         };
         if result.is_err() {
-            self.context.credential.revoke();
+            self.context.revoke();
         }
         result
     }
@@ -423,10 +610,13 @@ impl TaskLease {
                 .remaining()?
                 .div_f64(2.0)
                 .min(self.runtime.0.config.heartbeat_interval);
+            let peer = self.context.peer_session();
             tokio::select! {
                 biased;
                 _ = self.context.credential.closed.cancelled() => return Err(TaskError::Cancelled),
                 _ = self.context.credential.changed.notified() => {},
+                _ = async { match &peer { Some(peer) => peer.refresh_requested().await, None => std::future::pending().await } } => {},
+                _ = async { match &peer { Some(peer) => peer.wait_stopped().await, None => std::future::pending().await } } => return Err(TaskError::Authority("task peer stopped")),
                 _ = tokio::time::sleep(delay) => {}
             }
             self.heartbeat().await?;
@@ -434,7 +624,7 @@ impl TaskLease {
     }
 
     pub async fn complete(self, result: TaskResult) -> Result<()> {
-        self.context.data.close().await;
+        self.finish_resources().await?;
         if self.context.is_cancelled() {
             return Err(TaskError::Cancelled);
         }
@@ -451,7 +641,7 @@ impl TaskLease {
     }
 
     pub async fn fail(self, failure: FailTaskRequest) -> Result<()> {
-        self.context.data.close().await;
+        self.finish_resources().await?;
         if self.context.is_cancelled() {
             return Err(TaskError::Cancelled);
         }
@@ -470,30 +660,45 @@ impl TaskLease {
         cancellation: &CancellationToken,
     ) -> Result<()> {
         // Like the Posemesh host, validate current authority before starting work.
-        self.heartbeat().await?;
+        let startup = async {
+            self.heartbeat().await?;
+            self.start_peer(cancellation).await
+        }
+        .await;
+        if let Err(error) = startup {
+            self.context.revoke();
+            self.finish_resources().await?;
+            return Err(error);
+        }
         let context = self.context.clone();
         let runtime = self.runtime.clone();
         let outcome = {
-            let execution = handler.run(context.clone());
+            let started = AtomicBool::new(false);
+            let execution = async {
+                started.store(true, Ordering::Release);
+                handler.run(context.clone()).await
+            };
             tokio::pin!(execution);
             let heartbeat = self.heartbeat_loop();
             tokio::pin!(heartbeat);
             tokio::select! {
                 biased;
-                _ = runtime.stopped() => { context.credential.revoke(); let _ = execution.await; Err(runtime.stopped_error()) },
-                _ = cancellation.cancelled() => { context.credential.revoke(); let _ = execution.await; Err(TaskError::Cancelled) },
-                result = &mut heartbeat => { context.credential.revoke(); let _ = execution.await; result.and(Err(TaskError::LeaseLost)) },
+                _ = runtime.stopped() => { context.revoke(); if started.load(Ordering::Acquire) { let _ = execution.await; } Err(runtime.stopped_error()) },
+                _ = cancellation.cancelled() => { context.revoke(); if started.load(Ordering::Acquire) { let _ = execution.await; } Err(TaskError::Cancelled) },
+                result = &mut heartbeat => { context.revoke(); if started.load(Ordering::Acquire) { let _ = execution.await; } result.and(Err(TaskError::LeaseLost)) },
                 result = &mut execution => result,
             }
         };
         if context.is_cancelled() {
-            context.data.close().await;
+            self.finish_resources().await?;
             return outcome.map(|_| ()).and(Err(TaskError::Cancelled));
         }
         // Flush the final progress and check cancellation before publishing a result.
         let heartbeat_result = self.heartbeat().await;
-        context.data.close().await;
-        heartbeat_result?;
+        if let Err(error) = heartbeat_result {
+            self.finish_resources().await?;
+            return Err(error);
+        }
         match outcome {
             Ok(result) => self.complete(result).await,
             Err(_) => {

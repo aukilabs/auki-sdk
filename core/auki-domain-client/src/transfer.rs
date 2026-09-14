@@ -125,6 +125,7 @@ impl DomainDataClient {
         F: FnMut(usize) -> Fut,
         Fut: Future<Output = Result<Vec<u8>, DataError>>,
     {
+        self.require_write_access()?;
         options.validate()?;
         if size == 0 || size > options.max_bytes {
             return Err(DataError::InvalidInput(

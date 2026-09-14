@@ -963,6 +963,7 @@ dependencies = [
  "auki-auth",
  "auki-dms",
  "auki-domain-client",
+ "auki-p2p",
  "base64",
  "chrono",
  "httpmock",

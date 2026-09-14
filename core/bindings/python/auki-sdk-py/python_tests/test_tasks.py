@@ -17,6 +17,7 @@ import auki_sdk
 DOMAIN = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 TASK = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 DATA = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+ROBOT = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
 CAPABILITY = "/example/uppercase/v1"
 TRACE = contextvars.ContextVar("task_trace", default="unset")
 
@@ -32,16 +33,37 @@ def worker_services():
              "heartbeat_status": 200, "claim_status": 200, "registration_status": 200,
              "data_status": 200, "rotate": False}
 
-    def token():
+    def token(read_only=False):
         claims = {"iss": "dds", "domain_id": DOMAIN, "aud": [state["base"]],
                   "exp": int(time.time()) + 120, "generation": state["generation"]}
         claims.update(state.get("claims_override", {}))
+        if read_only:
+            claims.update({"type": "robot", "sub": ROBOT, "scopes": ["domain:r"]})
+            claims.update(state.get("read_claims_override", {}))
+        body = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+        return "e30." + body + ".fixture"
+
+    def machine_token(bound=False):
+        if not state.get("robot"):
+            return "bound-machine-fixture" if bound else "machine-fixture"
+        claims = {"iss": "dds", "aud": [state["base"] + "/robots"], "sub": ROBOT,
+                  "node_id": ROBOT, "organization_id": DATA, "node_type": "robot",
+                  "node_mode": "dedicated", "assigned_domain_id": state.get("assignment", DOMAIN),
+                  "iat": int(time.time()) - 1, "exp": int(time.time()) + 120}
+        if bound:
+            claims["peer_id"] = state["peer_id"]
+        claims.update(state.get("machine_claims_override", {}))
         body = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
         return "e30." + body + ".fixture"
 
     def grant():
-        return {"domain_id": DOMAIN, "domain_server_url": state["base"], "access_token": token(),
+        response = {"domain_id": DOMAIN, "domain_server_url": state["base"], "access_token": token(),
                 "access_token_expires_at": expires(120), "lease_expires_at": expires(state.get("ttl", 60))}
+        if state.get("p2p") and not state.get("robot") and not state.get("missing_peer_grant"):
+            peer = state["p2p"]["grant"](state)
+            response.update(p2p_access_token=peer["p2p_access_token"],
+                            p2p_access_token_expires_at=peer["p2p_access_expires_at"])
+        return response
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -63,6 +85,44 @@ def worker_services():
             query = parse_qs(path.query)
             body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
             state["calls"].append((self.command, path.path))
+            if path.path in ("/internal/v1/robots/register", "/internal/v1/auth/robot/verify"):
+                payload = json.loads(body)
+                assert payload["registration_credentials"] == "fixture-robot-registration"
+                if path.path.endswith("/register"):
+                    assert payload["capabilities"] == [CAPABILITY]
+                    state["register"] += 1
+                    if state["register"] == 1:
+                        time.sleep(state.get("auth_delay", 0))
+                else:
+                    state["verify"] += 1
+                return self.reply({"robot_id": ROBOT, "access_token": machine_token(),
+                                   "access_expires_at": expires(120)}, state["registration_status"])
+            if path.path == "/internal/v1/auth/robot/domain-token":
+                assert json.loads(body) == {"domain_id": DOMAIN}
+                state["read_exchanges"] = state.get("read_exchanges", 0) + 1
+                if state.get("reject_read_once") and state["read_exchanges"] == 1:
+                    return self.reply({}, 401)
+                if state.get("read_exchange_status", 200) != 200:
+                    return self.reply({}, state["read_exchange_status"])
+                return self.reply({"domain_id": DOMAIN, "domain_server_url": state["base"],
+                                   "access_token": token(True), "access_expires_at": expires(120)})
+            if path.path == "/internal/v1/auth/p2p/challenge":
+                payload = json.loads(body)
+                state["peer_id"] = payload["peer_id"]
+                state["peer_public_key"] = payload["public_key"]
+                return self.reply({"challenge_id": "fixture-challenge", "challenge": "Zml4dHVyZQ",
+                                   "expires_at": expires(60)})
+            if path.path == "/internal/v1/auth/p2p/verify":
+                payload = json.loads(body)
+                state["p2p"]["verify_proof"](state["peer_public_key"], payload["signature"])
+                return self.reply({"peer_id": state.get("binding_peer_override", state["peer_id"]),
+                                   "access_token": machine_token(True), "access_expires_at": expires(120)})
+            if path.path == "/internal/v1/auth/robot/p2p-token":
+                assert json.loads(body) == {"domain_id": DOMAIN}
+                assert "Authorization" in self.headers
+                return self.reply(state["p2p"]["grant"](state))
+            if path.path == "/service/p2p-verification-keys":
+                return self.reply(state["p2p"]["keys"])
             if path.path.endswith("/siwe/request"):
                 return self.reply({"nonce": "local-fixture", "domain": "localhost", "uri": state["base"],
                                    "version": "1", "chainId": 1, "issuedAt": expires(0)})
@@ -76,9 +136,20 @@ def worker_services():
             if path.path.endswith("/siwe/verify"):
                 assert len(json.loads(body)["signature"]) == 132
                 state["verify"] += 1
+                if state["verify"] == 1:
+                    time.sleep(state.get("auth_delay", 0))
                 return self.reply({"access_token": "machine-fixture", "access_expires_at": expires(120)})
             if path.path == "/tasks":
-                assert self.headers["Authorization"] == "Bearer machine-fixture"
+                expected = machine_token(bool(state.get("p2p")))
+                # Robot tokens contain issuance time; compare the invariant profile.
+                if state.get("robot"):
+                    encoded = self.headers["Authorization"].split(".")[1]
+                    claims = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+                    assert claims["node_type"] == "robot"
+                    if state.get("p2p"):
+                        assert claims["peer_id"] == state["peer_id"]
+                else:
+                    assert self.headers["Authorization"] == "Bearer " + expected
                 assert query == {"capability": [CAPABILITY]}
                 state["claims"] += 1
                 if state.get("reject_claim_once") and state["claims"] == 1:
@@ -103,7 +174,11 @@ def worker_services():
                 return self.reply({"upload": {"domain_data_max_bytes": 100000, "request_max_bytes": 100000,
                     "multipart": {"enabled": False}}})
             if "/data" in path.path:
-                if self.headers.get("Authorization") != "Bearer " + token():
+                bearer = self.headers.get("Authorization")
+                if bearer == "Bearer " + token(True):
+                    if self.command != "GET":
+                        return self.reply({}, 403)
+                elif bearer != "Bearer " + token():
                     return self.reply({}, 401)
                 if state["data_status"] != 200:
                     return self.reply({"error": "do not expose this fixture response"}, state["data_status"])

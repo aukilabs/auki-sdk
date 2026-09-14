@@ -4,14 +4,16 @@
 `auki-auth` machine authentication, `auki-dms` wire operations and
 `auki-domain-client` data transfers. DMS decides which machine receives work.
 
-The first milestone supports already-provisioned compute credentials and
-HTTP-only handlers. Robot authentication/idle access and task P2P integration
-remain follow-ups in #375. Web task execution is not exposed.
+Supports already-provisioned compute and robot credentials, HTTP-only handlers,
+assigned-robot idle reads and optional task P2P through the SDK peer adapter.
+Web task execution and persistent idle robot peers are not exposed.
 
 `AukiDmsTasks::run` manages polling and heartbeats; `claim` returns a `TaskLease`
 for custom loops using the same `heartbeat`, `complete` and `fail` operations.
 Custom loops own their heartbeat timing and must release their lease before
 awaiting runtime close. Each runtime permits one live lease across its clones.
+With P2P enabled, call `start_peer()` after the initial heartbeat; await
+`lease.close()` to cancel local work without reporting a remote result.
 
 Handlers receive task metadata, renewable `TaskCredential`, a selected data
 client and cancellation. They must stop their work and await cleanup before
@@ -19,6 +21,8 @@ returning. CPU work, threads, subprocesses and hardware require their own stop
 mechanism. Async Python handlers receive cancellation on their event-loop task;
 close waits for their `finally` blocks. Retained data clients stop when a lease
 ends. Already-issued remote bearer tokens may remain valid until expiry.
+Runtime `close()` returns a `Result` and retains peer shutdown failures so a
+cancelled run cannot hide a failed relay/transport cleanup.
 
 The runtime uses current `meta`, `inputs_cids`, `output_cids` and completion
 metadata without defining a new task payload or scheduler. Handler errors stop

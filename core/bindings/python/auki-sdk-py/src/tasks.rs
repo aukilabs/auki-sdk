@@ -3,8 +3,9 @@ use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use auki_sdk_rs::{
-    AukiComputeCredential, AukiDmsTasks, ComputeConfig, SecretString, TaskContext, TaskError,
-    TaskHandler, TaskOutcome, TaskResult, TasksConfig,
+    AukiComputeCredential, AukiDmsTasks, AukiPeerConfig, AukiRobotCredential, AukiTaskPeerConfig,
+    ComputeConfig, Identity, MachineCredential, RobotConfig, SecretString, TaskContext, TaskError,
+    TaskHandler, TaskOutcome, TaskPeerContext, TaskResult, TasksConfig,
 };
 use parking_lot::Mutex;
 use pyo3::{
@@ -15,6 +16,7 @@ use pyo3::{
 use pyo3_async_runtimes::TaskLocals;
 use tokio_util::sync::CancellationToken;
 
+use crate::facade::{PyAukiPeer, PyAukiPeerConfig};
 use crate::{data::PyData, python_task::CancelablePythonAwaitable};
 
 #[allow(unexpected_cfgs)]
@@ -36,6 +38,7 @@ fn error(error: TaskError) -> PyErr {
             TaskError::HttpStatus { .. } => "http",
             TaskError::Handler => "handler",
             TaskError::Data => "data",
+            TaskError::PeerCleanup => "cleanup",
         };
         let result = exception::TaskRuntimeError::new_err(error.to_string());
         let _ = result.value_bound(py).setattr("kind", kind);
@@ -85,12 +88,13 @@ where
 #[pyclass(name = "AukiComputeCredential")]
 struct PyCompute {
     inner: AukiComputeCredential,
+    peer: Option<Arc<AukiTaskPeerConfig>>,
 }
 
 #[pymethods]
 impl PyCompute {
     #[new]
-    #[pyo3(signature = (*, dds_url, dms_url, registration, wallet_key, version, client_id, request_timeout=30.0, registration_interval=120.0))]
+    #[pyo3(signature = (*, dds_url, dms_url, registration, wallet_key, version, client_id, request_timeout=30.0, registration_interval=120.0, peer_identity_file=None, peer_config=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         dds_url: &str,
@@ -101,6 +105,8 @@ impl PyCompute {
         client_id: &str,
         request_timeout: f64,
         registration_interval: f64,
+        peer_identity_file: Option<std::path::PathBuf>,
+        peer_config: Option<&PyAukiPeerConfig>,
     ) -> PyResult<Self> {
         let mut config = ComputeConfig::new(
             dds_url,
@@ -113,11 +119,109 @@ impl PyCompute {
         .map_err(error)?;
         config.request_timeout = duration(request_timeout)?;
         config.registration_interval = duration(registration_interval)?;
+        let peer = task_peer(dds_url, dms_url, peer_identity_file, peer_config)?;
+        config.peer_identity = peer.as_ref().map(|p| p.identity_proof());
         Ok(Self {
             inner: AukiComputeCredential::new(config).map_err(error)?,
+            peer,
         })
     }
 
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        owned(py, |_| async move {
+            inner.close().await;
+            Ok(Python::with_gil(|py| py.None()))
+        })
+    }
+}
+
+fn task_peer(
+    dds_url: &str,
+    dms_url: &str,
+    file: Option<std::path::PathBuf>,
+    config: Option<&PyAukiPeerConfig>,
+) -> PyResult<Option<Arc<AukiTaskPeerConfig>>> {
+    let Some(file) = file else {
+        if config.is_some() {
+            return Err(PyValueError::new_err(
+                "peer_config requires peer_identity_file",
+            ));
+        }
+        return Ok(None);
+    };
+    let identity = Identity::load_or_create(file)
+        .map_err(|_| PyValueError::new_err("cannot load persistent task peer identity"))?;
+    let config = match config {
+        Some(config) => config.inner.clone(),
+        None => AukiPeerConfig::new(dms_url)
+            .map_err(|_| PyValueError::new_err("invalid peer DMS URL"))?,
+    };
+    Ok(Some(Arc::new(
+        AukiTaskPeerConfig::new(identity, dds_url, config).map_err(error)?,
+    )))
+}
+
+#[pyclass(name = "AukiRobotCredential")]
+struct PyRobot {
+    inner: AukiRobotCredential,
+    peer: Option<Arc<AukiTaskPeerConfig>>,
+}
+#[pymethods]
+impl PyRobot {
+    #[new]
+    #[pyo3(signature = (*, dds_url, dms_url, registration, version, client_id, audience, capabilities, request_timeout=30.0, registration_interval=120.0, peer_identity_file=None, peer_config=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        dds_url: &str,
+        dms_url: &str,
+        registration: String,
+        version: &str,
+        client_id: &str,
+        audience: &str,
+        capabilities: Vec<String>,
+        request_timeout: f64,
+        registration_interval: f64,
+        peer_identity_file: Option<std::path::PathBuf>,
+        peer_config: Option<&PyAukiPeerConfig>,
+    ) -> PyResult<Self> {
+        let mut config = RobotConfig::new(
+            dds_url,
+            dms_url,
+            SecretString::new(registration),
+            version,
+            client_id,
+            audience,
+            capabilities,
+        )
+        .map_err(error)?;
+        config.request_timeout = duration(request_timeout)?;
+        config.registration_interval = duration(registration_interval)?;
+        let peer = task_peer(dds_url, dms_url, peer_identity_file, peer_config)?;
+        config.peer_identity = peer.as_ref().map(|p| p.identity_proof());
+        Ok(Self {
+            inner: AukiRobotCredential::new(config).map_err(error)?,
+            peer,
+        })
+    }
+    fn assigned_domain_id<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        owned(py, |cancel| async move {
+            let domain = inner
+                .assigned_domain_id(&cancel)
+                .await
+                .map_err(error)?
+                .map(|id| id.to_string());
+            Ok(Python::with_gil(|py| domain.into_py(py)))
+        })
+    }
+    fn data(&self, domain_id: &str) -> PyResult<PyData> {
+        let domain = uuid::Uuid::parse_str(domain_id)
+            .map_err(|_| PyValueError::new_err("Domain ID must be a UUID"))?;
+        Ok(PyData {
+            inner: self.inner.data(domain).map_err(error)?,
+        })
+    }
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         owned(py, |_| async move {
@@ -166,6 +270,9 @@ impl PyTask {
         PyData {
             inner: self.inner.data(),
         }
+    }
+    fn peer(&self) -> Option<PyAukiPeer> {
+        self.inner.peer().map(PyAukiPeer::from_task_peer)
     }
     fn is_cancelled(&self) -> bool {
         self.inner.is_cancelled()
@@ -264,7 +371,7 @@ impl PyTasks {
     #[new]
     #[pyo3(signature = (credential, handlers, *, poll_interval=1.0, heartbeat_interval=30.0, request_timeout=30.0))]
     fn new(
-        credential: &PyCompute,
+        credential: &Bound<'_, PyAny>,
         handlers: &Bound<'_, PyDict>,
         poll_interval: f64,
         heartbeat_interval: f64,
@@ -284,11 +391,26 @@ impl PyTasks {
             heartbeat_interval: duration(heartbeat_interval)?,
             request_timeout: duration(request_timeout)?,
         };
-        let inner = AukiDmsTasks::new(
-            credential.inner.clone(),
-            callbacks.keys().cloned().collect(),
-            config,
-        )
+        let (machine, peer) = if let Ok(credential) = credential.extract::<PyRef<'_, PyCompute>>() {
+            (
+                MachineCredential::from(credential.inner.clone()),
+                credential.peer.clone(),
+            )
+        } else if let Ok(credential) = credential.extract::<PyRef<'_, PyRobot>>() {
+            (
+                MachineCredential::from(credential.inner.clone()),
+                credential.peer.clone(),
+            )
+        } else {
+            return Err(PyTypeError::new_err(
+                "expected a compute or robot credential",
+            ));
+        };
+        let capabilities = callbacks.keys().cloned().collect();
+        let inner = match peer {
+            Some(peer) => AukiDmsTasks::new_with_peer(machine, capabilities, config, peer),
+            None => AukiDmsTasks::new(machine, capabilities, config),
+        }
         .map_err(error)?;
         Ok(Self {
             inner,
@@ -363,7 +485,7 @@ impl PyTasks {
         self.inner.request_shutdown();
         let inner = self.inner.clone();
         owned(py, |_| async move {
-            inner.close().await;
+            inner.close().await.map_err(error)?;
             Ok(Python::with_gil(|py| py.None()))
         })
     }
@@ -403,6 +525,7 @@ fn handler_error(error_value: TaskError, failure: &Failure) -> PyErr {
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyCompute>()?;
+    module.add_class::<PyRobot>()?;
     module.add_class::<PyTasks>()?;
     module.add_class::<PyTask>()?;
     module.add(

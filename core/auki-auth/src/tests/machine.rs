@@ -28,6 +28,41 @@ fn authenticator(server: &MockServer) -> RobotAuthenticator {
     .unwrap()
 }
 
+#[tokio::test]
+async fn robot_registration_does_not_follow_credential_redirects() {
+    let server = MockServer::start_with(|base| {
+        let mut response = MockResponse::status(307);
+        response.location = Some(format!("{base}/unexpected"));
+        vec![response]
+    })
+    .await;
+    assert_eq!(
+        authenticator(&server)
+            .login()
+            .await
+            .unwrap_err()
+            .status_code(),
+        Some(reqwest::StatusCode::TEMPORARY_REDIRECT)
+    );
+    let requests = server.finish().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].target, "/internal/v1/robots/register");
+}
+
+#[tokio::test]
+async fn robot_registration_redacts_malformed_and_bounds_oversized_responses() {
+    for body in [
+        json!({"robot_id": "fixture-secret-must-not-be-logged"}),
+        json!({"extra": "x".repeat(129 * 1024)}),
+    ] {
+        let server = MockServer::start(vec![MockResponse::json(body)]).await;
+        let error = authenticator(&server).login().await.unwrap_err();
+        assert!(matches!(error, crate::machine::SiweError::MissingField(_)));
+        assert!(!format!("{error:?}").contains("fixture-secret"));
+        server.finish().await;
+    }
+}
+
 const NODE_KEY: &str = "4c0883a69102937d6231471b5dbb6204fe5129617082798ce3f4fdf2548b6f90";
 
 #[tokio::test]

@@ -10,7 +10,7 @@ mod robot;
 mod robot_peer;
 mod runtime;
 
-pub use access::TaskCredential;
+pub use access::{TaskAccessToken, TaskCredential};
 pub use auki_dms::types::TaskSpec;
 pub use compute::{AukiComputeCredential, ComputeConfig};
 pub use machine::MachineCredential;

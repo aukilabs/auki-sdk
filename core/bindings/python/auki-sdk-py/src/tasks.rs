@@ -4,8 +4,8 @@ use std::{collections::BTreeMap, future::Future, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use auki_sdk_rs::{
     AukiComputeCredential, AukiDmsTasks, AukiPeerConfig, AukiRobotCredential, AukiTaskPeerConfig,
-    ComputeConfig, Identity, MachineCredential, RobotConfig, SecretString, TaskContext, TaskError,
-    TaskHandler, TaskOutcome, TaskPeerContext, TaskResult, TasksConfig,
+    ComputeConfig, Identity, MachineCredential, RobotConfig, SecretString, TaskAccessToken,
+    TaskContext, TaskError, TaskHandler, TaskOutcome, TaskPeerContext, TaskResult, TasksConfig,
 };
 use parking_lot::Mutex;
 use pyo3::{
@@ -240,8 +240,31 @@ struct PyTask {
     inner: TaskContext,
 }
 
+/// A retained handle reads the current task bearer and fails when its lease ends.
+#[pyclass(name = "TaskAccessToken")]
+struct PyTaskAccessToken {
+    inner: TaskAccessToken,
+}
+
+#[pymethods]
+impl PyTaskAccessToken {
+    fn get(&self) -> PyResult<String> {
+        Ok(self.inner.get().map_err(error)?.expose_secret().to_owned())
+    }
+
+    fn __repr__(&self) -> &'static str {
+        "TaskAccessToken([REDACTED])"
+    }
+}
+
 #[pymethods]
 impl PyTask {
+    #[getter]
+    fn access_token(&self) -> PyTaskAccessToken {
+        PyTaskAccessToken {
+            inner: self.inner.access_token.clone(),
+        }
+    }
     #[getter]
     fn id(&self) -> String {
         self.inner.task.id.to_string()
@@ -293,6 +316,35 @@ impl PyTask {
         let inner = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             inner.progress(value).map_err(error)
+        })
+    }
+
+    fn log_event<'py>(
+        &self,
+        py: Python<'py>,
+        value: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let value = parse(value)?;
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner.log_event(value).map_err(error)
+        })
+    }
+
+    #[pyo3(signature = (reason, details=None))]
+    fn set_failure<'py>(
+        &self,
+        py: Python<'py>,
+        reason: String,
+        details: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let details = details
+            .map(parse)
+            .transpose()?
+            .unwrap_or(serde_json::Value::Null);
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner.set_failure(reason, details).map_err(error)
         })
     }
 }
@@ -542,6 +594,7 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyRobot>()?;
     module.add_class::<PyTasks>()?;
     module.add_class::<PyTask>()?;
+    module.add_class::<PyTaskAccessToken>()?;
     module.add(
         "TaskRuntimeError",
         module.py().get_type_bound::<exception::TaskRuntimeError>(),

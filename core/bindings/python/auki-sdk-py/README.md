@@ -30,6 +30,14 @@ Robots expose assigned-Domain idle reads. Both machine types support optional
 task P2P using `peer_identity_file=` and `task.peer()`. Tasks also work with
 `--no-default-features`; application protocols remain optional.
 
+Managed handlers can `await task.log_event(value)` to append ordered heartbeat
+events, read the rotating task bearer with `task.access_token.get()`, and
+`await task.set_failure(reason, details)` before raising to preserve an explicit
+failure receipt, including artifact metadata. The SDK handles flushing, renewal,
+reporting and cancellation; no custom lease operations are required. See the
+[task guide](../../../../docs/how-to/run-compute-tasks.md#events-current-task-tokens-and-failure-receipts)
+for limits and token-handling rules.
+
 Robot peers stay connected between tasks. `await tasks.start()` starts networking
 without claiming work, and `tasks.peer()` exposes the idle robot peer. Close
 task-specific endpoints in the handler's `finally` block; await `tasks.close()`

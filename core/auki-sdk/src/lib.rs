@@ -17,8 +17,8 @@ mod status;
 #[cfg(not(target_arch = "wasm32"))]
 pub use auki_tasks::{
     AukiComputeCredential, AukiDmsTasks, AukiRobotCredential, ComputeConfig, MachineCredential,
-    RobotConfig, TaskContext, TaskCredential, TaskError, TaskHandler, TaskLease, TaskOutcome,
-    TaskResult, TaskSpec, TasksConfig,
+    RobotConfig, TaskAccessToken, TaskContext, TaskCredential, TaskError, TaskHandler, TaskLease,
+    TaskOutcome, TaskResult, TaskSpec, TasksConfig,
 };
 
 #[cfg(not(target_arch = "wasm32"))]

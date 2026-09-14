@@ -26,6 +26,34 @@ pub struct TaskCredential {
     pub(crate) closed: CancellationToken,
 }
 
+/// Read-only view of the current task's Domain HTTP bearer. Clones share renewal
+/// and revocation with the lease owner; this handle never refreshes credentials.
+#[derive(Clone)]
+pub struct TaskAccessToken(pub(crate) TaskCredential);
+
+impl std::fmt::Debug for TaskAccessToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TaskAccessToken([REDACTED])")
+    }
+}
+
+impl TaskAccessToken {
+    /// Read the latest bearer synchronously. Fails after cancellation, expiry or
+    /// task completion. Already returned copies cannot be revoked locally: read
+    /// immediately before each request, never cache or log the returned secret.
+    pub fn get(&self) -> Result<SecretString> {
+        let state = self.0.grant.borrow();
+        if self.0.closed.is_cancelled() {
+            return Err(TaskError::Cancelled);
+        }
+        let grant = state.as_ref().ok_or(TaskError::LeaseLost)?;
+        if grant.lease_expires.min(grant.access.expires_at()) <= Utc::now() {
+            return Err(TaskError::LeaseLost);
+        }
+        Ok(SecretString::new(grant.access.bearer().expose_secret()))
+    }
+}
+
 impl TaskCredential {
     pub(crate) fn new(lease: &LeaseEnvelope, client_id: &str) -> Result<Self> {
         let domain = lease
@@ -203,5 +231,38 @@ impl DomainAccessProvider for TaskCredential {
             }
             waited = true;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    use serde_json::json;
+
+    #[test]
+    fn synchronous_token_handle_checks_lease_expiry_without_a_background_runtime() {
+        let domain = Uuid::new_v4();
+        let expires = Utc::now() + chrono::Duration::minutes(1);
+        let claims = json!({"iss":"dds", "aud":["http://127.0.0.1:12345"], "domain_id":domain, "exp":expires.timestamp()});
+        let bearer = format!(
+            "e30.{}.fixture",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
+        );
+        let lease: LeaseEnvelope = serde_json::from_value(json!({
+            "task":{"id":Uuid::new_v4(),"capability":"/fixture/v1"},
+            "domain_id":domain,"domain_server_url":"http://127.0.0.1:12345",
+            "access_token":bearer,"access_token_expires_at":expires,"lease_expires_at":expires
+        }))
+        .unwrap();
+        let credential = TaskCredential::new(&lease, "fixture").unwrap();
+        let token = TaskAccessToken(credential.clone());
+        assert_eq!(token.get().unwrap().expose_secret(), bearer);
+        credential.grant.send_modify(|grant| {
+            grant.as_mut().unwrap().lease_expires = Utc::now() - chrono::Duration::seconds(1);
+        });
+        assert!(matches!(token.get(), Err(TaskError::LeaseLost)));
+        credential.revoke();
+        assert!(matches!(token.get(), Err(TaskError::Cancelled)));
     }
 }

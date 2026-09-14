@@ -159,7 +159,11 @@ def worker_services():
                 return self.reply({**grant(), "task": {"id": TASK, "capability": CAPABILITY,
                     "meta": {"input_id": DATA}, "inputs_cids": [DATA]}}, state["claim_status"])
             if path.path.endswith("/heartbeat"):
-                state["heartbeats"].append(json.loads(body))
+                heartbeat = json.loads(body)
+                state["heartbeats"].append(heartbeat)
+                if heartbeat.get("events") and "heartbeat_gate" in state:
+                    state["heartbeat_waiting"] = True
+                    assert state["heartbeat_gate"].wait(3), "test did not release heartbeat"
                 if state["rotate"]:
                     state["generation"] += 1
                 response = {**grant(), "task_id": TASK, "cancel": state["cancel"]}
@@ -265,11 +269,18 @@ def test_cancellation_waits_for_python_finally_and_skips_completion(worker_servi
         cleaned = asyncio.Event()
 
         async def handler(task):
+            token = task.access_token
+            assert token.get()
+            await task.set_failure("must not report after cancellation", {"artifacts": [DATA]})
             started.set()
             try:
                 await asyncio.sleep(100)
             finally:
                 assert task.is_cancelled()
+                with pytest.raises(auki_sdk.TaskRuntimeError):
+                    token.get()
+                with pytest.raises(auki_sdk.TaskRuntimeError):
+                    await task.log_event({"too_late": True})
                 cleaning.set()
                 await release.wait()
                 cleaned.set()
@@ -421,13 +432,103 @@ def test_handler_exception_reports_failure_and_reaches_python(worker_services):
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("method", ["run", "run_once"])
+def test_managed_events_drain_in_order_and_failure_preserves_artifact_metadata(worker_services, method):
+    async def scenario():
+        gate = threading.Event()
+        worker_services["heartbeat_gate"] = gate
+        returned = asyncio.Event()
+        retained = []
+        details = {"job": {"task_id": TASK}, "artifacts": [
+            {"id": DATA, "logical_path": "partial.json", "metadata": {"partial": True}}]}
+
+        async def handler(task):
+            retained.append(task.access_token)
+            await task.log_event({"sequence": 1})
+            while not worker_services.get("heartbeat_waiting"):
+                await asyncio.sleep(0.005)
+            await task.log_event({"sequence": 2})
+            await task.log_event({"sequence": 3})
+            await task.progress({"phase": "failed"})
+            await task.set_failure("reconstruction failed", details)
+            returned.set()
+            raise ValueError("private exception text is not a receipt")
+
+        credential, tasks = runtime(worker_services, handler)
+        operation = asyncio.ensure_future(getattr(tasks, method)())
+        try:
+            await asyncio.wait_for(returned.wait(), 2)
+            await asyncio.sleep(0.03)
+            assert not operation.done()
+            assert worker_services["complete"] == worker_services["fail"] == []
+            gate.set()
+            with pytest.raises(ValueError, match="private exception text"):
+                await asyncio.wait_for(operation, 3)
+            events = [event for hb in worker_services["heartbeats"] for event in hb["events"]]
+            assert events == [{"sequence": 1}, {"sequence": 2}, {"sequence": 3}]
+            assert worker_services["heartbeats"][-1]["progress"] == {"phase": "failed"}
+            assert worker_services["fail"] == [{"reason": "reconstruction failed", "details": details}]
+            assert worker_services["complete"] == []
+            with pytest.raises(auki_sdk.TaskRuntimeError):
+                retained[0].get()
+        finally:
+            gate.set()
+            await tasks.close()
+            await credential.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("cause", ["cancel", "heartbeat_failure"])
+def test_managed_final_drain_does_not_report_or_replay_after_losing_authority(worker_services, cause):
+    async def scenario():
+        gate = threading.Event()
+        worker_services["heartbeat_gate"] = gate
+        returned = asyncio.Event()
+        retained = []
+
+        async def handler(task):
+            retained.append(task.access_token)
+            await task.log_event({"sequence": 1})
+            while not worker_services.get("heartbeat_waiting"):
+                await asyncio.sleep(0.005)
+            await task.set_failure("must not report", {"artifacts": [DATA]})
+            returned.set()
+            raise RuntimeError("handler finished")
+
+        credential, tasks = runtime(worker_services, handler)
+        operation = asyncio.ensure_future(tasks.run_once())
+        try:
+            await asyncio.wait_for(returned.wait(), 2)
+            if cause == "cancel":
+                operation.cancel()
+            else:
+                worker_services["heartbeat_status"] = 503
+                gate.set()
+            with pytest.raises((asyncio.CancelledError, auki_sdk.TaskRuntimeError)):
+                await asyncio.wait_for(operation, 3)
+            await tasks.close()
+            assert worker_services["complete"] == worker_services["fail"] == []
+            assert [e for hb in worker_services["heartbeats"] for e in hb["events"]] == [{"sequence": 1}]
+            with pytest.raises(auki_sdk.TaskRuntimeError):
+                retained[0].get()
+        finally:
+            gate.set()
+            await tasks.close()
+            await credential.close()
+    asyncio.run(scenario())
+
+
 def test_task_data_uses_rotated_tokens_and_preserves_denied_writes(worker_services):
     async def scenario():
         async def handler(task):
             data = task.data()
+            token = task.access_token
+            old_token = token.get()
+            assert "fixture" not in repr(token)
             # Reject the cached token; data requests wake the one heartbeat owner.
             worker_services["generation"] += 1
             assert await data.read(DATA) == b"hello"
+            assert token.get() != old_token
             worker_services["data_status"] = 403
             with pytest.raises(auki_sdk.DomainDataError) as denied:
                 await data.write(b"denied", data_id=DATA)

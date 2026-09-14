@@ -56,8 +56,10 @@ registered capabilities serially with bounded request times and a delay between
 rounds. Concurrent managed `run()` calls are rejected.
 
 Handlers return `None` or the existing DMS `output_cids`/`meta` dictionary.
-A Python exception reports a generic failure to DMS and is re-raised locally;
-its text is not sent to services. Handler/service failures stop the managed loop.
+A Python exception is re-raised locally. By default it reports a generic failure
+to DMS; use `task.set_failure(reason, details)` to supply an explicit receipt as
+described below. Exception text is not automatically sent to services.
+Handler/service failures stop the managed loop.
 Progress replaces its previous value. Progress and Python result metadata are
 limited to 64 KiB; DMS envelopes to 2 MiB. Only HTTP 401 is replayed once after
 renewal. Other claim/complete/fail failures may have an unknown outcome.
@@ -68,6 +70,69 @@ HTTP failures retain `status`; data operations retain `DomainDataError`.
 Peer shutdown failures use kind `cleanup`. They are retained and reported by
 `tasks.close()` even if the Python run awaitable was cancelled. Rust callers
 must handle the `Result` returned by `AukiDmsTasks::close()`.
+
+## Events, current task tokens and failure receipts
+
+These features work in both managed `run()` and `run_once()`. Handlers do not
+need a custom heartbeat, token-renewal or result-reporting loop.
+
+`await task.log_event(value)` appends JSON to the next heartbeat's `events`
+array. Events keep their enqueue order, including calls through cloned Rust
+contexts. The queue accepts at most 1024 events and 64 KiB of serialized JSON;
+overflow returns an error without dropping previously accepted events. Progress
+still replaces its previous value independently of events.
+
+Managed execution awaits an in-flight heartbeat before the final flush and
+completion/failure receipt. Only acknowledged events leave the queue. A failed
+heartbeat ends the lease; there is no retry on an unknown network outcome.
+HTTP 401 still permits one authenticated replay, so remote delivery is not
+exactly-once. DMS applies its own configured event-retention limit.
+
+For existing Domain HTTP integrations, `task.access_token.get()` synchronously
+reads the current **task Domain bearer**. Retain the handle and call `get()` before
+each request: the sole heartbeat owner rotates its value. Reads fail after lease
+expiry, cancellation, runtime shutdown or task completion/failure. This is not a
+machine or P2P token. Prefer `task.data()` for new integrations because it also
+handles Domain Server changes, 401 renewal and transfer cleanup. Never log or
+cache plaintext tokens; a previously returned copy can remain valid remotely
+until expiry.
+
+`await task.set_failure(reason, details)` prepares a receipt for a handler that
+subsequently raises. It does not stop execution or immediately send a request.
+Use `details` for application metadata, including any uploaded artifacts:
+
+```python
+async def handle(task):
+    artifacts = []
+    try:
+        await task.log_event({"phase": "started"})
+        content = await task.data().read(task.meta["input_id"])
+        saved = await task.data().write(
+            content.upper(), name=f"result-{task.id}", data_type="example.text.v1"
+        )
+        artifacts.append({"id": saved["id"], "metadata": {"bytes": len(content)}})
+        await task.log_event({"phase": "finished"})
+        return {"output_cids": [saved["id"]], "meta": {"artifacts": artifacts}}
+    except Exception:
+        await task.set_failure("uppercase processing failed", {
+            "job": {"task_id": task.id}, "artifacts": artifacts,
+        })
+        raise
+```
+
+The reason must be nonblank and at most 4096 UTF-8 bytes; details are limited to
+64 KiB. Send only application-approved text/metadata, without credentials or
+private exception dumps. A later call replaces the prepared receipt. Successful
+handlers ignore it. Cancellation or lost authority skips both completion and
+failure reporting, including when the handler had already prepared a receipt.
+A receipt already sent to DMS before cancellation cannot be retracted; its remote
+outcome may be unknown.
+
+Rust exposes the same operations directly on `TaskContext`: `log_event(value)`,
+`set_failure(reason, details)` and `access_token.get()` are synchronous `Result`
+APIs. Set the receipt, finish cleanup and return `Err(TaskError::Handler)`.
+The getter returns a redacted, zeroizing `SecretString`; use `expose_secret()`
+only at the HTTP handoff. There is no additional refresh owner in either binding.
 
 ## Robots and idle reads
 
@@ -231,3 +296,6 @@ Robots additionally require `DDS_ROBOT_WORKERS_ENABLED` in DDS,
 `ROBOT_WORKERS_ENABLED` in DMS and the same exclusive `DDS_ROBOT_AUDIENCE`.
 Local tests exercise these contracts and real local peer exchanges; live machine
 execution and deployment flags have not been validated by this change.
+Ordered events and explicit failure receipts use the existing DMS `events`,
+`reason` and `details` fields, also checked at `004688cb`. These SDK APIs are
+additive and do not change provider routes or payload formats.

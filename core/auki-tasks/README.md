@@ -32,6 +32,15 @@ ends. Already-issued remote bearer tokens may remain valid until expiry.
 Runtime `close()` returns a `Result` and retains peer shutdown failures so a
 cancelled run cannot hide a failed relay/transport cleanup.
 
+Managed handlers call `task.log_event(value)` for ordered heartbeat events and
+`task.access_token.get()` for the latest task Domain HTTP bearer. The token
+handle shares rotation/revocation with the lease; it never refreshes independently.
+Prepare an explicit DMS failure reason and artifact metadata with
+`task.set_failure(reason, details)`, then finish cleanup and return an error.
+Managed execution drains the in-flight heartbeat and final event batch before
+reporting. Cancellation/authority loss skips receipts. See
+[limits and examples](../../docs/how-to/run-compute-tasks.md#events-current-task-tokens-and-failure-receipts).
+
 The runtime uses current `meta`, `inputs_cids`, `output_cids` and completion
 metadata without defining a new task payload or scheduler. Handler errors stop
 the managed loop after reporting failure. DMS controls task retries; there is

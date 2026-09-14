@@ -20,8 +20,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    MachineCredential, Result, TaskCredential, TaskError, TaskPeerFactory, TaskPeerGrant,
-    TaskPeerSession,
+    MachineCredential, Result, TaskAccessToken, TaskCredential, TaskError, TaskPeerFactory,
+    TaskPeerGrant, TaskPeerSession,
 };
 
 #[cfg(test)]
@@ -74,8 +74,12 @@ pub trait TaskHandler: Send + Sync {
 pub struct TaskContext {
     pub task: TaskSpec,
     pub credential: TaskCredential,
+    /// Current task Domain HTTP token, renewed by the sole heartbeat owner.
+    pub access_token: TaskAccessToken,
     data: DomainDataClient,
     progress: Arc<Mutex<Value>>,
+    events: Arc<Mutex<Vec<Value>>>,
+    failure: Arc<Mutex<Option<FailTaskRequest>>>,
     peer: Arc<Mutex<Option<Arc<dyn TaskPeerSession>>>>,
     owns_peer: bool,
 }
@@ -120,6 +124,62 @@ impl TaskContext {
         }
         *self.progress.lock() = value;
         self.credential.changed.notify_one();
+        Ok(())
+    }
+
+    /// Append an event to the next heartbeat. Calls are ordered by enqueueing;
+    /// acknowledged events are removed before the next batch. The bounded queue
+    /// rejects new events when full instead of silently dropping existing ones.
+    /// Remote delivery is not exactly-once if a request's outcome is unknown.
+    pub fn log_event(&self, value: Value) -> Result<()> {
+        if self.is_cancelled() {
+            return Err(TaskError::Cancelled);
+        }
+        let mut events = self.events.lock();
+        if events.len() >= 1024 {
+            return Err(TaskError::Configuration("event queue exceeds 1024 entries"));
+        }
+        // Count the serialized array, including separators, before mutating it.
+        let bytes = serde_json::to_vec(&*events)
+            .map_err(|_| TaskError::Configuration("invalid events"))?
+            .len();
+        let added = serde_json::to_vec(&value)
+            .map_err(|_| TaskError::Configuration("invalid event"))?
+            .len();
+        if bytes
+            .saturating_add(added)
+            .saturating_add(usize::from(!events.is_empty()))
+            > 64 * 1024
+        {
+            return Err(TaskError::Configuration("event queue exceeds 64 KiB"));
+        }
+        events.push(value);
+        self.credential.changed.notify_one();
+        Ok(())
+    }
+
+    /// Set the DMS failure receipt if this handler returns an error. This does
+    /// not end the task: finish cleanup, then return an error. Successful handlers
+    /// ignore this receipt. Cancellation/authority loss never reports it.
+    /// Only include application-approved text and metadata, never credentials.
+    pub fn set_failure(&self, reason: impl Into<String>, details: Value) -> Result<()> {
+        if self.is_cancelled() {
+            return Err(TaskError::Cancelled);
+        }
+        let reason = reason.into();
+        if reason.trim().is_empty() || reason.len() > 4096 {
+            return Err(TaskError::Configuration(
+                "failure reason must contain 1-4096 bytes",
+            ));
+        }
+        if serde_json::to_vec(&details)
+            .map_err(|_| TaskError::Configuration("invalid failure details"))?
+            .len()
+            > 64 * 1024
+        {
+            return Err(TaskError::Configuration("failure details exceed 64 KiB"));
+        }
+        *self.failure.lock() = Some(FailTaskRequest { reason, details });
         Ok(())
     }
 }
@@ -381,9 +441,12 @@ impl AukiDmsTasks {
                 .in_domain(credential.domain_id());
             let context = TaskContext {
                 task: lease.task.clone(),
+                access_token: TaskAccessToken(credential.clone()),
                 credential,
                 data,
                 progress: Arc::new(Mutex::new(Value::Object(Default::default()))),
+                events: Arc::new(Mutex::new(Vec::new())),
+                failure: Arc::new(Mutex::new(None)),
                 peer: Arc::new(Mutex::new(self.peer_session())),
                 owns_peer: self.0.robot_peer.is_none(),
             };
@@ -598,7 +661,7 @@ impl TaskLease {
         let progress = self.context.progress.lock().clone();
         let request = HeartbeatRequest {
             progress,
-            events: vec![],
+            events: self.context.events.lock().clone(),
         };
         let operation = async {
             let response = tokio::time::timeout(
@@ -611,6 +674,9 @@ impl TaskLease {
             .await
             .map_err(|_| TaskError::LeaseLost)?
             .map_err(|error| TaskError::dms("heartbeat", error))?;
+            // New events may have arrived while this request was in flight.
+            // Only retire the acknowledged prefix, retaining their order.
+            self.context.events.lock().drain(..request.events.len());
             self.context
                 .credential
                 .update(self.context.task.id, &response)?;
@@ -641,7 +707,7 @@ impl TaskLease {
         result
     }
 
-    async fn heartbeat_loop(&mut self) -> Result<()> {
+    async fn heartbeat_loop(&mut self, stop: &CancellationToken) -> Result<()> {
         loop {
             let delay = self
                 .remaining()?
@@ -651,6 +717,7 @@ impl TaskLease {
             tokio::select! {
                 biased;
                 _ = self.context.credential.closed.cancelled() => return Err(TaskError::Cancelled),
+                _ = stop.cancelled() => return Ok(()),
                 _ = self.context.credential.changed.notified() => {},
                 _ = async { match &peer { Some(peer) if self.context.owns_peer => peer.refresh_requested().await, _ => std::future::pending().await } } => {},
                 _ = async { match &peer { Some(peer) => peer.wait_stopped().await, None => std::future::pending().await } } => return Err(TaskError::Authority("task peer stopped")),
@@ -710,42 +777,76 @@ impl TaskLease {
         let context = self.context.clone();
         let runtime = self.runtime.clone();
         let outcome = {
+            let heartbeat_stop = CancellationToken::new();
             let started = AtomicBool::new(false);
             let execution = async {
                 started.store(true, Ordering::Release);
                 handler.run(context.clone()).await
             };
             tokio::pin!(execution);
-            let heartbeat = self.heartbeat_loop();
+            let heartbeat = self.heartbeat_loop(&heartbeat_stop);
             tokio::pin!(heartbeat);
             tokio::select! {
                 biased;
                 _ = runtime.stopped() => { context.revoke(); if started.load(Ordering::Acquire) { let _ = execution.await; } Err(runtime.stopped_error()) },
                 _ = cancellation.cancelled() => { context.revoke(); if started.load(Ordering::Acquire) { let _ = execution.await; } Err(TaskError::Cancelled) },
                 result = &mut heartbeat => { context.revoke(); if started.load(Ordering::Acquire) { let _ = execution.await; } result.and(Err(TaskError::LeaseLost)) },
-                result = &mut execution => result,
+                result = &mut execution => {
+                    // Do not drop an in-flight heartbeat when a fast handler
+                    // finishes: it may already have appended events remotely.
+                    // Await its bounded result before the final flush/receipt.
+                    heartbeat_stop.cancel();
+                    tokio::select! { biased;
+                        _ = runtime.stopped() => { context.revoke(); Err(runtime.stopped_error()) },
+                        _ = cancellation.cancelled() => { context.revoke(); Err(TaskError::Cancelled) },
+                        drained = &mut heartbeat => {
+                            if drained.is_err() { context.revoke(); }
+                            drained.and(result)
+                        },
+                    }
+                },
             }
         };
         if context.is_cancelled() {
             self.finish_resources().await?;
             return outcome.map(|_| ()).and(Err(TaskError::Cancelled));
         }
-        // Flush the final progress and check cancellation before publishing a result.
-        let heartbeat_result = self.heartbeat().await;
-        if let Err(error) = heartbeat_result {
-            self.finish_resources().await?;
-            return Err(error);
-        }
-        match outcome {
-            Ok(result) => self.complete(result).await,
-            Err(_) => {
-                self.fail(FailTaskRequest {
-                    reason: "task handler failed".into(),
-                    details: Value::Null,
-                })
-                .await?;
-                Err(TaskError::Handler)
+        let reporting = async {
+            // Flush the final progress/events before publishing a result.
+            if let Err(error) = self.heartbeat().await {
+                self.finish_resources().await?;
+                return Err(error);
             }
+            match outcome {
+                Ok(result) => self.complete(result).await,
+                Err(_) => {
+                    let failure =
+                        context
+                            .failure
+                            .lock()
+                            .clone()
+                            .unwrap_or_else(|| FailTaskRequest {
+                                reason: "task handler failed".into(),
+                                details: Value::Null,
+                            });
+                    self.fail(failure).await?;
+                    Err(TaskError::Handler)
+                }
+            }
+        };
+        tokio::pin!(reporting);
+        tokio::select! { biased;
+            _ = cancellation.cancelled() => {
+                context.revoke();
+                // Revocation stops the flush/report before admission, but peer
+                // and data cleanup must still finish. A receipt already sent
+                // to DMS cannot be retracted and may have an unknown outcome.
+                match reporting.await {
+                    Err(TaskError::PeerCleanup) => Err(TaskError::PeerCleanup),
+                    _ => Err(TaskError::Cancelled),
+                }
+            }
+            result = &mut reporting => result,
         }
     }
 }

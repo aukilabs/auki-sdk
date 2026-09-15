@@ -13,6 +13,14 @@ credential. The SDK selects the robot audience for official Auki DDS URLs;
 custom endpoints need an explicit value. Check the
 [service requirements](../reference/tasks.md#service-requirements) for your environment.
 
+## Try the paired example
+
+The [compute + robot Python example](../../core/examples/compute-robot/README.md)
+walks through run-isolated HTTP input/output, an uppercase compute task and a
+robot inspection report. It includes offline tests, bounded worker commands,
+and operator-owned verification and cleanup guidance. Use only provisioned
+workers and explicitly approved Domain/job/data scope.
+
 ## Write a Python handler
 
 A handler is an async function registered under a DMS capability. This example

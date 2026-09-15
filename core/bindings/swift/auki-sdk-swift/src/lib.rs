@@ -617,7 +617,7 @@ impl AukiSession {
     }
 
     /// Domain choices available for explicit peer selection. Imported sessions
-    /// use the permission-scoped P2P listing contract.
+    /// use the API-issued human listing profile appropriate to their role.
     pub async fn accessible_domains(&self) -> Result<Vec<AukiDomain>, AukiSdkError> {
         self.session
             .accessible_domains()

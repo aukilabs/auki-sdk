@@ -217,7 +217,7 @@ struct DomainDataHost {
         let importedBytes = try await importedData.read(dataId: initialDataID)
         try require(importedBytes == Data("fixture".utf8), "imported session could not read known-Domain data")
 
-        try await configure(baseURL, #"{"denyP2pExchange":true}"#)
+        try await configure(baseURL, #"{"importedViewer":true,"denyP2pExchange":true}"#)
         do {
             _ = try await imported.domains().list(query: AukiDomainListQuery(limit: 1))
             throw HostFailure.assertion("denied imported Domain listing unexpectedly succeeded")
@@ -232,7 +232,7 @@ struct DomainDataHost {
             retainedData == Data("fixture".utf8),
             "listing denial made known-Domain data unusable"
         )
-        try await configure(baseURL, #"{"denyP2pExchange":false}"#)
+        try await configure(baseURL, #"{"importedViewer":false,"denyP2pExchange":false}"#)
 
         let importedDomains = imported.domains()
         let importedPage = try await importedDomains.list(
@@ -241,6 +241,11 @@ struct DomainDataHost {
         try require(
             importedPage.total == 2 && importedPage.domains.first?.id == otherDomainID,
             "imported Domain pagination was not preserved"
+        )
+        let importedChoices = try await imported.accessibleDomains()
+        try require(
+            importedChoices.count == 2 && importedChoices.first?.id == domainID,
+            "imported accessible Domains did not use the ordinary User profile"
         )
         do {
             _ = try await importedDomains.list(

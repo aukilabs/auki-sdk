@@ -106,7 +106,7 @@ actor Store: AukiZitadelSessionStore {
         await store.release.open()
         let listed = try await listing.value
         try check(listed.count == 1 && listed[0].id == "00000000-0000-0000-0000-000000000099",
-            "scoped imported Domain listing changed")
+            "ordinary imported Domain listing changed")
         let first = Task { try await admissionProbe(session) }
         let second = Task { try await admissionProbe(session) }
         try await first.value
@@ -123,7 +123,7 @@ actor Store: AukiZitadelSessionStore {
         let restartedStats = try await fixture("/__stats")
         try check(restartedStats["refresh"] == 1, "restart replayed rotation")
         try check(restartedStats["exchange"] == 1 && restartedStats["domains"] == 1,
-            "imported listing did not use the scoped API/DDS path")
+            "imported listing did not use the ordinary API/DDS path")
         await restored.close()
         print("PASS Swift listing, single-flight ACK ordering, selected Domain denial, restart")
 
@@ -200,7 +200,7 @@ actor Store: AukiZitadelSessionStore {
         }
         print("PASS Swift redacted configuration errors")
         let finalStats = try await fixture("/__stats")
-        try check(finalStats["exchange"] == 0 && finalStats["domains"] == 0, "legacy exchange or listing called")
+        try check(finalStats["exchange"] == 0 && finalStats["domains"] == 0, "terminal failure reached service exchange or listing")
         print("PASS 8 Swift binding cases")
     }
 }

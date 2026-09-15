@@ -197,6 +197,17 @@ struct SessionState {
 struct ImportedListingGrant {
     bearer: SecretString,
     domains: HashSet<Uuid>,
+    kind: ImportedListingGrantKind,
+}
+
+enum ImportedListingGrantKind {
+    User { organization: Uuid },
+    Peer,
+}
+
+enum ImportedOrdinaryProfile {
+    User(ImportedListingGrant),
+    Viewer,
 }
 
 #[derive(Deserialize)]
@@ -207,7 +218,8 @@ struct ImportedListingClaims {
     aud: Vec<String>,
     sub: String,
     org: String,
-    domains: Vec<String>,
+    #[serde(default)]
+    domains: Option<Vec<String>>,
     iat: i64,
     exp: i64,
 }
@@ -602,8 +614,8 @@ impl AuthSession {
         self.inner.client.inner.environment.dds_base_url()
     }
 
-    /// List Domain choices. Imported sessions use the API's explicit,
-    /// permission-aware human listing grant and fail closed on legacy profiles.
+    /// List Domain choices. Imported owners and scoped Users use the API's
+    /// ordinary User grant; viewer profiles require its permission-aware grant.
     pub async fn accessible_domains(&self) -> Result<Vec<DomainChoice>> {
         let cancellation = CancellationToken::new();
         self.accessible_domains_with_cancellation(&cancellation)
@@ -684,21 +696,19 @@ impl AuthSession {
     ) -> Result<ImportedListingGrant> {
         let mut ready = session.ready(RefreshMode::IfExpiring, cancellation).await?;
         *refresh_used |= ready.refreshed;
-        let mut url = self.inner.client.api_url("service/domains-access-token");
-        url.query_pairs_mut().append_pair("purpose", "p2p");
         loop {
             let request = self
                 .inner
                 .client
                 .inner
                 .http
-                .post(url.clone())
+                .post(self.inner.client.api_url("service/domains-access-token"))
                 .header(ACCEPT, "application/json")
                 .bearer_auth(ready.credentials.access_token().expose());
             match self
                 .inner
                 .client
-                .send_json::<ServiceTokenResponse>(request, API_P2P_SERVICE_TOKEN, cancellation)
+                .send_json::<ServiceTokenResponse>(request, API_SERVICE_TOKEN, cancellation)
                 .await
             {
                 Err(error) if error.is_unauthorized() => {
@@ -710,7 +720,46 @@ impl AuthSession {
                     *refresh_used = true;
                 }
                 Ok(response) => {
-                    return validate_imported_listing_grant(response.access_token);
+                    match validate_imported_ordinary_listing_profile(response.access_token)? {
+                        ImportedOrdinaryProfile::User(grant) => return Ok(grant),
+                        ImportedOrdinaryProfile::Viewer => {
+                            let mut url = self.inner.client.api_url("service/domains-access-token");
+                            url.query_pairs_mut().append_pair("purpose", "p2p");
+                            let request = self
+                                .inner
+                                .client
+                                .inner
+                                .http
+                                .post(url)
+                                .header(ACCEPT, "application/json")
+                                .bearer_auth(ready.credentials.access_token().expose());
+                            match self
+                                .inner
+                                .client
+                                .send_json::<ServiceTokenResponse>(
+                                    request,
+                                    API_P2P_SERVICE_TOKEN,
+                                    cancellation,
+                                )
+                                .await
+                            {
+                                Err(error) if error.is_unauthorized() => {
+                                    if *refresh_used {
+                                        session.require_login().await;
+                                        return Err(Error::AuthenticationRequired);
+                                    }
+                                    ready = session.ready(RefreshMode::Force, cancellation).await?;
+                                    *refresh_used = true;
+                                }
+                                Ok(response) => {
+                                    return validate_imported_peer_listing_grant(
+                                        response.access_token,
+                                    );
+                                }
+                                Err(error) => return Err(error),
+                            }
+                        }
+                    }
                 }
                 Err(error) => return Err(error),
             }
@@ -1013,7 +1062,7 @@ impl AuthSession {
                 expected_total,
                 &mut domains,
                 &mut domain_ids,
-                Some(&grant.domains),
+                grant.allowed_domains(),
             )?;
             expected_total = Some(total);
             if domains.len() == total as usize {
@@ -1366,16 +1415,15 @@ fn append_accessible_domain_page(
     Ok(response.total)
 }
 
-fn validate_imported_listing_grant(value: String) -> Result<ImportedListingGrant> {
+fn decode_imported_listing_claims(
+    value: String,
+    endpoint: &'static str,
+) -> Result<(SecretString, ImportedListingClaims)> {
     // Validate the profile/scope of an authenticated API response. DDS still
     // verifies its signature and permissions; this does not trust peer input.
-    let invalid = || {
-        Error::invalid_response(
-            API_P2P_SERVICE_TOKEN,
-            "invalid imported Domain-listing service token",
-        )
-    };
-    let bearer = validated_token(value, API_P2P_SERVICE_TOKEN)?;
+    let invalid =
+        || Error::invalid_response(endpoint, "invalid imported Domain-listing service token");
+    let bearer = validated_token(value, endpoint)?;
     let mut parts = bearer.expose().split('.');
     let _header = parts.next().ok_or_else(invalid)?;
     let payload = parts.next().ok_or_else(invalid)?;
@@ -1384,35 +1432,83 @@ fn validate_imported_listing_grant(value: String) -> Result<ImportedListingGrant
     }
     let bytes = URL_SAFE_NO_PAD.decode(payload).map_err(|_| invalid())?;
     let claims: ImportedListingClaims = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-    if claims.token_type != "user-p2p-access" {
-        return Err(Error::InvalidConfiguration(
-            "API does not support permission-aware imported Domain listing",
-        ));
-    }
     let organization = Uuid::parse_str(&claims.org).map_err(|_| invalid())?;
     let expires_at = DateTime::from_timestamp(claims.exp, 0).ok_or_else(invalid)?;
     if claims.iss != "api"
-        || !claims
-            .aud
-            .iter()
-            .any(|audience| audience == "domain-service")
+        || claims.aud.as_slice() != ["domain-service"]
         || claims.sub.is_empty()
         || claims.sub.len() > 255
         || organization.to_string() != claims.org
         || claims.iat >= claims.exp
         || expires_at <= Utc::now()
-        || claims.domains.is_empty()
     {
         return Err(invalid());
     }
-    let mut domains = HashSet::with_capacity(claims.domains.len());
-    for domain in claims.domains {
+    Ok((bearer, claims))
+}
+
+fn validate_imported_ordinary_listing_profile(value: String) -> Result<ImportedOrdinaryProfile> {
+    let (bearer, claims) = decode_imported_listing_claims(value, API_SERVICE_TOKEN)?;
+    match claims.token_type.as_str() {
+        "user-access" => {
+            let organization = Uuid::parse_str(&claims.org).map_err(|_| {
+                Error::invalid_response(API_SERVICE_TOKEN, "invalid imported listing organization")
+            })?;
+            let domains =
+                canonical_listing_domains(claims.domains.unwrap_or_default(), API_SERVICE_TOKEN)?;
+            Ok(ImportedOrdinaryProfile::User(ImportedListingGrant {
+                bearer,
+                domains,
+                kind: ImportedListingGrantKind::User { organization },
+            }))
+        }
+        "app-access" if claims.domains.as_ref().is_none_or(Vec::is_empty) => {
+            Ok(ImportedOrdinaryProfile::Viewer)
+        }
+        _ => Err(Error::invalid_response(
+            API_SERVICE_TOKEN,
+            "invalid imported Domain-listing service-token profile",
+        )),
+    }
+}
+
+fn validate_imported_peer_listing_grant(value: String) -> Result<ImportedListingGrant> {
+    let (bearer, claims) = decode_imported_listing_claims(value, API_P2P_SERVICE_TOKEN)?;
+    if claims.token_type != "user-p2p-access" || claims.domains.as_ref().is_none_or(Vec::is_empty) {
+        return Err(Error::InvalidConfiguration(
+            "API does not support permission-aware imported Domain listing",
+        ));
+    }
+    let domains = canonical_listing_domains(
+        claims.domains.expect("checked nonempty above"),
+        API_P2P_SERVICE_TOKEN,
+    )?;
+    Ok(ImportedListingGrant {
+        bearer,
+        domains,
+        kind: ImportedListingGrantKind::Peer,
+    })
+}
+
+fn canonical_listing_domains(values: Vec<String>, endpoint: &'static str) -> Result<HashSet<Uuid>> {
+    let invalid = || Error::invalid_response(endpoint, "invalid imported Domain allowlist");
+    let mut domains = HashSet::with_capacity(values.len());
+    for domain in values {
         let id = Uuid::parse_str(&domain).map_err(|_| invalid())?;
         if id.to_string() != domain || !domains.insert(id) {
             return Err(invalid());
         }
     }
-    Ok(ImportedListingGrant { bearer, domains })
+    Ok(domains)
+}
+
+impl ImportedListingGrant {
+    fn allowed_domains(&self) -> Option<&HashSet<Uuid>> {
+        match self.kind {
+            ImportedListingGrantKind::User { .. } if self.domains.is_empty() => None,
+            _ => Some(&self.domains),
+        }
+    }
 }
 
 fn convert_domain(domain: AccessibleDomain) -> Result<DomainDescriptor> {

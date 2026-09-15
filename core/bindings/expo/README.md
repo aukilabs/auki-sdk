@@ -51,9 +51,12 @@ installationId)`. Keep all three endpoints aligned to the same deployment.
 Domain listing is server-paged; totals may change between pages. Visibility in
 the list does not imply read, write, or delete permission. Portal and pose reads
 have their own permission checks. Imported ZITADEL sessions support the default
-own-Domain listing for a picker through the scoped `purpose=p2p` exchange, and
-can use a known Domain ID for data access. Organization and Domain Server filters,
-and portal-to-Domain association queries, remain unsupported for imported sessions.
+own-Domain listing for a picker and can use a known Domain ID for data access.
+The SDK strictly validates the ordinary service-token profile: human `user-access`
+uses the deployed User Domain route, while App-shaped viewer grants are never
+sent to that broader route and require the permission-scoped `purpose=p2p`
+exchange. Organization and Domain Server filters, and portal-to-Domain
+association queries, remain unsupported for imported sessions.
 The [example picker helper](example/domain-data.js) requests one explicit page;
 the UI can request another offset when the user asks for more.
 

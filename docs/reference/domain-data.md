@@ -22,15 +22,24 @@ Imported-session data uses the existing ordinary API service exchange, then
 DDS selected-Domain authentication. The deployment must accept imported
 ZITADEL bearers on that API route.
 
-¹ Imported listing requires `POST /service/domains-access-token?purpose=p2p`
-to issue a `user-p2p-access` token with an explicit, nonempty human Domain
-allowlist, followed by DDS `/api/v1/accessible-domains`. The SDK rejects older
-API deployments that ignore this purpose and return ordinary User/App profiles.
-It checks the returned page against the grant and preserves permission errors.
-The bridge uses the API's Domain registry, which can differ from DDS; a known
-DDS Domain can support data access while listing is denied. Portal-to-Domain
-association queries remain unsupported and fail before network I/O. Neither
-path falls back to broader organization visibility. See
+¹ Imported owner and scoped User grants use the ordinary service exchange and
+the same DDS listing route as User login. The API-issued `user-access` grant
+limits the request to its organization and any explicit Domain restrictions;
+a null or empty restriction list allows owned Domains.
+
+The older `accessible_domains` picker follows DDS User access-control rules
+and can also include public Domains or Domains explicitly shared with the
+token's organization. Any explicit token Domain restrictions still apply;
+its total can differ from the owned-only `domains().list()` query.
+
+Imported viewer grants are App-shaped and cannot safely use legacy listing.
+They require `POST /service/domains-access-token?purpose=p2p` to issue a
+`user-p2p-access` token with an explicit, nonempty human Domain allowlist,
+followed by DDS `/api/v1/accessible-domains`. Older providers that ignore this
+purpose fail closed. The SDK checks each page against its grant and preserves
+permission errors. The viewer bridge's API Domain registry can differ from
+DDS, so known-Domain data can work while that listing is denied. Portal-to-Domain
+association queries remain unsupported for imported sessions. See
 [provider compatibility](../../test-support/domain-data-validation.md#provider-compatibility).
 
 `AukiCredential` is an alias for `AuthSession`. A User, App, or imported session can be
@@ -75,7 +84,8 @@ Totals can change between pages. Portal association lookup also accepts `all`
 without a Domain Server filter.
 
 User/App Domain and portal association listings send `issue_token=false` and SDK
-identification. Imported listings use the allowlist metadata route. Neither
+identification. Imported User grants use the same Domain route; imported viewer
+grants use the allowlist metadata route. Neither
 obtains potentially billed Domain tokens for every entry. Listing establishes
 visibility; it does not report effective read/write
 permission. Permission filters are not available.

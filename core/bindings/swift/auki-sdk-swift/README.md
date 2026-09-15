@@ -77,11 +77,13 @@ pose fields.
 
 An imported ZITADEL session uses the same awaited credential store for Domain
 listing, data access, and peer authentication. Its default `domains().list`
-query returns the paginated Domains allowed by the API's scoped P2P-access
-token. Organization and Domain Server filters and portal association queries
-remain unsupported for imported sessions. A 403 listing denial is recoverable:
-the same session may still access a known Domain ID if the provider authorizes
-it. Keep the session on a
+query uses the API's ordinary User access profile for owners and other User
+roles, then validates the DDS page against the token's organization and any
+Domain allowlist. Viewer profiles use the API's narrower P2P listing grant.
+Organization and Domain Server filters and portal association queries remain
+unsupported for imported sessions. A 403 listing denial is recoverable: the
+same session may still access a known Domain ID if the provider authorizes it.
+Keep the session on a
 `.DomainData(... authKind: .persistence ...)` error and retry after secure
 storage is available. `loginDataWithEnvironment` and
 `importZitadelDataWithEnvironment` take only API and DDS URLs for apps that do

@@ -80,11 +80,13 @@ without rotating twice. Cancelling an operation does not cancel a storage write
 that has already started, and `await session.close()` waits for that write before
 the host clears secure storage.
 
-Imported sessions list the paginated Domains allowed by the API's scoped P2P
-access token. Their default `session.domains().list()` query is supported;
-organization and Domain Server filters and portal association queries remain
-unsupported. A 403 listing denial is recoverable, and the same session may
-still access a known Domain ID when the provider authorizes it. Use
+Imported owner and User sessions list Domains through the API's ordinary User
+access profile; the SDK validates each DDS page against the token's organization
+and any Domain allowlist. Viewer profiles use the API's narrower P2P listing
+grant. The default `session.domains().list()` query is supported; organization
+and Domain Server filters and portal association queries remain unsupported. A
+403 listing denial is recoverable, and the same session may still access a known
+Domain ID when the provider authorizes it. Use
 `import_zitadel_with_environment` to supply exact API, DDS, and DMS base URLs.
 
 The [compute](examples/compute_task.py) and [robot](examples/robot_task.py)

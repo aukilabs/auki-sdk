@@ -212,7 +212,7 @@ impl AuthSession {
             .await?;
         for attempt in 0..2 {
             match self
-                .fetch_imported_listing_page(&grant, query.limit, query.offset, cancellation)
+                .fetch_imported_domain_page(&grant, query, cancellation)
                 .await
             {
                 Err(error) if attempt == 0 && error.is_unauthorized() => {
@@ -220,49 +220,106 @@ impl AuthSession {
                         .exchange_imported_listing_grant(session, &mut refresh_used, cancellation)
                         .await?;
                 }
-                Ok(response) => {
-                    let mut ids = HashSet::new();
-                    if response.limit != query.limit
-                        || response.offset != query.offset
-                        || response.total > grant.domains.len() as u64
-                        || response.domains.len()
-                            != response
-                                .total
-                                .saturating_sub(u64::from(query.offset))
-                                .min(u64::from(query.limit)) as usize
-                    {
-                        return Err(Error::invalid_response(
-                            DDS_ACCESSIBLE_DOMAINS,
-                            "inconsistent imported Domain pagination",
-                        ));
-                    }
-                    let total = response.total;
-                    let mut domains = Vec::with_capacity(response.domains.len());
-                    for domain in response.domains {
-                        let descriptor = convert_domain(domain)?;
-                        if !grant.domains.contains(&descriptor.id) || !ids.insert(descriptor.id) {
-                            return Err(Error::invalid_response(
-                                DDS_ACCESSIBLE_DOMAINS,
-                                "imported Domain page is outside the service-token allowlist or contains duplicates",
-                            ));
-                        }
-                        domains.push(DomainSummary {
-                            id: descriptor.id,
-                            name: descriptor.name.unwrap_or_default(),
-                            organization_id: descriptor.organization_id,
-                        });
-                    }
-                    return Ok(DomainPage {
-                        domains,
-                        total,
-                        limit: query.limit,
-                        offset: query.offset,
-                    });
-                }
+                Ok(page) => return Ok(page),
                 Err(error) => return Err(error),
             }
         }
         unreachable!("second attempt always returns")
+    }
+
+    async fn fetch_imported_domain_page(
+        &self,
+        grant: &ImportedListingGrant,
+        query: &DomainListQuery,
+        cancellation: &CancellationToken,
+    ) -> Result<DomainPage> {
+        match grant.kind {
+            ImportedListingGrantKind::User { organization } => {
+                let mut url = self.inner.client.dds_url("api/v1/domains");
+                url.query_pairs_mut()
+                    .append_pair("org", "own")
+                    .append_pair("issue_token", "false")
+                    .append_pair("limit", &query.limit.to_string())
+                    .append_pair("offset", &query.offset.to_string());
+                let request = self
+                    .inner
+                    .client
+                    .inner
+                    .http
+                    .get(url)
+                    .header(ACCEPT, "application/json")
+                    .bearer_auth(grant.bearer.expose())
+                    .header("posemesh-client-id", self.client_id())
+                    .header(
+                        "posemesh-sdk-version",
+                        concat!("auki-sdk/", env!("CARGO_PKG_VERSION")),
+                    );
+                let page: DomainPage = self
+                    .inner
+                    .client
+                    .send_json(request, DDS_DOMAINS, cancellation)
+                    .await?;
+                let mut ids = HashSet::new();
+                if page.limit != query.limit
+                    || page.offset != query.offset
+                    || page.domains.len() > query.limit as usize
+                    || page.domains.iter().any(|domain| {
+                        domain.organization_id != Some(organization)
+                            || (!grant.domains.is_empty() && !grant.domains.contains(&domain.id))
+                            || !ids.insert(domain.id)
+                    })
+                    || (!grant.domains.is_empty() && page.total > grant.domains.len() as u64)
+                {
+                    return Err(Error::invalid_response(
+                        DDS_DOMAINS,
+                        "imported User Domain page exceeds its organization or service-token scope",
+                    ));
+                }
+                Ok(page)
+            }
+            ImportedListingGrantKind::Peer => {
+                let response = self
+                    .fetch_imported_listing_page(grant, query.limit, query.offset, cancellation)
+                    .await?;
+                let mut ids = HashSet::new();
+                if response.limit != query.limit
+                    || response.offset != query.offset
+                    || response.total > grant.domains.len() as u64
+                    || response.domains.len()
+                        != response
+                            .total
+                            .saturating_sub(u64::from(query.offset))
+                            .min(u64::from(query.limit)) as usize
+                {
+                    return Err(Error::invalid_response(
+                        DDS_ACCESSIBLE_DOMAINS,
+                        "inconsistent imported Domain pagination",
+                    ));
+                }
+                let total = response.total;
+                let mut domains = Vec::with_capacity(response.domains.len());
+                for domain in response.domains {
+                    let descriptor = convert_domain(domain)?;
+                    if !grant.domains.contains(&descriptor.id) || !ids.insert(descriptor.id) {
+                        return Err(Error::invalid_response(
+                            DDS_ACCESSIBLE_DOMAINS,
+                            "imported Domain page is outside the service-token allowlist or contains duplicates",
+                        ));
+                    }
+                    domains.push(DomainSummary {
+                        id: descriptor.id,
+                        name: descriptor.name.unwrap_or_default(),
+                        organization_id: descriptor.organization_id,
+                    });
+                }
+                Ok(DomainPage {
+                    domains,
+                    total,
+                    limit: query.limit,
+                    offset: query.offset,
+                })
+            }
+        }
     }
 
     pub(super) fn require_domain_listing(&self, state: &SessionState) -> Result<()> {

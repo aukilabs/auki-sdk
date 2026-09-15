@@ -186,11 +186,11 @@ export async function runDomainDataCases(report) {
       && page.domains[0]?.id === 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
     'imported server pagination lost its Domain or page fields');
     stats = await domainFixture('/__stats');
-    check(stats.p2pExchanges === 1
-      && stats.requests['GET /api/v1/accessible-domains'] === 1,
-    'imported listing did not use the scoped accessible-Domains route');
+    check(stats.p2pExchanges === 0
+      && stats.requests['GET /api/v1/domains'] === 1,
+    'imported owner listing did not use the ordinary User Domain route');
 
-    const listingCalls = stats.requests['GET /api/v1/accessible-domains'] ?? 0;
+    const listingCalls = stats.requests['GET /api/v1/domains'] ?? 0;
     try {
       await domains(importedSession).list({ organization: 'all', limit: 1 });
       throw new Error('imported filtered Domain listing unexpectedly succeeded');
@@ -198,7 +198,7 @@ export async function runDomainDataCases(report) {
       check(error.kind === 'auth' && error.code === 'configuration', 'imported filtered listing lost unsupported classification');
     }
     stats = await domainFixture('/__stats');
-    check((stats.requests['GET /api/v1/accessible-domains'] ?? 0) === listingCalls,
+    check((stats.requests['GET /api/v1/domains'] ?? 0) === listingCalls,
       'unsupported imported filter performed provider I/O');
   } finally {
     if (importedClient) await importedClient.close();
@@ -226,13 +226,14 @@ export async function runDomainDataCases(report) {
       await closeSession(session);
     }
     const stats = await domainFixture('/__stats');
-    check(stats.p2pExchanges === 1
+    check(stats.exchanges === 2 && stats.p2pExchanges === 1
+      && (stats.requests['GET /api/v1/domains'] ?? 0) === 0
       && (stats.requests['GET /api/v1/accessible-domains'] ?? 0) === 0,
-    'rejected imported service token reached DDS');
+    'viewer grant reached DDS or skipped role classification');
   };
-  await importedListingFailure({ denyP2pExchange: true }, 'authorization_denied');
-  await importedListingFailure({ wrongP2pToken: true }, 'configuration');
-  report('PASS imported listing denies permission and legacy token profiles');
+  await importedListingFailure({ importedViewer: true, denyP2pExchange: true }, 'authorization_denied');
+  await importedListingFailure({ importedViewer: true, wrongP2pToken: true }, 'configuration');
+  report('PASS viewer listing denies permission without an unsafe App fallback');
 
   report('PASS 8 Expo Domain data host cases');
   await domainFixture('/__phase', { phase: 'passed', count: 8 });

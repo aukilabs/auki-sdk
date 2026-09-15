@@ -182,7 +182,7 @@ mod facade {
         }
 
         /// Domain choices for password sessions and imported ZITADEL sessions.
-        /// Imported sessions use the permission-scoped P2P listing exchange.
+        /// Imported sessions use a strictly validated, role-appropriate service grant.
         #[wasm_bindgen(js_name = accessibleDomains, unchecked_return_type = "AukiDomain[]")]
         pub async fn accessible_domains(&self) -> Result<Array, JsValue> {
             let choices = self

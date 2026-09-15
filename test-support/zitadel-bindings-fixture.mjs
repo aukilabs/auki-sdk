@@ -6,25 +6,25 @@ import { readFile } from 'node:fs/promises';
 const port = Number(process.argv[2] ?? 18111);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('invalid port');
 const base = `http://127.0.0.1:${port}`;
-let counts, generation, options, p2pToken;
+let counts, generation, options, ordinaryToken, p2pToken;
 let phase = { phase: 'idle' };
 const reset = (settings = {}) => {
-  counts = { refresh: 0, exchange: 0, domains: 0, admission: 0 };
-  generation = 0; options = settings; p2pToken = null;
+  counts = { refresh: 0, exchange: 0, p2pExchange: 0, domains: 0, admission: 0 };
+  generation = 0; options = settings; ordinaryToken = null; p2pToken = null;
 };
 reset();
-const issueP2pToken = () => {
+const issueServiceToken = (type, domains) => {
   const now = Math.floor(Date.now() / 1000);
   const claims = {
-    type: 'user-p2p-access',
+    type,
     iss: 'api',
     aud: ['domain-service'],
     sub: 'fixture-user',
     org: '11111111-1111-4111-8111-111111111111',
-    domains: ['00000000-0000-0000-0000-000000000099'],
     iat: now,
     exp: now + 3600,
   };
+  if (domains !== undefined) claims.domains = domains;
   return `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.fixture`;
 };
 const server = http.createServer(async (request, response) => {
@@ -77,15 +77,24 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === '/service/domains-access-token' && request.method === 'POST') {
       counts.exchange++;
-      if (url.search !== '?purpose=p2p') return send(400, { error: 'missing scoped purpose' });
       if (request.headers.authorization !== `Bearer access-${generation}`) return send(401, {});
-      p2pToken = issueP2pToken();
+      if (!url.search) {
+        ordinaryToken = options.importedViewer
+          ? issueServiceToken('app-access')
+          : issueServiceToken('user-access', null);
+        return send(200, { access_token: ordinaryToken });
+      }
+      if (url.search !== '?purpose=p2p' || !options.importedViewer) return send(400, { error: 'unexpected scoped purpose' });
+      counts.p2pExchange++;
+      if (options.denyP2pExchange) return send(403, {});
+      p2pToken = issueServiceToken('user-p2p-access', ['00000000-0000-0000-0000-000000000099']);
       return send(200, { access_token: p2pToken });
     }
     if (url.pathname === '/api/v1/accessible-domains') {
       counts.domains++;
-      if (request.method !== 'GET' || !p2pToken
-          || request.headers.authorization !== `Bearer ${p2pToken}`) return send(401, {});
+      const expectedToken = options.importedViewer ? p2pToken : ordinaryToken;
+      if (request.method !== 'GET' || !expectedToken
+          || request.headers.authorization !== `Bearer ${expectedToken}`) return send(401, {});
       const limit = Number(url.searchParams.get('limit'));
       const offset = Number(url.searchParams.get('offset'));
       if (limit !== 100 || offset !== 0) return send(400, { error: 'unexpected pagination' });
@@ -93,7 +102,7 @@ const server = http.createServer(async (request, response) => {
         id: '00000000-0000-0000-0000-000000000099',
         name: 'Denied Domain',
         description: 'Listed for lifecycle tests; peer admission remains denied',
-        organization_id: null,
+        organization_id: '11111111-1111-4111-8111-111111111111',
       }], total: 1, limit, offset });
     }
     if (/^\/api\/v1\/domains\/00000000-0000-0000-0000-000000000099\/p2p\/zitadel\/challenge$/.test(url.pathname) && request.method === 'POST') {

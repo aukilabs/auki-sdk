@@ -22,9 +22,12 @@ def zitadel_services():
         "calls": [],
         "deny": False,
         "deny_listing": False,
+        "deny_p2p": False,
+        "viewer": False,
         "wrong_claim": False,
+        "ordinary_exchanges": 0,
         "p2p_exchanges": 0,
-        "data_exchanges": 0,
+        "ordinary_token": None,
         "p2p_token": None,
     }
 
@@ -69,7 +72,7 @@ def zitadel_services():
                 assert self.headers["Authorization"] == "Bearer access-replacement"
                 if query.get("purpose") == ["p2p"]:
                     state["p2p_exchanges"] += 1
-                    if state["deny_listing"]:
+                    if state["deny_p2p"]:
                         return self.reply(status=403)
                     now = int(time.time())
                     claims = {
@@ -88,10 +91,54 @@ def zitadel_services():
                     state["p2p_token"] = "e30." + payload + ".sig"
                     return self.reply({"access_token": state["p2p_token"]})
                 assert not query
-                state["data_exchanges"] += 1
-                return self.reply({"access_token": "domain-service-token"})
+                state["ordinary_exchanges"] += 1
+                if state["deny_listing"]:
+                    return self.reply(status=403)
+                now = int(time.time())
+                claims = {
+                    "type": "app-access" if state["viewer"] else "user-access",
+                    "iss": "api",
+                    "aud": ["domain-service"],
+                    "sub": "fixture-user",
+                    "org": "11111111-1111-4111-8111-111111111111",
+                    "iat": now,
+                    "exp": now + 3600,
+                }
+                if not state["viewer"]:
+                    # The released owner profile uses null for an org-wide grant.
+                    claims["domains"] = None
+                payload = base64.urlsafe_b64encode(
+                    json.dumps(claims).encode()
+                ).decode().rstrip("=")
+                token = "e30." + payload + ".sig"
+                state["ordinary_token"] = token
+                return self.reply({"access_token": token})
+            if path == "/api/v1/domains":
+                assert self.headers["Authorization"] == "Bearer " + state["ordinary_token"]
+                assert query["org"] == ["own"]
+                assert query["issue_token"] == ["false"]
+                limit = int(query["limit"][0])
+                offset = int(query["offset"][0])
+                domains = [
+                    {
+                        "id": DOMAIN,
+                        "name": "First",
+                        "organization_id": "11111111-1111-4111-8111-111111111111",
+                    },
+                    {
+                        "id": OTHER_DOMAIN,
+                        "name": "Second",
+                        "organization_id": "11111111-1111-4111-8111-111111111111",
+                    },
+                ]
+                return self.reply({
+                    "domains": domains[offset:offset + limit],
+                    "total": len(domains),
+                    "limit": limit,
+                    "offset": offset,
+                })
             if path == "/api/v1/accessible-domains":
-                assert self.headers["Authorization"] == "Bearer " + state["p2p_token"]
+                assert self.headers["Authorization"] == "Bearer " + state["ordinary_token"]
                 limit = int(query["limit"][0])
                 offset = int(query["offset"][0])
                 domains = [
@@ -281,7 +328,7 @@ def test_imported_listing_paginates_and_keeps_data_authority_separate(zitadel_se
             "domains": [{
                 "id": OTHER_DOMAIN,
                 "name": "Second",
-                "organization_id": None,
+                "organization_id": "11111111-1111-4111-8111-111111111111",
             }],
             "total": 2,
             "limit": 1,
@@ -299,14 +346,15 @@ def test_imported_listing_paginates_and_keeps_data_authority_separate(zitadel_se
         assert denied.value.status == 403
         assert denied.value.code == "authorization_denied"
 
-        # P2P listing denial is recoverable and does not replace the ordinary
-        # Domain-data service-token path or repeat credential persistence.
+        # An ordinary listing denial is recoverable and does not poison the
+        # selected-Domain data path or repeat credential persistence.
+        zitadel_services["deny_listing"] = False
         data = session.data(DOMAIN)
         assert await data.list() == []
         await data.close()
         assert len(saved) == 1
-        assert zitadel_services["p2p_exchanges"] == 3
-        assert zitadel_services["data_exchanges"] == 1
+        assert zitadel_services["ordinary_exchanges"] == 4
+        assert zitadel_services["p2p_exchanges"] == 0
 
         before = len(zitadel_services["calls"])
         with pytest.raises(auki_sdk.DomainDataError) as unsupported_filter:
@@ -320,6 +368,24 @@ def test_imported_listing_paginates_and_keeps_data_authority_separate(zitadel_se
         assert unsupported_portal.value.code == "configuration"
         assert len(zitadel_services["calls"]) == before
         await session.close()
+
+        # A viewer-shaped ordinary profile must fail closed into the narrower
+        # P2P grant. Its 403 remains a structured, recoverable listing denial.
+        zitadel_services["viewer"] = True
+        zitadel_services["deny_p2p"] = True
+
+        async def viewer_store(_snapshot):
+            pass
+
+        viewer = import_session(zitadel_services, viewer_store)
+        with pytest.raises(auki_sdk.DomainDataError) as denied_viewer:
+            await viewer.domains().list(limit=1)
+        assert denied_viewer.value.kind == "auth"
+        assert denied_viewer.value.status == 403
+        assert denied_viewer.value.code == "authorization_denied"
+        assert zitadel_services["ordinary_exchanges"] == 5
+        assert zitadel_services["p2p_exchanges"] == 1
+        await viewer.close()
 
     asyncio.run(scenario())
 

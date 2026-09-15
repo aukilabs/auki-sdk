@@ -52,11 +52,12 @@ export async function runCases(report) {
     release.resolve();
     const [listedDomains] = await Promise.all([listed, ...calls]);
     check(listedDomains.length === 1 && listedDomains[0].id === '00000000-0000-0000-0000-000000000099',
-      'scoped imported Domain listing lost its result');
+      'owner imported Domain listing lost its result');
     check(saves === 1 && (await fixture('/__stats')).refresh === 1, 'single flight lost across Expo');
     const listingStats = await fixture('/__stats');
-    check(listingStats.exchange === 1 && listingStats.domains === 1,
-      'scoped imported Domain listing used the wrong route');
+    check(listingStats.exchange === 1 && listingStats.p2pExchange === 0
+      && listingStats.domains === 1,
+    'owner imported listing did not use the ordinary User grant');
     const saved = await durable.load(); check(saved.refreshToken === 'refresh-1' && saved.accessTokenExpiresAt.endsWith('Z'), 'durable snapshot lost rotation or timestamp');
     await closeSession(session);
     const restarted = await importSession(async () => { throw new Error('unexpected refresh'); }, saved);

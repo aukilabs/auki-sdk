@@ -47,11 +47,12 @@ export async function run() {
     release.resolve();
     const [listedDomains] = await Promise.all([listed, ...calls]);
     assert(listedDomains.length === 1 && listedDomains[0].id === '00000000-0000-0000-0000-000000000099',
-      'scoped imported Domain listing lost its result');
+      'owner imported Domain listing lost its result');
     assert(saves === 1 && (await api('/__stats')).refresh === 1, 'refresh/save must be single flight');
     const listingStats = await api('/__stats');
-    assert(listingStats.exchange === 1 && listingStats.domains === 1,
-      'scoped imported Domain listing used the wrong route');
+    assert(listingStats.exchange === 1 && listingStats.p2pExchange === 0
+      && listingStats.domains === 1,
+    'owner imported listing did not use the ordinary User grant');
     await errorCode(() => s.startPeer('00000000-0000-0000-0000-000000000099'), 'authorization_denied');
     await s.close();
     const restarted = session(async () => { throw new Error('unexpected refresh'); }, durable);

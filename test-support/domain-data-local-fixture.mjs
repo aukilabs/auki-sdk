@@ -13,6 +13,7 @@ export const PORTAL_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
 export const PORTAL_SHORT_ID = 'ABC12345678';
 export const UPLOAD_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 export const DENIED_DATA_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+const ORGANIZATION_ID = '11111111-1111-4111-8111-111111111111';
 
 const primaryBase = `http://127.0.0.1:${port}`;
 const timestamp = '2026-09-01T00:00:00Z';
@@ -38,6 +39,7 @@ function reset(config = {}) {
       ddsUnauthorizedOnce: false,
       domainsUnauthorizedOnce: false,
       accessibleDomainsUnauthorizedOnce: false,
+      importedViewer: false,
       denyP2pExchange: false,
       wrongP2pToken: false,
       ...config,
@@ -56,6 +58,7 @@ function reset(config = {}) {
     importedGeneration: 0,
     nextUpload: 0,
     activeP2pToken: null,
+    activeImportedServiceToken: null,
     records: new Map([[INITIAL_DATA_ID, {
       metadata: metadata(INITIAL_DATA_ID, 'fixture', 'fixture.v1', initialBytes),
       bytes: initialBytes,
@@ -141,18 +144,18 @@ function dataGrant() {
   return `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.fixture`;
 }
 
-function p2pAccessToken(type = 'user-p2p-access') {
+function importedServiceToken(type, domains) {
   const now = Math.floor(Date.now() / 1000);
   const claims = {
     type,
     iss: 'api',
     aud: ['domain-service'],
     sub: 'fixture-user',
-    org: '11111111-1111-4111-8111-111111111111',
-    domains: [DOMAIN_ID, OTHER_DOMAIN_ID],
+    org: ORGANIZATION_ID,
     iat: now,
     exp: now + 3600,
   };
+  if (domains !== undefined) claims.domains = domains;
   return `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.fixture`;
 }
 
@@ -294,19 +297,26 @@ async function primaryHandler(request, response) {
         state.p2pExchanges++;
         if (!imported) return json(response, 403);
         if (state.config.denyP2pExchange) return json(response, 403);
-        state.activeP2pToken = p2pAccessToken(
+        state.activeP2pToken = importedServiceToken(
           state.config.wrongP2pToken ? 'user-access' : 'user-p2p-access',
+          [DOMAIN_ID, OTHER_DOMAIN_ID],
         );
         return json(response, 200, { access_token: state.activeP2pToken });
       }
+      if (imported) {
+        state.activeImportedServiceToken = state.config.importedViewer
+          ? importedServiceToken('app-access')
+          : importedServiceToken('user-access', null);
+        return json(response, 200, { access_token: state.activeImportedServiceToken });
+      }
       return json(response, 200, {
-        access_token: imported
-          ? `service-imported-${state.importedGeneration}`
-          : `service-${state.generation}`,
+        access_token: `service-${state.generation}`,
       });
     }
     if (url.pathname === '/api/v1/domains' && request.method === 'GET') {
-      if (!requireBearer(request, 'service-')) return json(response, 401);
+      const imported = state.activeImportedServiceToken
+        && bearerIs(request, state.activeImportedServiceToken);
+      if (!imported && !requireBearer(request, 'service-')) return json(response, 401);
       if (state.config.ddsUnauthorizedOnce || state.config.domainsUnauthorizedOnce) {
         state.config.ddsUnauthorizedOnce = false;
         state.config.domainsUnauthorizedOnce = false;
@@ -314,11 +324,23 @@ async function primaryHandler(request, response) {
       }
       const limit = Number(url.searchParams.get('limit') ?? 50);
       const offset = Number(url.searchParams.get('offset') ?? 0);
-      const all = [{ id: DOMAIN_ID, name: 'Fixture Domain', organization_id: null }];
+      if (imported && (state.config.importedViewer
+        || url.searchParams.get('org') !== 'own'
+        || url.searchParams.get('issue_token') !== 'false'
+        || url.searchParams.has('domain_server_id'))) return json(response, 403);
+      const all = imported
+        ? [
+          { id: DOMAIN_ID, name: 'Fixture Domain', description: 'first', organization_id: ORGANIZATION_ID },
+          { id: OTHER_DOMAIN_ID, name: 'Other Domain', description: 'second', organization_id: ORGANIZATION_ID },
+        ]
+        : [{ id: DOMAIN_ID, name: 'Fixture Domain', organization_id: null }];
       return json(response, 200, { domains: all.slice(offset, offset + limit), total: all.length, limit, offset });
     }
     if (url.pathname === '/api/v1/accessible-domains' && request.method === 'GET') {
-      if (!state.activeP2pToken || !bearerIs(request, state.activeP2pToken)) return json(response, 401);
+      const peer = state.activeP2pToken && bearerIs(request, state.activeP2pToken);
+      const importedUser = !state.config.importedViewer && state.activeImportedServiceToken
+        && bearerIs(request, state.activeImportedServiceToken);
+      if (!peer && !importedUser) return json(response, 401);
       if (state.config.accessibleDomainsUnauthorizedOnce) {
         state.config.accessibleDomainsUnauthorizedOnce = false;
         return json(response, 401);
@@ -326,8 +348,8 @@ async function primaryHandler(request, response) {
       const limit = Number(url.searchParams.get('limit') ?? 100);
       const offset = Number(url.searchParams.get('offset') ?? 0);
       const all = [
-        { id: DOMAIN_ID, name: 'Fixture Domain', description: 'first', organization_id: null },
-        { id: OTHER_DOMAIN_ID, name: 'Other Domain', description: 'second', organization_id: '11111111-1111-4111-8111-111111111111' },
+        { id: DOMAIN_ID, name: 'Fixture Domain', description: 'first', organization_id: ORGANIZATION_ID },
+        { id: OTHER_DOMAIN_ID, name: 'Other Domain', description: 'second', organization_id: ORGANIZATION_ID },
       ];
       return json(response, 200, {
         domains: all.slice(offset, offset + limit), total: all.length, limit, offset,
@@ -337,7 +359,9 @@ async function primaryHandler(request, response) {
     if (auth && request.method === 'POST') {
       await readBody(request);
       state.domainAuths++;
-      if (!requireBearer(request, 'service-')) return json(response, 401);
+      if (!requireBearer(request, 'service-')
+        && (!state.activeImportedServiceToken
+          || !bearerIs(request, state.activeImportedServiceToken))) return json(response, 401);
       if (auth[1] !== DOMAIN_ID) return json(response, 403);
       return json(response, 200, {
         id: DOMAIN_ID,

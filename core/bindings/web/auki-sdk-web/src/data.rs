@@ -684,9 +684,11 @@ mod tests {
             globalThis.__importedSaves = 0;
             globalThis.__importedSaved = false;
             globalThis.__importedSnapshots = [];
-            globalThis.__importedListingMode = 'valid';
+            globalThis.__importedListingMode = 'owner';
+            globalThis.__importedOrdinaryExchanges = 0;
             globalThis.__importedP2pExchanges = 0;
             globalThis.__importedDomainCalls = 0;
+            globalThis.__importedAccessibleCalls = 0;
             const dataFetch = globalThis.fetch;
             globalThis.fetch = async (input, init) => {
                 const request = input instanceof Request ? input : new Request(input, init);
@@ -708,27 +710,47 @@ mod tests {
                         throw Error('exchange before persisted rotation or wrong credential profile');
                     if (url.search === '?purpose=p2p') {
                         __importedP2pExchanges++;
-                        if (__importedListingMode === 'deny') return json({}, 403);
+                        if (__importedListingMode === 'viewer-deny') return json({}, 403);
                         const now=Math.floor(Date.now()/1000);
-                        const claims={type:__importedListingMode === 'legacy' ? 'user-access' : 'user-p2p-access',
+                        const claims={type:__importedListingMode === 'viewer-legacy' ? 'user-access' : 'user-p2p-access',
                             iss:'api',aud:['domain-service'],sub:'fixture-user',org:'11111111-1111-4111-8111-111111111111',
                             domains:['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','dddddddd-dddd-4ddd-8ddd-dddddddddddd'],iat:now,exp:now+3600};
                         globalThis.__importedP2pToken='e30.'+btoa(JSON.stringify(claims)).replaceAll('=','').replaceAll('+','-').replaceAll('/','_')+'.fixture';
                         return json({access_token:__importedP2pToken});
                     }
                     if (url.search) throw Error('wrong service-token purpose');
-                    return json({access_token:'service'});
+                    __importedOrdinaryExchanges++;
+                    const now=Math.floor(Date.now()/1000);
+                    const viewer=__importedListingMode.startsWith('viewer-');
+                    const claims={type:viewer ? 'app-access' : 'user-access',iss:'api',aud:['domain-service'],
+                        sub:'fixture-user',org:'11111111-1111-4111-8111-111111111111',iat:now,exp:now+3600};
+                    if (!viewer) claims.domains=null;
+                    globalThis.__importedOrdinaryToken='e30.'+btoa(JSON.stringify(claims)).replaceAll('=','').replaceAll('+','-').replaceAll('/','_')+'.fixture';
+                    return json({access_token:__importedOrdinaryToken});
                 }
-                if (url.pathname === '/api/v1/accessible-domains') {
+                if (url.pathname === '/api/v1/domains') {
                     __importedDomainCalls++;
-                    if (request.headers.get('authorization') !== 'Bearer '+__importedP2pToken)
-                        throw Error('wrong p2p service token');
+                    if (__importedListingMode !== 'owner'
+                        || request.headers.get('authorization') !== 'Bearer '+__importedOrdinaryToken
+                        || url.searchParams.get('org') !== 'own'
+                        || url.searchParams.get('issue_token') !== 'false')
+                        throw Error('unsafe or malformed imported User Domain listing');
                     const limit=Number(url.searchParams.get('limit')), offset=Number(url.searchParams.get('offset'));
-                    const all=[{id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',name:'Domain',description:'first',organization_id:null},
+                    const all=[{id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',name:'Domain',description:'first',organization_id:'11111111-1111-4111-8111-111111111111'},
                         {id:'dddddddd-dddd-4ddd-8ddd-dddddddddddd',name:'Other',description:'second',organization_id:'11111111-1111-4111-8111-111111111111'}];
                     return json({domains:all.slice(offset,offset+limit),total:all.length,limit,offset});
                 }
-                if (url.pathname.endsWith('/auth') && request.headers.get('authorization') !== 'Bearer service')
+                if (url.pathname === '/api/v1/accessible-domains') {
+                    __importedAccessibleCalls++;
+                    const expected=__importedListingMode === 'owner' ? __importedOrdinaryToken : __importedP2pToken;
+                    if (request.headers.get('authorization') !== 'Bearer '+expected)
+                        throw Error('wrong imported listing service token');
+                    const limit=Number(url.searchParams.get('limit')), offset=Number(url.searchParams.get('offset'));
+                    const all=[{id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',name:'Domain',description:'first',organization_id:'11111111-1111-4111-8111-111111111111'},
+                        {id:'dddddddd-dddd-4ddd-8ddd-dddddddddddd',name:'Other',description:'second',organization_id:'11111111-1111-4111-8111-111111111111'}];
+                    return json({domains:all.slice(offset,offset+limit),total:all.length,limit,offset});
+                }
+                if (url.pathname.endsWith('/auth') && request.headers.get('authorization') !== 'Bearer '+__importedOrdinaryToken)
                     throw Error('wrong data service bearer');
                 if (url.searchParams.get('raw') === 'true' && !request.headers.get('authorization').endsWith('.sig'))
                     throw Error('wrong Domain grant');
@@ -777,7 +799,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            js_sys::eval("__importedP2pExchanges === 1 && __importedDomainCalls === 1")
+            js_sys::eval("__importedOrdinaryExchanges === 2 && __importedP2pExchanges === 0 && __importedDomainCalls === 1 && __importedAccessibleCalls === 0")
                 .unwrap()
                 .as_bool(),
             Some(true)
@@ -814,10 +836,10 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    async fn imported_listing_preserves_denial_and_rejects_legacy_profile_before_dds() {
+    async fn imported_viewer_listing_preserves_denial_without_unsafe_app_fallback() {
         for (mode, code) in [
-            ("deny", "authorization_denied"),
-            ("legacy", "configuration"),
+            ("viewer-deny", "authorization_denied"),
+            ("viewer-legacy", "configuration"),
         ] {
             let (_restore, session) =
                 imported_fixture("globalThis.__importedSaved=true; return Promise.resolve();");
@@ -829,7 +851,7 @@ mod tests {
                 .unwrap_err();
             assert_eq!(js_sys::Reflect::get(&error, &"code".into()).unwrap(), code);
             assert_eq!(
-                js_sys::eval("__importedP2pExchanges === 1 && __importedDomainCalls === 0")
+                js_sys::eval("__importedOrdinaryExchanges === 1 && __importedP2pExchanges === 1 && __importedDomainCalls === 0 && __importedAccessibleCalls === 0")
                     .unwrap()
                     .as_bool(),
                 Some(true)

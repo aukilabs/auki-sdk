@@ -90,11 +90,12 @@ Your storage callback must save all replacement credentials together and await
 every write, including on failure. Keep the session if startup or saving fails.
 On a `persistence` error, retry with that session to save its retained tokens.
 
-Imported listing requires an API deployment that implements the
-`purpose=p2p` human Domain-allowlist exchange and DDS that accepts its
-`user-p2p-access` token on `/accessible-domains`. The SDK rejects older exchanges
-that ignore the purpose and preserves HTTP 403 when the account has no readable
-Domains. It does not fall back to organization-wide listing.
+The SDK selects imported listing from the API's service grant. Owner and scoped
+User grants use the existing DDS User listing route, with the granted
+organization and Domain restrictions. Viewer grants require the separate
+`purpose=p2p` human Domain-allowlist exchange and matching DDS support. The SDK
+preserves listing denials and never sends an imported viewer's App-shaped token
+to the broader legacy listing route.
 
 A known Domain ID can still use the separate data path: the API deployment must
 accept ZITADEL for the ordinary service exchange. DDS must separately support

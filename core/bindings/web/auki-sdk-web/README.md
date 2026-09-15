@@ -34,11 +34,13 @@ for streaming, cancellation, and errors.
 
 Imported ZITADEL sessions support the default `session.domains().list()` query
 for a server-paged picker, plus `session.data(knownDomainId)` and selected-Domain
-portal/pose reads. Imported listing uses the API's scoped `purpose=p2p` token;
-organization and Domain Server filters remain unsupported. Portal-to-Domain
-association queries also remain unsupported. The session shares one refresh
-owner and awaited storage callback across listing, data, and peers. Retain it
-after `error.code === "persistence"` and retry after storage recovers. See
+portal/pose reads. The SDK strictly validates the ordinary service-token profile:
+human `user-access` uses the deployed User Domain route, while App-shaped viewer
+grants are never sent to that broader route and require the permission-scoped
+`purpose=p2p` exchange. Organization and Domain Server filters remain unsupported.
+Portal-to-Domain association queries also remain unsupported. The session shares
+one refresh owner and awaited storage callback across listing, data, and peers.
+Retain it after `error.code === "persistence"` and retry after storage recovers. See
 [imported login data access](../../../../docs/how-to/domain-data.md#reuse-an-imported-login).
 
 The [Blob/File and Domain-picker helpers](examples/domain-data.ts) request one

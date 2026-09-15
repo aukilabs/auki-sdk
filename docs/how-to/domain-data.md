@@ -206,16 +206,18 @@ On logout, close all clients and peers, await `session.close()`, then clear
 secure storage.
 
 The same session provides a paged picker through
-`session.domains().list({ limit: 50, offset: 0 })`. Imported listing requires the
-API's `purpose=p2p` human Domain-allowlist exchange and the matching DDS
-`/accessible-domains` route. Use default organization selection and no Domain
-Server filter for imported sessions. The SDK rejects unsupported token profiles
-and preserves listing denials instead of falling back to a broader catalog.
+`session.domains().list({ limit: 50, offset: 0 })`. The SDK uses the ordinary
+API-issued User grant for owner and scoped User sessions, applying its
+organization and Domain restrictions. Imported viewer grants require the
+separate `purpose=p2p` human Domain-allowlist exchange and matching DDS route.
+Use default organization selection and no Domain Server filter for imported
+sessions. The SDK rejects unsupported token profiles and preserves denials.
 
-The current bridge enumerates the API's Domain registry before checking read
-visibility. A Domain that exists only in DDS can therefore support known-Domain
-data access without appearing in that picker. Preserve this distinction in your
-app; do not infer that a listing failure invalidates the whole session.
+The viewer bridge currently enumerates the API's Domain registry before
+checking read visibility. A Domain that exists only in DDS can therefore
+support known-Domain data access without appearing through that bridge.
+Preserve this distinction in your app; a listing failure does not invalidate
+the whole session.
 Portal-to-Domain association lookup remains unsupported for imported sessions.
 Read, write, delete, and pose access remain separate server permission checks;
 successful exchange or listing does not authorize an operation.

@@ -1,7 +1,10 @@
-# Auki networking for Web
+# Auki SDK for Web
 
-Use `AukiUserSession` and `AukiPeer` from JavaScript to connect a browser app.
-Each start creates a new Peer ID. Browsers connect through WSS relay addresses.
+Use `AukiUserSession` to sign in from JavaScript, access Domain data, and start
+an `AukiPeer`. Browser peers use a new Peer ID on each start and connect through
+WSS relay addresses.
+
+## Build
 
 Requires Rust 1.89+, wasm-pack 0.13.1, and `wasm32-unknown-unknown`.
 From the SDK repository root:
@@ -12,43 +15,42 @@ wasm-pack build core/bindings/web/auki-sdk-web --target web --out-dir pkg -- --l
 ~~~
 
 Import the generated module and await its default initialization function before
-using the bindings. Choose `AukiPeerReachabilityMode.OutboundOnly` to make
-outgoing requests, or `RelayBacked` to also accept incoming requests.
+using the bindings. Custom Rust protocols must be compiled into the same Wasm
+module; see [custom protocols](../../../../docs/how-to/protocols.md).
 
-For an app that sends and receives messages, run
-[Web Echo](../../../examples/portable-echo/web/README.md).
-Compile custom Rust protocols into the same Wasm module as the SDK. See
-[custom protocols](../../../../docs/how-to/protocols.md).
+## Use the binding
 
-## Domain data without a peer
+For an app that sends and receives messages, start with
+[Web Echo](../../../examples/portable-echo/web/README.md). Choose
+`AukiPeerReachabilityMode.OutboundOnly` to make outgoing requests or
+`RelayBacked` to also accept incoming requests.
 
-The same session exposes `domains()` for ordinary Domain discovery and portal
-metadata, and `data(domain_id)` for data operations and pose reads. Close the data
-client before closing the shared session. See [Domain data](../../../../docs/how-to/domain-data.md)
-for permission boundaries, streaming limits and migration from Posemesh clients.
-
+For HTTP data access, use `session.domains()` and `session.data(domain_id)`.
 `AukiUserSession.loginDev(email, password, clientId?)` accepts a persistent
-installation ID; existing calls remain valid. Data methods accept an optional
-`AbortSignal`. `readTo` awaits a chunk sink; `writeStream` awaits a bounded source.
-Both callbacks receive a signal so they can stop their own pending work.
+installation ID. Close data clients and peers before closing the session.
+See [Work with Domain data](../../../../docs/how-to/domain-data.md#use-web-or-python)
+for examples and the [reference](../../../../docs/reference/domain-data.md)
+for streaming, cancellation, and errors.
 
-The [Blob/File round trip](examples/domain-data.ts) accepts an existing session
-and chosen Domain, reads portals/poses, uploads a file, streams it to the supplied
-destination and deletes its unique test record. Import the generated SDK in your
-app, await its initialization, then pass your session and selected file to this
-helper. This example contacts the session's configured services.
+The [Blob/File helper](examples/domain-data.ts) accepts a session, selected
+Domain, file, and destination callback. It reads portal/pose records, uploads
+the file, streams it back, and deletes its unique record. It contacts the
+session's configured services, so use a Domain approved for these operations.
 
-Compile the binding, declarations and examples locally:
+## Check the binding and examples
 
-```sh
+Requires Node 20.19+ on 20.x or 22.12+. From the repository root:
+
+~~~sh
 cd core/bindings/web/auki-sdk-web
 npm ci
 npm run check
-```
+~~~
 
-From the repository root, run the offline Chromium integration tests with
-`WASM_BINDGEN_TEST_RUNNER` pointing to the matching wasm-bindgen 0.2.121 runner:
+This builds WASM and checks TypeScript declarations and examples. For local
+Chromium integration tests, return to the repository root and set
+`WASM_BINDGEN_TEST_RUNNER` to the matching wasm-bindgen 0.2.121 runner:
 
-```sh
+~~~sh
 bash test-support/run-domain-data-browser-tests.sh
-```
+~~~

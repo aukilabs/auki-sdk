@@ -61,6 +61,7 @@ impl RobotAuthenticator {
 
         let client = Client::builder()
             .use_rustls_tls()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(request_timeout)
             .build()
             .context("build DDS robot authentication client")?;
@@ -88,6 +89,11 @@ impl RobotAuthenticator {
             .send()
             .await?;
         decode_access_response(response).await
+    }
+
+    /// Refresh presence and the registered capabilities using provisioned credentials.
+    pub async fn register_presence(&self) -> std::result::Result<AccessBundle, SiweError> {
+        self.register().await
     }
 
     async fn verify(&self) -> std::result::Result<AccessBundle, SiweError> {
@@ -122,13 +128,23 @@ impl AccessAuthenticator for RobotAuthenticator {
 }
 
 async fn decode_access_response(
-    response: Response,
+    mut response: Response,
 ) -> std::result::Result<AccessBundle, SiweError> {
     if !response.status().is_success() {
         return Err(SiweError::UpstreamStatus(response.status()));
     }
 
-    let body: AccessResponse = response.json().await?;
+    let mut encoded = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if encoded.len().saturating_add(chunk.len()) > 128 * 1024 {
+            return Err(SiweError::MissingField("bounded robot response"));
+        }
+        encoded.extend_from_slice(&chunk);
+    }
+    // A serde UUID/type error can contain an upstream string. Never attach
+    // response values to a token-manager diagnostic.
+    let body: AccessResponse = serde_json::from_slice(&encoded)
+        .map_err(|_| SiweError::MissingField("valid robot access response"))?;
     if body.robot_id.filter(|id| !id.is_nil()).is_none() {
         return Err(SiweError::MissingField("robot_id"));
     }

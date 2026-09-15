@@ -54,6 +54,7 @@ finite-protocols = ["info", "catalog", "registry", "blob"]
 standard-protocols = ["finite-protocols", "message", "stream"]
 
 [dependencies]
+async-trait.workspace = true
 auki-datatypes = { path = "../../../../labs/auki-datatypes", optional = true }
 auki-protocols = { path = "../../../../labs/auki-protocols", optional = true }
 auki-registry = { path = "../../../../labs/auki-registry", optional = true }

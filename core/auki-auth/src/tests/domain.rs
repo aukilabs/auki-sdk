@@ -6,6 +6,40 @@ fn page() -> MockResponse {
     MockResponse::json(json!({"domains":[],"total":0,"limit":50,"offset":0}))
 }
 
+#[test]
+fn issued_task_data_grants_preserve_routing_checks_and_clamp_expiry() {
+    let domain = Uuid::new_v4();
+    let server = "https://domain.example/";
+    let expiry = Utc::now().timestamp() + 120;
+    let claims = json!({"iss":"dds", "domain_id":domain, "aud":[server], "exp":expiry});
+    let make = |claims: &Value, expires_at| {
+        let token = SecretString::new(format!(
+            "e30.{}.signature",
+            URL_SAFE_NO_PAD.encode(claims.to_string())
+        ));
+        crate::DomainAccess::from_issued_grant(domain, server, token, expires_at)
+    };
+    let advertised = chrono::DateTime::from_timestamp(expiry + 120, 0).unwrap();
+    assert_eq!(
+        make(&claims, advertised).unwrap().expires_at().timestamp(),
+        expiry
+    );
+    let shorter = chrono::DateTime::from_timestamp(expiry - 30, 0).unwrap();
+    assert_eq!(make(&claims, shorter).unwrap().expires_at(), shorter);
+    for (field, value) in [
+        ("iss", json!("other")),
+        ("domain_id", json!(Uuid::new_v4())),
+        ("aud", json!(["https://other.example/"])),
+        ("exp", json!(1)),
+    ] {
+        let mut bad = claims.clone();
+        bad[field] = value;
+        assert!(make(&bad, advertised).is_err());
+    }
+    assert!(make(&claims, chrono::DateTime::from_timestamp(1, 0).unwrap()).is_err());
+    assert!(!format!("{:?}", make(&claims, advertised).unwrap()).contains("signature"));
+}
+
 #[tokio::test]
 async fn data_and_peer_clients_share_one_login_and_refresh_owner() {
     let identity = Identity::generate();

@@ -61,6 +61,31 @@ pub struct DomainAccess {
 }
 
 impl DomainAccess {
+    /// Validate a DDS-issued data grant delivered by an authenticated authority
+    /// such as a DMS lease. This checks routing and expiry, not the signature;
+    /// Domain Servers still verify the bearer and enforce resource permissions.
+    /// Never use this constructor to trust a token received from a remote peer.
+    pub fn from_issued_grant(
+        domain_id: Uuid,
+        server_url: &str,
+        token: SecretString,
+        expires_at: DateTime<Utc>,
+    ) -> Result<Self> {
+        let mut access = AccessResponse {
+            id: domain_id,
+            domain_server: ServerResponse {
+                url: server_url.into(),
+            },
+            access_token: token.expose().to_owned(),
+        }
+        .into_access(domain_id)?;
+        if expires_at <= Utc::now() {
+            return Err(Error::StaleAuthority);
+        }
+        access.expires_at = access.expires_at.min(expires_at);
+        Ok(access)
+    }
+
     pub fn domain_id(&self) -> Uuid {
         self.domain_id
     }
@@ -81,6 +106,11 @@ impl DomainAccess {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait DomainAccessProvider: Send + Sync {
     fn client_id(&self) -> &str;
+    /// Local restriction for credentials that can only supply read grants.
+    /// Returning true prevents writes; false never bypasses server permissions.
+    fn read_only(&self) -> bool {
+        false
+    }
     /// Completes when all work using this credential must stop.
     async fn wait_closed(&self);
     /// Renew after expiry, or after the server rejects `rejected` with HTTP 401.

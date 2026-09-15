@@ -1,8 +1,5 @@
 # Sign in and choose a Domain
 
-For HTTP data access without networking, see [Work with Domain data](domain-data.md).
-Its User/App clients and peer bootstrap can share the same session.
-
 You need credentials and a Domain ID that the account can access.
 [Add the SDK to your app](../reference/networking.md#platforms-and-installation)
 before using these native Rust examples.
@@ -39,6 +36,10 @@ async fn main() -> anyhow::Result<()> {
 
 To show a Domain picker, call `bootstrap.accessible_domains().await?` before
 starting the peer. Pass the selected `choice.domain.id` to `DomainSelection::new`.
+
+To reuse this login for HTTP data access, pass a cloned session to the
+[Domain data clients](domain-data.md). Close all clients and peers before
+closing the session.
 
 ## Sign in as a backend service
 
@@ -93,6 +94,10 @@ peers, close the session, then delete stored credentials.
 
 ## Build a compute node or robot
 
-[Posemesh runners](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
-already manage machine authentication and execution for DMS tasks. Use the
-entrypoint for your [compute node or robot](../explanation/apps-nodes-and-robots.md).
+Use provisioned DDS credentials for a compute node or robot. Compute nodes
+also need a signing wallet; robots use the deployment's robot audience.
+These credentials are separate from User and App login.
+
+See [Run compute and robot tasks](run-compute-tasks.md) for Rust and Python
+setup, and [apps, services, compute nodes, and robots](../explanation/apps-nodes-and-robots.md)
+for Domain and assignment rules.

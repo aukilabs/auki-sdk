@@ -1,30 +1,17 @@
 # auki-domain-client
 
-List Domains and read/write Domain data using the same User/App session as
-`AukiPeer`. No peer, relay, discovery registration or DMS configuration is needed.
+Find Domains and read or write Domain data using the SDK's shared credentials.
+User and App sessions work without starting a peer. Native task leases and
+robot credentials use the same data client through `auki-tasks`.
 
-Start with [Domain data access](../../docs/how-to/domain-data.md). The SDK facade
-reexports `AukiDomains`, `AukiDomainData` and their request/response types.
+The `auki-sdk` facade reexports these APIs for Rust, with bindings for Web and
+Python. Start with [Work with Domain data](../../docs/how-to/domain-data.md).
+See the [reference](../../docs/reference/domain-data.md) for credential support,
+portal and pose reads, transfer limits, and multipart upload behavior.
 
-Provides Rust, Web and Python APIs for metadata, portal/pose reads, buffered
-CRUD and streaming multipart transfers. Native task grants and read-only robot
-credentials use the same client through `auki-tasks`. Imported ZITADEL data access
-and Swift/Expo data bindings remain follow-ups. Existing networking
-bindings remain compatible.
+Run local fixture tests and check WASM compilation from the repository root:
 
-The metadata and multipart operations are adapted from Posemesh's
-[`core/domain-http`](https://github.com/aukilabs/posemesh/tree/37db36a50c8b6bacf471d5721e32cd1f88e0e552/core/domain-http).
-The existing Posemesh package stays available for its current consumers;
-this crate replaces its independent login/cache/background-refresh path with
-`auki-auth`, bounded requests and explicit cancellation. It does not depend on
-Posemesh or `labs/` at runtime.
-
-Run local fixture tests and portability checks from the repository root:
-
-```sh
+~~~sh
 cargo test --locked -p auki-auth -p auki-domain-client -p auki-sdk
 cargo check --locked --target wasm32-unknown-unknown -p auki-auth -p auki-domain-client -p auki-sdk
-```
-
-The tests are offline. The documented dev example performs real authentication
-and data writes; run it only with an approved account and Domain.
+~~~

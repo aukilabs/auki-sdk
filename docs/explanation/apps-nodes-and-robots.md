@@ -1,11 +1,8 @@
 # Apps, services, compute nodes, and robots
 
-Use `auki-sdk` to connect your app to peers and run
-[compute or robot handlers](../how-to/run-compute-tasks.md) in Rust or Python.
-Task execution and peer communication have separate authority: a service can
-exchange data without executing tasks. Existing
-[Posemesh runners](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
-remain available for their application-specific execution and storage conventions.
+Apps, backend services, compute nodes, and robots use different credentials
+and receive different access to Domains. A P2P connection lets them exchange
+application data; DMS decides which compute node or robot may execute a task.
 
 ## User apps and backend services
 
@@ -36,12 +33,13 @@ DMS selects tasks matching the node's registered capabilities and mode:
 DMS supplies access to the task's Domain through the lease. A node registration
 does not grant unrestricted access to Domains.
 
-See [Posemesh compute setup](https://github.com/aukilabs/posemesh/blob/main/docs/how-to/configure-workers.md#compute-node).
+Use [SDK task handlers](../how-to/run-compute-tasks.md#start-a-compute-node)
+or a [Posemesh compute runner](https://github.com/aukilabs/posemesh/blob/main/docs/how-to/configure-workers.md#compute-node)
+to execute work.
 
 ## Robots
 
-A robot can use the SDK task runtime or the existing Posemesh robot entrypoint.
-It authenticates with a robot registration credential provisioned in DDS,
+A robot authenticates with a registration credential provisioned in DDS,
 without a wallet or staking. If P2P is enabled, it also needs a separate
 network identity key.
 
@@ -50,17 +48,22 @@ matching **dedicated** tasks in that Domain. An unassigned robot can report
 presence but cannot claim tasks. Reassignment requires the robot to be offline
 and its active leases and tokens to expire.
 
-See [Posemesh robot setup](https://github.com/aukilabs/posemesh/blob/main/docs/how-to/configure-workers.md#robot).
+Use [SDK task handlers](../how-to/run-compute-tasks.md#use-a-robot)
+or a [Posemesh robot runner](https://github.com/aukilabs/posemesh/blob/main/docs/how-to/configure-workers.md#robot)
+to execute work.
 
 ## Task execution
 
-Implement an SDK task handler or a Posemesh `Runner` for the capability you
-support. The selected runtime handles polling, heartbeats and results. SDK robot
-credentials also supply assigned-Domain idle reads; writes use task credentials.
-Optional compute peers shut down with the task, including discovery and relays.
-Robot peers stay connected to their assigned Domain between tasks; runtime
-shutdown drains their peer, discovery and relay resources. Applications close
-task-specific protocol endpoints when the handler finishes.
+An SDK handler implements a capability in Rust or Python. The managed runtime
+handles registration, authentication, polling, heartbeats, and results.
+Posemesh runners provide application-specific execution and storage interfaces.
+See [Run compute and robot tasks](../how-to/run-compute-tasks.md).
+
+A compute node receives Domain access for its active lease. Its optional peer
+closes when that task ends. A robot can read its assigned Domain and stay
+connected while idle, but writes require task authority. Ending a robot task
+revokes its task data access while leaving its peer connected. Runtime shutdown
+releases the peer, discovery registration, and relay bookings.
 
 DMS currently allows **one active task lease per node**, for both compute nodes
 and robots. A robot runner must keep physical task execution exclusive and

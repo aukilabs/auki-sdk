@@ -14,9 +14,13 @@ The SDK reexports the types from
 | Robot, while idle | Native, assigned Domain reads | Assigned Domain reads | Not exposed |
 | Imported ZITADEL session | Data access unsupported | Import not exposed | Data access unsupported |
 
-Swift and Expo do not expose Domain data APIs. Imported ZITADEL data operations
-return an unsupported-configuration error without refreshing or changing stored
-credentials. See [authentication](../how-to/authenticate.md) for supported P2P login.
+Swift and Expo Domain data bindings are not implemented yet. They are part of
+[#374](https://github.com/aukilabs/auki-sdk/issues/374), which tracks support across
+SDK platforms.
+
+Imported ZITADEL data operations return an unsupported-configuration error
+without refreshing or changing stored credentials. See
+[authentication](../how-to/authenticate.md) for supported P2P login.
 
 `AukiCredential` is an alias for `AuthSession`. A User or App session can be
 shared by data clients and `AukiPeerBootstrap`; data access does not require

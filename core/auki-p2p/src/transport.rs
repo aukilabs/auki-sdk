@@ -30,6 +30,7 @@ use crate::system_dns::SystemDnsTransport;
 use crate::{
     authentication::{authenticate_duplex, SessionRequirements},
     authority::DomainAuthority,
+    circuit_hop::{CircuitAcquire, CircuitHopKey, CircuitHopTable},
     observation::{NodeFailure, NodeObservations},
     relay::{
         canonicalize_provider_base, ObservedRelayLimits, RelayCancellation,
@@ -56,9 +57,10 @@ struct Behaviour {
 
 /// A circuit connection selected by one explicit relay route.
 ///
-/// Its private process nonce and public libp2p connection ID prevent a later
-/// application open from silently falling back to a direct or sibling-relay
-/// connection to the same target.
+/// Its public libp2p connection ID prevents a later application open from
+/// silently falling back to a direct or sibling-relay connection to the same
+/// target. Overlapping `open_exact_route` / `connect_relayed` calls to the same
+/// circuit share this hop until the last owner releases it.
 #[derive(Clone, Debug)]
 pub struct RelayRouteHandle {
     node_instance_id: Uuid,
@@ -705,8 +707,9 @@ impl Node {
         Ok(stream)
     }
 
-    /// Close only the circuit represented by this handle. The possibly shared
+    /// Release one hop ref. The possibly shared
     /// direct relay connection and unrelated target paths remain established.
+    /// The circuit itself stays up until the last ref is released.
     pub async fn close_relay_route(&self, route: &RelayRouteHandle) -> P2PResult<()> {
         if route.node_instance_id != self.node_instance_id {
             return Err(Error::ForeignRelayRoute);
@@ -1436,10 +1439,11 @@ enum DialCompletion {
 
 struct PendingDial {
     peer_id: PeerId,
-    response: oneshot::Sender<P2PResult<ConnectionId>>,
+    responses: Vec<oneshot::Sender<P2PResult<ConnectionId>>>,
     completion: DialCompletion,
     requested_direct_address: Option<Multiaddr>,
     circuit_relay_peer_id: Option<PeerId>,
+    circuit_key: Option<CircuitHopKey>,
     _circuit_permit: Option<RelayCircuitDialPermit>,
 }
 
@@ -1573,6 +1577,7 @@ async fn run_swarm(
     let local_peer_id = *swarm.local_peer_id();
     let mut reservations = ReservationRuntime::new(local_peer_id, relay_events);
     let mut pending_dials: HashMap<ConnectionId, PendingDial> = HashMap::new();
+    let mut circuit_hops = CircuitHopTable::default();
     let mut pending_disconnects: HashMap<PeerId, Vec<oneshot::Sender<P2PResult<()>>>> =
         HashMap::new();
     loop {
@@ -1660,7 +1665,15 @@ async fn run_swarm(
                                         Ok(None) => connection_id,
                                         Err(error) => {
                                             swarm.close_connection(connection_id);
-                                            let _ = pending.response.send(Err(error));
+                                            let mut responses = pending.responses;
+                                            if let Some(first) = responses.pop() {
+                                                let reason = error.to_string();
+                                                for leftover in responses {
+                                                    let _ = leftover
+                                                        .send(Err(Error::Dial(reason.clone())));
+                                                }
+                                                let _ = first.send(Err(error));
+                                            }
                                             continue;
                                         }
                                     },
@@ -1668,27 +1681,50 @@ async fn run_swarm(
                                 if selected != connection_id {
                                     swarm.close_connection(connection_id);
                                 }
-                                if pending.response.send(Ok(selected)).is_err()
-                                    && selected == connection_id
-                                {
+                                let mut refs = 0;
+                                for response in pending.responses {
+                                    if response.send(Ok(selected)).is_ok() {
+                                        refs += 1;
+                                    }
+                                }
+                                if let Some(key) = pending.circuit_key {
+                                    circuit_hops.established(key, selected, refs);
+                                }
+                                if refs == 0 && selected == connection_id {
                                     swarm.close_connection(selected);
                                 }
                             } else {
+                                if let Some(key) = pending.circuit_key.as_ref() {
+                                    circuit_hops.fail_pending(key);
+                                }
                                 swarm.close_connection(connection_id);
-                                let _ = pending.response.send(Err(Error::UnexpectedRemotePeer {
-                                    expected: pending.peer_id.to_string(),
-                                    actual: peer_id.to_string(),
-                                }));
+                                let expected = pending.peer_id.to_string();
+                                let actual = peer_id.to_string();
+                                for response in pending.responses {
+                                    let _ = response.send(Err(Error::UnexpectedRemotePeer {
+                                        expected: expected.clone(),
+                                        actual: actual.clone(),
+                                    }));
+                                }
                             }
                         }
                     }
                     SwarmEvent::OutgoingConnectionError { connection_id, error, .. } => {
                         if let Some(pending) = pending_dials.remove(&connection_id) {
+                            if let Some(key) = pending.circuit_key.as_ref() {
+                                circuit_hops.fail_pending(key);
+                            }
                             reservations
                                 .record_direct_dial_failed(pending.peer_id, connection_id);
-                            let _ = pending
-                                .response
-                                .send(Err(classify_dial_error(error)));
+                            let classified = classify_dial_error(error);
+                            let reason = classified.to_string();
+                            let mut responses = pending.responses;
+                            if let Some(first) = responses.pop() {
+                                for leftover in responses {
+                                    let _ = leftover.send(Err(Error::Dial(reason.clone())));
+                                }
+                                let _ = first.send(Err(classified));
+                            }
                         }
                     }
                     SwarmEvent::ConnectionClosed {
@@ -1699,6 +1735,9 @@ async fn run_swarm(
                         ..
                     } => {
                         observations.connection_closed(peer_id, connection_id);
+                        if endpoint.is_relayed() {
+                            circuit_hops.invalidate(connection_id);
+                        }
                         if !endpoint.is_relayed() {
                             reservations.record_connection_closed(
                                 &mut swarm,
@@ -1860,6 +1899,36 @@ async fn run_swarm(
                             )));
                             continue;
                         }
+                        let circuit_key = (!direct)
+                            .then(|| {
+                                addresses.first().cloned().map(|circuit_address| CircuitHopKey {
+                                    target_peer_id: peer_id,
+                                    circuit_address,
+                                })
+                            })
+                            .flatten();
+                        if let Some(key) = circuit_key.as_ref() {
+                            match circuit_hops.acquire(key) {
+                                CircuitAcquire::Live(connection_id) => {
+                                    let _ = response.send(Ok(connection_id));
+                                    continue;
+                                }
+                                CircuitAcquire::Pending => {
+                                    if let Some(pending) = pending_dials.values_mut().find(
+                                        |pending| pending.circuit_key.as_ref() == Some(key),
+                                    ) {
+                                        pending.responses.push(response);
+                                        continue;
+                                    }
+                                    circuit_hops.fail_pending(key);
+                                    let _ = response.send(Err(Error::Dial(
+                                        "pending circuit hop is missing its dial".into(),
+                                    )));
+                                    continue;
+                                }
+                                CircuitAcquire::Vacant => {}
+                            }
+                        }
                         let requested_direct_address = if direct && addresses.len() == 1 {
                             addresses.first().cloned()
                         } else {
@@ -1877,14 +1946,18 @@ async fn run_swarm(
                                     reservations
                                         .record_pending_direct_dial(peer_id, connection_id);
                                 }
+                                if let Some(key) = circuit_key.as_ref() {
+                                    circuit_hops.mark_pending(key.clone());
+                                }
                                 pending_dials.insert(
                                     connection_id,
                                     PendingDial {
                                         peer_id,
-                                        response,
+                                        responses: vec![response],
                                         completion: DialCompletion::Exact,
                                         requested_direct_address,
                                         circuit_relay_peer_id,
+                                        circuit_key,
                                         _circuit_permit: circuit_permit,
                                     },
                                 );
@@ -1929,12 +2002,13 @@ async fn run_swarm(
                                     connection_id,
                                     PendingDial {
                                         peer_id,
-                                        response,
+                                        responses: vec![response],
                                         completion: DialCompletion::FirstRelayConnection {
                                             expected_address: address.clone(),
                                         },
                                         requested_direct_address: Some(address),
                                         circuit_relay_peer_id: None,
+                                        circuit_key: None,
                                         _circuit_permit: None,
                                     },
                                 );
@@ -1948,7 +2022,9 @@ async fn run_swarm(
                         connection_id,
                         response,
                     } => {
-                        swarm.close_connection(connection_id);
+                        if circuit_hops.release(connection_id) {
+                            swarm.close_connection(connection_id);
+                        }
                         let _ = response.send(Ok(()));
                     }
                     Command::BeginReservation {

@@ -11,10 +11,10 @@ use std::{
 };
 
 use auki_p2p::{
-    ApplicationProtocol, DdsTokenVerifier, ExactRoute, ExpectedRelayLimits, Identity, Node,
-    P2PAccessClaims, PeerRole, RelayProvider, RelayReservationState, SessionRequirements,
-    SignedP2pCredential, P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_SCOPE, P2P_TOKEN_TTL,
-    P2P_TOKEN_TYPE,
+    ApplicationProtocol, AuthenticatedRouteStream, DdsTokenVerifier, ExactRoute,
+    ExpectedRelayLimits, Identity, Node, P2PAccessClaims, PeerRole, RelayProvider,
+    RelayReservationState, SessionRequirements, SignedP2pCredential, P2P_TOKEN_AUDIENCE,
+    P2P_TOKEN_ISSUER, P2P_TOKEN_SCOPE, P2P_TOKEN_TTL, P2P_TOKEN_TYPE,
 };
 use chrono::{SecondsFormat, Utc};
 use futures::{
@@ -161,6 +161,235 @@ async fn exact_route_reuses_one_source_admission_across_multiple_circuits() {
     must_succeed(target.cancel_relay_reservation(reservation)).await;
     must_succeed(source.shutdown()).await;
     must_succeed(target.shutdown()).await;
+    relay.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn overlapping_exact_route_opens_share_one_circuit() {
+    let dns = TestDns::start();
+    let mut relay = RelayHarness::start("shared-circuit").await;
+    let domain_id = Uuid::new_v4().to_string();
+
+    let target = node(&dns);
+    install_current_token(&target, PeerRole::Robot, vec![domain_id.clone()]).await;
+    let source = node(&dns);
+    install_current_token(&source, PeerRole::Compute, vec![domain_id.clone()]).await;
+
+    let reservation = must_succeed(target.start_relay_reservation(relay.provider())).await;
+    let snapshot = must_succeed(target.wait_relay_reservation(reservation)).await;
+    let route = snapshot.publishable_route().unwrap().clone();
+    let target_peer_id = target.peer_id();
+    let source_peer_id = source.peer_id();
+    let protocol = ApplicationProtocol::new("/auki-p2p/shared-circuit/1").unwrap();
+    let requirements = SessionRequirements::new(&domain_id)
+        .unwrap()
+        .with_expected_remote_peer_id(target_peer_id);
+
+    let mut incoming = target
+        .accept(
+            protocol.clone(),
+            SessionRequirements::new(&domain_id).unwrap(),
+        )
+        .unwrap();
+    let application_server = tokio::spawn(async move {
+        while let Some(result) = incoming.accept().await {
+            let mut stream = result.unwrap();
+            assert_eq!(stream.remote_peer().peer_id, source_peer_id);
+            tokio::spawn(async move {
+                loop {
+                    let mut request = [0_u8; 1];
+                    if stream.read_exact(&mut request).await.is_err() {
+                        break;
+                    }
+                    stream.write_all(&request).await.unwrap();
+                    stream.flush().await.unwrap();
+                }
+            });
+        }
+    });
+
+    async fn ping(
+        source: &Node,
+        target_peer_id: PeerId,
+        route: Multiaddr,
+        protocol: ApplicationProtocol,
+        requirements: SessionRequirements,
+        marker: u8,
+    ) -> AuthenticatedRouteStream {
+        let mut stream = must_succeed(source.open_exact_route(
+            target_peer_id,
+            ExactRoute::Circuit(route),
+            protocol,
+            requirements,
+        ))
+        .await;
+        assert!(stream.is_relayed());
+        stream.write_all(&[marker]).await.unwrap();
+        stream.flush().await.unwrap();
+        let mut response = [0_u8; 1];
+        stream.read_exact(&mut response).await.unwrap();
+        assert_eq!(response, [marker]);
+        stream
+    }
+
+    let message = timeout(ping(
+        &source,
+        target_peer_id,
+        route.clone(),
+        protocol.clone(),
+        requirements.clone(),
+        b'M',
+    ))
+    .await;
+    assert_circuit(
+        timeout(relay.circuits.recv()).await.unwrap(),
+        source_peer_id,
+        target_peer_id,
+    );
+
+    let info = timeout(ping(
+        &source,
+        target_peer_id,
+        route.clone(),
+        protocol.clone(),
+        requirements.clone(),
+        b'I',
+    ))
+    .await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), relay.circuits.recv())
+            .await
+            .is_err(),
+        "overlapping exact-route opens dialed a second circuit hop"
+    );
+
+    must_succeed(info.close()).await;
+    let mut still_held = message;
+    still_held.write_all(&[b'!']).await.unwrap();
+    still_held.flush().await.unwrap();
+    let mut ping = [0_u8; 1];
+    still_held.read_exact(&mut ping).await.unwrap();
+    assert_eq!(ping, [b'!']);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), relay.circuits.recv())
+            .await
+            .is_err(),
+        "closing one shared exact-route stream opened another circuit"
+    );
+
+    must_succeed(still_held.close()).await;
+
+    let mut after = must_succeed(source.open_exact_route(
+        target_peer_id,
+        ExactRoute::Circuit(route),
+        protocol,
+        requirements,
+    ))
+    .await;
+    after.write_all(&[b'Z']).await.unwrap();
+    after.flush().await.unwrap();
+    let mut late = [0_u8; 1];
+    after.read_exact(&mut late).await.unwrap();
+    assert_eq!(late, [b'Z']);
+    assert_circuit(
+        timeout(relay.circuits.recv()).await.unwrap(),
+        source_peer_id,
+        target_peer_id,
+    );
+    must_succeed(after.close()).await;
+
+    must_succeed(target.cancel_relay_reservation(reservation)).await;
+    must_succeed(source.shutdown()).await;
+    must_succeed(target.shutdown()).await;
+    application_server.abort();
+    let _ = application_server.await;
+    relay.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_exact_route_opens_single_flight_one_circuit() {
+    let dns = TestDns::start();
+    let mut relay = RelayHarness::start("single-flight-circuit").await;
+    let domain_id = Uuid::new_v4().to_string();
+
+    let target = node(&dns);
+    install_current_token(&target, PeerRole::Robot, vec![domain_id.clone()]).await;
+    let source = node(&dns);
+    install_current_token(&source, PeerRole::Compute, vec![domain_id.clone()]).await;
+
+    let reservation = must_succeed(target.start_relay_reservation(relay.provider())).await;
+    let snapshot = must_succeed(target.wait_relay_reservation(reservation)).await;
+    let route = snapshot.publishable_route().unwrap().clone();
+    let target_peer_id = target.peer_id();
+    let source_peer_id = source.peer_id();
+    let protocol = ApplicationProtocol::new("/auki-p2p/single-flight-circuit/1").unwrap();
+    let requirements = SessionRequirements::new(&domain_id)
+        .unwrap()
+        .with_expected_remote_peer_id(target_peer_id);
+
+    let mut incoming = target
+        .accept(
+            protocol.clone(),
+            SessionRequirements::new(&domain_id).unwrap(),
+        )
+        .unwrap();
+    let application_server = tokio::spawn(async move {
+        while let Some(result) = incoming.accept().await {
+            let mut stream = result.unwrap();
+            assert_eq!(stream.remote_peer().peer_id, source_peer_id);
+            tokio::spawn(async move {
+                loop {
+                    let mut request = [0_u8; 1];
+                    if stream.read_exact(&mut request).await.is_err() {
+                        break;
+                    }
+                    stream.write_all(&request).await.unwrap();
+                    stream.flush().await.unwrap();
+                }
+            });
+        }
+    });
+
+    let open = |marker: u8| {
+        let source = source.clone();
+        let route = route.clone();
+        let protocol = protocol.clone();
+        let requirements = requirements.clone();
+        async move {
+            let mut stream = must_succeed(source.open_exact_route(
+                target_peer_id,
+                ExactRoute::Circuit(route),
+                protocol,
+                requirements,
+            ))
+            .await;
+            stream.write_all(&[marker]).await.unwrap();
+            stream.flush().await.unwrap();
+            let mut response = [0_u8; 1];
+            stream.read_exact(&mut response).await.unwrap();
+            assert_eq!(response, [marker]);
+            must_succeed(stream.close()).await;
+        }
+    };
+
+    timeout(async { tokio::join!(open(b'A'), open(b'B')) }).await;
+    assert_circuit(
+        timeout(relay.circuits.recv()).await.unwrap(),
+        source_peer_id,
+        target_peer_id,
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), relay.circuits.recv())
+            .await
+            .is_err(),
+        "concurrent exact-route opens dialed a second circuit hop"
+    );
+
+    must_succeed(target.cancel_relay_reservation(reservation)).await;
+    must_succeed(source.shutdown()).await;
+    must_succeed(target.shutdown()).await;
+    application_server.abort();
+    let _ = application_server.await;
     relay.shutdown().await;
 }
 

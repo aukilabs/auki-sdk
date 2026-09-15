@@ -10,7 +10,7 @@ The SDK reexports the types from
 | --- | --- | --- | --- | --- | --- |
 | User email/password | Listing and data | Listing and data | Listing and data | Listing and data | Listing and data |
 | App key and secret | Native listing and data | Listing and data | Not exposed | Not exposed | Not exposed |
-| Imported ZITADEL session | Known-Domain data | Known-Domain data | Known-Domain data | Known-Domain data | Known-Domain data |
+| Imported ZITADEL session | Listing and data¹ | Listing and data¹ | Listing and data¹ | Listing and data¹ | Listing and data¹ |
 | Compute or robot task lease | Native, through `task.data()` | `task.data()` | Not exposed | Not exposed | Not exposed |
 | Robot, while idle | Native, assigned Domain reads | Assigned Domain reads | Not exposed | Not exposed | Not exposed |
 
@@ -20,11 +20,18 @@ Android is not implemented by the Expo binding.
 
 Imported-session data uses the existing ordinary API service exchange, then
 DDS selected-Domain authentication. The deployment must accept imported
-ZITADEL bearers on that API route. Listing and portal-to-Domain association
-queries remain unsupported for imported sessions: the released API/DDS
-contracts do not safely list all human roles. These queries fail before any
-network request or credential rotation. They never fall back to broader
-organization visibility. See [provider compatibility](../../test-support/domain-data-validation.md#provider-compatibility).
+ZITADEL bearers on that API route.
+
+¹ Imported listing requires `POST /service/domains-access-token?purpose=p2p`
+to issue a `user-p2p-access` token with an explicit, nonempty human Domain
+allowlist, followed by DDS `/api/v1/accessible-domains`. The SDK rejects older
+API deployments that ignore this purpose and return ordinary User/App profiles.
+It checks the returned page against the grant and preserves permission errors.
+The bridge uses the API's Domain registry, which can differ from DDS; a known
+DDS Domain can support data access while listing is denied. Portal-to-Domain
+association queries remain unsupported and fail before network I/O. Neither
+path falls back to broader organization visibility. See
+[provider compatibility](../../test-support/domain-data-validation.md#provider-compatibility).
 
 `AukiCredential` is an alias for `AuthSession`. A User, App, or imported session can be
 shared by data clients and `AukiPeerBootstrap`; data access does not require
@@ -60,14 +67,17 @@ Expo returns typed objects and `Uint8Array`.
 
 ### Listing and permissions
 
-`DomainListQuery` accepts `own` (the default), an organization UUID, or `all`
-with an owned Domain Server. DDS uses `limit` and `offset`; limits are 1–100.
+For User/App sessions, `DomainListQuery` accepts `own` (the default), an
+organization UUID, or `all` with an owned Domain Server. Imported sessions
+accept the default `own` query without a Domain Server filter. DDS uses `limit`
+and `offset`; limits are 1–100.
 Totals can change between pages. Portal association lookup also accepts `all`
 without a Domain Server filter.
 
-Domain and portal association listings send `issue_token=false` and SDK
-identification. They do not obtain potentially billed Domain tokens for every
-entry. Listing establishes visibility; it does not report effective read/write
+User/App Domain and portal association listings send `issue_token=false` and SDK
+identification. Imported listings use the allowlist metadata route. Neither
+obtains potentially billed Domain tokens for every entry. Listing establishes
+visibility; it does not report effective read/write
 permission. Permission filters are not available.
 
 Data lists filter by `ids`, `name`, and `data_type`. They return metadata without
@@ -165,9 +175,9 @@ audience before sending a grant to that host. Domain Servers verify signatures
 and permissions. P2P admission and discovery do not grant data write access.
 Keep service endpoints aligned to one environment; browser CORS rules apply.
 
-Imported data clients and peers use one refresh owner and await complete
-replacement-credential persistence. Data service tokens remain separate from
-the imported bearer used by direct DDS P2P authentication. Even a cached Domain
+Imported listing, data clients, and peers use one refresh owner and await complete
+replacement-credential persistence. Listing and data service tokens remain
+separate from the imported bearer used by direct DDS P2P authentication. Even a cached Domain
 grant cannot bypass a pending credential save or a terminal login failure.
 The existing API role projection is coarse: successful exchange, visibility,
 or read access does not establish write/delete permission.

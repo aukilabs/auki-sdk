@@ -3,7 +3,8 @@
 Use `AukiDomains` to find Domains and `AukiDomainData` to read and write their
 data. Both use your SDK login session and work without starting a peer.
 
-[Sign in](authenticate.md) with a User account or backend App credentials first.
+[Sign in](authenticate.md) with a User account, imported ZITADEL session, or
+backend App credentials first.
 The Rust examples below use that session as `credential` and a Domain UUID
 chosen by your app as `selected_domain_id`. For supported credentials, limits,
 and errors, see the [Domain data reference](../reference/domain-data.md).
@@ -170,8 +171,8 @@ their client.
 ## Reuse an imported login
 
 Import your application's ZITADEL PKCE session using the
-[authentication guide](authenticate.md#reuse-a-zitadel-login), then create a
-data client with a known Domain UUID:
+[authentication guide](authenticate.md#reuse-a-zitadel-login), then use its
+Domain picker or create a data client with a known Domain UUID:
 
 ~~~ts
 const session = AukiUserSession.importZitadelDev(credentials, async replacement => {
@@ -204,11 +205,20 @@ refresh owner; stop the application's previous refresh loop before importing.
 On logout, close all clients and peers, await `session.close()`, then clear
 secure storage.
 
-Imported Domain listing is unavailable with the released provider contracts.
-Supply a known Domain from your application's existing selection flow. User
-and App sessions still support the paged picker above. Read, write, delete,
-and pose access remain separate server permission checks; successful exchange
-or listing does not authorize an operation.
+The same session provides a paged picker through
+`session.domains().list({ limit: 50, offset: 0 })`. Imported listing requires the
+API's `purpose=p2p` human Domain-allowlist exchange and the matching DDS
+`/accessible-domains` route. Use default organization selection and no Domain
+Server filter for imported sessions. The SDK rejects unsupported token profiles
+and preserves listing denials instead of falling back to a broader catalog.
+
+The current bridge enumerates the API's Domain registry before checking read
+visibility. A Domain that exists only in DDS can therefore support known-Domain
+data access without appearing in that picker. Preserve this distinction in your
+app; do not infer that a listing failure invalidates the whole session.
+Portal-to-Domain association lookup remains unsupported for imported sessions.
+Read, write, delete, and pose access remain separate server permission checks;
+successful exchange or listing does not authorize an operation.
 
 ## Close clients and the shared session
 

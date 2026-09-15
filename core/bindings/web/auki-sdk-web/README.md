@@ -32,16 +32,18 @@ See [Work with Domain data](../../../../docs/how-to/domain-data.md#use-web-or-py
 for examples and the [reference](../../../../docs/reference/domain-data.md)
 for streaming, cancellation, and errors.
 
-Imported ZITADEL sessions also support `session.data(knownDomainId)` and
-selected-Domain portal/pose reads. They share the same refresh owner and awaited
-storage callback as peers. Retain the session after `error.code === "persistence"`
-and retry it after storage recovers. The released provider contracts do not
-support safe imported-session Domain listing for all human roles; listing and
-portal-to-Domain association queries reject before network I/O. See
+Imported ZITADEL sessions support the default `session.domains().list()` query
+for a server-paged picker, plus `session.data(knownDomainId)` and selected-Domain
+portal/pose reads. Imported listing uses the API's scoped `purpose=p2p` token;
+organization and Domain Server filters remain unsupported. Portal-to-Domain
+association queries also remain unsupported. The session shares one refresh
+owner and awaited storage callback across listing, data, and peers. Retain it
+after `error.code === "persistence"` and retry after storage recovers. See
 [imported login data access](../../../../docs/how-to/domain-data.md#reuse-an-imported-login).
 
-The [Blob/File helper](examples/domain-data.ts) accepts a session, selected
-Domain, file, and destination callback. It reads portal/pose records, uploads
+The [Blob/File and Domain-picker helpers](examples/domain-data.ts) request one
+explicit Domain page and accept an explicitly selected Domain, file, and
+destination callback. The User round trip reads portal/pose records, uploads
 the file, streams it back, and deletes its unique record. It contacts the
 session's configured services, so use a Domain approved for these operations.
 

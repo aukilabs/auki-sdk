@@ -684,12 +684,15 @@ mod tests {
             globalThis.__importedSaves = 0;
             globalThis.__importedSaved = false;
             globalThis.__importedSnapshots = [];
+            globalThis.__importedListingMode = 'valid';
+            globalThis.__importedP2pExchanges = 0;
+            globalThis.__importedDomainCalls = 0;
             const dataFetch = globalThis.fetch;
             globalThis.fetch = async (input, init) => {
                 const request = input instanceof Request ? input : new Request(input, init);
                 const url = new URL(request.url);
-                const json = body => {
-                    const response = new Response(JSON.stringify(body), {headers:{'content-type':'application/json'}});
+                const json = (body, status=200) => {
+                    const response = new Response(JSON.stringify(body), {status,headers:{'content-type':'application/json'}});
                     Object.defineProperty(response, 'url', {value:request.url});
                     return response;
                 };
@@ -701,8 +704,29 @@ mod tests {
                     return json({access_token:'rotated-access',refresh_token:'rotated-refresh',expires_in:3600,token_type:'Bearer'});
                 }
                 if (url.pathname === '/service/domains-access-token') {
-                    if (url.search || request.headers.get('authorization') !== 'Bearer rotated-access' || !__importedSaved)
+                    if (request.headers.get('authorization') !== 'Bearer rotated-access' || !__importedSaved)
                         throw Error('exchange before persisted rotation or wrong credential profile');
+                    if (url.search === '?purpose=p2p') {
+                        __importedP2pExchanges++;
+                        if (__importedListingMode === 'deny') return json({}, 403);
+                        const now=Math.floor(Date.now()/1000);
+                        const claims={type:__importedListingMode === 'legacy' ? 'user-access' : 'user-p2p-access',
+                            iss:'api',aud:['domain-service'],sub:'fixture-user',org:'11111111-1111-4111-8111-111111111111',
+                            domains:['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','dddddddd-dddd-4ddd-8ddd-dddddddddddd'],iat:now,exp:now+3600};
+                        globalThis.__importedP2pToken='e30.'+btoa(JSON.stringify(claims)).replaceAll('=','').replaceAll('+','-').replaceAll('/','_')+'.fixture';
+                        return json({access_token:__importedP2pToken});
+                    }
+                    if (url.search) throw Error('wrong service-token purpose');
+                    return json({access_token:'service'});
+                }
+                if (url.pathname === '/api/v1/accessible-domains') {
+                    __importedDomainCalls++;
+                    if (request.headers.get('authorization') !== 'Bearer '+__importedP2pToken)
+                        throw Error('wrong p2p service token');
+                    const limit=Number(url.searchParams.get('limit')), offset=Number(url.searchParams.get('offset'));
+                    const all=[{id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',name:'Domain',description:'first',organization_id:null},
+                        {id:'dddddddd-dddd-4ddd-8ddd-dddddddddddd',name:'Other',description:'second',organization_id:'11111111-1111-4111-8111-111111111111'}];
+                    return json({domains:all.slice(offset,offset+limit),total:all.length,limit,offset});
                 }
                 if (url.pathname.endsWith('/auth') && request.headers.get('authorization') !== 'Bearer service')
                     throw Error('wrong data service bearer');
@@ -747,22 +771,71 @@ mod tests {
         );
         assert_eq!(data.read(DATA.into(), None).await.unwrap().length(), 7);
         assert_eq!(js_sys::eval("__importedRefreshes === 1 && __importedSaves === 2 && JSON.stringify(__importedSnapshots[0]) === JSON.stringify(__importedSnapshots[1])").unwrap().as_bool(), Some(true));
-        // Unsupported listing neither refreshes nor attempts the broader org route.
-        assert!(
-            session
-                .domains()
-                .list(JsValue::UNDEFINED, None)
-                .await
-                .is_err()
-        );
+        let page = session
+            .domains()
+            .list(js_sys::eval("({limit:1,offset:1})").unwrap(), None)
+            .await
+            .unwrap();
         assert_eq!(
-            js_sys::eval("__dataCalls.includes('/api/v1/domains')")
+            js_sys::eval("__importedP2pExchanges === 1 && __importedDomainCalls === 1")
                 .unwrap()
                 .as_bool(),
-            Some(false)
+            Some(true)
+        );
+        assert_eq!(
+            js_sys::Reflect::get(&page, &"total".into())
+                .unwrap()
+                .as_f64(),
+            Some(2.0)
+        );
+        assert_eq!(
+            js_sys::Reflect::get(&page, &"limit".into())
+                .unwrap()
+                .as_f64(),
+            Some(1.0)
+        );
+        assert_eq!(
+            js_sys::Reflect::get(&page, &"offset".into())
+                .unwrap()
+                .as_f64(),
+            Some(1.0)
+        );
+        assert_eq!(
+            js_sys::Reflect::get(
+                &js_sys::Array::from(&js_sys::Reflect::get(&page, &"domains".into()).unwrap())
+                    .get(0),
+                &"id".into(),
+            )
+            .unwrap(),
+            "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
         );
         data.close().await;
         JsFuture::from(session.close()).await.unwrap();
+    }
+
+    #[wasm_bindgen_test]
+    async fn imported_listing_preserves_denial_and_rejects_legacy_profile_before_dds() {
+        for (mode, code) in [
+            ("deny", "authorization_denied"),
+            ("legacy", "configuration"),
+        ] {
+            let (_restore, session) =
+                imported_fixture("globalThis.__importedSaved=true; return Promise.resolve();");
+            js_sys::eval(&format!("globalThis.__importedListingMode='{mode}'")).unwrap();
+            let error = session
+                .domains()
+                .list(js_sys::eval("({limit:1})").unwrap(), None)
+                .await
+                .unwrap_err();
+            assert_eq!(js_sys::Reflect::get(&error, &"code".into()).unwrap(), code);
+            assert_eq!(
+                js_sys::eval("__importedP2pExchanges === 1 && __importedDomainCalls === 0")
+                    .unwrap()
+                    .as_bool(),
+                Some(true)
+            );
+            JsFuture::from(session.close()).await.unwrap();
+        }
     }
 
     #[wasm_bindgen_test]

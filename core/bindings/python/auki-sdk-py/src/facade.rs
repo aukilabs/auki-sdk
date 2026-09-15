@@ -655,7 +655,8 @@ impl PyAukiSession {
         )
     }
 
-    /// List every Domain this principal may explicitly select.
+    /// List every Domain this principal may explicitly select. Imported
+    /// sessions use the permission-scoped P2P listing contract.
     fn accessible_domains<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let bootstrap = self.bootstrap.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {

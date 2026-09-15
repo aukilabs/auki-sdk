@@ -32,6 +32,7 @@ private actor RetryZitadelStore: AukiZitadelSessionStore {
 @main
 struct DomainDataHost {
     private static let domainID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    private static let otherDomainID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
     private static let initialDataID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
     private static let portalID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
     private static let portalShortID = "ABC12345678"
@@ -50,14 +51,14 @@ struct DomainDataHost {
         }
     }
 
-    private static func forceOneDDSRenewal(_ baseURL: String) async throws {
+    private static func configure(_ baseURL: String, _ json: String) async throws {
         guard let url = URL(string: "\(baseURL)/__configure") else {
             throw HostFailure.assertion("invalid loopback fixture URL")
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.httpBody = Data(#"{"ddsUnauthorizedOnce":true}"#.utf8)
+        request.httpBody = Data(json.utf8)
         let (_, response) = try await URLSession.shared.data(for: request)
         try require((response as? HTTPURLResponse)?.statusCode == 200, "failed to configure loopback renewal")
     }
@@ -78,7 +79,7 @@ struct DomainDataHost {
         )
 
         do {
-            try await forceOneDDSRenewal(baseURL)
+            try await configure(baseURL, #"{"ddsUnauthorizedOnce":true}"#)
             let domains = session.domains()
             let page = try await domains.list(
                 query: AukiDomainListQuery(limit: 1, offset: 0)
@@ -215,11 +216,53 @@ struct DomainDataHost {
         }
         let importedBytes = try await importedData.read(dataId: initialDataID)
         try require(importedBytes == Data("fixture".utf8), "imported session could not read known-Domain data")
+
+        try await configure(baseURL, #"{"denyP2pExchange":true}"#)
         do {
-            _ = try await imported.domains().list(query: AukiDomainListQuery())
-            throw HostFailure.assertion("imported session unexpectedly listed Domains")
+            _ = try await imported.domains().list(query: AukiDomainListQuery(limit: 1))
+            throw HostFailure.assertion("denied imported Domain listing unexpectedly succeeded")
+        } catch AukiSdkError.DomainData(let kind, let status, let authKind, _) {
+            try require(
+                kind == .authentication && status == 403 && authKind == .authorizationDenied,
+                "imported listing denial lost its structured 403"
+            )
+        }
+        let retainedData = try await importedData.read(dataId: initialDataID)
+        try require(
+            retainedData == Data("fixture".utf8),
+            "listing denial made known-Domain data unusable"
+        )
+        try await configure(baseURL, #"{"denyP2pExchange":false}"#)
+
+        let importedDomains = imported.domains()
+        let importedPage = try await importedDomains.list(
+            query: AukiDomainListQuery(limit: 1, offset: 1)
+        )
+        try require(
+            importedPage.total == 2 && importedPage.domains.first?.id == otherDomainID,
+            "imported Domain pagination was not preserved"
+        )
+        do {
+            _ = try await importedDomains.list(
+                query: AukiDomainListQuery(organization: otherDomainID)
+            )
+            throw HostFailure.assertion("imported organization filter unexpectedly succeeded")
         } catch AukiSdkError.DomainData(_, _, let authKind, _) {
-            try require(authKind == .configuration, "imported listing lost provider limitation code")
+            try require(authKind == .configuration, "imported filter rejection lost configuration code")
+        }
+        do {
+            _ = try await importedDomains.list(
+                query: AukiDomainListQuery(domainServerId: domainID)
+            )
+            throw HostFailure.assertion("imported Domain Server filter unexpectedly succeeded")
+        } catch AukiSdkError.DomainData(_, _, let authKind, _) {
+            try require(authKind == .configuration, "imported server filter lost configuration code")
+        }
+        do {
+            _ = try await importedDomains.forPortal(portal: portalShortID)
+            throw HostFailure.assertion("imported portal association unexpectedly succeeded")
+        } catch AukiSdkError.DomainData(_, _, let authKind, _) {
+            try require(authKind == .configuration, "imported portal rejection lost configuration code")
         }
         try await importedData.close()
         await imported.close()

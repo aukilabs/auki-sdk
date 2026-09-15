@@ -46,7 +46,7 @@ node -e '(async()=>{for(let i=0;i<300;i++){try{if((await fetch("http://127.0.0.1
 cd "$domain_artifacts"
 domain_browser=1
 pw open http://127.0.0.1:18115/ --browser chrome
-node -e '(async()=>{for(let i=0;i<900;i++){try{const p=await(await fetch("http://127.0.0.1:18114/__phase",{signal:AbortSignal.timeout(1000)})).json();if(p.phase==="failed")throw Error(JSON.stringify(p));if(p.phase==="passed"){if(p.count!==7)throw Error("incorrect case count");return;}}catch(e){if(String(e).includes("failed")||String(e).includes("case count"))throw e;}await new Promise(r=>setTimeout(r,100));}throw Error("Expo Web host did not finish");})().catch(e=>{console.error(e.message);process.exit(1);});'
+node -e '(async()=>{for(let i=0;i<900;i++){try{const p=await(await fetch("http://127.0.0.1:18114/__phase",{signal:AbortSignal.timeout(1000)})).json();if(p.phase==="failed")throw Error(JSON.stringify(p));if(p.phase==="passed"){if(p.count!==8)throw Error("incorrect case count");return;}}catch(e){if(String(e).includes("failed")||String(e).includes("case count"))throw e;}await new Promise(r=>setTimeout(r,100));}throw Error("Expo Web host did not finish");})().catch(e=>{console.error(e.message);process.exit(1);});'
 pw snapshot | tee "$domain_artifacts/result.log"
-rg -q 'PASS 7 Expo Domain data host cases' "$domain_artifacts/result.log"
+rg -q 'PASS 8 Expo Domain data host cases' "$domain_artifacts/result.log"
 printf 'Expo Web Domain data checks passed; artifacts: %s\n' "$domain_artifacts"

@@ -64,9 +64,13 @@ async def save_replacement(replacement):
 session = auki_sdk.AukiSession.import_zitadel_dev(
     credentials, save_replacement
 )
-data = session.data(known_domain_id)
+page = await session.domains().list(limit=50)
+# Present page["domains"] to the user. The host must explicitly select an ID;
+# continue with offset += len(page["domains"]) to show another server page.
+selected_domain_id = await choose_domain_id(page["domains"])
+data = session.data(selected_domain_id)
 items = await data.list()
-peer = await session.start_peer(known_domain_id, identity_file)
+peer = await session.start_peer(selected_domain_id, identity_file)
 ~~~
 
 The callback receives one immutable, redacted replacement object. The SDK waits
@@ -76,9 +80,11 @@ without rotating twice. Cancelling an operation does not cancel a storage write
 that has already started, and `await session.close()` waits for that write before
 the host clears secure storage.
 
-Imported sessions currently require a known Domain ID. Domain listing through
-`session.domains().list()` is unsupported because the released API/DDS contracts
-do not safely list Domains for every imported human role. Use
+Imported sessions list the paginated Domains allowed by the API's scoped P2P
+access token. Their default `session.domains().list()` query is supported;
+organization and Domain Server filters and portal association queries remain
+unsupported. A 403 listing denial is recoverable, and the same session may
+still access a known Domain ID when the provider authorizes it. Use
 `import_zitadel_with_environment` to supply exact API, DDS, and DMS base URLs.
 
 The [compute](examples/compute_task.py) and [robot](examples/robot_task.py)
@@ -87,7 +93,8 @@ streams a 17 MiB file by default, verifies SHA-256, and deletes its unique dev
 record. It requires Python 3.9+ and optionally accepts an input file path.
 
 To run the file example, set `AUKI_EMAIL`, `AUKI_PASSWORD`, `AUKI_DOMAIN_ID`, and
-`AUKI_CLIENT_ID` for a dev account and Domain approved for data writes:
+`AUKI_CLIENT_ID` for a dev account and explicitly selected Domain approved for
+data writes:
 
 ~~~sh
 python core/bindings/python/auki-sdk-py/examples/domain_data.py

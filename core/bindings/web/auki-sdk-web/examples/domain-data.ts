@@ -1,8 +1,25 @@
-import type { AukiUserSession, DataSink } from "../pkg-test/auki_sdk_web";
+import type {
+  AukiUserSession,
+  DataSink,
+  DomainPage,
+  DomainQuery,
+} from "../pkg-test/auki_sdk_web";
 
-/** Uses an already initialized shared login and an explicitly selected Domain.
+/** Load one server page for a simple picker. Request the next offset only when
+ * the user asks for more. Imported sessions support the default own selection. */
+export async function domainChoices(
+  session: AukiUserSession,
+  query: DomainQuery = { limit: 50, offset: 0 },
+  signal?: AbortSignal,
+): Promise<DomainPage> {
+  return session.domains().list(query, signal);
+}
+
+/** Uses an already initialized User login and an explicitly selected Domain.
  * Creates a unique record, streams a Blob/File to it and back, and deletes it.
  * The caller owns the destination and its partial-file cleanup on failure.
+ * Imported sessions can use the data methods directly; their portal-to-Domain
+ * association query is intentionally unsupported.
  */
 export async function roundTrip(
   session: AukiUserSession,

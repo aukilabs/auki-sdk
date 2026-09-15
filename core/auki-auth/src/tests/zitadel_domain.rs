@@ -50,17 +50,46 @@ fn grant_with_claims(base: &str, domain: Uuid, claims: Value) -> MockResponse {
     }))
 }
 
+fn listing_service_response(domains: &[Uuid]) -> MockResponse {
+    listing_service_response_with_claims(json!({
+        "type": "user-p2p-access",
+        "iss": "api",
+        "aud": ["domain-service"],
+        "sub": "opaque-zitadel-user",
+        "org": Uuid::from_u128(0xaaaa),
+        "domains": domains,
+        "iat": Utc::now().timestamp(),
+        "exp": Utc::now().timestamp() + 3600,
+    }))
+}
+
+fn listing_service_response_with_claims(claims: Value) -> MockResponse {
+    service_response(&format!(
+        "e30.{}.fixture",
+        URL_SAFE_NO_PAD.encode(claims.to_string())
+    ))
+}
+
 #[tokio::test]
-async fn imported_listing_rejects_without_io_refresh_or_broad_viewer_fallback() {
+async fn imported_listing_rejects_broad_filters_and_portal_lookup_without_io() {
     let server = MockServer::start(vec![]).await;
     let store = Store::new(false, 0);
-    let session = import(&server, store.clone(), true);
+    let session = import(&server, store.clone(), false);
+    let query = DomainListQuery {
+        organization: "all".into(),
+        domain_server_id: Some(Uuid::from_u128(1)),
+        ..Default::default()
+    };
     assert!(matches!(
-        session.list_domains(&DomainListQuery::default()).await,
+        session.list_domains(&query).await,
         Err(Error::InvalidConfiguration(_))
     ));
+    let query = DomainListQuery {
+        organization: Uuid::from_u128(2).to_string(),
+        ..Default::default()
+    };
     assert!(matches!(
-        session.accessible_domains().await,
+        session.list_domains(&query).await,
         Err(Error::InvalidConfiguration(_))
     ));
     assert!(matches!(
@@ -81,6 +110,260 @@ async fn imported_listing_rejects_without_io_refresh_or_broad_viewer_fallback() 
         Err(Error::SessionClosed)
     ));
     server.finish().await;
+}
+
+#[tokio::test]
+async fn imported_listing_uses_peer_profile_and_preserves_server_pages() {
+    let server = MockServer::start(vec![
+        listing_service_response(&[DOMAIN]),
+        domains_page_response(&[DOMAIN], Uuid::from_u128(0xaaaa), 1, 1, 0),
+        listing_service_response(&[DOMAIN]),
+        domains_response(DOMAIN, Uuid::from_u128(0xaaaa)),
+    ])
+    .await;
+    let session = import(&server, Store::new(false, 0), false);
+    let query = DomainListQuery {
+        limit: 1,
+        ..Default::default()
+    };
+    let page = session.list_domains(&query).await.unwrap();
+    assert_eq!(page.domains.len(), 1);
+    assert_eq!(page.domains[0].id, DOMAIN);
+    assert_eq!((page.total, page.limit, page.offset), (1, 1, 0));
+    assert_eq!(session.accessible_domains().await.unwrap().len(), 1);
+    session.close().await;
+    let requests = server.finish().await;
+    assert_eq!(
+        requests[0].target,
+        "/service/domains-access-token?purpose=p2p"
+    );
+    assert_eq!(
+        requests[1].target,
+        "/api/v1/accessible-domains?limit=1&offset=0"
+    );
+    assert!(requests[1].headers["authorization"].ends_with(".fixture"));
+}
+
+#[tokio::test]
+async fn imported_listing_accepts_an_empty_page_beyond_the_total() {
+    let server = MockServer::start(vec![
+        listing_service_response(&[DOMAIN]),
+        domains_page_response(&[], Uuid::from_u128(0xaaaa), 1, 10, 50),
+    ])
+    .await;
+    let session = import(&server, Store::new(false, 0), false);
+    let page = session
+        .list_domains(&DomainListQuery {
+            offset: 50,
+            limit: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(page.domains.is_empty());
+    assert_eq!((page.total, page.limit, page.offset), (1, 10, 50));
+    session.close().await;
+    assert_eq!(server.finish().await.len(), 2);
+}
+
+#[tokio::test]
+async fn imported_accessible_domains_accumulates_server_pagination() {
+    let domains: Vec<_> = (1..=101).map(Uuid::from_u128).collect();
+    let server = MockServer::start(vec![
+        listing_service_response(&domains),
+        domains_page_response(&domains[..100], Uuid::from_u128(0xaaaa), 101, 100, 0),
+        domains_page_response(&domains[100..], Uuid::from_u128(0xaaaa), 101, 100, 100),
+    ])
+    .await;
+    let session = import(&server, Store::new(false, 0), false);
+    let choices = session.accessible_domains().await.unwrap();
+    assert_eq!(choices.len(), 101);
+    assert_eq!(choices[100].domain.id, domains[100]);
+    session.close().await;
+    let requests = server.finish().await;
+    assert!(requests[2].target.ends_with("limit=100&offset=100"));
+}
+
+#[tokio::test]
+async fn imported_listing_rejects_legacy_and_invalid_peer_profiles_before_dds() {
+    let base = json!({
+        "type": "user-p2p-access", "iss": "api", "aud": ["domain-service"],
+        "sub": "opaque-user", "org": Uuid::from_u128(0xaaaa), "domains": [DOMAIN],
+        "iat": Utc::now().timestamp(), "exp": Utc::now().timestamp() + 3600,
+    });
+    for (field, value, configuration) in [
+        ("type", json!("user-access"), true),
+        ("iss", json!("other"), false),
+        ("aud", json!(["other"]), false),
+        ("sub", json!(""), false),
+        ("org", json!("not-a-uuid"), false),
+        ("iat", json!(Utc::now().timestamp() + 7200), false),
+        ("exp", json!(1), false),
+        ("domains", json!([]), false),
+        ("domains", json!([DOMAIN, DOMAIN]), false),
+    ] {
+        let mut claims = base.clone();
+        claims[field] = value;
+        let server = MockServer::start(vec![listing_service_response_with_claims(claims)]).await;
+        let session = import(&server, Store::new(false, 0), false);
+        let error = session
+            .list_domains(&DomainListQuery::default())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            matches!(error, Error::InvalidConfiguration(_)),
+            configuration
+        );
+        assert!(configuration || matches!(error, Error::InvalidResponse { .. }));
+        session.close().await;
+        assert_eq!(server.finish().await.len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn imported_listing_rejects_dds_domains_outside_service_allowlist() {
+    let other = Uuid::from_u128(2);
+    let server = MockServer::start(vec![
+        listing_service_response(&[DOMAIN]),
+        domains_response(other, Uuid::from_u128(0xaaaa)),
+    ])
+    .await;
+    let session = import(&server, Store::new(false, 0), false);
+    assert!(matches!(
+        session.accessible_domains().await,
+        Err(Error::InvalidResponse { .. })
+    ));
+    session.close().await;
+    assert_eq!(server.finish().await.len(), 2);
+}
+
+#[tokio::test]
+async fn imported_listing_preserves_api_forbidden_and_reexchanges_after_dds_unauthorized() {
+    let denied = MockServer::start(vec![MockResponse::status(403)]).await;
+    let session = import(&denied, Store::new(false, 0), false);
+    assert!(matches!(
+        session.accessible_domains().await,
+        Err(Error::HttpStatus { status: 403, .. })
+    ));
+    session.close().await;
+    assert_eq!(denied.finish().await.len(), 1);
+
+    let denied = MockServer::start(vec![
+        listing_service_response(&[DOMAIN]),
+        MockResponse::status(403),
+    ])
+    .await;
+    let session = import(&denied, Store::new(false, 0), false);
+    assert!(matches!(
+        session.accessible_domains().await,
+        Err(Error::HttpStatus { status: 403, .. })
+    ));
+    session.close().await;
+    assert_eq!(denied.finish().await.len(), 2);
+
+    let server = MockServer::start(vec![
+        listing_service_response(&[DOMAIN]),
+        MockResponse::status(401),
+        listing_service_response(&[DOMAIN]),
+        domains_response(DOMAIN, Uuid::from_u128(0xaaaa)),
+    ])
+    .await;
+    let store = Store::new(false, 0);
+    let session = import(&server, store.clone(), false);
+    assert_eq!(session.accessible_domains().await.unwrap().len(), 1);
+    session.close().await;
+    let requests = server.finish().await;
+    assert_eq!(
+        requests[0].headers["authorization"],
+        requests[2].headers["authorization"]
+    );
+    assert!(store.attempts.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn imported_listing_retries_a_failed_save_before_exchange() {
+    let server = MockServer::start_with(|base| {
+        vec![
+            MockResponse::json(discovery(base)),
+            MockResponse::json(token()),
+            listing_service_response(&[DOMAIN]),
+            domains_response(DOMAIN, Uuid::from_u128(0xaaaa)),
+        ]
+    })
+    .await;
+    let store = Store::new(false, 1);
+    let session = import(&server, store.clone(), true);
+    assert!(matches!(
+        session.accessible_domains().await,
+        Err(Error::Persistence)
+    ));
+    assert_eq!(server.requests.lock().await.len(), 2);
+    assert_eq!(session.accessible_domains().await.unwrap().len(), 1);
+    let attempts = store.attempts.lock().unwrap().clone();
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0], attempts[1]);
+    session.close().await;
+    let requests = server.finish().await;
+    assert_eq!(
+        requests[2].headers["authorization"],
+        "Bearer replacement-opaque"
+    );
+}
+
+#[tokio::test]
+async fn imported_listing_cancellation_stops_the_exchange_without_dds_io() {
+    let server = MockServer::start(vec![
+        listing_service_response(&[DOMAIN]).delayed(Duration::from_millis(100)),
+    ])
+    .await;
+    let session = import(&server, Store::new(false, 0), false);
+    let cancellation = CancellationToken::new();
+    let operation_session = session.clone();
+    let operation_cancellation = cancellation.clone();
+    let operation = tokio::spawn(async move {
+        operation_session
+            .accessible_domains_with_cancellation(&operation_cancellation)
+            .await
+    });
+    wait_requests(&server, 1).await;
+    cancellation.cancel();
+    assert!(matches!(
+        operation.await.unwrap(),
+        Err(Error::Cancelled { .. })
+    ));
+    session.close().await;
+    assert_eq!(server.finish().await.len(), 1);
+}
+
+#[tokio::test]
+async fn concurrent_imported_lists_share_one_api_refresh_and_save() {
+    let server = MockServer::start_with(|base| {
+        vec![
+            MockResponse::status(401),
+            MockResponse::json(discovery(base)),
+            MockResponse::json(token()),
+            listing_service_response(&[DOMAIN]),
+            domains_response(DOMAIN, Uuid::from_u128(0xaaaa)),
+            listing_service_response(&[DOMAIN]),
+            domains_response(DOMAIN, Uuid::from_u128(0xaaaa)),
+        ]
+    })
+    .await;
+    let store = Store::new(false, 0);
+    let session = import(&server, store.clone(), false);
+    let (first, second) = tokio::join!(session.accessible_domains(), session.accessible_domains());
+    assert_eq!(first.unwrap().len(), 1);
+    assert_eq!(second.unwrap().len(), 1);
+    session.close().await;
+    let requests = server.finish().await;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.target == "/oauth/v2/token")
+            .count(),
+        1
+    );
+    assert_eq!(store.attempts.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]

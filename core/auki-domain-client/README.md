@@ -2,7 +2,8 @@
 
 Find Domains and read or write Domain data using the SDK's shared credentials.
 User, App, and imported sessions work without starting a peer. Imported
-sessions require a known Domain ID. Native task leases and
+listing requires the API/DDS human Domain-allowlist exchange; a known Domain
+can use the separate data exchange. Native task leases and
 robot credentials use the same data client through `auki-tasks`.
 
 The `auki-sdk` facade reexports these APIs for Rust, with bindings for Web,

@@ -37,6 +37,9 @@ function reset(config = {}) {
       serviceUnauthorizedOnce: false,
       ddsUnauthorizedOnce: false,
       domainsUnauthorizedOnce: false,
+      accessibleDomainsUnauthorizedOnce: false,
+      denyP2pExchange: false,
+      wrongP2pToken: false,
       ...config,
     },
     phase: { phase: 'idle' },
@@ -45,12 +48,14 @@ function reset(config = {}) {
     refreshes: 0,
     importedRefreshes: 0,
     exchanges: 0,
+    p2pExchanges: 0,
     domainAuths: 0,
     multipartAborts: 0,
     multipartCompletions: 0,
     generation: 0,
     importedGeneration: 0,
     nextUpload: 0,
+    activeP2pToken: null,
     records: new Map([[INITIAL_DATA_ID, {
       metadata: metadata(INITIAL_DATA_ID, 'fixture', 'fixture.v1', initialBytes),
       bytes: initialBytes,
@@ -108,6 +113,7 @@ function stats() {
     refreshes: state.refreshes,
     importedRefreshes: state.importedRefreshes,
     exchanges: state.exchanges,
+    p2pExchanges: state.p2pExchanges,
     domainAuths: state.domainAuths,
     multipartAborts: state.multipartAborts,
     multipartCompletions: state.multipartCompletions,
@@ -131,6 +137,21 @@ function dataGrant() {
     domain_id: DOMAIN_ID,
     aud: ['dds', dataBase],
     exp: Math.floor(Date.now() / 1000) + 3600,
+  };
+  return `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.fixture`;
+}
+
+function p2pAccessToken(type = 'user-p2p-access') {
+  const now = Math.floor(Date.now() / 1000);
+  const claims = {
+    type,
+    iss: 'api',
+    aud: ['domain-service'],
+    sub: 'fixture-user',
+    org: '11111111-1111-4111-8111-111111111111',
+    domains: [DOMAIN_ID, OTHER_DOMAIN_ID],
+    iat: now,
+    exp: now + 3600,
   };
   return `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.fixture`;
 }
@@ -267,6 +288,17 @@ async function primaryHandler(request, response) {
       const user = bearerIs(request, `user-${state.generation}`);
       const imported = bearerIs(request, `imported-access-${state.importedGeneration}`);
       if (!user && !imported) return json(response, 401);
+      const purpose = url.searchParams.get('purpose');
+      if (purpose && purpose !== 'p2p') return json(response, 400);
+      if (purpose === 'p2p') {
+        state.p2pExchanges++;
+        if (!imported) return json(response, 403);
+        if (state.config.denyP2pExchange) return json(response, 403);
+        state.activeP2pToken = p2pAccessToken(
+          state.config.wrongP2pToken ? 'user-access' : 'user-p2p-access',
+        );
+        return json(response, 200, { access_token: state.activeP2pToken });
+      }
       return json(response, 200, {
         access_token: imported
           ? `service-imported-${state.importedGeneration}`
@@ -284,6 +316,22 @@ async function primaryHandler(request, response) {
       const offset = Number(url.searchParams.get('offset') ?? 0);
       const all = [{ id: DOMAIN_ID, name: 'Fixture Domain', organization_id: null }];
       return json(response, 200, { domains: all.slice(offset, offset + limit), total: all.length, limit, offset });
+    }
+    if (url.pathname === '/api/v1/accessible-domains' && request.method === 'GET') {
+      if (!state.activeP2pToken || !bearerIs(request, state.activeP2pToken)) return json(response, 401);
+      if (state.config.accessibleDomainsUnauthorizedOnce) {
+        state.config.accessibleDomainsUnauthorizedOnce = false;
+        return json(response, 401);
+      }
+      const limit = Number(url.searchParams.get('limit') ?? 100);
+      const offset = Number(url.searchParams.get('offset') ?? 0);
+      const all = [
+        { id: DOMAIN_ID, name: 'Fixture Domain', description: 'first', organization_id: null },
+        { id: OTHER_DOMAIN_ID, name: 'Other Domain', description: 'second', organization_id: '11111111-1111-4111-8111-111111111111' },
+      ];
+      return json(response, 200, {
+        domains: all.slice(offset, offset + limit), total: all.length, limit, offset,
+      });
     }
     const auth = /^\/api\/v1\/domains\/([^/]+)\/auth$/.exec(url.pathname);
     if (auth && request.method === 'POST') {

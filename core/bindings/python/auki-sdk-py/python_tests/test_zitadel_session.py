@@ -6,7 +6,7 @@ import json
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import auki_sdk
 import pytest
@@ -18,7 +18,15 @@ OTHER_DOMAIN = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 
 @pytest.fixture
 def zitadel_services():
-    state = {"calls": [], "deny": False, "wrong_claim": False}
+    state = {
+        "calls": [],
+        "deny": False,
+        "deny_listing": False,
+        "wrong_claim": False,
+        "p2p_exchanges": 0,
+        "data_exchanges": 0,
+        "p2p_token": None,
+    }
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -33,7 +41,9 @@ def zitadel_services():
             self.wfile.write(body)
 
         def request(self):
-            path = urlparse(self.path).path
+            url = urlparse(self.path)
+            path = url.path
+            query = parse_qs(url.query)
             length = int(self.headers.get("Content-Length", "0"))
             body = self.rfile.read(length).decode()
             state["calls"].append(
@@ -57,7 +67,43 @@ def zitadel_services():
                 })
             if path == "/service/domains-access-token":
                 assert self.headers["Authorization"] == "Bearer access-replacement"
+                if query.get("purpose") == ["p2p"]:
+                    state["p2p_exchanges"] += 1
+                    if state["deny_listing"]:
+                        return self.reply(status=403)
+                    now = int(time.time())
+                    claims = {
+                        "type": "user-p2p-access",
+                        "iss": "api",
+                        "aud": ["domain-service"],
+                        "sub": "fixture-user",
+                        "org": "11111111-1111-4111-8111-111111111111",
+                        "domains": [DOMAIN, OTHER_DOMAIN],
+                        "iat": now,
+                        "exp": now + 3600,
+                    }
+                    payload = base64.urlsafe_b64encode(
+                        json.dumps(claims).encode()
+                    ).decode().rstrip("=")
+                    state["p2p_token"] = "e30." + payload + ".sig"
+                    return self.reply({"access_token": state["p2p_token"]})
+                assert not query
+                state["data_exchanges"] += 1
                 return self.reply({"access_token": "domain-service-token"})
+            if path == "/api/v1/accessible-domains":
+                assert self.headers["Authorization"] == "Bearer " + state["p2p_token"]
+                limit = int(query["limit"][0])
+                offset = int(query["offset"][0])
+                domains = [
+                    {"id": DOMAIN, "name": "First", "description": "first"},
+                    {"id": OTHER_DOMAIN, "name": "Second", "description": "second"},
+                ]
+                return self.reply({
+                    "domains": domains[offset:offset + limit],
+                    "total": len(domains),
+                    "limit": limit,
+                    "offset": offset,
+                })
             if path.endswith("/auth"):
                 if state["deny"] or OTHER_DOMAIN in path:
                     return self.reply(status=403)
@@ -217,6 +263,67 @@ def test_cancelled_waiter_does_not_cancel_save_and_close_drains_it(zitadel_servi
     asyncio.run(scenario())
 
 
+def test_imported_listing_paginates_and_keeps_data_authority_separate(zitadel_services):
+    async def scenario():
+        saved = []
+
+        async def store(snapshot):
+            saved.append((
+                snapshot.expose_access_token(),
+                snapshot.expose_refresh_token(),
+                snapshot.access_token_expires_at,
+            ))
+
+        session = import_session(zitadel_services, store)
+        domains = session.domains()
+        page = await domains.list(limit=1, offset=1)
+        assert page == {
+            "domains": [{
+                "id": OTHER_DOMAIN,
+                "name": "Second",
+                "organization_id": None,
+            }],
+            "total": 2,
+            "limit": 1,
+            "offset": 1,
+        }
+        assert len(saved) == 1
+
+        choices = await session.accessible_domains()
+        assert [choice.id for choice in choices] == [DOMAIN, OTHER_DOMAIN]
+
+        zitadel_services["deny_listing"] = True
+        with pytest.raises(auki_sdk.DomainDataError) as denied:
+            await domains.list(limit=1)
+        assert denied.value.kind == "auth"
+        assert denied.value.status == 403
+        assert denied.value.code == "authorization_denied"
+
+        # P2P listing denial is recoverable and does not replace the ordinary
+        # Domain-data service-token path or repeat credential persistence.
+        data = session.data(DOMAIN)
+        assert await data.list() == []
+        await data.close()
+        assert len(saved) == 1
+        assert zitadel_services["p2p_exchanges"] == 3
+        assert zitadel_services["data_exchanges"] == 1
+
+        before = len(zitadel_services["calls"])
+        with pytest.raises(auki_sdk.DomainDataError) as unsupported_filter:
+            await domains.list(organization=OTHER_DOMAIN)
+        assert unsupported_filter.value.code == "configuration"
+        with pytest.raises(auki_sdk.DomainDataError) as unsupported_server:
+            await domains.list(domain_server_id=DOMAIN)
+        assert unsupported_server.value.code == "configuration"
+        with pytest.raises(auki_sdk.DomainDataError) as unsupported_portal:
+            await domains.for_portal("ABC12345678")
+        assert unsupported_portal.value.code == "configuration"
+        assert len(zitadel_services["calls"]) == before
+        await session.close()
+
+    asyncio.run(scenario())
+
+
 def test_invalid_credentials_denial_wrong_domain_and_listing_are_bounded(zitadel_services):
     with pytest.raises(RuntimeError) as invalid:
         auki_sdk.ZitadelSessionCredentials("", "refresh", "client", zitadel_services["base"])
@@ -243,12 +350,6 @@ def test_invalid_credentials_denial_wrong_domain_and_listing_are_bounded(zitadel
             pass
 
         session = import_session(zitadel_services, store)
-        with pytest.raises(auki_sdk.DomainDataError) as unsupported:
-            await session.domains().list()
-        assert unsupported.value.kind == "auth"
-        assert unsupported.value.code == "configuration"
-        assert zitadel_services["calls"] == []
-
         zitadel_services["deny"] = True
         with pytest.raises(auki_sdk.DomainDataError) as denied:
             await session.data(OTHER_DOMAIN).list()

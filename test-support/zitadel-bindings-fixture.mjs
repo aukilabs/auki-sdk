@@ -6,13 +6,27 @@ import { readFile } from 'node:fs/promises';
 const port = Number(process.argv[2] ?? 18111);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('invalid port');
 const base = `http://127.0.0.1:${port}`;
-let counts, generation, options;
+let counts, generation, options, p2pToken;
 let phase = { phase: 'idle' };
 const reset = (settings = {}) => {
   counts = { refresh: 0, exchange: 0, domains: 0, admission: 0 };
-  generation = 0; options = settings;
+  generation = 0; options = settings; p2pToken = null;
 };
 reset();
+const issueP2pToken = () => {
+  const now = Math.floor(Date.now() / 1000);
+  const claims = {
+    type: 'user-p2p-access',
+    iss: 'api',
+    aud: ['domain-service'],
+    sub: 'fixture-user',
+    org: '11111111-1111-4111-8111-111111111111',
+    domains: ['00000000-0000-0000-0000-000000000099'],
+    iat: now,
+    exp: now + 3600,
+  };
+  return `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.fixture`;
+};
 const server = http.createServer(async (request, response) => {
   response.setHeader('Access-Control-Allow-Origin', '*');
   response.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Accept, Cache-Control');
@@ -63,11 +77,24 @@ const server = http.createServer(async (request, response) => {
     }
     if (url.pathname === '/service/domains-access-token' && request.method === 'POST') {
       counts.exchange++;
-      return send(500, { error: 'unexpected legacy API exchange' });
+      if (url.search !== '?purpose=p2p') return send(400, { error: 'missing scoped purpose' });
+      if (request.headers.authorization !== `Bearer access-${generation}`) return send(401, {});
+      p2pToken = issueP2pToken();
+      return send(200, { access_token: p2pToken });
     }
     if (url.pathname === '/api/v1/accessible-domains') {
       counts.domains++;
-      return send(500, { error: 'unexpected Domain discovery' });
+      if (request.method !== 'GET' || !p2pToken
+          || request.headers.authorization !== `Bearer ${p2pToken}`) return send(401, {});
+      const limit = Number(url.searchParams.get('limit'));
+      const offset = Number(url.searchParams.get('offset'));
+      if (limit !== 100 || offset !== 0) return send(400, { error: 'unexpected pagination' });
+      return send(200, { domains: [{
+        id: '00000000-0000-0000-0000-000000000099',
+        name: 'Denied Domain',
+        description: 'Listed for lifecycle tests; peer admission remains denied',
+        organization_id: null,
+      }], total: 1, limit, offset });
     }
     if (/^\/api\/v1\/domains\/00000000-0000-0000-0000-000000000099\/p2p\/zitadel\/challenge$/.test(url.pathname) && request.method === 'POST') {
       counts.admission++;

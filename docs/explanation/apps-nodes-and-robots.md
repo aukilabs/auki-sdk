@@ -14,7 +14,8 @@ Each peer selects a Domain that its User or App can access. Neither login
 requires a node wallet or stake. Keep App secrets on trusted backends.
 
 For ZITADEL, your app completes login and supplies the session to the SDK.
-Supply a known Domain ID; imported sessions cannot currently list Domains.
+Use the Domain picker when the deployment supports the imported human
+Domain-allowlist exchange, or supply a known Domain ID for data access.
 See [authentication](../how-to/authenticate.md).
 
 ## Compute nodes

@@ -98,13 +98,17 @@ actor Store: AukiZitadelSessionStore {
         let session = try imported(store)
         let initialStats = try await fixture("/__stats")
         try check(initialStats["refresh"] == 0 && initialStats["admission"] == 0, "import performed network I/O")
-        try await authFailure(.configuration) { _ = try await session.accessibleDomains() }
-        let first = Task { try await admissionProbe(session) }
-        let second = Task { try await admissionProbe(session) }
+        let listing = Task { try await session.accessibleDomains() }
         await store.entered.wait()
         let pendingStats = try await fixture("/__stats")
-        try check(pendingStats["admission"] == 0, "admission before host ACK")
+        try check(pendingStats["exchange"] == 0 && pendingStats["domains"] == 0,
+            "Domain listing continued before host ACK")
         await store.release.open()
+        let listed = try await listing.value
+        try check(listed.count == 1 && listed[0].id == "00000000-0000-0000-0000-000000000099",
+            "scoped imported Domain listing changed")
+        let first = Task { try await admissionProbe(session) }
+        let second = Task { try await admissionProbe(session) }
         try await first.value
         try await second.value
         try check(await store.calls == 1, "duplicated host save")
@@ -118,8 +122,10 @@ actor Store: AukiZitadelSessionStore {
         try await admissionProbe(restored)
         let restartedStats = try await fixture("/__stats")
         try check(restartedStats["refresh"] == 1, "restart replayed rotation")
+        try check(restartedStats["exchange"] == 1 && restartedStats["domains"] == 1,
+            "imported listing did not use the scoped API/DDS path")
         await restored.close()
-        print("PASS Swift single-flight, ACK ordering, selected Domain denial, restart")
+        print("PASS Swift listing, single-flight ACK ordering, selected Domain denial, restart")
 
         _ = try await fixture("/__reset", [:])
         let failingStore = Store(fail: true)

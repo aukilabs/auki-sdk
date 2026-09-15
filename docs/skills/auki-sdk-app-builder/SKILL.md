@@ -47,8 +47,10 @@ running peer when the platform supports it.
 
 When importing ZITADEL credentials, give the SDK sole ownership of refresh.
 Await persistence of all replacement credentials together and retain the session
-after startup or persistence failure so it can recover. Use a known Domain ID;
-imported sessions cannot currently list Domains.
+after startup or persistence failure so it can recover. Imported Domain listing
+requires the API/DDS human Domain-allowlist exchange. Preserve a listing denial;
+never replace it with an organization's broader catalog. Known-Domain data uses
+a separate authorization path.
 
 Posemesh manages machine authentication and DMS execution for compute nodes and
 robots. For an existing host that owns authentication, inspect

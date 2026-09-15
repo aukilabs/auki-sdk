@@ -75,12 +75,14 @@ Portal lookup accepts a UUID or eleven-character short ID. `portals`/`portal`
 return DDS metadata, while `poses`/`pose` return the Domain Server's unchanged
 pose fields.
 
-An imported ZITADEL session supports data access for a known Domain ID and uses
-the same awaited credential store as peer authentication. The released API/DDS
-contracts do not expose a safe imported-session Domain listing for every human
-role, so `domains().list` remains unsupported for imported sessions. Keep the
-session on
-a `.DomainData(... authKind: .persistence ...)` error and retry after secure
+An imported ZITADEL session uses the same awaited credential store for Domain
+listing, data access, and peer authentication. Its default `domains().list`
+query returns the paginated Domains allowed by the API's scoped P2P-access
+token. Organization and Domain Server filters and portal association queries
+remain unsupported for imported sessions. A 403 listing denial is recoverable:
+the same session may still access a known Domain ID if the provider authorizes
+it. Keep the session on a
+`.DomainData(... authKind: .persistence ...)` error and retry after secure
 storage is available. `loginDataWithEnvironment` and
 `importZitadelDataWithEnvironment` take only API and DDS URLs for apps that do
 not need peer networking. App access-key secrets are not exposed by this mobile

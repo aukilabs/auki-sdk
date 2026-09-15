@@ -21,7 +21,7 @@ use reqwest::{
     Client as HttpClient, RequestBuilder, Url,
     header::{ACCEPT, CONTENT_TYPE},
 };
-use serde::de::DeserializeOwned;
+use serde::{Deserialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, MutexGuard};
 use tokio_util::sync::CancellationToken;
@@ -48,6 +48,7 @@ use crate::{
 const API_LOGIN: &str = "API /user/login";
 const API_REFRESH: &str = "API /user/refresh";
 const API_SERVICE_TOKEN: &str = "API /service/domains-access-token";
+const API_P2P_SERVICE_TOKEN: &str = "API /service/domains-access-token?purpose=p2p";
 const DDS_ACCESSIBLE_DOMAINS: &str = "DDS /api/v1/accessible-domains";
 const DDS_P2P_CHALLENGE: &str = "DDS selected-Domain P2P challenge";
 const DDS_P2P_VERIFY: &str = "DDS selected-Domain P2P verify";
@@ -191,6 +192,24 @@ struct SessionState {
     principal: PrincipalState,
     dds_bearer: Option<SecretString>,
     domain_access: std::collections::HashMap<Uuid, Arc<domain::DomainAccess>>,
+}
+
+struct ImportedListingGrant {
+    bearer: SecretString,
+    domains: HashSet<Uuid>,
+}
+
+#[derive(Deserialize)]
+struct ImportedListingClaims {
+    #[serde(rename = "type")]
+    token_type: String,
+    iss: String,
+    aud: Vec<String>,
+    sub: String,
+    org: String,
+    domains: Vec<String>,
+    iat: i64,
+    exp: i64,
 }
 
 impl SessionState {
@@ -583,8 +602,8 @@ impl AuthSession {
         self.inner.client.inner.environment.dds_base_url()
     }
 
-    /// List Domain choices for User/App sessions. Imported sessions require a
-    /// known Domain ID until API/DDS expose permission-aware human listing.
+    /// List Domain choices. Imported sessions use the API's explicit,
+    /// permission-aware human listing grant and fail closed on legacy profiles.
     pub async fn accessible_domains(&self) -> Result<Vec<DomainChoice>> {
         let cancellation = CancellationToken::new();
         self.accessible_domains_with_cancellation(&cancellation)
@@ -609,6 +628,12 @@ impl AuthSession {
         let mut state = self
             .lock_state(cancellation, DDS_ACCESSIBLE_DOMAINS)
             .await?;
+        if let PrincipalState::Zitadel(session) = &state.principal {
+            let session = session.clone();
+            return self
+                .imported_accessible_domains(&session, cancellation)
+                .await;
+        }
         self.require_domain_listing(&state)?;
         let mut refresh_used = false;
         self.prepare_session(&mut state, &mut refresh_used, cancellation)
@@ -623,6 +648,72 @@ impl AuthSession {
                 self.fetch_accessible_domains(&state, cancellation).await
             }
             Err(error) => Err(error),
+        }
+    }
+
+    async fn imported_accessible_domains(
+        &self,
+        session: &Arc<ZitadelSession>,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<DomainChoice>> {
+        let mut refresh_used = false;
+        let mut grant = self
+            .exchange_imported_listing_grant(session, &mut refresh_used, cancellation)
+            .await?;
+        for attempt in 0..2 {
+            match self
+                .fetch_accessible_domains_with_grant(&grant, cancellation)
+                .await
+            {
+                Err(error) if attempt == 0 && error.is_unauthorized() => {
+                    grant = self
+                        .exchange_imported_listing_grant(session, &mut refresh_used, cancellation)
+                        .await?;
+                }
+                result => return result,
+            }
+        }
+        unreachable!("second attempt always returns")
+    }
+
+    async fn exchange_imported_listing_grant(
+        &self,
+        session: &Arc<ZitadelSession>,
+        refresh_used: &mut bool,
+        cancellation: &CancellationToken,
+    ) -> Result<ImportedListingGrant> {
+        let mut ready = session.ready(RefreshMode::IfExpiring, cancellation).await?;
+        *refresh_used |= ready.refreshed;
+        let mut url = self.inner.client.api_url("service/domains-access-token");
+        url.query_pairs_mut().append_pair("purpose", "p2p");
+        loop {
+            let request = self
+                .inner
+                .client
+                .inner
+                .http
+                .post(url.clone())
+                .header(ACCEPT, "application/json")
+                .bearer_auth(ready.credentials.access_token().expose());
+            match self
+                .inner
+                .client
+                .send_json::<ServiceTokenResponse>(request, API_P2P_SERVICE_TOKEN, cancellation)
+                .await
+            {
+                Err(error) if error.is_unauthorized() => {
+                    if *refresh_used {
+                        session.require_login().await;
+                        return Err(Error::AuthenticationRequired);
+                    }
+                    ready = session.ready(RefreshMode::Force, cancellation).await?;
+                    *refresh_used = true;
+                }
+                Ok(response) => {
+                    return validate_imported_listing_grant(response.access_token);
+                }
+                Err(error) => return Err(error),
+            }
         }
     }
 
@@ -874,10 +965,12 @@ impl AuthSession {
                 .await?;
             let total = append_accessible_domain_page(
                 response,
+                ACCESSIBLE_DOMAINS_PAGE_SIZE as u32,
                 offset,
                 expected_total,
                 &mut domains,
                 &mut domain_ids,
+                None,
             )?;
             expected_total = Some(total);
             if domains.len() == total as usize {
@@ -892,6 +985,79 @@ impl AuthSession {
                     )
                 })?;
         }
+    }
+
+    async fn fetch_accessible_domains_with_grant(
+        &self,
+        grant: &ImportedListingGrant,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<DomainChoice>> {
+        let mut domains = Vec::new();
+        let mut domain_ids = HashSet::new();
+        let mut expected_total = None;
+        let mut offset = 0u32;
+
+        loop {
+            let response = self
+                .fetch_imported_listing_page(
+                    grant,
+                    ACCESSIBLE_DOMAINS_PAGE_SIZE as u32,
+                    offset,
+                    cancellation,
+                )
+                .await?;
+            let total = append_accessible_domain_page(
+                response,
+                ACCESSIBLE_DOMAINS_PAGE_SIZE as u32,
+                offset,
+                expected_total,
+                &mut domains,
+                &mut domain_ids,
+                Some(&grant.domains),
+            )?;
+            expected_total = Some(total);
+            if domains.len() == total as usize {
+                return Ok(domains);
+            }
+            offset = offset
+                .checked_add(ACCESSIBLE_DOMAINS_PAGE_SIZE as u32)
+                .ok_or_else(|| {
+                    Error::invalid_response(
+                        DDS_ACCESSIBLE_DOMAINS,
+                        "accessible Domain offset overflowed",
+                    )
+                })?;
+        }
+    }
+
+    async fn fetch_imported_listing_page(
+        &self,
+        grant: &ImportedListingGrant,
+        limit: u32,
+        offset: u32,
+        cancellation: &CancellationToken,
+    ) -> Result<AccessibleDomainsResponse> {
+        let mut url = self.inner.client.dds_url("api/v1/accessible-domains");
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string())
+            .append_pair("offset", &offset.to_string());
+        let request = self
+            .inner
+            .client
+            .inner
+            .http
+            .get(url)
+            .header(ACCEPT, "application/json")
+            .bearer_auth(grant.bearer.expose())
+            .header("posemesh-client-id", self.client_id())
+            .header(
+                "posemesh-sdk-version",
+                concat!("auki-sdk/", env!("CARGO_PKG_VERSION")),
+            );
+        self.inner
+            .client
+            .send_json(request, DDS_ACCESSIBLE_DOMAINS, cancellation)
+            .await
     }
 
     async fn fetch_verification_keys(
@@ -1126,19 +1292,20 @@ fn validated_token(value: String, endpoint: &'static str) -> Result<SecretString
 
 fn append_accessible_domain_page(
     response: AccessibleDomainsResponse,
+    expected_limit: u32,
     expected_offset: u32,
     expected_total: Option<u64>,
     domains: &mut Vec<DomainChoice>,
     domain_ids: &mut HashSet<Uuid>,
+    allowed_domain_ids: Option<&HashSet<Uuid>>,
 ) -> Result<u64> {
-    if response.limit as usize != ACCESSIBLE_DOMAINS_PAGE_SIZE || response.offset != expected_offset
-    {
+    if response.limit != expected_limit || response.offset != expected_offset {
         return Err(Error::invalid_response(
             DDS_ACCESSIBLE_DOMAINS,
             "pagination echo does not match the request",
         ));
     }
-    if response.domains.len() > ACCESSIBLE_DOMAINS_PAGE_SIZE {
+    if response.domains.len() > expected_limit as usize {
         return Err(Error::invalid_response(
             DDS_ACCESSIBLE_DOMAINS,
             "accessible Domain page exceeds the requested bound",
@@ -1149,6 +1316,12 @@ fn append_accessible_domain_page(
             total: response.total,
             returned: domains.len() + response.domains.len(),
         });
+    }
+    if allowed_domain_ids.is_some_and(|allowed| response.total > allowed.len() as u64) {
+        return Err(Error::invalid_response(
+            DDS_ACCESSIBLE_DOMAINS,
+            "accessible Domain total exceeds the service-token allowlist",
+        ));
     }
     if expected_total.is_some_and(|total| total != response.total) {
         return Err(Error::invalid_response(
@@ -1166,7 +1339,7 @@ fn append_accessible_domain_page(
                 "pagination offset exceeds the accessible Domain total",
             )
         })?;
-    let expected_page_len = remaining.min(ACCESSIBLE_DOMAINS_PAGE_SIZE as u64) as usize;
+    let expected_page_len = remaining.min(u64::from(expected_limit)) as usize;
     if response.domains.len() != expected_page_len {
         return Err(Error::invalid_response(
             DDS_ACCESSIBLE_DOMAINS,
@@ -1176,6 +1349,12 @@ fn append_accessible_domain_page(
 
     for domain in response.domains {
         let descriptor = convert_domain(domain)?;
+        if allowed_domain_ids.is_some_and(|allowed| !allowed.contains(&descriptor.id)) {
+            return Err(Error::invalid_response(
+                DDS_ACCESSIBLE_DOMAINS,
+                "Domain is outside the service-token allowlist",
+            ));
+        }
         if !domain_ids.insert(descriptor.id) {
             return Err(Error::invalid_response(
                 DDS_ACCESSIBLE_DOMAINS,
@@ -1185,6 +1364,55 @@ fn append_accessible_domain_page(
         domains.push(DomainChoice { domain: descriptor });
     }
     Ok(response.total)
+}
+
+fn validate_imported_listing_grant(value: String) -> Result<ImportedListingGrant> {
+    // Validate the profile/scope of an authenticated API response. DDS still
+    // verifies its signature and permissions; this does not trust peer input.
+    let invalid = || {
+        Error::invalid_response(
+            API_P2P_SERVICE_TOKEN,
+            "invalid imported Domain-listing service token",
+        )
+    };
+    let bearer = validated_token(value, API_P2P_SERVICE_TOKEN)?;
+    let mut parts = bearer.expose().split('.');
+    let _header = parts.next().ok_or_else(invalid)?;
+    let payload = parts.next().ok_or_else(invalid)?;
+    if parts.next().is_none_or(str::is_empty) || parts.next().is_some() {
+        return Err(invalid());
+    }
+    let bytes = URL_SAFE_NO_PAD.decode(payload).map_err(|_| invalid())?;
+    let claims: ImportedListingClaims = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    if claims.token_type != "user-p2p-access" {
+        return Err(Error::InvalidConfiguration(
+            "API does not support permission-aware imported Domain listing",
+        ));
+    }
+    let organization = Uuid::parse_str(&claims.org).map_err(|_| invalid())?;
+    let expires_at = DateTime::from_timestamp(claims.exp, 0).ok_or_else(invalid)?;
+    if claims.iss != "api"
+        || !claims
+            .aud
+            .iter()
+            .any(|audience| audience == "domain-service")
+        || claims.sub.is_empty()
+        || claims.sub.len() > 255
+        || organization.to_string() != claims.org
+        || claims.iat >= claims.exp
+        || expires_at <= Utc::now()
+        || claims.domains.is_empty()
+    {
+        return Err(invalid());
+    }
+    let mut domains = HashSet::with_capacity(claims.domains.len());
+    for domain in claims.domains {
+        let id = Uuid::parse_str(&domain).map_err(|_| invalid())?;
+        if id.to_string() != domain || !domains.insert(id) {
+            return Err(invalid());
+        }
+    }
+    Ok(ImportedListingGrant { bearer, domains })
 }
 
 fn convert_domain(domain: AccessibleDomain) -> Result<DomainDescriptor> {

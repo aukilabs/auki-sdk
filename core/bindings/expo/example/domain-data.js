@@ -1,8 +1,16 @@
 import { data, domains } from '@aukilabs/auki-sdk-expo';
 
+/** Load one server page for a simple picker. Request another offset only when
+ * the user asks for more. Imported sessions support the default own selection. */
+export async function domainChoices(session, query = { limit: 50, offset: 0 }, signal) {
+  return domains(session).list(query, signal);
+}
+
 /**
- * Round-trip a Blob/File using an existing session and an explicitly selected
- * Domain. The caller owns its destination and partial-file cleanup on failure.
+ * Round-trip a Blob/File using an existing User session and an explicitly
+ * selected Domain. Imported sessions can call the data methods directly; their
+ * portal-to-Domain association query is intentionally unsupported. The caller
+ * owns its destination and partial-file cleanup on failure.
  */
 export async function roundTrip(session, domainId, source, destination, signal) {
   const domainData = await data(session, domainId);

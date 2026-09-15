@@ -181,21 +181,59 @@ export async function runDomainDataCases(report) {
     stats = await domainFixture('/__stats');
     check(stats.importedRefreshes === 1 && snapshots.join(',') === 'imported-refresh-1,imported-refresh-1', 'imported retry rotated credentials twice');
 
-    const listCalls = stats.requests['GET /api/v1/domains'] ?? 0;
+    const page = await domains(importedSession).list({ limit: 1, offset: 1 });
+    check(page.total === 2 && page.limit === 1 && page.offset === 1
+      && page.domains[0]?.id === 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    'imported server pagination lost its Domain or page fields');
+    stats = await domainFixture('/__stats');
+    check(stats.p2pExchanges === 1
+      && stats.requests['GET /api/v1/accessible-domains'] === 1,
+    'imported listing did not use the scoped accessible-Domains route');
+
+    const listingCalls = stats.requests['GET /api/v1/accessible-domains'] ?? 0;
     try {
-      await domains(importedSession).list({ limit: 1 });
-      throw new Error('imported Domain listing unexpectedly succeeded');
+      await domains(importedSession).list({ organization: 'all', limit: 1 });
+      throw new Error('imported filtered Domain listing unexpectedly succeeded');
     } catch (error) {
-      check(error.kind === 'auth' && error.code === 'configuration', 'imported listing lost unsupported classification');
+      check(error.kind === 'auth' && error.code === 'configuration', 'imported filtered listing lost unsupported classification');
     }
     stats = await domainFixture('/__stats');
-    check((stats.requests['GET /api/v1/domains'] ?? 0) === listCalls, 'unsupported imported listing performed provider I/O');
+    check((stats.requests['GET /api/v1/accessible-domains'] ?? 0) === listingCalls,
+      'unsupported imported filter performed provider I/O');
   } finally {
     if (importedClient) await importedClient.close();
     await closeSession(importedSession);
   }
-  report('PASS imported session persistence retry and known-Domain data');
+  report('PASS imported persistence retry, paged Domains, and known-Domain data');
 
-  report('PASS 7 Expo Domain data host cases');
-  await domainFixture('/__phase', { phase: 'passed', count: 7 });
+  const importedListingFailure = async (config, expectedCode) => {
+    await domainFixture('/__reset', config);
+    const session = await importZitadelSession({
+      ...credentials,
+      accessTokenExpiresAt: '2099-01-01T00:00:00Z',
+    }, async () => { throw new Error('unexpected credential save'); }, {
+      apiBaseUrl: domainDataBase,
+      ddsBaseUrl: domainDataBase,
+      dmsBaseUrl: domainDataBase,
+    });
+    try {
+      await domains(session).list({ limit: 1 });
+      throw new Error(`imported listing unexpectedly accepted ${expectedCode}`);
+    } catch (error) {
+      check(error.kind === 'auth' && error.code === expectedCode,
+        `imported listing lost ${expectedCode} classification`);
+    } finally {
+      await closeSession(session);
+    }
+    const stats = await domainFixture('/__stats');
+    check(stats.p2pExchanges === 1
+      && (stats.requests['GET /api/v1/accessible-domains'] ?? 0) === 0,
+    'rejected imported service token reached DDS');
+  };
+  await importedListingFailure({ denyP2pExchange: true }, 'authorization_denied');
+  await importedListingFailure({ wrongP2pToken: true }, 'configuration');
+  report('PASS imported listing denies permission and legacy token profiles');
+
+  report('PASS 8 Expo Domain data host cases');
+  await domainFixture('/__phase', { phase: 'passed', count: 8 });
 }

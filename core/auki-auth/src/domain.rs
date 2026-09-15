@@ -150,6 +150,17 @@ impl AuthSession {
         }
         let operation = async {
             let mut state = self.lock_state(cancellation, DDS_DOMAINS).await?;
+            if let PrincipalState::Zitadel(session) = &state.principal {
+                if query.organization != "own" || query.domain_server_id.is_some() {
+                    return Err(Error::InvalidConfiguration(
+                        "imported ZITADEL Domain listing supports only the permission-aware own-Domain query without a Domain Server filter",
+                    ));
+                }
+                let session = session.clone();
+                return self
+                    .imported_domain_page(&session, query, cancellation)
+                    .await;
+            }
             self.require_domain_listing(&state)?;
             let mut url = self.inner.client.dds_url("api/v1/domains");
             url.query_pairs_mut()
@@ -189,10 +200,75 @@ impl AuthSession {
         }
     }
 
+    async fn imported_domain_page(
+        &self,
+        session: &Arc<ZitadelSession>,
+        query: &DomainListQuery,
+        cancellation: &CancellationToken,
+    ) -> Result<DomainPage> {
+        let mut refresh_used = false;
+        let mut grant = self
+            .exchange_imported_listing_grant(session, &mut refresh_used, cancellation)
+            .await?;
+        for attempt in 0..2 {
+            match self
+                .fetch_imported_listing_page(&grant, query.limit, query.offset, cancellation)
+                .await
+            {
+                Err(error) if attempt == 0 && error.is_unauthorized() => {
+                    grant = self
+                        .exchange_imported_listing_grant(session, &mut refresh_used, cancellation)
+                        .await?;
+                }
+                Ok(response) => {
+                    let mut ids = HashSet::new();
+                    if response.limit != query.limit
+                        || response.offset != query.offset
+                        || response.total > grant.domains.len() as u64
+                        || response.domains.len()
+                            != response
+                                .total
+                                .saturating_sub(u64::from(query.offset))
+                                .min(u64::from(query.limit)) as usize
+                    {
+                        return Err(Error::invalid_response(
+                            DDS_ACCESSIBLE_DOMAINS,
+                            "inconsistent imported Domain pagination",
+                        ));
+                    }
+                    let total = response.total;
+                    let mut domains = Vec::with_capacity(response.domains.len());
+                    for domain in response.domains {
+                        let descriptor = convert_domain(domain)?;
+                        if !grant.domains.contains(&descriptor.id) || !ids.insert(descriptor.id) {
+                            return Err(Error::invalid_response(
+                                DDS_ACCESSIBLE_DOMAINS,
+                                "imported Domain page is outside the service-token allowlist or contains duplicates",
+                            ));
+                        }
+                        domains.push(DomainSummary {
+                            id: descriptor.id,
+                            name: descriptor.name.unwrap_or_default(),
+                            organization_id: descriptor.organization_id,
+                        });
+                    }
+                    return Ok(DomainPage {
+                        domains,
+                        total,
+                        limit: query.limit,
+                        offset: query.offset,
+                    });
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("second attempt always returns")
+    }
+
     pub(super) fn require_domain_listing(&self, state: &SessionState) -> Result<()> {
         if matches!(state.principal, PrincipalState::Zitadel(_)) {
             return Err(Error::InvalidConfiguration(
-                "imported ZITADEL Domain listing requires a permission-aware backend contract; use a known Domain ID",
+                "imported ZITADEL portal-to-Domain lookup is unsupported; list Domains directly or use a known Domain ID",
             ));
         }
         Ok(())

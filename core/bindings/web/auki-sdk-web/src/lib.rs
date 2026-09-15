@@ -181,8 +181,8 @@ mod facade {
             Ok(Self { bootstrap })
         }
 
-        /// Domain choices for password sessions. ZITADEL sessions require an
-        /// application-supplied Domain ID and return a configuration error here.
+        /// Domain choices for password sessions and imported ZITADEL sessions.
+        /// Imported sessions use the permission-scoped P2P listing exchange.
         #[wasm_bindgen(js_name = accessibleDomains, unchecked_return_type = "AukiDomain[]")]
         pub async fn accessible_domains(&self) -> Result<Array, JsValue> {
             let choices = self

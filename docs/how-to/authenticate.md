@@ -83,18 +83,24 @@ In Rust, call `AuthClient::import_zitadel_session` with a `ZitadelSessionStore`,
 then `AukiPeerBootstrap::from_session` if you need a peer. Web uses
 `AukiUserSession.importZitadelDev`; Python uses `AukiSession.import_zitadel_dev`.
 Swift and Expo also support import. The same session supports
-[data access for a known Domain](domain-data.md#reuse-an-imported-login). See the
+[Domain selection and data access](domain-data.md#reuse-an-imported-login). See the
 [Expo example](../../core/bindings/expo/README.md#import-an-existing-login).
 
 Your storage callback must save all replacement credentials together and await
 every write, including on failure. Keep the session if startup or saving fails.
 On a `persistence` error, retry with that session to save its retained tokens.
 
-Provide a known Domain ID: the released backend does not expose safe imported
-Domain listing for every human role. Your API deployment must accept ZITADEL
-for the ordinary service exchange to use data; DDS must separately support
+Imported listing requires an API deployment that implements the
+`purpose=p2p` human Domain-allowlist exchange and DDS that accepts its
+`user-p2p-access` token on `/accessible-domains`. The SDK rejects older exchanges
+that ignore the purpose and preserves HTTP 403 when the account has no readable
+Domains. It does not fall back to organization-wide listing.
+
+A known Domain ID can still use the separate data path: the API deployment must
+accept ZITADEL for the ordinary service exchange. DDS must separately support
 direct ZITADEL login for P2P. On logout, close data clients and peers, close the
-session, then delete stored credentials.
+session, then delete stored credentials. See the
+[deployment evidence and limits](../../test-support/domain-data-validation.md#provider-compatibility).
 
 ## Build a compute node or robot
 

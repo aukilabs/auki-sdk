@@ -31,6 +31,6 @@ node -e '(async()=>{for(let i=0;i<300;i++){try{if((await fetch("http://127.0.0.1
 browser_started=1
 pw open http://127.0.0.1:18138/ --browser chrome
 pw snapshot
-pw run-code 'async page => { await page.waitForFunction(() => document.body.textContent.includes("test result:"), null, {timeout:45000}); const result = await page.locator("body").innerText(); if (!result.includes("test result: ok. 7 passed; 0 failed; 0 ignored;")) throw Error(result); return result; }'
+pw run-code 'async page => { await page.waitForFunction(() => document.body.textContent.includes("test result:"), null, {timeout:45000}); const result = await page.locator("body").innerText(); if (!result.includes("test result: ok. 8 passed; 0 failed; 0 ignored;")) throw Error(result); return result; }'
 pw snapshot
 printf 'Web data browser tests passed; artifacts: %s\n' "$artifacts"

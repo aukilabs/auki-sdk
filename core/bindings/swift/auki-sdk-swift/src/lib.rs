@@ -616,8 +616,8 @@ impl AukiSession {
         }))
     }
 
-    /// Domain choices for password sessions. ZITADEL sessions require an
-    /// application-supplied Domain ID and return a configuration error here.
+    /// Domain choices available for explicit peer selection. Imported sessions
+    /// use the permission-scoped P2P listing contract.
     pub async fn accessible_domains(&self) -> Result<Vec<AukiDomain>, AukiSdkError> {
         self.session
             .accessible_domains()

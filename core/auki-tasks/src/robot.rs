@@ -43,15 +43,32 @@ pub struct RobotConfig {
     registration: SecretString,
 }
 impl RobotConfig {
+    /// Use the configured audience, or the preset for an official Auki DDS URL.
+    /// Custom DDS endpoints require an explicit audience. No network requests
+    /// are made, and token audience validation remains exact.
     pub fn new(
         dds_url: &str,
         dms_url: &str,
         registration: SecretString,
         version: &str,
         client_id: &str,
-        audience: &str,
+        audience: Option<&str>,
         capabilities: Vec<String>,
     ) -> Result<Self> {
+        let dds_url = endpoint(dds_url)?;
+        let audience = match audience {
+            Some(value) => value,
+            None => match dds_url.as_str() {
+                "https://dds.dev.aukiverse.com/" => "https://dds.dev.aukiverse.com/robots",
+                "https://dds.staging.aukiverse.com/" => "https://dds.staging.aukiverse.com/robots",
+                "https://dds.auki.network/" => "https://dds.auki.network/robots",
+                _ => {
+                    return Err(TaskError::Configuration(
+                        "provide an explicit robot audience for custom DDS endpoints",
+                    ));
+                }
+            },
+        };
         if registration.expose_secret().trim().is_empty()
             || version.is_empty()
             || version.len() > 128
@@ -68,7 +85,7 @@ impl RobotConfig {
         }
         crate::runtime::validate_capabilities(&capabilities)?;
         Ok(Self {
-            dds_url: endpoint(dds_url)?,
+            dds_url,
             dms_url: endpoint(dms_url)?,
             registration,
             version: version.into(),
@@ -81,6 +98,10 @@ impl RobotConfig {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "robot_tests.rs"]
+mod tests;
 
 #[derive(Clone, Deserialize)]
 pub(crate) struct RobotClaims {

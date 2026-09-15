@@ -116,7 +116,7 @@ fn fixture(
         SecretString::new("fixture"),
         "1.0.0",
         "fixture",
-        &format!("{}/robots", server.base_url()),
+        Some(&format!("{}/robots", server.base_url())),
         vec!["/example/v1".into()],
     )
     .unwrap();

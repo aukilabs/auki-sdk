@@ -9,7 +9,8 @@ Before starting, build the [Python binding](../../core/bindings/python/auki-sdk-
 or [add the Rust SDK](../reference/networking.md#rust). Get the machine's
 credentials and matching DDS/DMS URLs from its operator. Compute nodes need
 a registration credential and wallet key; robots use a robot registration
-credential and the deployment's robot audience. Check the
+credential. The SDK selects the robot audience for official Auki DDS URLs;
+custom endpoints need an explicit value. Check the
 [service requirements](../reference/tasks.md#service-requirements) for your environment.
 
 ## Write a Python handler
@@ -116,13 +117,17 @@ robot = auki_sdk.AukiRobotCredential(
     dds_url=os.environ["DDS_BASE_URL"],
     dms_url=os.environ["DMS_BASE_URL"],
     registration=os.environ["ROBOT_REGISTRATION_CREDENTIAL"],
-    audience=os.environ["DDS_ROBOT_AUDIENCE"],
+    audience=os.environ.get("DDS_ROBOT_AUDIENCE"),
     version="1.0.0",
     client_id=os.environ["AUKI_CLIENT_ID"],
     capabilities=["/example/uppercase/v1"],
 )
 tasks = auki_sdk.AukiDmsTasks(robot, {"/example/uppercase/v1": uppercase})
 ~~~
+
+Omit `audience` to use the default for Auki dev, staging, or production. Set it
+explicitly for a custom DDS endpoint or a deployment with a different audience.
+See [robot audience defaults](../reference/tasks.md#robot-audience).
 
 Use the same run and cleanup pattern as for a compute node. An unassigned robot
 reports presence but does not claim tasks. An assigned robot can also read

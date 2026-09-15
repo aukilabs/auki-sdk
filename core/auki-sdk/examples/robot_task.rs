@@ -32,6 +32,11 @@ impl TaskHandler for Inspect {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dds = std::env::var("DDS_BASE_URL")?;
     let dms = std::env::var("DMS_BASE_URL")?;
+    let audience = match std::env::var("DDS_ROBOT_AUDIENCE") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => return Err(error.into()),
+    };
     let capabilities = vec![CAPABILITY.into()];
     let mut config = RobotConfig::new(
         &dds,
@@ -39,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         SecretString::new(std::env::var("ROBOT_REGISTRATION_CREDENTIAL")?),
         "1.0.0",
         &std::env::var("AUKI_CLIENT_ID")?,
-        &std::env::var("DDS_ROBOT_AUDIENCE")?,
+        audience.as_deref(),
         capabilities.clone(),
     )?;
     let peer = std::env::var_os("AUKI_PEER_IDENTITY_FILE")

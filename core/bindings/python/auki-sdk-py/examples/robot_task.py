@@ -33,7 +33,7 @@ async def main():
     robot = auki_sdk.AukiRobotCredential(
         dds_url=os.environ["DDS_BASE_URL"], dms_url=os.environ["DMS_BASE_URL"],
         registration=os.environ["ROBOT_REGISTRATION_CREDENTIAL"],
-        audience=os.environ["DDS_ROBOT_AUDIENCE"],
+        audience=os.environ.get("DDS_ROBOT_AUDIENCE"),
         version="1.0.0", client_id=os.environ["AUKI_CLIENT_ID"], capabilities=[CAPABILITY],
         peer_identity_file=os.environ.get("AUKI_PEER_IDENTITY_FILE"),
     )

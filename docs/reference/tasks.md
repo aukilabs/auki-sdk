@@ -58,6 +58,29 @@ Rust configures runtime intervals with `TasksConfig` and machine settings with
 `ComputeConfig` or `RobotConfig`. Python exposes corresponding constructor
 keywords. Data operations use the [Domain data limits](domain-data.md#limits).
 
+### Robot audience
+
+The audience identifies the robot authentication profile in a token's `aud`
+claim. It is not a robot-listing endpoint or a frontend setting. DDS, DMS, and
+the robot runner must agree on its value.
+
+Rust `RobotConfig::new` accepts `None` for the default or `Some(audience)` for
+an override. Python `AukiRobotCredential` accepts an optional `audience=`;
+omitting it or passing `None` selects the default from the DDS URL:
+
+| DDS base URL | Default robot audience |
+| --- | --- |
+| `https://dds.dev.aukiverse.com` | `https://dds.dev.aukiverse.com/robots` |
+| `https://dds.staging.aukiverse.com` | `https://dds.staging.aukiverse.com/robots` |
+| `https://dds.auki.network` | `https://dds.auki.network/robots` |
+
+These presets apply to the root HTTPS URL, with an optional trailing slash.
+Custom hosts, nonstandard ports, and URL path prefixes require an explicit
+value. An explicit value overrides a preset; empty or invalid values fail.
+The SDK still requires an exact audience match when validating robot tokens.
+Presets do not establish that robot workers are enabled in an environment;
+check the [service requirements](#service-requirements).
+
 ## Events and receipts
 
 `log_event` preserves enqueue order, including across cloned Rust contexts.

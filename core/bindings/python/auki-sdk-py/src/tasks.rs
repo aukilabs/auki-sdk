@@ -170,7 +170,7 @@ struct PyRobot {
 #[pymethods]
 impl PyRobot {
     #[new]
-    #[pyo3(signature = (*, dds_url, dms_url, registration, version, client_id, audience, capabilities, request_timeout=30.0, registration_interval=120.0, peer_identity_file=None, peer_config=None))]
+    #[pyo3(signature = (*, dds_url, dms_url, registration, version, client_id, audience=None, capabilities, request_timeout=30.0, registration_interval=120.0, peer_identity_file=None, peer_config=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         dds_url: &str,
@@ -178,7 +178,7 @@ impl PyRobot {
         registration: String,
         version: &str,
         client_id: &str,
-        audience: &str,
+        audience: Option<&str>,
         capabilities: Vec<String>,
         request_timeout: f64,
         registration_interval: f64,

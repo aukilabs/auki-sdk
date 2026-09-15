@@ -70,6 +70,43 @@ def runtime(services, handler, kind="robot", peer_file=None):
     return credential, tasks
 
 
+@pytest.mark.parametrize("dds", [
+    "https://dds.dev.aukiverse.com",
+    "https://dds.staging.aukiverse.com/",
+    "https://dds.auki.network",
+])
+@pytest.mark.parametrize("options", [{}, {"audience": None}])
+def test_robot_audience_can_be_omitted_for_official_environments(dds, options):
+    async def scenario():
+        robot = auki_sdk.AukiRobotCredential(
+            dds_url=dds, dms_url=dds, registration="fixture-robot-registration",
+            version="1.0.0", client_id="robot-fixture", capabilities=[CAPABILITY], **options,
+        )
+        # Construction and closing an unused credential make no service requests.
+        await robot.close()
+    asyncio.run(scenario())
+
+
+def test_custom_dds_requires_explicit_robot_audience_before_any_request(worker_services):
+    with pytest.raises(auki_sdk.TaskRuntimeError, match="explicit robot audience"):
+        auki_sdk.AukiRobotCredential(
+            dds_url=worker_services["base"], dms_url=worker_services["base"],
+            registration="fixture-robot-registration", version="1.0.0",
+            client_id="robot-fixture", capabilities=[CAPABILITY],
+        )
+    assert worker_services["calls"] == []
+
+
+@pytest.mark.parametrize("audience", ["", " ", " robot-audience"])
+def test_invalid_explicit_robot_audience_does_not_use_the_default(audience):
+    with pytest.raises(auki_sdk.TaskRuntimeError, match="audience"):
+        auki_sdk.AukiRobotCredential(
+            dds_url="https://dds.dev.aukiverse.com", dms_url="https://dms.dev.aukiverse.com/v1",
+            registration="fixture-robot-registration", version="1.0.0", client_id="robot-fixture",
+            capabilities=[CAPABILITY], audience=audience,
+        )
+
+
 def test_robot_idle_reads_and_task_writes_use_separate_authority(worker_services):
     async def scenario():
         async def handler(task):

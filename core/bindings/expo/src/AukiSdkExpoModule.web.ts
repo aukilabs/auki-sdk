@@ -9,6 +9,7 @@ import type {
   AukiServiceEnvironment,
   ZitadelSessionCredentials,
 } from "./AukiSdkExpo.types";
+import { jsonStringify } from "./json-stringify";
 import { loadAukiSdkWasm, type AukiSdkWasm } from "./web/loadAukiSdkWasm";
 
 type Session = Awaited<ReturnType<AukiSdkWasm["AukiUserSession"]["loginDev"]>>;
@@ -234,10 +235,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     const info = await new sdk.AukiInfoClient(this.peer(peerHandle)).fetchExact(
       target,
     );
-    // AukiParticipantInfo.sessionNowNs is bigint — JSON.stringify rejects it.
-    return JSON.stringify(info, (_key, value) =>
-      typeof value === "bigint" ? value.toString() : value,
-    );
+    return jsonStringify(info);
   }
 
   async catalogFetchResourcesExact(
@@ -252,7 +250,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
       target,
       variants as Parameters<CatalogClient["fetchResourcesExact"]>[1],
     );
-    return JSON.stringify(resources);
+    return jsonStringify(resources);
   }
 
   async registryListExact(
@@ -264,7 +262,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     const entries = await new sdk.AukiRegistryClient(
       this.peer(peerHandle),
     ).listExact(target, kind as "device_model");
-    return JSON.stringify(entries);
+    return jsonStringify(entries);
   }
 
   async registryFetchExact(
@@ -278,7 +276,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     const entry = await new sdk.AukiRegistryClient(
       this.peer(peerHandle),
     ).fetchExact(target, kind as "device_model", id, hash);
-    return JSON.stringify(entry);
+    return jsonStringify(entry);
   }
 
   async blobFetchExact(
@@ -301,7 +299,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     } else {
       throw new Error("blobFetchExact: unexpected bytes type");
     }
-    return JSON.stringify({
+    return jsonStringify({
       peerId: receipt.peerId,
       sha256: receipt.sha256,
       relayed: receipt.relayed,
@@ -339,7 +337,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
       return null;
     }
     if (next.kind !== "entry") {
-      return JSON.stringify({
+      return jsonStringify({
         kind: next.kind,
         reason: next.reason,
         entry: null,
@@ -355,7 +353,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     } else if (Array.isArray(payload)) {
       payloadBase64 = bytesToBase64(Uint8Array.from(payload));
     }
-    return JSON.stringify({
+    return jsonStringify({
       kind: "entry",
       entry: {
         timestampNs: String(entry.timestampNs),

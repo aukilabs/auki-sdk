@@ -18,7 +18,8 @@
     "build": "npm run build:wasm && tsc && node scripts/copy-web-artifacts.cjs",
     "clean": "rm -rf build src/web/generated/*",
     "prepare": "npm run build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/json-stringify.test.mjs"
   },
   "keywords": [
     "react-native",

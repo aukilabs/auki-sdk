@@ -44,18 +44,30 @@ def services():
                 if url.path == "/user/login":
                     return self.reply({"access_token": "user", "refresh_token": "refresh"})
                 if url.path == "/service/domains-access-token":
+                    if state.get("expect_app"):
+                        expected = base64.b64encode(b"fixture-key:fixture-secret").decode()
+                        assert self.headers["Authorization"] == "Basic " + expected
+                        state["app_exchanges"] = state.get("app_exchanges", 0) + 1
                     return self.reply({"access_token": "service"})
                 if url.path == "/api/v1/domains":
                     assert query["issue_token"] == ["false"]
                     assert self.headers["posemesh-client-id"] == "python-fixture"
+                    if state.get("expect_app"):
+                        assert self.headers["posemesh-gateway-mac"] == "AA:BB:CC:DD:EE:FF"
                     return self.reply({"domains": [{"id": DOMAIN, "name": "Domain"}], "limit": int(query["limit"][0]), "offset": int(query["offset"][0]), "total": 1})
                 if url.path.endswith("/auth"):
+                    if state.get("expect_app"):
+                        assert self.headers["posemesh-gateway-mac"] == "AA:BB:CC:DD:EE:FF"
+                    if state.pop("reject_next_grant", False):
+                        return self.reply({}, 401)
                     claims = {"iss": "dds", "domain_id": DOMAIN, "aud": ["dds", state["server"]], "exp": int(time.time()) + 3600}
                     token = "e30." + base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=") + ".sig"
                     return self.reply({"id": DOMAIN, "domain_server": {"url": state["server"]}, "access_token": token})
                 if url.path == "/api/v1/info":
                     assert "Authorization" not in self.headers
                     return self.reply({"upload": {"domain_data_max_bytes": 10000, "request_max_bytes": 4096, "multipart": {"enabled": True, "part_size_bytes": 4}}})
+                if state.get("deny_writes") and role == "data" and self.command in ("POST", "PUT", "DELETE"):
+                    return self.reply({}, 403)
                 if url.path.endswith("/domains") and "/lighthouses/" in url.path:
                     assert query["issue_token"] == ["false"]
                     return self.reply({"domains": [{"id": DOMAIN, "name": "Domain", "is_default": True, "added_to_domain_at": DATE}]})
@@ -106,6 +118,39 @@ def services():
 async def login(services):
     endpoint = services["dds"]
     return await auki_sdk.AukiSession.login_with_environment(endpoint, endpoint, endpoint, "fixture@example.com", "fixture", client_id="python-fixture")
+
+
+def test_app_custom_environment_preserves_gateway_policy_and_denied_operations(services):
+    async def scenario():
+        endpoint = services["dds"]
+        with pytest.raises(RuntimeError):
+            await auki_sdk.AukiSession.login_app_with_environment(
+                endpoint, endpoint, endpoint, "fixture-key", "fixture-secret",
+                gateway_mac="invalid",
+            )
+        assert services["calls"] == []
+        services.update(expect_app=True, reject_next_grant=True, deny_writes=True)
+        session = await auki_sdk.AukiSession.login_app_with_environment(
+            endpoint, endpoint, endpoint, "fixture-key", "fixture-secret",
+            client_id="python-fixture", gateway_mac="aa:bb:cc:dd:ee:ff",
+        )
+        data = session.data(DOMAIN)
+        try:
+            assert (await session.domains().list(limit=1))["domains"][0]["id"] == DOMAIN
+            assert await data.read(DATA) == b"abcdefg"
+            with pytest.raises(auki_sdk.DomainDataError) as denied:
+                await data.write(b"denied", name="new-report", data_type="report.v1")
+            assert denied.value.status == 403
+            with pytest.raises(auki_sdk.DomainDataError) as denied:
+                await data.delete(DATA)
+            assert denied.value.status == 403
+            assert services["app_exchanges"] == 2
+            assert not any(path.startswith("/user/") for _, _, path in services["calls"])
+        finally:
+            await data.close()
+            await session.close()
+
+    asyncio.run(scenario())
 
 
 def test_shared_session_portals_poses_and_streaming(services):

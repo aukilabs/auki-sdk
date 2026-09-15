@@ -32,6 +32,14 @@ See [Work with Domain data](../../../../docs/how-to/domain-data.md#use-web-or-py
 for examples and the [reference](../../../../docs/reference/domain-data.md)
 for streaming, cancellation, and errors.
 
+Imported ZITADEL sessions also support `session.data(knownDomainId)` and
+selected-Domain portal/pose reads. They share the same refresh owner and awaited
+storage callback as peers. Retain the session after `error.code === "persistence"`
+and retry it after storage recovers. The released provider contracts do not
+support safe imported-session Domain listing for all human roles; listing and
+portal-to-Domain association queries reject before network I/O. See
+[imported login data access](../../../../docs/how-to/domain-data.md#reuse-an-imported-login).
+
 The [Blob/File helper](examples/domain-data.ts) accepts a session, selected
 Domain, file, and destination callback. It reads portal/pose records, uploads
 the file, streams it back, and deletes its unique record. It contacts the

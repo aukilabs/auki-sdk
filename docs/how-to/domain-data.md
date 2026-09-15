@@ -154,6 +154,62 @@ See the [Web](../../core/bindings/web/auki-sdk-web/README.md) and
 [Python](../../core/bindings/python/auki-sdk-py/README.md) READMEs for build
 instructions and local tests.
 
+## Use Swift or Expo
+
+Swift's `session.domains()` and `session.data(domainId:)` use the same login as
+its peer APIs. Expo exports `domains(session)` and `data(session, domainId)`
+for Web and iOS. Neither requires a running peer. Both support portal/pose
+reads, metadata filters, buffered CRUD, streamed downloads, and multipart uploads.
+
+Start with the [Swift example and tests](../../core/bindings/swift/auki-sdk-swift/README.md#work-with-domains-and-domain-data)
+or the [Expo binding](../../core/bindings/expo/README.md). Streaming keeps one
+bounded chunk in flight across the native bridge and waits for the destination
+before continuing. Always cancel and await pending transfers before closing
+their client.
+
+## Reuse an imported login
+
+Import your application's ZITADEL PKCE session using the
+[authentication guide](authenticate.md#reuse-a-zitadel-login), then create a
+data client with a known Domain UUID:
+
+~~~ts
+const session = AukiUserSession.importZitadelDev(credentials, async replacement => {
+  await secureStore.saveAtomically({
+    accessToken: replacement.exposeAccessToken(),
+    refreshToken: replacement.exposeRefreshToken(),
+    clientId: replacement.clientId,
+    issuer: replacement.issuer,
+    accessTokenExpiresAt: replacement.accessTokenExpiresAt,
+  });
+});
+// Keep session in app state before starting operations, including on failure.
+const data = session.data(selectedDomainId);
+try {
+  const records = await data.list({ dataType: "my-app.report.v1" });
+  if (records.length) showReport(await data.read(records[0].id));
+} catch (error) {
+  // A persistence error is recoverable on this same session after storage recovers.
+  // Report the structured error to the application; do not reimport old tokens.
+  reportDataError(error);
+} finally {
+  await data.close();
+}
+~~~
+
+The SDK exchanges the imported bearer through the ordinary API service-token
+route and DDS Domain authentication. It retains rotated credentials until the
+host has saved the complete replacement. Data clients and peers share this
+refresh owner; stop the application's previous refresh loop before importing.
+On logout, close all clients and peers, await `session.close()`, then clear
+secure storage.
+
+Imported Domain listing is unavailable with the released provider contracts.
+Supply a known Domain from your application's existing selection flow. User
+and App sessions still support the paged picker above. Read, write, delete,
+and pose access remain separate server permission checks; successful exchange
+or listing does not authorize an operation.
+
 ## Close clients and the shared session
 
 Always await `data.close()` when finished, including after an error. It cancels

@@ -25,8 +25,8 @@ export type DataTarget = { name: string; dataType: string; id?: never } | { id: 
 export interface TransferOptions { maxBytes?: number; maxChunkBytes?: number }
 export type DataSource = (maximumBytes: number, signal: AbortSignal) => Uint8Array | Promise<Uint8Array>;
 export type DataSink = (chunk: Uint8Array, signal: AbortSignal) => void | Promise<void>;
-/** Rejections are Error objects with kind and optional HTTP status. */
-export interface DomainDataError extends Error { kind: string; status?: number }
+/** Auth failures also carry a code; retry a persistence failure on the retained session. */
+export interface DomainDataError extends Error { kind: string; status?: number; code?: AukiAuthFailureCode }
 "#;
 
 pub(crate) fn error(error: DataError) -> JsValue {
@@ -47,6 +47,16 @@ pub(crate) fn error(error: DataError) -> JsValue {
     let _ = js_sys::Reflect::set(&result, &"kind".into(), &kind.into());
     if let Some(status) = error.status() {
         let _ = js_sys::Reflect::set(&result, &"status".into(), &status.into());
+    }
+    let mut original = &error;
+    while let DataError::Cleanup { operation, .. } = original {
+        original = operation;
+    }
+    if let DataError::Auth(auth) = original {
+        let auth = crate::zitadel::auth_error(auth.kind());
+        if let Ok(code) = js_sys::Reflect::get(&auth, &"code".into()) {
+            let _ = js_sys::Reflect::set(&result, &"code".into(), &code);
+        }
     }
     result.into()
 }
@@ -649,5 +659,167 @@ mod tests {
         );
         data.close().await;
         JsFuture::from(session.close()).await.unwrap();
+    }
+
+    #[wasm_bindgen_test]
+    fn multipart_cleanup_preserves_authentication_failure_code() {
+        let failure = error(DataError::Cleanup {
+            operation: Box::new(DataError::Auth(auki_sdk::AuthError::Persistence)),
+            cleanup: Box::new(DataError::HttpStatus { status: 503 }),
+        });
+        assert_eq!(
+            js_sys::Reflect::get(&failure, &"kind".into()).unwrap(),
+            "cleanup"
+        );
+        assert_eq!(
+            js_sys::Reflect::get(&failure, &"code".into()).unwrap(),
+            "persistence"
+        );
+    }
+
+    fn imported_fixture(store: &str) -> (Restore, AukiUserSession) {
+        let restore = fixture();
+        js_sys::eval(r#"
+            globalThis.__importedRefreshes = 0;
+            globalThis.__importedSaves = 0;
+            globalThis.__importedSaved = false;
+            globalThis.__importedSnapshots = [];
+            const dataFetch = globalThis.fetch;
+            globalThis.fetch = async (input, init) => {
+                const request = input instanceof Request ? input : new Request(input, init);
+                const url = new URL(request.url);
+                const json = body => {
+                    const response = new Response(JSON.stringify(body), {headers:{'content-type':'application/json'}});
+                    Object.defineProperty(response, 'url', {value:request.url});
+                    return response;
+                };
+                if (url.pathname === '/.well-known/openid-configuration') return json({
+                    issuer:'https://issuer.example', token_endpoint:'https://issuer.example/oauth/v2/token',
+                });
+                if (url.pathname === '/oauth/v2/token') {
+                    __importedRefreshes++;
+                    return json({access_token:'rotated-access',refresh_token:'rotated-refresh',expires_in:3600,token_type:'Bearer'});
+                }
+                if (url.pathname === '/service/domains-access-token') {
+                    if (url.search || request.headers.get('authorization') !== 'Bearer rotated-access' || !__importedSaved)
+                        throw Error('exchange before persisted rotation or wrong credential profile');
+                }
+                if (url.pathname.endsWith('/auth') && request.headers.get('authorization') !== 'Bearer service')
+                    throw Error('wrong data service bearer');
+                if (url.searchParams.get('raw') === 'true' && !request.headers.get('authorization').endsWith('.sig'))
+                    throw Error('wrong Domain grant');
+                return dataFetch(request);
+            };
+        "#).unwrap();
+        let credentials = js_sys::eval(r#"({accessToken:'old-access',refreshToken:'old-refresh',
+            clientId:'browser-client',issuer:'https://issuer.example',accessTokenExpiresAt:'2000-01-01T00:00:00Z'})"#).unwrap();
+        let session = AukiUserSession::import_zitadel_with_environment(
+            "https://api.example".into(),
+            "https://dds.example".into(),
+            "https://dms.example".into(),
+            credentials.unchecked_into(),
+            Function::new_with_args("credentials", store).unchecked_into(),
+        )
+        .unwrap();
+        (restore, session)
+    }
+
+    #[wasm_bindgen_test]
+    async fn imported_data_retains_rotation_and_reports_persistence_for_retry() {
+        let (_restore, session) = imported_fixture(
+            r#"
+            __importedSnapshots.push([credentials.exposeAccessToken(), credentials.exposeRefreshToken(),
+                credentials.clientId, credentials.issuer, credentials.accessTokenExpiresAt]);
+            if (++__importedSaves === 1) return Promise.reject(Error('private storage detail'));
+            return Promise.resolve().then(() => { __importedSaved = true; });
+        "#,
+        );
+        let data = session.data(DOMAIN.into()).unwrap();
+        let error = data.read(DATA.into(), None).await.unwrap_err();
+        assert_eq!(
+            js_sys::Reflect::get(&error, &"code".into()).unwrap(),
+            "persistence"
+        );
+        assert!(
+            !js_sys::Error::from(error)
+                .message()
+                .includes("private storage", 0)
+        );
+        assert_eq!(data.read(DATA.into(), None).await.unwrap().length(), 7);
+        assert_eq!(js_sys::eval("__importedRefreshes === 1 && __importedSaves === 2 && JSON.stringify(__importedSnapshots[0]) === JSON.stringify(__importedSnapshots[1])").unwrap().as_bool(), Some(true));
+        // Unsupported listing neither refreshes nor attempts the broader org route.
+        assert!(
+            session
+                .domains()
+                .list(JsValue::UNDEFINED, None)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            js_sys::eval("__dataCalls.includes('/api/v1/domains')")
+                .unwrap()
+                .as_bool(),
+            Some(false)
+        );
+        data.close().await;
+        JsFuture::from(session.close()).await.unwrap();
+    }
+
+    #[wasm_bindgen_test]
+    async fn imported_data_cancellation_keeps_save_owned_until_session_close() {
+        let (_restore, session) = imported_fixture(
+            r#"
+            __importedSaves++;
+            globalThis.__importedCancel.abort();
+            return new Promise(resolve => { globalThis.__releaseImportedSave = () => { __importedSaved = true; resolve(); }; });
+        "#,
+        );
+        let controller = web_sys::AbortController::new().unwrap();
+        js_sys::Reflect::set(
+            &js_sys::global(),
+            &"__importedCancel".into(),
+            controller.as_ref(),
+        )
+        .unwrap();
+        let data = session.data(DOMAIN.into()).unwrap();
+        let error = data
+            .read(DATA.into(), Some(controller.signal()))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            js_sys::Reflect::get(&error, &"kind".into()).unwrap(),
+            "cancelled"
+        );
+        let closing = session.close();
+        js_sys::Reflect::set(
+            &js_sys::global(),
+            &"__importedClosing".into(),
+            closing.as_ref(),
+        )
+        .unwrap();
+        let done = js_sys::eval(
+            r#"(async () => {
+            let closed = false; __importedClosing.then(() => { closed = true; });
+            await Promise.resolve(); if (closed) throw Error('close abandoned credential save');
+            __releaseImportedSave(); await __importedClosing; return true;
+        })()"#,
+        )
+        .unwrap();
+        assert_eq!(
+            JsFuture::from(done.unchecked_into::<Promise>())
+                .await
+                .unwrap()
+                .as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            js_sys::eval(
+                "__dataCalls.length === 0 && __importedRefreshes === 1 && __importedSaved"
+            )
+            .unwrap()
+            .as_bool(),
+            Some(true)
+        );
+        data.close().await;
     }
 }

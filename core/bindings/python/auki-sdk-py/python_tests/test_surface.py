@@ -13,8 +13,11 @@ def test_module_exposes_the_small_peer_facade() -> None:
     assert auki_sdk.AukiPeerRoutes.__name__ == "AukiPeerRoutes"
     assert auki_sdk.AukiDiscoveryCandidate.__name__ == "AukiDiscoveryCandidate"
     assert auki_sdk.AukiPeer.__name__ == "AukiPeer"
+    assert auki_sdk.ZitadelSessionCredentials.__name__ == "ZitadelSessionCredentials"
     assert hasattr(auki_sdk.AukiSession, "login_dev")
     assert hasattr(auki_sdk.AukiSession, "login_app_dev")
+    assert hasattr(auki_sdk.AukiSession, "import_zitadel_dev")
+    assert hasattr(auki_sdk.AukiSession, "import_zitadel_with_environment")
     assert hasattr(auki_sdk.AukiPeerRoutes, "tcp")
     assert hasattr(auki_sdk.AukiPeerRoutes, "wss")
     assert hasattr(auki_sdk.AukiPeer, "routes")

@@ -150,10 +150,7 @@ impl AuthSession {
         }
         let operation = async {
             let mut state = self.lock_state(cancellation, DDS_DOMAINS).await?;
-            self.require_data_session(&state)?;
-            let mut refresh_used = false;
-            self.prepare_session(&mut state, &mut refresh_used, cancellation)
-                .await?;
+            self.require_domain_listing(&state)?;
             let mut url = self.inner.client.dds_url("api/v1/domains");
             url.query_pairs_mut()
                 .append_pair("org", &query.organization)
@@ -192,10 +189,10 @@ impl AuthSession {
         }
     }
 
-    fn require_data_session(&self, state: &SessionState) -> Result<()> {
+    pub(super) fn require_domain_listing(&self, state: &SessionState) -> Result<()> {
         if matches!(state.principal, PrincipalState::Zitadel(_)) {
             return Err(Error::InvalidConfiguration(
-                "imported ZITADEL data access is not supported in this milestone",
+                "imported ZITADEL Domain listing requires a permission-aware backend contract; use a known Domain ID",
             ));
         }
         Ok(())
@@ -209,7 +206,14 @@ impl AuthSession {
         endpoint: &'static str,
         cancellation: &CancellationToken,
     ) -> Result<T> {
+        if let PrincipalState::Zitadel(session) = &state.principal {
+            return self
+                .imported_dds_json(session, url, post, endpoint, cancellation)
+                .await;
+        }
         let mut refresh_used = false;
+        self.prepare_session(state, &mut refresh_used, cancellation)
+            .await?;
         for attempt in 0..2 {
             let http = &self.inner.client.inner.http;
             let request = if post {
@@ -242,6 +246,75 @@ impl AuthSession {
         }
         unreachable!("second attempt always returns")
     }
+
+    /// Data service tokens stay request-local and cannot overwrite the bearer
+    /// used for direct ZITADEL P2P proof.
+    async fn imported_dds_json<T: DeserializeOwned>(
+        &self,
+        session: &Arc<ZitadelSession>,
+        url: Url,
+        post: bool,
+        endpoint: &'static str,
+        cancellation: &CancellationToken,
+    ) -> Result<T> {
+        let mut ready = session.ready(RefreshMode::IfExpiring, cancellation).await?;
+        let mut refresh_used = ready.refreshed;
+        let exchange_url = self.inner.client.api_url("service/domains-access-token");
+        for attempt in 0..2 {
+            let bearer = loop {
+                let request = self
+                    .inner
+                    .client
+                    .inner
+                    .http
+                    .post(exchange_url.clone())
+                    .header(ACCEPT, "application/json")
+                    .bearer_auth(ready.credentials.access_token().expose());
+                match self
+                    .inner
+                    .client
+                    .send_json::<ServiceTokenResponse>(request, API_SERVICE_TOKEN, cancellation)
+                    .await
+                {
+                    Err(error) if error.is_unauthorized() => {
+                        if refresh_used {
+                            session.require_login().await;
+                            return Err(Error::AuthenticationRequired);
+                        }
+                        ready = session.ready(RefreshMode::Force, cancellation).await?;
+                        refresh_used = true;
+                    }
+                    result => break validated_token(result?.access_token, API_SERVICE_TOKEN)?,
+                }
+            };
+            let http = &self.inner.client.inner.http;
+            let request = if post {
+                http.post(url.clone())
+            } else {
+                http.get(url.clone())
+            };
+            let request = request
+                .bearer_auth(bearer.expose())
+                .header(ACCEPT, "application/json")
+                .header("posemesh-client-id", self.client_id())
+                .header(
+                    "posemesh-sdk-version",
+                    concat!("auki-sdk/", env!("CARGO_PKG_VERSION")),
+                );
+            match self
+                .inner
+                .client
+                .send_json(request, endpoint, cancellation)
+                .await
+            {
+                // The service grant may have expired. Re-exchange once; only an
+                // API rejection permits OAuth rotation, never a DDS permission error.
+                Err(error) if attempt == 0 && error.is_unauthorized() => continue,
+                result => return result,
+            }
+        }
+        unreachable!("second attempt always returns")
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
@@ -262,17 +335,18 @@ impl DomainAccessProvider for AuthSession {
     ) -> Result<Arc<DomainAccess>> {
         let operation = async {
             let mut state = self.lock_state(cancellation, DDS_DOMAIN_AUTH).await?;
-            self.require_data_session(&state)?;
             if let Some(access) = state.domain_access.get(&domain_id)
                 && access.expires_at > Utc::now() + ChronoDuration::seconds(30)
                 && !rejected.is_some_and(|old| old.token == access.token)
             {
+                // A cached grant must not bypass a pending save or terminal login
+                // failure observed by another client sharing this session.
+                if let PrincipalState::Zitadel(session) = &state.principal {
+                    session.ready(RefreshMode::IfExpiring, cancellation).await?;
+                }
                 return Ok(access.clone());
             }
             state.domain_access.remove(&domain_id);
-            let mut refresh_used = false;
-            self.prepare_session(&mut state, &mut refresh_used, cancellation)
-                .await?;
             let url = self
                 .inner
                 .client

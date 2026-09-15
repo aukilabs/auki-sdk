@@ -69,8 +69,13 @@ serde_json.workspace = true
 sha2 = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+tokio-util.workspace = true
 uniffi = { version = "0.31", features = ["tokio"] }
 uuid.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+httpmock = "0.8.2"
 
 [[bin]]
 name = "uniffi-bindgen"

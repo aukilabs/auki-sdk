@@ -80,17 +80,21 @@ issuer, client ID, and optional expiry. The SDK will refresh the tokens;
 stop any other refresh loop for that login.
 
 In Rust, call `AuthClient::import_zitadel_session` with a `ZitadelSessionStore`,
-then `AukiPeerBootstrap::from_session`. Web uses `AukiUserSession.importZitadelDev`;
-Swift and Expo also support import. See the
+then `AukiPeerBootstrap::from_session` if you need a peer. Web uses
+`AukiUserSession.importZitadelDev`; Python uses `AukiSession.import_zitadel_dev`.
+Swift and Expo also support import. The same session supports
+[data access for a known Domain](domain-data.md#reuse-an-imported-login). See the
 [Expo example](../../core/bindings/expo/README.md#import-an-existing-login).
 
 Your storage callback must save all replacement credentials together and await
 every write, including on failure. Keep the session if startup or saving fails.
 On a `persistence` error, retry with that session to save its retained tokens.
 
-Provide a known Domain ID: imported sessions cannot currently list Domains.
-Your DDS deployment must support ZITADEL login for P2P access. On logout, stop
-peers, close the session, then delete stored credentials.
+Provide a known Domain ID: the released backend does not expose safe imported
+Domain listing for every human role. Your API deployment must accept ZITADEL
+for the ordinary service exchange to use data; DDS must separately support
+direct ZITADEL login for P2P. On logout, close data clients and peers, close the
+session, then delete stored credentials.
 
 ## Build a compute node or robot
 

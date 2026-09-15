@@ -583,8 +583,8 @@ impl AuthSession {
         self.inner.client.inner.environment.dds_base_url()
     }
 
-    /// List Domain choices for legacy user/app sessions. ZITADEL v1 requires
-    /// an application-supplied Domain ID and returns InvalidConfiguration here.
+    /// List Domain choices for User/App sessions. Imported sessions require a
+    /// known Domain ID until API/DDS expose permission-aware human listing.
     pub async fn accessible_domains(&self) -> Result<Vec<DomainChoice>> {
         let cancellation = CancellationToken::new();
         self.accessible_domains_with_cancellation(&cancellation)
@@ -609,11 +609,7 @@ impl AuthSession {
         let mut state = self
             .lock_state(cancellation, DDS_ACCESSIBLE_DOMAINS)
             .await?;
-        if matches!(state.principal, PrincipalState::Zitadel(_)) {
-            return Err(Error::InvalidConfiguration(
-                "ZITADEL Domain discovery is not supported; supply a Domain ID",
-            ));
-        }
+        self.require_domain_listing(&state)?;
         let mut refresh_used = false;
         self.prepare_session(&mut state, &mut refresh_used, cancellation)
             .await?;

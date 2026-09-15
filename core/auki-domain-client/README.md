@@ -1,11 +1,12 @@
 # auki-domain-client
 
 Find Domains and read or write Domain data using the SDK's shared credentials.
-User and App sessions work without starting a peer. Native task leases and
+User, App, and imported sessions work without starting a peer. Imported
+sessions require a known Domain ID. Native task leases and
 robot credentials use the same data client through `auki-tasks`.
 
-The `auki-sdk` facade reexports these APIs for Rust, with bindings for Web and
-Python. Start with [Work with Domain data](../../docs/how-to/domain-data.md).
+The `auki-sdk` facade reexports these APIs for Rust, with bindings for Web,
+Python, Swift/iOS, and Expo Web/iOS. Start with [Work with Domain data](../../docs/how-to/domain-data.md).
 See the [reference](../../docs/reference/domain-data.md) for credential support,
 portal and pose reads, transfer limits, and multipart upload behavior.
 

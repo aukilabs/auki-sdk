@@ -18,6 +18,7 @@ mod facade;
 mod protocols;
 mod python_task;
 mod tasks;
+mod zitadel;
 
 use pyo3::prelude::*;
 
@@ -27,7 +28,8 @@ pub use facade::PyAukiPeer;
 pub fn register_facade(module: &Bound<'_, PyModule>) -> PyResult<()> {
     facade::register(module)?;
     data::register(module)?;
-    tasks::register(module)
+    tasks::register(module)?;
+    zitadel::register(module)
 }
 
 /// Register every protocol role enabled by this crate's Cargo features.

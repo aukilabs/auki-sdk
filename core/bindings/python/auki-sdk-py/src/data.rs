@@ -24,6 +24,9 @@ fn error(error: DataError) -> PyErr {
     Python::with_gil(|py| {
         let result = DomainDataError::new_err(error.to_string());
         let _ = result.value_bound(py).setattr("status", error.status());
+        if let Some(code) = auth_code(&error) {
+            let _ = result.value_bound(py).setattr("code", code);
+        }
         let kind = match error {
             DataError::Cancelled => "cancelled",
             DataError::Closed => "closed",
@@ -40,6 +43,13 @@ fn error(error: DataError) -> PyErr {
         let _ = result.value_bound(py).setattr("kind", kind);
         result
     })
+}
+fn auth_code(error: &DataError) -> Option<&'static str> {
+    match error {
+        DataError::Auth(error) => Some(crate::zitadel::auth_code(error.kind())),
+        DataError::Cleanup { operation, .. } => auth_code(operation),
+        _ => None,
+    }
 }
 pub(crate) fn id(value: &str) -> PyResult<Uuid> {
     Uuid::parse_str(value).map_err(|_| PyValueError::new_err("expected UUID"))

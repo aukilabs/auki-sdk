@@ -28,9 +28,58 @@ Rust protocols must be compiled into the same extension; see
 | Run compute or robot handlers | `AukiComputeCredential`, `AukiRobotCredential`, `AukiDmsTasks` | [Task guide](../../../../docs/how-to/run-compute-tasks.md) |
 
 `AukiSession.login_dev` signs in to development services. Backend services can
-use `login_app_dev`. Both accept a persistent `client_id` for the installation.
+use `login_app_dev`. Use `login_app_with_environment(api, dds, dms, access_key,
+secret, client_id=installation_id)` for exact custom service URLs. App login
+methods also accept `gateway_mac` when the App's DDS policy requires it; the
+same policy is retained during renewal. Keep App secrets on trusted backends.
+User and App login accept a persistent `client_id` for the installation.
 Close data clients and peers before closing their session. For tasks, await
 `tasks.close()` before closing the machine credential.
+
+### Import a ZITADEL session
+
+Mobile and desktop hosts that own a ZITADEL PKCE login can import its complete
+credential snapshot synchronously. Call the import method on the asyncio loop
+that owns the storage callback. Import performs no network request.
+
+~~~python
+credentials = auki_sdk.ZitadelSessionCredentials(
+    access_token,
+    refresh_token,
+    public_client_id,
+    trusted_issuer,
+    access_token_expires_at,  # RFC 3339, or None when unknown
+)
+
+async def save_replacement(replacement):
+    # Atomically persist every field before returning. Token getters are explicit.
+    await secure_store.replace({
+        "access_token": replacement.expose_access_token(),
+        "refresh_token": replacement.expose_refresh_token(),
+        "client_id": replacement.client_id,
+        "issuer": replacement.issuer,
+        "access_token_expires_at": replacement.access_token_expires_at,
+    })
+
+session = auki_sdk.AukiSession.import_zitadel_dev(
+    credentials, save_replacement
+)
+data = session.data(known_domain_id)
+items = await data.list()
+peer = await session.start_peer(known_domain_id, identity_file)
+~~~
+
+The callback receives one immutable, redacted replacement object. The SDK waits
+for the callback before using its new access token. If persistence fails, retain
+the session and retry an operation; the SDK offers the same replacement again
+without rotating twice. Cancelling an operation does not cancel a storage write
+that has already started, and `await session.close()` waits for that write before
+the host clears secure storage.
+
+Imported sessions currently require a known Domain ID. Domain listing through
+`session.domains().list()` is unsupported because the released API/DDS contracts
+do not safely list Domains for every imported human role. Use
+`import_zitadel_with_environment` to supply exact API, DDS, and DMS base URLs.
 
 The [compute](examples/compute_task.py) and [robot](examples/robot_task.py)
 examples include shutdown handling. The [file example](examples/domain_data.py)
@@ -55,5 +104,5 @@ These use local DDS, DMS, and data fixtures:
 
 ~~~sh
 python -m pip install -r core/bindings/python/auki-sdk-py/python_tests/requirements.txt
-python -m pytest core/bindings/python/auki-sdk-py/python_tests/test_domain_data.py core/bindings/python/auki-sdk-py/python_tests/test_tasks.py core/bindings/python/auki-sdk-py/python_tests/test_robot_tasks.py -q
+python -m pytest core/bindings/python/auki-sdk-py/python_tests/test_domain_data.py core/bindings/python/auki-sdk-py/python_tests/test_zitadel_session.py core/bindings/python/auki-sdk-py/python_tests/test_tasks.py core/bindings/python/auki-sdk-py/python_tests/test_robot_tasks.py -q
 ~~~

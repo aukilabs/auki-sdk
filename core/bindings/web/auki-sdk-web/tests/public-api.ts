@@ -58,6 +58,7 @@ import {
   type ZitadelSessionCredentials,
   type ZitadelSessionStore,
   type AukiAuthError,
+  type DomainDataError,
 } from "../pkg-test/auki_sdk_web.js";
 
 declare const credentials: ZitadelSessionCredentials;
@@ -72,6 +73,11 @@ const imported: AukiUserSession = AukiUserSession.importZitadelDev(credentials, 
 const closedSession: Promise<void> = imported.close();
 declare const authError: AukiAuthError;
 if (authError.code === "persistence") void imported.startPeer("00000000-0000-0000-0000-000000000001");
+declare const dataError: DomainDataError;
+if (dataError.code === "persistence") {
+  const data = imported.data("00000000-0000-0000-0000-000000000001");
+  void data.list(undefined).finally(() => data.close());
+}
 void closedSession;
 
 declare const peer: AukiPeer;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::{DomainAccessProvider, DomainListQuery};
+use crate::DomainListQuery;
 use auki_sdk::{AukiDomainData, DataListQuery};
 
 fn page() -> MockResponse {
@@ -184,40 +184,4 @@ async fn app_domain_listing_refreshes_with_basic_credentials_and_gateway_policy(
         requests[3].headers["posemesh-gateway-mac"],
         "AA:BB:CC:DD:EE:FF"
     );
-}
-
-#[tokio::test]
-async fn imported_sessions_reject_new_data_operations_without_refreshing_or_saving() {
-    struct NeverSave;
-    #[async_trait::async_trait]
-    impl crate::ZitadelSessionStore for NeverSave {
-        async fn save(&self, _: &crate::ZitadelSessionCredentials) -> crate::Result<()> {
-            panic!("unsupported operation must not refresh");
-        }
-    }
-    let client =
-        AuthClient::new(AuthEnvironment::new("http://127.0.0.1:1", "http://127.0.0.1:1").unwrap())
-            .unwrap();
-    let credentials = crate::ZitadelSessionCredentials::new(
-        "access",
-        "refresh",
-        "client",
-        "http://127.0.0.1:1".parse().unwrap(),
-        None,
-    )
-    .unwrap();
-    let session = client
-        .import_zitadel_session(credentials, std::sync::Arc::new(NeverSave))
-        .unwrap();
-    assert!(matches!(
-        session.list_domains(&DomainListQuery::default()).await,
-        Err(Error::InvalidConfiguration(_))
-    ));
-    assert!(matches!(
-        session
-            .domain_access(Uuid::new_v4(), None, &CancellationToken::new())
-            .await,
-        Err(Error::InvalidConfiguration(_))
-    ));
-    session.close().await;
 }

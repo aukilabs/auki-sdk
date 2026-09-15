@@ -18,6 +18,7 @@ use pyo3::{
 use uuid::Uuid;
 
 use crate::cleanup::{DetachedCleanup, wait_cleanup};
+use crate::zitadel::{PyZitadelSessionCredentials, PythonZitadelStore, auth_error};
 
 fn runtime_error(context: &'static str, error: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(format!("{context}: {error}"))
@@ -506,6 +507,45 @@ impl PyAukiSession {
             Ok(())
         })
     }
+    /// Import a host-owned PKCE login without network I/O.
+    ///
+    /// Call this from the asyncio loop that owns ``store``. The callback receives
+    /// one complete replacement snapshot and must settle every write before it
+    /// returns. Keep this session after persistence errors so the same snapshot
+    /// can be saved again.
+    #[staticmethod]
+    fn import_zitadel_dev(
+        py: Python<'_>,
+        credentials: &PyZitadelSessionCredentials,
+        store: PyObject,
+    ) -> PyResult<Self> {
+        Self::import_zitadel(
+            py,
+            credentials,
+            store,
+            AuthEnvironment::dev(),
+            AukiPeerConfig::dev(),
+        )
+    }
+
+    /// Import a host-owned PKCE login for exact API, DDS, and DMS endpoints.
+    #[staticmethod]
+    fn import_zitadel_with_environment(
+        py: Python<'_>,
+        api_base_url: String,
+        dds_base_url: String,
+        dms_base_url: String,
+        credentials: &PyZitadelSessionCredentials,
+        store: PyObject,
+    ) -> PyResult<Self> {
+        let environment = AuthEnvironment::new(api_base_url, dds_base_url).map_err(auth_error)?;
+        let config = AukiPeerConfig::new(dms_base_url).map_err(|_| {
+            auth_error(auki_sdk_rs::AuthError::InvalidConfiguration(
+                "invalid DMS base URL",
+            ))
+        })?;
+        Self::import_zitadel(py, credentials, store, environment, config)
+    }
     /// Exact aligned endpoints, useful for private environments and local fixtures.
     #[staticmethod]
     #[pyo3(signature = (api_base_url, dds_base_url, dms_base_url, email, password, *, client_id=None))]
@@ -572,31 +612,47 @@ impl PyAukiSession {
 
     /// Authenticate a trusted native App against the development environment.
     #[staticmethod]
-    #[pyo3(signature = (access_key, secret, *, client_id=None))]
+    #[pyo3(signature = (access_key, secret, *, client_id=None, gateway_mac=None))]
     fn login_app_dev<'py>(
         py: Python<'py>,
         access_key: String,
         secret: String,
         client_id: Option<String>,
+        gateway_mac: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let mut environment = AuthEnvironment::dev();
-            if let Some(id) = client_id {
-                environment = environment
-                    .with_client_id(id)
-                    .map_err(|e| runtime_error("configure client ID", e))?;
-            }
-            let client = AuthClient::new(environment)
-                .map_err(|e| runtime_error("configure authentication", e))?;
-            let bootstrap = AukiPeerBootstrap::authenticate(
-                client,
-                Credentials::app(access_key, secret),
-                AukiPeerConfig::dev(),
-            )
-            .await
-            .map_err(|error| runtime_error("authenticate Auki App", error))?;
-            Python::with_gil(|py| Py::new(py, Self { bootstrap }))
-        })
+        Self::login_app(
+            py,
+            AuthEnvironment::dev(),
+            AukiPeerConfig::dev(),
+            app_credentials(access_key, secret, gateway_mac)?,
+            client_id,
+        )
+    }
+
+    /// Authenticate a trusted backend App against exact aligned service bases.
+    #[staticmethod]
+    #[pyo3(signature = (api_base_url, dds_base_url, dms_base_url, access_key, secret, *, client_id=None, gateway_mac=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn login_app_with_environment<'py>(
+        py: Python<'py>,
+        api_base_url: String,
+        dds_base_url: String,
+        dms_base_url: String,
+        access_key: String,
+        secret: String,
+        client_id: Option<String>,
+        gateway_mac: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let environment = AuthEnvironment::new(api_base_url, dds_base_url).map_err(auth_error)?;
+        let config = AukiPeerConfig::new(dms_base_url)
+            .map_err(|error| runtime_error("configure DMS", error))?;
+        Self::login_app(
+            py,
+            environment,
+            config,
+            app_credentials(access_key, secret, gateway_mac)?,
+            client_id,
+        )
     }
 
     /// List every Domain this principal may explicitly select.
@@ -640,6 +696,60 @@ impl PyAukiSession {
                 .map_err(|error| runtime_error("start Auki peer", error))?;
             Python::with_gil(|py| Py::new(py, PyAukiPeer::new(peer)))
         })
+    }
+}
+
+impl PyAukiSession {
+    fn login_app<'py>(
+        py: Python<'py>,
+        mut environment: AuthEnvironment,
+        config: AukiPeerConfig,
+        credentials: auki_sdk_rs::AppCredentials,
+        client_id: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        if let Some(id) = client_id {
+            environment = environment.with_client_id(id).map_err(auth_error)?;
+        }
+        let client = AuthClient::new(environment).map_err(auth_error)?;
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let bootstrap = AukiPeerBootstrap::authenticate(
+                client,
+                Credentials::AppCredentials(credentials),
+                config,
+            )
+            .await
+            .map_err(|error| runtime_error("authenticate Auki App", error))?;
+            Python::with_gil(|py| Py::new(py, Self { bootstrap }))
+        })
+    }
+
+    fn import_zitadel(
+        py: Python<'_>,
+        credentials: &PyZitadelSessionCredentials,
+        store: PyObject,
+        environment: AuthEnvironment,
+        config: AukiPeerConfig,
+    ) -> PyResult<Self> {
+        let store = PythonZitadelStore::new(py, store)?;
+        let session = AuthClient::new(environment)
+            .map_err(auth_error)?
+            .import_zitadel_session(credentials.copy_credentials(), Arc::new(store))
+            .map_err(auth_error)?;
+        Ok(Self {
+            bootstrap: AukiPeerBootstrap::from_session(session, config),
+        })
+    }
+}
+
+fn app_credentials(
+    access_key: String,
+    secret: String,
+    gateway_mac: Option<String>,
+) -> PyResult<auki_sdk_rs::AppCredentials> {
+    let credentials = auki_sdk_rs::AppCredentials::new(access_key, secret);
+    match gateway_mac {
+        Some(mac) => credentials.with_gateway_mac(mac).map_err(auth_error),
+        None => Ok(credentials),
     }
 }
 

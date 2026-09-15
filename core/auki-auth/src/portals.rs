@@ -68,9 +68,7 @@ impl AuthSession {
         }
         let operation = async {
             let mut state = self.lock_state(cancellation, DDS_PORTALS).await?;
-            self.require_data_session(&state)?;
-            self.prepare_session(&mut state, &mut false, cancellation)
-                .await?;
+            self.require_domain_listing(&state)?;
             let mut url = self
                 .inner
                 .client

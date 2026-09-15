@@ -6,30 +6,35 @@ The SDK reexports the types from
 
 ## Platforms and credentials
 
-| Credential | Rust | Python | Web |
-| --- | --- | --- | --- |
-| User email/password | Supported | Supported | Supported |
-| App key and secret | Native, trusted backends | Trusted backends | Not exposed |
-| Compute or robot task lease | Native, through `task.data()` | `task.data()` | Not exposed |
-| Robot, while idle | Native, assigned Domain reads | Assigned Domain reads | Not exposed |
-| Imported ZITADEL session | Data access unsupported | Import not exposed | Data access unsupported |
+| Credential | Rust | Python | Web | Swift/iOS | Expo Web/iOS |
+| --- | --- | --- | --- | --- | --- |
+| User email/password | Listing and data | Listing and data | Listing and data | Listing and data | Listing and data |
+| App key and secret | Native listing and data | Listing and data | Not exposed | Not exposed | Not exposed |
+| Imported ZITADEL session | Known-Domain data | Known-Domain data | Known-Domain data | Known-Domain data | Known-Domain data |
+| Compute or robot task lease | Native, through `task.data()` | `task.data()` | Not exposed | Not exposed | Not exposed |
+| Robot, while idle | Native, assigned Domain reads | Assigned Domain reads | Not exposed | Not exposed | Not exposed |
 
-Swift and Expo Domain data bindings are not implemented yet. They are part of
-[#374](https://github.com/aukilabs/auki-sdk/issues/374), which tracks support across
-SDK platforms.
+App secrets belong on trusted backends. Machine credentials get their Domain
+from a lease or robot assignment; they do not provide a user Domain picker.
+Android is not implemented by the Expo binding.
 
-Imported ZITADEL data operations return an unsupported-configuration error
-without refreshing or changing stored credentials. See
-[authentication](../how-to/authenticate.md) for supported P2P login.
+Imported-session data uses the existing ordinary API service exchange, then
+DDS selected-Domain authentication. The deployment must accept imported
+ZITADEL bearers on that API route. Listing and portal-to-Domain association
+queries remain unsupported for imported sessions: the released API/DDS
+contracts do not safely list all human roles. These queries fail before any
+network request or credential rotation. They never fall back to broader
+organization visibility. See [provider compatibility](../../test-support/domain-data-validation.md#provider-compatibility).
 
-`AukiCredential` is an alias for `AuthSession`. A User or App session can be
+`AukiCredential` is an alias for `AuthSession`. A User, App, or imported session can be
 shared by data clients and `AukiPeerBootstrap`; data access does not require
 a peer or DMS configuration. Native task and robot credentials provide data
 access through the [task runtime](tasks.md).
 
 Persist one client ID per application installation and reuse it across logins.
 DDS uses it for access accounting. `AuthEnvironment::with_client_id` sets it
-in Rust; Web login accepts `clientId` and Python login accepts `client_id`.
+in Rust; Web, Swift, and Expo login accept `clientId`, and Python login accepts
+`client_id`.
 Without an explicit ID, an auth environment generates one shared by its clones
 for that environment's lifetime.
 
@@ -50,7 +55,8 @@ for that environment's lifetime.
 `DataMetadata` contains `id`, `domain_id`, `name`, `data_type`, `size`,
 `created_at`, and `updated_at`. The client preserves the service's IDs, types,
 bytes, and portal/pose fields. Web returns typed objects and `Uint8Array`;
-Python returns dictionaries and `bytes`.
+Python returns dictionaries and `bytes`. Swift exposes records and `Data`;
+Expo returns typed objects and `Uint8Array`.
 
 ### Listing and permissions
 
@@ -136,23 +142,35 @@ Rust callbacks return `Result<_, DataError>`; map local I/O failures to
 `DataError::Callback` and retain private error details in your application.
 Web `readTo`/`writeStream` callbacks receive an `AbortSignal` for pending work.
 Python callbacks are async; cancelling an asyncio operation signals the native
-transfer and cancels its pending Python callback.
+transfer and cancels its pending Python callback. Swift and Expo expose bounded
+stream adapters over the same Rust transfer implementation; see their binding
+READMEs for cancellation and cleanup.
 
 ## Errors, authority, and shutdown
 
 Rust `DataError::status()`, Web `Error.status`, and Python
-`DomainDataError.status` retain HTTP status when present. Web and Python also
-expose `kind`. Statuses such as 401, 402, 403, 404, 413, 429, and 5xx remain
+`DomainDataError.status` retain HTTP status when present. Web, Python, and Expo
+also expose `kind` and an optional authentication `code`; Swift's Domain data
+error carries the equivalent status and authentication kind. A `persistence`
+failure requires retrying with the retained session to save its replacement
+credentials. Statuses such as 401, 402, 403, 404, 413, 429, and 5xx remain
 distinct. Errors exclude response bodies, credentials, and application data.
 Only a confirmed 401 permits one authenticated retry. A timeout, cancellation,
 or connection loss after a write can leave its outcome unknown.
 
-For User/App sessions, the selected server URL comes from authenticated DDS.
+For User/App/imported sessions, the selected server URL comes from authenticated DDS.
 The client caches renewable grants by credential and Domain and checks issuer,
 Domain, audience, and expiry before use. DDS portal reads also check the DDS
 audience before sending a grant to that host. Domain Servers verify signatures
 and permissions. P2P admission and discovery do not grant data write access.
 Keep service endpoints aligned to one environment; browser CORS rules apply.
+
+Imported data clients and peers use one refresh owner and await complete
+replacement-credential persistence. Data service tokens remain separate from
+the imported bearer used by direct DDS P2P authentication. Even a cached Domain
+grant cannot bypass a pending credential save or a terminal login failure.
+The existing API role projection is coarse: successful exchange, visibility,
+or read access does not establish write/delete permission.
 
 Rust buffered operations have `_with_cancellation` variants; portal and streaming
 methods take a `CancellationToken` directly. Dropping a future stops its request

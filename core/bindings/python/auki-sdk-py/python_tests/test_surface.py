@@ -18,6 +18,11 @@ def test_module_exposes_the_small_peer_facade() -> None:
     assert hasattr(auki_sdk.AukiSession, "login_app_dev")
     assert hasattr(auki_sdk.AukiSession, "import_zitadel_dev")
     assert hasattr(auki_sdk.AukiSession, "import_zitadel_with_environment")
+    assert hasattr(auki_sdk.AukiSession, "jobs")
+    assert auki_sdk.AukiDmsJobs.__name__ == "AukiDmsJobs"
+    assert issubclass(auki_sdk.AukiJobsError, RuntimeError)
+    for member in ("domain_id", "estimate", "submit", "list", "get", "cancel", "close"):
+        assert hasattr(auki_sdk.AukiDmsJobs, member)
     assert hasattr(auki_sdk.AukiPeerRoutes, "tcp")
     assert hasattr(auki_sdk.AukiPeerRoutes, "wss")
     assert hasattr(auki_sdk.AukiPeer, "routes")

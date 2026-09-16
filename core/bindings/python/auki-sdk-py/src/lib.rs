@@ -8,6 +8,7 @@ pub mod async_completion;
 pub mod cleanup;
 mod data;
 mod facade;
+mod jobs;
 #[cfg(any(
     feature = "info",
     feature = "catalog",
@@ -29,6 +30,7 @@ pub use facade::PyAukiPeer;
 pub fn register_facade(module: &Bound<'_, PyModule>) -> PyResult<()> {
     facade::register(module)?;
     data::register(module)?;
+    jobs::register(module)?;
     tasks::register(module)?;
     zitadel::register(module)
 }

@@ -66,7 +66,7 @@ swiftc \
   -typecheck \
   -I "$BINDINGS" \
   -Xcc "-fmodule-map-file=$BINDINGS/module.modulemap" \
-  "$SWIFT_OUT"/*.swift
+  "$SWIFT_OUT"/*.swift "$CRATE_DIR/Sources/AukiSDK/"*.swift
 plutil -lint "$OUT/AukiSDK.xcframework/Info.plist"
 
 echo "XCFramework: $OUT/AukiSDK.xcframework"

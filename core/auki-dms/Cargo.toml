@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "DMS task types and native client/polling building blocks"
+description = "Portable DMS jobs and native worker client/polling building blocks"
 readme = "README.md"
 
 [[example]]
@@ -16,6 +16,10 @@ required-features = ["client"]
 [features]
 default = ["client"]
 client = ["dep:anyhow", "dep:auki-auth", "dep:reqwest", "dep:tokio", "dep:tracing"]
+jobs = [
+    "dep:auki-auth", "dep:reqwest", "dep:tokio", "dep:tokio-util", "dep:futures-timer",
+    "dep:thiserror", "dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys",
+]
 
 [dependencies]
 chrono = { workspace = true }
@@ -23,17 +27,35 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 url = { version = "2.5", features = ["serde"] }
 uuid = { workspace = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-anyhow = { workspace = true, optional = true }
 auki-auth = { path = "../auki-auth", optional = true }
 reqwest = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["sync", "time", "macros"], optional = true }
+tokio-util = { workspace = true, features = ["rt"], optional = true }
+futures-timer = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+anyhow = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+uuid = { workspace = true, features = ["js"] }
+js-sys = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+web-sys = { version = "0.3.98", optional = true, features = [
+    "AbortController", "AbortSignal", "Headers", "ReadableStream",
+    "ReadableStreamDefaultReader", "Request", "RequestInit", "RequestCache",
+    "RequestCredentials", "RequestMode", "RequestRedirect", "ReferrerPolicy", "Response",
+] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 async-trait = { workspace = true }
+base64 = { workspace = true }
 httpmock = "0.8.3"
 parking_lot = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"

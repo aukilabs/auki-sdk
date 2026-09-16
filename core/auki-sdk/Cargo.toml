@@ -13,6 +13,7 @@ readme = "README.md"
 async-trait = { workspace = true }
 auki-auth = { path = "../auki-auth" }
 auki-domain-client = { path = "../auki-domain-client" }
+auki-dms = { path = "../auki-dms", default-features = false, features = ["jobs"] }
 auki-p2p = { path = "../auki-p2p" }
 auki-relay-booking = { path = "../auki-relay-booking" }
 chrono = { workspace = true }

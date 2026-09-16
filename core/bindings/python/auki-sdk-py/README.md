@@ -25,6 +25,7 @@ Rust protocols must be compiled into the same extension; see
 | --- | --- | --- |
 | Connect peers | `AukiSession`, `AukiPeer` | [Python Echo](../../../examples/portable-echo/python/README.md) |
 | Read and write Domain data | `session.domains()`, `session.data(domain_id)` | [Domain data guide](../../../../docs/how-to/domain-data.md#use-web-or-python) |
+| Submit and monitor DMS jobs | `session.jobs(domain_id)` | `estimate`, `submit`, `list`, `get`, `cancel` |
 | Run compute or robot handlers | `AukiComputeCredential`, `AukiRobotCredential`, `AukiDmsTasks` | [Task guide](../../../../docs/how-to/run-compute-tasks.md) |
 
 `AukiSession.login_dev` signs in to development services. Backend services can
@@ -35,6 +36,46 @@ same policy is retained during renewal. Keep App secrets on trusted backends.
 User and App login accept a persistent `client_id` for the installation.
 Close data clients and peers before closing their session. For tasks, await
 `tasks.close()` before closing the machine credential.
+
+### Submit and monitor jobs
+
+User, App, and imported ZITADEL sessions can create a Domain-scoped jobs client
+without starting a peer. App credentials remain for trusted Python hosts. Job
+specifications and responses use ordinary dictionaries; custom capability names
+pass through unchanged, including dedicated work:
+
+~~~python
+jobs = session.jobs(selected_domain_id)
+spec = {
+    "label": "prepare-assets",
+    "tasks": [{
+        "label": "convert",
+        "stage": "convert",
+        "capability": "com.example.convert.v1",
+        "mode": "dedicated",
+        "capability_filters": {"format": "glb"},
+    }],
+}
+try:
+    estimate = await jobs.estimate(spec)
+    job_id = await jobs.submit(spec)
+    details = await jobs.get(job_id)
+    page = await jobs.list(limit=50, capabilities=["com.example.convert.v1"])
+finally:
+    await jobs.close()
+~~~
+
+Python task dictionaries use the DMS snake-case names shown above. Omitted
+`mode`, `priority`, collections, metadata, and `max_attempts` use SDK defaults.
+Canceling the Python await cancels its HTTP operation. `AukiJobsError` exposes
+`kind`, `code`, and optional `status`; `code == "persistence"` is recoverable on
+the retained imported session. A `kind == "submission_uncertain"` error includes
+the underlying `source` code and means the submit request may have succeeded, so
+reconcile with `list` before retrying.
+Always await `jobs.close()` before closing the shared session.
+
+See the [jobs reference](../../../../docs/reference/jobs.md) for required write
+authority, worker availability and provider limitations.
 
 ### Import a ZITADEL session
 
@@ -113,7 +154,7 @@ These use local DDS, DMS, and data fixtures:
 
 ~~~sh
 python -m pip install -r core/bindings/python/auki-sdk-py/python_tests/requirements.txt
-python -m pytest core/bindings/python/auki-sdk-py/python_tests/test_domain_data.py core/bindings/python/auki-sdk-py/python_tests/test_zitadel_session.py core/bindings/python/auki-sdk-py/python_tests/test_tasks.py core/bindings/python/auki-sdk-py/python_tests/test_robot_tasks.py -q
+python -m pytest core/bindings/python/auki-sdk-py/python_tests/test_domain_data.py core/bindings/python/auki-sdk-py/python_tests/test_jobs.py core/bindings/python/auki-sdk-py/python_tests/test_zitadel_session.py core/bindings/python/auki-sdk-py/python_tests/test_tasks.py core/bindings/python/auki-sdk-py/python_tests/test_robot_tasks.py -q
 ~~~
 
 The process-exit regression uses fresh subprocesses, synthetic unregistered

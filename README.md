@@ -18,12 +18,13 @@ Echo example. For Python, Web, Swift, or Expo, see
 | --- | --- |
 | Sign in and choose a Domain | [Authenticate](docs/how-to/authenticate.md) |
 | Read and write Domain data | [Work with Domain data](docs/how-to/domain-data.md) |
+| Submit and monitor Domain jobs | [Submit jobs](docs/how-to/submit-jobs.md) |
 | Run compute or robot handlers | [Run tasks](docs/how-to/run-compute-tasks.md) |
 | Use discovery or connect to a known address | [Connect to a peer](docs/how-to/connect.md) |
 | Exchange my own messages | [Use a custom protocol](docs/how-to/protocols.md) |
 | Keep a Peer ID and stop cleanly | [Manage a peer](docs/how-to/lifecycle.md) |
 | Understand peers, Domains, and task handling | [How networking works](docs/explanation/networking.md) |
-| Look up APIs, defaults, or errors | [Networking](docs/reference/networking.md), [Domain data](docs/reference/domain-data.md), and [tasks](docs/reference/tasks.md) |
+| Look up APIs, defaults, or errors | [Networking](docs/reference/networking.md), [Domain data](docs/reference/domain-data.md), [jobs](docs/reference/jobs.md), and [tasks](docs/reference/tasks.md) |
 | Look up SDK terminology | [Glossary](docs/reference/glossary.md) |
 | Understand the core SDK's direction | [Vision](docs/explanation/vision.md) |
 | Build an app with a coding agent | [App-builder skill](docs/skills/auki-sdk-app-builder/SKILL.md) |

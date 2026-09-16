@@ -12,6 +12,8 @@
 #[cfg(target_arch = "wasm32")]
 mod data;
 #[cfg(target_arch = "wasm32")]
+mod jobs;
+#[cfg(target_arch = "wasm32")]
 mod protocol_support;
 #[cfg(target_arch = "wasm32")]
 mod protocols;

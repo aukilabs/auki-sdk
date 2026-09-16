@@ -9,6 +9,7 @@ public class AukiSdkExpoModule: Module {
   #if canImport(auki_sdk_swiftFFI)
   private let sessions = ExpoSessionRegistry()
   private let domainData = ExpoDomainDataRegistry()
+  private let jobs = ExpoJobsRegistry()
   private var peers: [String: AukiPeer] = [:]
   private var identities: [String: AukiPeerIdentity] = [:]
   private var streams: [String: AukiStreamSubscription] = [:]
@@ -490,6 +491,99 @@ public class AukiSdkExpoModule: Module {
       #if canImport(auki_sdk_swiftFFI)
       guard let transfer = self.domainData.removeUpload(uploadId) else { return }
       try await withDataErrors { try await transfer.close() }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("jobsOpen") { (sessionId: String, domainId: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let client = try await withJobsErrors { try self.sessions.session(sessionId).jobs(domainId: domainId) }
+      let id = self.newId("jobs")
+      self.jobs.insert(client, id: id)
+      return id
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("jobsEstimate") {
+      (clientId: String, specJson: String, operationId: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.jobs.beginOperation(operationId)
+      defer { self.jobs.finishOperation(operationId) }
+      return try await withJobsErrors {
+        try await self.jobs.client(clientId).estimateJson(specJson: specJson, cancellation: cancellation)
+      }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("jobsSubmit") {
+      (clientId: String, specJson: String, operationId: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.jobs.beginOperation(operationId)
+      defer { self.jobs.finishOperation(operationId) }
+      return try await withJobsErrors {
+        try await self.jobs.client(clientId).submitJson(specJson: specJson, cancellation: cancellation)
+      }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("jobsList") {
+      (clientId: String, queryJson: String, operationId: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.jobs.beginOperation(operationId)
+      defer { self.jobs.finishOperation(operationId) }
+      return try await withJobsErrors {
+        try await self.jobs.client(clientId).listJson(queryJson: queryJson, cancellation: cancellation)
+      }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("jobsGet") {
+      (clientId: String, jobId: String, operationId: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.jobs.beginOperation(operationId)
+      defer { self.jobs.finishOperation(operationId) }
+      return try await withJobsErrors {
+        try await self.jobs.client(clientId).getJson(jobId: jobId, cancellation: cancellation)
+      }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("jobsCancel") {
+      (clientId: String, jobId: String, operationId: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.jobs.beginOperation(operationId)
+      defer { self.jobs.finishOperation(operationId) }
+      return try await withJobsErrors {
+        try await self.jobs.client(clientId).cancelJson(jobId: jobId, cancellation: cancellation)
+      }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("jobsOperationCancel") { (operationId: String) in
+      #if canImport(auki_sdk_swiftFFI)
+      self.jobs.cancelOperation(operationId)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("jobsClose") { (clientId: String) in
+      #if canImport(auki_sdk_swiftFFI)
+      guard let client = self.jobs.remove(clientId) else { return }
+      try await withJobsErrors { try await client.close() }
       #else
       throw unsupported("AukiSDK XCFramework missing")
       #endif

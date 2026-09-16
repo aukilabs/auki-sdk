@@ -13,6 +13,7 @@ import {
   AukiPeer,
   AukiPeerReachabilityMode,
   AukiUserSession,
+  AukiDmsJobs,
   AukiRegistryClient,
   AukiRegistryEndpoint,
   AukiStreamClient,
@@ -60,6 +61,12 @@ import {
   type AukiAuthError,
   type DomainDataError,
   type DomainPage,
+  type AukiJobsError,
+  type JobCancellation,
+  type JobDetails,
+  type JobEstimate,
+  type JobPage,
+  type JobSpec,
 } from "../pkg-test/auki_sdk_web.js";
 
 declare const credentials: ZitadelSessionCredentials;
@@ -82,6 +89,39 @@ if (dataError.code === "persistence") {
 }
 void closedSession;
 void importedDomainPage;
+
+const jobSpec: JobSpec = {
+  label: "prepare-assets",
+  tasks: [{
+    label: "convert",
+    stage: "convert",
+    capability: "com.example.convert.v1",
+    mode: "dedicated",
+    capabilityFilters: { format: "glb" },
+    inputsCids: ["bafy-input"],
+    outputsPrefix: "converted/",
+    maxAttempts: 3,
+  }],
+  edges: [],
+};
+const jobs: AukiDmsJobs = imported.jobs("00000000-0000-0000-0000-000000000001");
+const estimate: Promise<JobEstimate> = jobs.estimate(jobSpec);
+const submitted: Promise<string> = jobs.submit(jobSpec);
+const jobPage: Promise<JobPage> = jobs.list({
+  status: "running",
+  capabilities: ["com.example.convert.v1"],
+  matchAllCapabilities: true,
+});
+const details: Promise<JobDetails> = jobs.get("00000000-0000-0000-0000-000000000002");
+const canceled: Promise<JobCancellation> = jobs.cancel("00000000-0000-0000-0000-000000000002");
+const jobsClosed: Promise<void> = jobs.close();
+declare const jobsError: AukiJobsError;
+if (jobsError.kind === "submission_uncertain") {
+  const source: string | undefined = jobsError.source;
+  void source;
+}
+if (jobsError.code === "persistence") void jobPage;
+void [estimate, submitted, details, canceled, jobsClosed];
 
 declare const peer: AukiPeer;
 declare const session: AukiUserSession;

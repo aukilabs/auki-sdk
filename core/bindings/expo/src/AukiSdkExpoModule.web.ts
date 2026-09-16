@@ -9,6 +9,8 @@ import type {
   AukiServiceEnvironment,
   DataMetadata,
   DomainPage,
+  JobListQuery,
+  JobSpec,
   Portal,
   PortalDomain,
   PortalPose,
@@ -25,6 +27,7 @@ type MessageClient = import("./web/generated/auki_sdk_web.js").AukiMessageClient
 type StreamSub = Awaited<ReturnType<StreamClient["subscribeExact"]>>;
 type MessageSender = Awaited<ReturnType<MessageClient["openExact"]>>;
 type DomainDataClient = import("./web/generated/auki_sdk_web.js").AukiDomainData;
+type JobsClient = ReturnType<Session["jobs"]>;
 type WebDownload = {
   controller: AbortController;
   task: Promise<number>;
@@ -86,6 +89,42 @@ function mapCandidate(candidate: {
   };
 }
 
+function webJobSpec(value: Record<string, unknown>): JobSpec {
+  const tasks = value.tasks as Array<Record<string, unknown>>;
+  return {
+    label: value.label as string,
+    ...(value.priority === undefined ? {} : { priority: value.priority as number }),
+    ...(value.meta === undefined ? {} : { meta: value.meta as JobSpec["meta"] }),
+    tasks: tasks.map(task => ({
+      label: task.label as string,
+      stage: task.stage as string,
+      capability: task.capability as string,
+      ...(task.mode === undefined ? {} : { mode: task.mode as "public" | "dedicated" }),
+      ...(task.capability_filters === undefined ? {} : {
+        capabilityFilters: task.capability_filters as Record<string, string>,
+      }),
+      ...(task.priority === undefined ? {} : { priority: task.priority as number }),
+      ...(task.inputs_cids === undefined ? {} : { inputsCids: task.inputs_cids as string[] }),
+      ...(task.outputs_prefix === undefined ? {} : { outputsPrefix: task.outputs_prefix as string }),
+      ...(task.meta === undefined ? {} : { meta: task.meta as JobSpec["meta"] }),
+      ...(task.max_attempts === undefined ? {} : { maxAttempts: task.max_attempts as number }),
+    })),
+    ...(value.edges === undefined ? {} : { edges: value.edges as JobSpec["edges"] }),
+  };
+}
+
+function webJobQuery(value: Record<string, unknown>): JobListQuery {
+  return {
+    ...(value.limit === undefined ? {} : { limit: value.limit as number }),
+    ...(value.cursor === undefined ? {} : { cursor: value.cursor as string }),
+    ...(value.status === undefined ? {} : { status: value.status as JobListQuery["status"] }),
+    ...(value.capabilities === undefined ? {} : { capabilities: value.capabilities as string[] }),
+    ...(value.match_all_capabilities === undefined ? {} : {
+      matchAllCapabilities: value.match_all_capabilities as boolean,
+    }),
+  };
+}
+
 class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
   private wasm: AukiSdkWasm | null = null;
   private sessions = new Map<string, Session>();
@@ -94,6 +133,9 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
   private messages = new Map<string, { peerHandle: string; sender: MessageSender }>();
   private dataClients = new Map<string, { sessionId: string; client: DomainDataClient }>();
   private dataOperations = new Map<string, AbortController>();
+  private jobsClients = new Map<string, { sessionId: string; client: JobsClient }>();
+  private jobsOperations = new Map<string, AbortController>();
+  private jobsCancelledBeforeStart = new Set<string>();
   private downloads = new Map<string, WebDownload>();
   private uploads = new Map<string, WebUpload>();
   private saves = new Map<string, {
@@ -526,6 +568,60 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     }
   }
 
+  async jobsOpen(sessionId: string, domainId: string): Promise<string> {
+    const client = this.session(sessionId).jobs(domainId);
+    const clientId = newId("jobs");
+    this.jobsClients.set(clientId, { sessionId, client });
+    return clientId;
+  }
+
+  async jobsEstimate(clientId: string, specJson: string, operationId: string): Promise<string> {
+    const value = await this.withJobsOperation(operationId, signal =>
+      this.jobsClient(clientId).estimate(webJobSpec(JSON.parse(specJson)), signal));
+    return JSON.stringify(value);
+  }
+
+  async jobsSubmit(clientId: string, specJson: string, operationId: string): Promise<string> {
+    return this.withJobsOperation(operationId, signal =>
+      this.jobsClient(clientId).submit(webJobSpec(JSON.parse(specJson)), signal));
+  }
+
+  async jobsList(clientId: string, queryJson: string, operationId: string): Promise<string> {
+    const value = await this.withJobsOperation(operationId, signal =>
+      this.jobsClient(clientId).list(webJobQuery(JSON.parse(queryJson)), signal));
+    return JSON.stringify(value);
+  }
+
+  async jobsGet(clientId: string, jobId: string, operationId: string): Promise<string> {
+    const value = await this.withJobsOperation(operationId, signal =>
+      this.jobsClient(clientId).get(jobId, signal));
+    return JSON.stringify(value);
+  }
+
+  async jobsCancel(clientId: string, jobId: string, operationId: string): Promise<string> {
+    const value = await this.withJobsOperation(operationId, signal =>
+      this.jobsClient(clientId).cancel(jobId, signal));
+    return JSON.stringify(value);
+  }
+
+  async jobsOperationCancel(operationId: string): Promise<void> {
+    const operation = this.jobsOperations.get(operationId);
+    if (operation) operation.abort();
+    else if (this.jobsCancelledBeforeStart.size < 1_024) {
+      this.jobsCancelledBeforeStart.add(operationId);
+    }
+  }
+
+  async jobsClose(clientId: string): Promise<void> {
+    const entry = this.jobsClients.get(clientId);
+    if (!entry) return;
+    await entry.client.close();
+    if (this.jobsClients.get(clientId) === entry) {
+      this.jobsClients.delete(clientId);
+      entry.client.free();
+    }
+  }
+
   async startPeer(sessionId: string, domainId: string): Promise<string> {
     const peer = await this.session(sessionId).startPeer(domainId);
     const id = newId("peer");
@@ -836,6 +932,28 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     } finally {
       if (this.dataOperations.get(operationId) === controller) {
         this.dataOperations.delete(operationId);
+      }
+    }
+  }
+
+  private jobsClient(clientId: string): JobsClient {
+    const entry = this.jobsClients.get(clientId);
+    if (!entry) throw Object.assign(new Error("The DMS jobs client is closed"), { kind: "closed" });
+    return entry.client;
+  }
+
+  private async withJobsOperation<T>(
+    operationId: string,
+    operation: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const controller = new AbortController();
+    this.jobsOperations.set(operationId, controller);
+    if (this.jobsCancelledBeforeStart.delete(operationId)) controller.abort();
+    try {
+      return await operation(controller.signal);
+    } finally {
+      if (this.jobsOperations.get(operationId) === controller) {
+        this.jobsOperations.delete(operationId);
       }
     }
   }

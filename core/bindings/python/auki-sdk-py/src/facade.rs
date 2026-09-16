@@ -500,6 +500,16 @@ impl PyAukiSession {
                 .in_domain(crate::data::id(domain_id)?),
         })
     }
+    /// Select DMS job access for one Domain without starting a peer.
+    fn jobs(&self, domain_id: &str) -> PyResult<crate::jobs::PyJobs> {
+        Ok(crate::jobs::PyJobs {
+            inner: self
+                .bootstrap
+                .jobs()
+                .map_err(crate::jobs::error)?
+                .in_domain(crate::data::id(domain_id)?),
+        })
+    }
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let session = self.bootstrap.session().clone();
         crate::async_completion::future_into_py(py, async move {

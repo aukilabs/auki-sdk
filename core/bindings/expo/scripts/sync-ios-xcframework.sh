@@ -29,7 +29,7 @@ cp -R "$SWIFT_CRATE/target-xcframework/AukiSDK.xcframework" "$XCF"
 # UniFFI high-level Swift must live in the Expo pod (same target as AukiSdkExpoModule).
 rm -rf "$SWIFT_SOURCES"
 mkdir -p "$SWIFT_SOURCES"
-cp "$SWIFT_CRATE/Sources/AukiSDK/AukiSDK.swift" "$SWIFT_SOURCES/"
+cp "$SWIFT_CRATE/Sources/AukiSDK/"*.swift "$SWIFT_SOURCES/"
 cp -R "$SWIFT_CRATE/Sources/AukiSDK/Generated" "$SWIFT_SOURCES/Generated"
 
 echo "synced AukiSDK.xcframework → $XCF"

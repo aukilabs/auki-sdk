@@ -97,10 +97,38 @@ async fn all_operations_replay_once_with_the_new_bearer() {
 }
 
 #[tokio::test]
-async fn empty_and_busy_leases_keep_the_existing_unfiltered_request() {
+async fn empty_and_busy_leases_preserve_the_requested_capability() {
     for status in [204, 409] {
         let server = MockServer::start();
         let lease = server.mock(|when, then| {
+            when.method(GET)
+                .path("/tasks")
+                .query_param("capability", "/example/task/v1");
+            then.status(status);
+        });
+        let client = DmsClient::new(
+            server.base_url().parse().unwrap(),
+            Duration::from_secs(2),
+            Arc::new(RotatingProvider::default()),
+        )
+        .unwrap();
+        assert!(
+            client
+                .lease_by_capability("/example/task/v1")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        lease.assert_calls(1);
+    }
+}
+
+#[tokio::test]
+async fn explicit_unfiltered_claim_and_busy_outcome_remain_distinct() {
+    use auki_dms::client::ClaimOutcome;
+    for status in [204, 409] {
+        let server = MockServer::start();
+        let request = server.mock(|when, then| {
             when.method(GET)
                 .path("/tasks")
                 .query_param_missing("capability");
@@ -112,13 +140,52 @@ async fn empty_and_busy_leases_keep_the_existing_unfiltered_request() {
             Arc::new(RotatingProvider::default()),
         )
         .unwrap();
-        assert!(
-            client
-                .lease_by_capability("/example/ignored/v1")
-                .await
-                .unwrap()
-                .is_none()
-        );
-        lease.assert_calls(1);
+        let outcome = client.claim("").await.unwrap();
+        assert!(matches!(
+            (status, outcome),
+            (204, ClaimOutcome::NoWork) | (409, ClaimOutcome::Busy)
+        ));
+        assert!(client.lease_any().await.unwrap().is_none());
+        request.assert_calls(2);
+    }
+}
+
+#[tokio::test]
+async fn claim_rejects_redirects_oversized_envelopes_and_redacts_decode_errors() {
+    for case in ["redirect", "oversized", "invalid"] {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET).path("/tasks");
+            match case {
+                "redirect" => {
+                    then.status(302).header("Location", "/redirect-target");
+                }
+                "oversized" => {
+                    then.body("x".repeat(2 * 1024 * 1024 + 1));
+                }
+                _ => {
+                    then.json_body(
+                        json!({"task":{"id":"private-fixture-token", "capability":"/example/v1"}}),
+                    );
+                }
+            }
+        });
+        let redirected = server.mock(|when, then| {
+            when.path("/redirect-target");
+            then.status(204);
+        });
+        let client = DmsClient::new(
+            server.base_url().parse().unwrap(),
+            Duration::from_secs(2),
+            Arc::new(RotatingProvider::default()),
+        )
+        .unwrap();
+        let error = client
+            .claim("/example/v1")
+            .await
+            .err()
+            .expect("invalid response rejected");
+        assert!(!format!("{error:#}").contains("private-fixture-token"));
+        redirected.assert_calls(0);
     }
 }

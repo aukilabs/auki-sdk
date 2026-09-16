@@ -1,5 +1,8 @@
 # Networking reference
 
+For HTTP data APIs and managed task execution, see the
+[Domain data](domain-data.md) and [task runtime](tasks.md) references.
+
 ## Platforms and installation
 
 These instructions build from source. Use the same SDK revision for your app,
@@ -35,7 +38,7 @@ The [tutorial](../tutorials/first-peer.md) runs directly from this checkout.
 Generate the Rust API reference from the repository root:
 
 ~~~sh
-cargo doc --locked -p auki-sdk -p auki-auth -p auki-p2p -p auki-dms --no-deps
+cargo doc --locked -p auki-sdk -p auki-auth -p auki-p2p -p auki-dms -p auki-domain-client -p auki-tasks --no-deps
 ~~~
 
 Open `target/doc/auki_sdk/index.html`.
@@ -73,8 +76,8 @@ pass a discovered address to `open_exact` instead.
 
 `start_external(identity, update, config)` returns a peer and an authentication
 control handle. Respond to `next_refresh_request` and pass complete
-`ExternalAuthorityUpdate` values to `replace`. Posemesh handles this for its
-[robot and compute runners](https://github.com/aukilabs/posemesh/tree/main/core/compute-node).
+`ExternalAuthorityUpdate` values to `replace`. For managed compute and robot
+peers, the [task runtime](tasks.md#authority-and-peer-lifetime) handles renewal.
 
 See the [public exports](../../core/auki-sdk/src/lib.rs) for platform availability.
 

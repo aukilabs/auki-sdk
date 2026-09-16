@@ -9,3 +9,5 @@ dist/
 .worktrees/
 __pycache__/
 *.pyc
+/.venv/
+.env

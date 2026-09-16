@@ -11,9 +11,11 @@ the [glossary](docs/reference/glossary.md) defines its terms.
 | --- | --- |
 | `core/auki-sdk/` | Peer lifecycle and connection coordination |
 | `core/auki-auth/` | Sign-in, sessions, and Domain authorization |
+| `core/auki-domain-client/` | Domain metadata, data transfers, and portal/pose reads |
 | `core/auki-p2p/` | Authenticated transport and protocol streams |
 | `core/auki-relay-booking/` | DMS relay-booking requests and renewal |
 | `core/auki-dms/` | DMS task types and client helpers |
+| `core/auki-tasks/` | Native task lifecycle for compute and robot handlers |
 | `core/bindings/` and `core/examples/` | Platform APIs and networking examples |
 | `labs/` | Experimental protocols, data models, and spatial computing code |
 | `test-support/` | Shared test fixtures and harnesses |
@@ -21,7 +23,7 @@ the [glossary](docs/reference/glossary.md) defines its terms.
 
 Keep application protocols optional. A new dependency from a core crate into
 `labs/` needs an architectural decision. P2P carries application data; DMS owns
-task state and leases, and Posemesh runners execute tasks. See
+task state and leases. SDK handlers and Posemesh runners execute tasks. See
 [apps, services, compute nodes, and robots](docs/explanation/apps-nodes-and-robots.md)
 before changing those boundaries.
 

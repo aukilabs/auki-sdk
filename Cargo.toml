@@ -3,7 +3,9 @@ resolver = "2"
 members = [
     # Stable SDK crates.
     "core/auki-auth",
+    "core/auki-domain-client",
     "core/auki-dms",
+    "core/auki-tasks",
     "core/auki-p2p",
     "core/auki-relay-booking",
     "core/auki-sdk",

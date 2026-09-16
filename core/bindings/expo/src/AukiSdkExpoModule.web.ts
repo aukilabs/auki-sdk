@@ -7,6 +7,11 @@ import type {
   AukiExactTarget,
   AukiSdkExpoModuleEvents,
   AukiServiceEnvironment,
+  DataMetadata,
+  DomainPage,
+  Portal,
+  PortalDomain,
+  PortalPose,
   ZitadelSessionCredentials,
 } from "./AukiSdkExpo.types";
 import { jsonStringify } from "./json-stringify";
@@ -19,6 +24,22 @@ type CatalogClient = import("./web/generated/auki_sdk_web.js").AukiCatalogClient
 type MessageClient = import("./web/generated/auki_sdk_web.js").AukiMessageClient;
 type StreamSub = Awaited<ReturnType<StreamClient["subscribeExact"]>>;
 type MessageSender = Awaited<ReturnType<MessageClient["openExact"]>>;
+type DomainDataClient = import("./web/generated/auki_sdk_web.js").AukiDomainData;
+type WebDownload = {
+  controller: AbortController;
+  task: Promise<number>;
+  pending: { encoded: string; acknowledge: () => void; reject: (error: unknown) => void } | null;
+  delivered: boolean;
+  changed: (() => void) | null;
+  observedError?: unknown;
+};
+type WebUpload = {
+  controller: AbortController;
+  task: Promise<DataMetadata>;
+  pending: { maximum: number; supply: (bytes: Uint8Array) => void; reject: (error: unknown) => void } | null;
+  changed: (() => void) | null;
+  observedError?: unknown;
+};
 
 function newId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`;
@@ -33,14 +54,14 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-function base64ToBytes(b64: string): Uint8Array {
-  if (!b64) {
+function base64ToBytes(value: string): Uint8Array {
+  if (!value) {
     return new Uint8Array();
   }
-  const binary = atob(b64);
+  const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
   }
   return bytes;
 }
@@ -71,6 +92,10 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
   private peers = new Map<string, Peer>();
   private streams = new Map<string, StreamSub>();
   private messages = new Map<string, { peerHandle: string; sender: MessageSender }>();
+  private dataClients = new Map<string, { sessionId: string; client: DomainDataClient }>();
+  private dataOperations = new Map<string, AbortController>();
+  private downloads = new Map<string, WebDownload>();
+  private uploads = new Map<string, WebUpload>();
   private saves = new Map<string, {
     requestId: string;
     snapshot: import("./web/generated/auki_sdk_web.js").ZitadelCredentialsSnapshot;
@@ -149,9 +174,31 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     return peer;
   }
 
-  async loginDev(email: string, password: string): Promise<string> {
+  async loginDev(email: string, password: string, clientId?: string | null): Promise<string> {
     const sdk = await this.sdk();
-    const session = await sdk.AukiUserSession.loginDev(email, password);
+    const session = await sdk.AukiUserSession.loginDev(email, password, clientId);
+    const id = newId("session");
+    this.sessions.set(id, session);
+    return id;
+  }
+
+  async loginWithEnvironment(
+    apiBaseUrl: string,
+    ddsBaseUrl: string,
+    dmsBaseUrl: string,
+    email: string,
+    password: string,
+    clientId?: string | null,
+  ): Promise<string> {
+    const sdk = await this.sdk();
+    const session = await sdk.AukiUserSession.loginWithEnvironment(
+      apiBaseUrl,
+      ddsBaseUrl,
+      dmsBaseUrl,
+      email,
+      password,
+      clientId,
+    );
     const id = newId("session");
     this.sessions.set(id, session);
     return id;
@@ -165,6 +212,318 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
       description: domain.description ?? null,
       organizationId: domain.organizationId ?? null,
     }));
+  }
+
+  async domainsList(
+    sessionId: string,
+    queryJson: string,
+    operationId: string,
+  ): Promise<DomainPage> {
+    return this.withDataOperation(operationId, async signal => {
+      const domains = this.session(sessionId).domains();
+      try {
+        return await domains.list(JSON.parse(queryJson), signal);
+      } finally {
+        domains.free();
+      }
+    });
+  }
+
+  async domainsForPortal(
+    sessionId: string,
+    portal: string,
+    organization: string | null,
+    operationId: string,
+  ): Promise<PortalDomain[]> {
+    return this.withDataOperation(operationId, async signal => {
+      const domains = this.session(sessionId).domains();
+      try {
+        return await domains.forPortal(portal, organization, signal);
+      } finally {
+        domains.free();
+      }
+    });
+  }
+
+  async domainsPortals(
+    sessionId: string,
+    domainId: string,
+    operationId: string,
+  ): Promise<Portal[]> {
+    return this.withDataOperation(operationId, async signal => {
+      const domains = this.session(sessionId).domains();
+      try {
+        return await domains.portals(domainId, signal);
+      } finally {
+        domains.free();
+      }
+    });
+  }
+
+  async domainsPortal(
+    sessionId: string,
+    domainId: string,
+    portal: string,
+    operationId: string,
+  ): Promise<Portal> {
+    return this.withDataOperation(operationId, async signal => {
+      const domains = this.session(sessionId).domains();
+      try {
+        return await domains.portal(domainId, portal, signal);
+      } finally {
+        domains.free();
+      }
+    });
+  }
+
+  async domainDataOpen(sessionId: string, domainId: string): Promise<string> {
+    const client = this.session(sessionId).data(domainId);
+    const clientId = newId("data");
+    this.dataClients.set(clientId, { sessionId, client });
+    return clientId;
+  }
+
+  async domainDataList(
+    clientId: string,
+    queryJson: string,
+    operationId: string,
+  ): Promise<DataMetadata[]> {
+    return this.withDataOperation(operationId, signal =>
+      this.dataClient(clientId).list(JSON.parse(queryJson), signal));
+  }
+
+  async domainDataGet(
+    clientId: string,
+    dataId: string,
+    operationId: string,
+  ): Promise<DataMetadata> {
+    return this.withDataOperation(operationId, signal =>
+      this.dataClient(clientId).get(dataId, signal));
+  }
+
+  async domainDataRead(clientId: string, dataId: string, operationId: string): Promise<string> {
+    const bytes = await this.withDataOperation(operationId, signal =>
+      this.dataClient(clientId).read(dataId, signal));
+    return bytesToBase64(bytes);
+  }
+
+  async domainDataWrite(
+    clientId: string,
+    targetJson: string,
+    bytesBase64: string,
+    operationId: string,
+  ): Promise<DataMetadata> {
+    return this.withDataOperation(operationId, signal => this.dataClient(clientId).write(
+      JSON.parse(targetJson),
+      base64ToBytes(bytesBase64),
+      signal,
+    ));
+  }
+
+  async domainDataDelete(clientId: string, dataId: string, operationId: string): Promise<void> {
+    await this.withDataOperation(operationId, signal =>
+      this.dataClient(clientId).delete(dataId, signal));
+  }
+
+  async domainDataPoses(clientId: string, operationId: string): Promise<PortalPose[]> {
+    return this.withDataOperation(operationId, signal => this.dataClient(clientId).poses(signal));
+  }
+
+  async domainDataPose(
+    clientId: string,
+    portal: string,
+    operationId: string,
+  ): Promise<PortalPose> {
+    return this.withDataOperation(operationId, signal =>
+      this.dataClient(clientId).pose(portal, signal));
+  }
+
+  async domainDataClose(clientId: string): Promise<void> {
+    const entry = this.dataClients.get(clientId);
+    if (!entry) return;
+    await entry.client.close();
+    if (this.dataClients.get(clientId) === entry) {
+      this.dataClients.delete(clientId);
+      entry.client.free();
+    }
+  }
+
+  async dataOperationCancel(operationId: string): Promise<void> {
+    this.dataOperations.get(operationId)?.abort();
+  }
+
+  async dataDownloadStart(
+    clientId: string,
+    dataId: string,
+    optionsJson: string,
+    operationId: string,
+  ): Promise<string> {
+    const controller = this.beginDataOperation(operationId);
+    const downloadId = newId("download");
+    const download: WebDownload = {
+      controller,
+      task: Promise.resolve(0),
+      pending: null,
+      delivered: false,
+      changed: null,
+    };
+    download.task = this.dataClient(clientId).readTo(
+      dataId,
+      bytes => new Promise<void>((acknowledge, reject) => {
+        download.pending = { encoded: bytesToBase64(bytes), acknowledge, reject };
+        download.changed?.();
+        download.changed = null;
+      }),
+      JSON.parse(optionsJson),
+      controller.signal,
+    );
+    void download.task.catch(() => undefined).finally(() => {
+      download.changed?.();
+      download.changed = null;
+      this.dataOperations.delete(operationId);
+    });
+    this.downloads.set(downloadId, download);
+    return downloadId;
+  }
+
+  async dataDownloadNext(downloadId: string): Promise<string | null> {
+    const download = this.download(downloadId);
+    if (download.delivered && download.pending) {
+      download.pending.acknowledge();
+      download.pending = null;
+      download.delivered = false;
+    }
+    try {
+      while (!download.pending) {
+        const outcome = await Promise.race([
+          download.task.then(() => "done" as const),
+          new Promise<"changed">(resolve => { download.changed = () => resolve("changed"); }),
+        ]);
+        if (outcome === "done" && !download.pending) return null;
+      }
+      download.delivered = true;
+      return download.pending.encoded;
+    } catch (error) {
+      download.observedError = error;
+      throw error;
+    }
+  }
+
+  async dataDownloadCancel(downloadId: string): Promise<void> {
+    const download = this.downloads.get(downloadId);
+    if (!download) return;
+    download.controller.abort();
+    download.pending?.reject(new Error("cancelled"));
+    download.pending = null;
+  }
+
+  async dataDownloadClose(downloadId: string): Promise<void> {
+    const download = this.downloads.get(downloadId);
+    if (!download) return;
+    await this.dataDownloadCancel(downloadId);
+    try {
+      await download.task;
+    } catch (error) {
+      const kind = (error as { kind?: unknown }).kind;
+      if (error !== download.observedError && kind !== "cancelled") throw error;
+    } finally {
+      this.downloads.delete(downloadId);
+    }
+  }
+
+  async dataUploadStart(
+    clientId: string,
+    targetJson: string,
+    size: number,
+    optionsJson: string,
+    operationId: string,
+  ): Promise<string> {
+    const controller = this.beginDataOperation(operationId);
+    const uploadId = newId("upload");
+    const upload: WebUpload = {
+      controller,
+      task: Promise.resolve({} as DataMetadata),
+      pending: null,
+      changed: null,
+    };
+    upload.task = this.dataClient(clientId).writeStream(
+      JSON.parse(targetJson),
+      size,
+      maximum => {
+        return new Promise<Uint8Array>((supply, reject) => {
+          upload.pending = { maximum, supply, reject };
+          upload.changed?.();
+          upload.changed = null;
+        });
+      },
+      JSON.parse(optionsJson),
+      controller.signal,
+    );
+    void upload.task.catch(() => undefined).finally(() => {
+      upload.changed?.();
+      upload.changed = null;
+      this.dataOperations.delete(operationId);
+    });
+    this.uploads.set(uploadId, upload);
+    return uploadId;
+  }
+
+  async dataUploadNextMaximum(uploadId: string): Promise<number | null> {
+    const upload = this.upload(uploadId);
+    try {
+      while (!upload.pending) {
+        const outcome = await Promise.race([
+          upload.task.then(() => "done" as const),
+          new Promise<"changed">(resolve => { upload.changed = () => resolve("changed"); }),
+        ]);
+        if (outcome === "done" && !upload.pending) return null;
+      }
+      return upload.pending.maximum;
+    } catch (error) {
+      upload.observedError = error;
+      throw error;
+    }
+  }
+
+  async dataUploadPush(uploadId: string, bytesBase64: string): Promise<void> {
+    const upload = this.upload(uploadId);
+    if (!upload.pending) throw new Error("upload is not requesting a chunk");
+    const bytes = base64ToBytes(bytesBase64);
+    const pending = upload.pending;
+    upload.pending = null;
+    pending.supply(bytes);
+  }
+
+  async dataUploadResult(uploadId: string): Promise<DataMetadata> {
+    const upload = this.upload(uploadId);
+    try {
+      return await upload.task;
+    } catch (error) {
+      upload.observedError = error;
+      throw error;
+    }
+  }
+
+  async dataUploadCancel(uploadId: string): Promise<void> {
+    const upload = this.uploads.get(uploadId);
+    if (!upload) return;
+    upload.controller.abort();
+    upload.pending?.reject(new Error("cancelled"));
+    upload.pending = null;
+  }
+
+  async dataUploadClose(uploadId: string): Promise<void> {
+    const upload = this.uploads.get(uploadId);
+    if (!upload) return;
+    await this.dataUploadCancel(uploadId);
+    try {
+      await upload.task;
+    } catch (error) {
+      const kind = (error as { kind?: unknown }).kind;
+      if (error !== upload.observedError && kind !== "cancelled") throw error;
+    } finally {
+      this.uploads.delete(uploadId);
+    }
   }
 
   async startPeer(sessionId: string, domainId: string): Promise<string> {
@@ -453,6 +812,44 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
 
   async waitStopped(peerHandle: string): Promise<void> {
     await this.peer(peerHandle).waitStopped();
+  }
+
+  private dataClient(clientId: string): DomainDataClient {
+    const entry = this.dataClients.get(clientId);
+    if (!entry) throw Object.assign(new Error("The Domain data client is closed"), { kind: "closed" });
+    return entry.client;
+  }
+
+  private beginDataOperation(operationId: string): AbortController {
+    const controller = new AbortController();
+    this.dataOperations.set(operationId, controller);
+    return controller;
+  }
+
+  private async withDataOperation<T>(
+    operationId: string,
+    operation: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const controller = this.beginDataOperation(operationId);
+    try {
+      return await operation(controller.signal);
+    } finally {
+      if (this.dataOperations.get(operationId) === controller) {
+        this.dataOperations.delete(operationId);
+      }
+    }
+  }
+
+  private download(downloadId: string): WebDownload {
+    const download = this.downloads.get(downloadId);
+    if (!download) throw Object.assign(new Error("The download is closed"), { kind: "closed" });
+    return download;
+  }
+
+  private upload(uploadId: string): WebUpload {
+    const upload = this.uploads.get(uploadId);
+    if (!upload) throw Object.assign(new Error("The upload is closed"), { kind: "closed" });
+    return upload;
   }
 }
 

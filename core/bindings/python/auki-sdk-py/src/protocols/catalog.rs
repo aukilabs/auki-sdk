@@ -101,7 +101,7 @@ impl PyAukiCatalogClient {
         let remote_peer_id = parse_peer_id(&remote_peer_id)?;
         let request = resources_request(variants)?;
         let client = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let response = client
                 .fetch_resources(remote_peer_id, request)
                 .await
@@ -122,7 +122,7 @@ impl PyAukiCatalogClient {
         let (remote_peer_id, route) = parse_target(&remote_peer_id, &route)?;
         let request = resources_request(variants)?;
         let client = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let response = client
                 .fetch_resources_exact(remote_peer_id, route, request)
                 .await
@@ -139,7 +139,7 @@ impl PyAukiCatalogClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let remote_peer_id = parse_peer_id(&remote_peer_id)?;
         let client = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let response = client
                 .fetch_maps(remote_peer_id)
                 .await
@@ -157,7 +157,7 @@ impl PyAukiCatalogClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let (remote_peer_id, route) = parse_target(&remote_peer_id, &route)?;
         let client = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let response = client
                 .fetch_maps_exact(remote_peer_id, route)
                 .await
@@ -347,7 +347,7 @@ impl PyAukiCatalogEndpoint {
     /// Stop accepting Catalog requests behind one detached, replayable barrier.
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let cleanup = self.owner.begin_close();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             wait_cleanup(cleanup)
                 .await
                 .map_err(|error| runtime_error("close Catalog", error))

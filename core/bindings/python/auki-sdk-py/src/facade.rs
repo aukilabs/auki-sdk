@@ -4,9 +4,9 @@ use std::sync::Arc;
 use auki_sdk_rs::{
     AukiDiscovery, AukiDiscoveryCandidate, AukiDiscoveryError, AukiDiscoverySource, AukiPeer,
     AukiPeerBootstrap, AukiPeerConfig, AukiPeerExit, AukiPeerLifecycle, AukiPeerProtocols,
-    AukiPeerRoutes, Credentials, DdsTrackerConfig, DdsTrackerMode, DdsVerificationKeys,
-    DomainDescriptor, DomainSelection, ExternalAuthorityControl, ExternalAuthorityUpdate, Identity,
-    Multiaddr, SignedP2pCredential,
+    AukiPeerRoutes, AuthClient, AuthEnvironment, Credentials, DdsTrackerConfig, DdsTrackerMode,
+    DdsVerificationKeys, DomainDescriptor, DomainSelection, ExternalAuthorityControl,
+    ExternalAuthorityUpdate, Identity, Multiaddr, SignedP2pCredential,
 };
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -18,6 +18,7 @@ use pyo3::{
 use uuid::Uuid;
 
 use crate::cleanup::{DetachedCleanup, wait_cleanup};
+use crate::zitadel::{PyZitadelSessionCredentials, PythonZitadelStore, auth_error};
 
 fn runtime_error(context: &'static str, error: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(format!("{context}: {error}"))
@@ -67,14 +68,6 @@ impl PeerOwner {
             peer: Mutex::new(Some(peer)),
             cleanup: DetachedCleanup::default(),
         }
-    }
-
-    fn with_peer<R>(&self, f: impl FnOnce(&AukiPeer) -> R) -> PyResult<R> {
-        let guard = self.peer.lock();
-        let peer = guard
-            .as_ref()
-            .ok_or_else(|| PyRuntimeError::new_err("AukiPeer has been shut down"))?;
-        Ok(f(peer))
     }
 
     fn begin_shutdown(
@@ -399,7 +392,7 @@ impl PyExternalAuthorityControl {
     ) -> PyResult<Bound<'py, PyAny>> {
         let control = Arc::clone(&self.inner);
         let update = update.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let outcome = control
                 .replace(update)
                 .await
@@ -411,8 +404,8 @@ impl PyExternalAuthorityControl {
 
 #[pyclass(name = "AukiPeerConfig")]
 #[derive(Clone)]
-struct PyAukiPeerConfig {
-    inner: AukiPeerConfig,
+pub(crate) struct PyAukiPeerConfig {
+    pub(crate) inner: AukiPeerConfig,
 }
 
 #[pymethods]
@@ -476,8 +469,7 @@ impl PyAukiPeerConfig {
 
     #[pyo3(signature = (mode, dds_url=None))]
     fn with_dds_tracker(&self, mode: String, dds_url: Option<String>) -> PyResult<Self> {
-        let mode = parse_discovery_mode(Some(mode))?
-            .expect("discovery mode is required");
+        let mode = parse_discovery_mode(Some(mode))?.expect("discovery mode is required");
         let tracker = match dds_url.filter(|s| !s.is_empty()) {
             Some(url) => DdsTrackerConfig::for_trusted_dds(url, mode)
                 .map_err(|error| runtime_error("with_dds_tracker", error))?,
@@ -496,40 +488,178 @@ struct PyAukiSession {
 
 #[pymethods]
 impl PyAukiSession {
+    fn domains(&self) -> crate::data::PyDomains {
+        crate::data::PyDomains {
+            inner: auki_sdk_rs::AukiDomains::new(self.bootstrap.session().clone()),
+        }
+    }
+    fn data(&self, domain_id: &str) -> PyResult<crate::data::PyData> {
+        Ok(crate::data::PyData {
+            inner: auki_sdk_rs::AukiDomainData::new(self.bootstrap.session().clone())
+                .map_err(|e| runtime_error("create data client", e))?
+                .in_domain(crate::data::id(domain_id)?),
+        })
+    }
+    fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let session = self.bootstrap.session().clone();
+        crate::async_completion::future_into_py(py, async move {
+            session.close().await;
+            Ok(())
+        })
+    }
+    /// Import a host-owned PKCE login without network I/O.
+    ///
+    /// Call this from the asyncio loop that owns ``store``. The callback receives
+    /// one complete replacement snapshot and must settle every write before it
+    /// returns. Keep this session after persistence errors so the same snapshot
+    /// can be saved again.
+    #[staticmethod]
+    fn import_zitadel_dev(
+        py: Python<'_>,
+        credentials: &PyZitadelSessionCredentials,
+        store: PyObject,
+    ) -> PyResult<Self> {
+        Self::import_zitadel(
+            py,
+            credentials,
+            store,
+            AuthEnvironment::dev(),
+            AukiPeerConfig::dev(),
+        )
+    }
+
+    /// Import a host-owned PKCE login for exact API, DDS, and DMS endpoints.
+    #[staticmethod]
+    fn import_zitadel_with_environment(
+        py: Python<'_>,
+        api_base_url: String,
+        dds_base_url: String,
+        dms_base_url: String,
+        credentials: &PyZitadelSessionCredentials,
+        store: PyObject,
+    ) -> PyResult<Self> {
+        let environment = AuthEnvironment::new(api_base_url, dds_base_url).map_err(auth_error)?;
+        let config = AukiPeerConfig::new(dms_base_url).map_err(|_| {
+            auth_error(auki_sdk_rs::AuthError::InvalidConfiguration(
+                "invalid DMS base URL",
+            ))
+        })?;
+        Self::import_zitadel(py, credentials, store, environment, config)
+    }
+    /// Exact aligned endpoints, useful for private environments and local fixtures.
+    #[staticmethod]
+    #[pyo3(signature = (api_base_url, dds_base_url, dms_base_url, email, password, *, client_id=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn login_with_environment<'py>(
+        py: Python<'py>,
+        api_base_url: String,
+        dds_base_url: String,
+        dms_base_url: String,
+        email: String,
+        password: String,
+        client_id: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let mut environment = AuthEnvironment::new(api_base_url, dds_base_url)
+            .map_err(|e| runtime_error("configure authentication", e))?;
+        if let Some(id) = client_id {
+            environment = environment
+                .with_client_id(id)
+                .map_err(|e| runtime_error("configure client ID", e))?;
+        }
+        let client = AuthClient::new(environment)
+            .map_err(|e| runtime_error("configure authentication", e))?;
+        let config =
+            AukiPeerConfig::new(dms_base_url).map_err(|e| runtime_error("configure DMS", e))?;
+        crate::async_completion::future_into_py(py, async move {
+            let bootstrap = AukiPeerBootstrap::authenticate(
+                client,
+                Credentials::user_password(email, password),
+                config,
+            )
+            .await
+            .map_err(|e| runtime_error("authenticate User", e))?;
+            Python::with_gil(|py| Py::new(py, Self { bootstrap }))
+        })
+    }
     /// Authenticate a User against the shared development environment.
     #[staticmethod]
+    #[pyo3(signature = (email, password, *, client_id=None))]
     fn login_dev<'py>(
         py: Python<'py>,
         email: String,
         password: String,
+        client_id: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let bootstrap = AukiPeerBootstrap::dev(Credentials::user_password(email, password))
-                .await
-                .map_err(|error| runtime_error("authenticate Auki User", error))?;
+        crate::async_completion::future_into_py(py, async move {
+            let mut environment = AuthEnvironment::dev();
+            if let Some(id) = client_id {
+                environment = environment
+                    .with_client_id(id)
+                    .map_err(|e| runtime_error("configure client ID", e))?;
+            }
+            let client = AuthClient::new(environment)
+                .map_err(|e| runtime_error("configure authentication", e))?;
+            let bootstrap = AukiPeerBootstrap::authenticate(
+                client,
+                Credentials::user_password(email, password),
+                AukiPeerConfig::dev(),
+            )
+            .await
+            .map_err(|error| runtime_error("authenticate Auki User", error))?;
             Python::with_gil(|py| Py::new(py, Self { bootstrap }))
         })
     }
 
     /// Authenticate a trusted native App against the development environment.
     #[staticmethod]
+    #[pyo3(signature = (access_key, secret, *, client_id=None, gateway_mac=None))]
     fn login_app_dev<'py>(
         py: Python<'py>,
         access_key: String,
         secret: String,
+        client_id: Option<String>,
+        gateway_mac: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let bootstrap = AukiPeerBootstrap::dev(Credentials::app(access_key, secret))
-                .await
-                .map_err(|error| runtime_error("authenticate Auki App", error))?;
-            Python::with_gil(|py| Py::new(py, Self { bootstrap }))
-        })
+        Self::login_app(
+            py,
+            AuthEnvironment::dev(),
+            AukiPeerConfig::dev(),
+            app_credentials(access_key, secret, gateway_mac)?,
+            client_id,
+        )
     }
 
-    /// List every Domain this principal may explicitly select.
+    /// Authenticate a trusted backend App against exact aligned service bases.
+    #[staticmethod]
+    #[pyo3(signature = (api_base_url, dds_base_url, dms_base_url, access_key, secret, *, client_id=None, gateway_mac=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn login_app_with_environment<'py>(
+        py: Python<'py>,
+        api_base_url: String,
+        dds_base_url: String,
+        dms_base_url: String,
+        access_key: String,
+        secret: String,
+        client_id: Option<String>,
+        gateway_mac: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let environment = AuthEnvironment::new(api_base_url, dds_base_url).map_err(auth_error)?;
+        let config = AukiPeerConfig::new(dms_base_url)
+            .map_err(|error| runtime_error("configure DMS", error))?;
+        Self::login_app(
+            py,
+            environment,
+            config,
+            app_credentials(access_key, secret, gateway_mac)?,
+            client_id,
+        )
+    }
+
+    /// List every Domain this principal may explicitly select. Imported
+    /// sessions use the API-issued human listing profile appropriate to their role.
     fn accessible_domains<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let bootstrap = self.bootstrap.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let domains = bootstrap
                 .accessible_domains()
                 .await
@@ -560,7 +690,7 @@ impl PyAukiSession {
             Some(mode) => self.bootstrap.clone().with_dds_tracker(mode),
             None => self.bootstrap.clone(),
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let peer = bootstrap
                 .start_persistent_peer(DomainSelection::new(domain_id), identity_file)
                 .await
@@ -570,10 +700,65 @@ impl PyAukiSession {
     }
 }
 
+impl PyAukiSession {
+    fn login_app<'py>(
+        py: Python<'py>,
+        mut environment: AuthEnvironment,
+        config: AukiPeerConfig,
+        credentials: auki_sdk_rs::AppCredentials,
+        client_id: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        if let Some(id) = client_id {
+            environment = environment.with_client_id(id).map_err(auth_error)?;
+        }
+        let client = AuthClient::new(environment).map_err(auth_error)?;
+        crate::async_completion::future_into_py(py, async move {
+            let bootstrap = AukiPeerBootstrap::authenticate(
+                client,
+                Credentials::AppCredentials(credentials),
+                config,
+            )
+            .await
+            .map_err(|error| runtime_error("authenticate Auki App", error))?;
+            Python::with_gil(|py| Py::new(py, Self { bootstrap }))
+        })
+    }
+
+    fn import_zitadel(
+        py: Python<'_>,
+        credentials: &PyZitadelSessionCredentials,
+        store: PyObject,
+        environment: AuthEnvironment,
+        config: AukiPeerConfig,
+    ) -> PyResult<Self> {
+        let store = PythonZitadelStore::new(py, store)?;
+        let session = AuthClient::new(environment)
+            .map_err(auth_error)?
+            .import_zitadel_session(credentials.copy_credentials(), Arc::new(store))
+            .map_err(auth_error)?;
+        Ok(Self {
+            bootstrap: AukiPeerBootstrap::from_session(session, config),
+        })
+    }
+}
+
+fn app_credentials(
+    access_key: String,
+    secret: String,
+    gateway_mac: Option<String>,
+) -> PyResult<auki_sdk_rs::AppCredentials> {
+    let credentials = auki_sdk_rs::AppCredentials::new(access_key, secret);
+    match gateway_mac {
+        Some(mac) => credentials.with_gateway_mac(mac).map_err(auth_error),
+        None => Ok(credentials),
+    }
+}
+
 /// One persistent relay-backed native peer.
 #[pyclass(name = "AukiPeer")]
 pub struct PyAukiPeer {
-    owner: PeerOwner,
+    owner: Option<PeerOwner>,
+    known_peers: auki_sdk_rs::AukiKnownPeers,
     peer_id: String,
     domain_id: String,
     listen_addresses: Vec<String>,
@@ -602,7 +787,26 @@ impl PyAukiPeer {
             lifecycle: peer.lifecycle(),
             protocols: context.protocols(),
             discovery,
-            owner: PeerOwner::new(peer),
+            known_peers: peer.known_peers(),
+            owner: Some(PeerOwner::new(peer)),
+        }
+    }
+
+    pub(crate) fn from_task_peer(peer: auki_sdk_rs::AukiTaskPeer) -> Self {
+        Self {
+            peer_id: peer.peer_id().to_string(),
+            domain_id: peer.domain_id().to_string(),
+            listen_addresses: peer
+                .listen_addresses()
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            routes: peer.routes(),
+            lifecycle: peer.lifecycle(),
+            protocols: peer.protocols(),
+            discovery: peer.discovery(),
+            known_peers: peer.known_peers(),
+            owner: None,
         }
     }
 
@@ -638,7 +842,7 @@ impl PyAukiPeer {
         let identity = identity.inner.clone();
         let update = update.inner.clone();
         let config = config.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let (peer, control) = AukiPeer::start_external(identity, update, config)
                 .await
                 .map_err(|error| runtime_error("start_external AukiPeer", error))?;
@@ -702,15 +906,13 @@ impl PyAukiPeer {
     }
 
     fn known_peer_ids(&self) -> PyResult<Vec<String>> {
-        self.owner.with_peer(|runtime| {
-            runtime
-                .known_peers()
-                .snapshot()
-                .peers()
-                .iter()
-                .map(|peer| peer.peer_id().to_string())
-                .collect()
-        })
+        Ok(self
+            .known_peers
+            .snapshot()
+            .peers()
+            .iter()
+            .map(|peer| peer.peer_id().to_string())
+            .collect())
     }
 
     /// Fetch every fresh same-Domain DDS candidate.
@@ -730,7 +932,7 @@ impl PyAukiPeer {
     /// Resolve after requested shutdown or raise after unexpected terminal failure.
     fn wait_stopped<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let lifecycle = self.lifecycle.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             match lifecycle.wait_stopped().await {
                 AukiPeerExit::Stopped => Ok(()),
                 AukiPeerExit::Failed(failure) => Err(runtime_error(
@@ -743,8 +945,13 @@ impl PyAukiPeer {
 
     /// Fence immediately, then await one detached, replayable ordered cleanup.
     fn shutdown<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let cleanup = self.owner.begin_shutdown();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        let owner = self.owner.as_ref().ok_or_else(|| {
+            PyRuntimeError::new_err(
+                "the task runtime owns this peer; stop the task to shut it down",
+            )
+        })?;
+        let cleanup = owner.begin_shutdown();
+        crate::async_completion::future_into_py(py, async move {
             wait_cleanup(cleanup)
                 .await
                 .map_err(|error| runtime_error("shut down Auki peer", error))
@@ -766,7 +973,7 @@ impl PyAukiPeer {
         protocol_id: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let discovery = self.discovery.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let discovery = discovery.ok_or_else(|| {
                 runtime_error("discover Auki peers", AukiDiscoveryError::Disabled)
             })?;

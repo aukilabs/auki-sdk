@@ -6,6 +6,11 @@ import type {
   AukiDomainInfo,
   AukiExactTarget,
   AukiSdkExpoModuleEvents,
+  DataMetadata,
+  DomainPage,
+  Portal,
+  PortalDomain,
+  PortalPose,
 } from "./AukiSdkExpo.types";
 
 declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents> {
@@ -14,8 +19,66 @@ declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents
   _zitadelCredentials(sessionId: string, requestId: string): Promise<string>;
   _ackZitadelSave(sessionId: string, requestId: string, success: boolean): Promise<boolean>;
   _closeSession(sessionId: string): Promise<void>;
-  loginDev(email: string, password: string): Promise<string>;
+  loginDev(email: string, password: string, clientId?: string | null): Promise<string>;
+  loginWithEnvironment(
+    apiBaseUrl: string,
+    ddsBaseUrl: string,
+    dmsBaseUrl: string,
+    email: string,
+    password: string,
+    clientId?: string | null,
+  ): Promise<string>;
   accessibleDomains(sessionId: string): Promise<AukiDomainInfo[]>;
+  domainsList(sessionId: string, queryJson: string, operationId: string): Promise<DomainPage>;
+  domainsForPortal(
+    sessionId: string,
+    portal: string,
+    organization: string | null,
+    operationId: string,
+  ): Promise<PortalDomain[]>;
+  domainsPortals(sessionId: string, domainId: string, operationId: string): Promise<Portal[]>;
+  domainsPortal(
+    sessionId: string,
+    domainId: string,
+    portal: string,
+    operationId: string,
+  ): Promise<Portal>;
+  domainDataOpen(sessionId: string, domainId: string): Promise<string>;
+  domainDataList(clientId: string, queryJson: string, operationId: string): Promise<DataMetadata[]>;
+  domainDataGet(clientId: string, dataId: string, operationId: string): Promise<DataMetadata>;
+  domainDataRead(clientId: string, dataId: string, operationId: string): Promise<string>;
+  domainDataWrite(
+    clientId: string,
+    targetJson: string,
+    bytesBase64: string,
+    operationId: string,
+  ): Promise<DataMetadata>;
+  domainDataDelete(clientId: string, dataId: string, operationId: string): Promise<void>;
+  domainDataPoses(clientId: string, operationId: string): Promise<PortalPose[]>;
+  domainDataPose(clientId: string, portal: string, operationId: string): Promise<PortalPose>;
+  domainDataClose(clientId: string): Promise<void>;
+  dataOperationCancel(operationId: string): Promise<void>;
+  dataDownloadStart(
+    clientId: string,
+    dataId: string,
+    optionsJson: string,
+    operationId: string,
+  ): Promise<string>;
+  dataDownloadNext(downloadId: string): Promise<string | null>;
+  dataDownloadCancel(downloadId: string): Promise<void>;
+  dataDownloadClose(downloadId: string): Promise<void>;
+  dataUploadStart(
+    clientId: string,
+    targetJson: string,
+    size: number,
+    optionsJson: string,
+    operationId: string,
+  ): Promise<string>;
+  dataUploadNextMaximum(uploadId: string): Promise<number | null>;
+  dataUploadPush(uploadId: string, bytesBase64: string): Promise<void>;
+  dataUploadResult(uploadId: string): Promise<DataMetadata>;
+  dataUploadCancel(uploadId: string): Promise<void>;
+  dataUploadClose(uploadId: string): Promise<void>;
   startPeer(sessionId: string, domainId: string): Promise<string>;
   startPeerWithDiscovery(
     sessionId: string,

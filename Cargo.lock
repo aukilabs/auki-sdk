@@ -411,6 +411,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-domain-client"
+version = "0.1.0"
+dependencies = [
+ "auki-auth",
+ "base64",
+ "bytes",
+ "chrono",
+ "futures",
+ "futures-timer",
+ "httpmock",
+ "js-sys",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
+]
+
+[[package]]
 name = "auki-geometry"
 version = "0.0.0"
 dependencies = [
@@ -774,8 +799,10 @@ dependencies = [
  "async-channel",
  "async-trait",
  "auki-auth",
+ "auki-domain-client",
  "auki-p2p",
  "auki-relay-booking",
+ "auki-tasks",
  "base64",
  "chrono",
  "futures",
@@ -803,6 +830,7 @@ dependencies = [
 name = "auki-sdk-py"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "auki-datatypes",
  "auki-protocols",
  "auki-registry",
@@ -817,6 +845,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "uuid",
 ]
 
@@ -831,8 +860,10 @@ dependencies = [
  "auki-registry",
  "auki-sdk",
  "auki-urdf-fk",
+ "base64",
  "chrono",
  "futures",
+ "httpmock",
  "parking_lot",
  "prost",
  "serde",
@@ -840,6 +871,7 @@ dependencies = [
  "sha2",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "uniffi",
  "uuid",
 ]
@@ -861,10 +893,12 @@ dependencies = [
  "send_wrapper",
  "serde",
  "serde-wasm-bindgen",
+ "tokio-util",
  "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
+ "web-sys",
 ]
 
 [[package]]
@@ -920,6 +954,30 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "auki-tasks"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "auki-auth",
+ "auki-dms",
+ "auki-domain-client",
+ "auki-p2p",
+ "base64",
+ "chrono",
+ "httpmock",
+ "parking_lot",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "url",
  "uuid",
 ]
 
@@ -1625,6 +1683,18 @@ checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
 dependencies = [
  "event-listener",
  "pin-project-lite",
+]
+
+[[package]]
+name = "fastbloom"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e7f34442dbe69c60fe8eaf58a8cafff81a1f278816d8ab4db255b3bef4ac3c4"
+dependencies = [
+ "getrandom 0.3.4",
+ "libm",
+ "rand 0.9.4",
+ "siphasher",
 ]
 
 [[package]]
@@ -2902,9 +2972,9 @@ dependencies = [
 
 [[package]]
 name = "libp2p-quic"
-version = "0.13.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8dc448b2de9f4745784e3751fe8bc6c473d01b8317edd5ababcb0dec803d843f"
+checksum = "9dcc597d70bf7f6f30cbe07081802c836184e48416e89e9ce73a0ba2c56a319e"
 dependencies = [
  "futures",
  "futures-timer",
@@ -2913,6 +2983,7 @@ dependencies = [
  "libp2p-identity",
  "libp2p-tls",
  "quinn",
+ "quinn-proto",
  "rand 0.8.6",
  "ring",
  "rustls",
@@ -4108,6 +4179,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
 dependencies = [
  "bytes",
+ "fastbloom",
  "getrandom 0.3.4",
  "lru-slab",
  "rand 0.9.4",

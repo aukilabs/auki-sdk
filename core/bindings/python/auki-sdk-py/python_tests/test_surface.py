@@ -13,8 +13,11 @@ def test_module_exposes_the_small_peer_facade() -> None:
     assert auki_sdk.AukiPeerRoutes.__name__ == "AukiPeerRoutes"
     assert auki_sdk.AukiDiscoveryCandidate.__name__ == "AukiDiscoveryCandidate"
     assert auki_sdk.AukiPeer.__name__ == "AukiPeer"
+    assert auki_sdk.ZitadelSessionCredentials.__name__ == "ZitadelSessionCredentials"
     assert hasattr(auki_sdk.AukiSession, "login_dev")
     assert hasattr(auki_sdk.AukiSession, "login_app_dev")
+    assert hasattr(auki_sdk.AukiSession, "import_zitadel_dev")
+    assert hasattr(auki_sdk.AukiSession, "import_zitadel_with_environment")
     assert hasattr(auki_sdk.AukiPeerRoutes, "tcp")
     assert hasattr(auki_sdk.AukiPeerRoutes, "wss")
     assert hasattr(auki_sdk.AukiPeer, "routes")
@@ -104,8 +107,12 @@ def test_protocol_preparation_helpers_use_canonical_rust_codecs() -> None:
         auki_sdk.decode_camera_frame_image(b"not protobuf")
 
     assert auki_sdk.prepare_catalog_resources({"resources": []}) == {"resources": []}
+    # Match the canonical Rust decoder: ignore unknown fields when normalizing.
+    assert auki_sdk.prepare_catalog_resources(
+        {"resources": [], "unexpected": True}
+    ) == {"resources": []}
     with pytest.raises(ValueError, match="Catalog resources snapshot"):
-        auki_sdk.prepare_catalog_resources({"resources": [], "unexpected": True})
+        auki_sdk.prepare_catalog_resources({"resources": "invalid"})
 
     entry = {
         "peer_id": "12D3KooWH3okqZcRaHwy4keYWo9eAaCDwhePYajtHsCM4Egsptan",

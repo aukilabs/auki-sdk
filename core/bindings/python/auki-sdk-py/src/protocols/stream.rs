@@ -466,7 +466,7 @@ fn subscribe_to_python<'py>(
     payload_kind: StreamPayloadKind,
     request: StreamRequest,
 ) -> PyResult<Bound<'py, PyAny>> {
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+    crate::async_completion::future_into_py(py, async move {
         let subscription = subscribe_kind(&client, target, payload_kind, request)
             .await
             .map_err(|error| runtime_error("subscribe to Stream", error))?;
@@ -1136,7 +1136,7 @@ impl PyAukiStreamEndpoint {
     /// Stop admission, cancel admitted handlers, and close Python sources.
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let cleanup = self.owner.begin_close();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             wait_cleanup(cleanup)
                 .await
                 .map_err(|error| runtime_error("close Stream endpoint", error))
@@ -1409,11 +1409,11 @@ impl PyAukiStreamSubscription {
     /// Only one `next()` may be pending at a time.
     fn next<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let Some(pending) = self.state.begin_next()? else {
-            return pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            return crate::async_completion::future_into_py(py, async move {
                 Ok(Python::with_gil(|py| py.None()))
             });
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let item = subscription_next(pending).await;
             Python::with_gil(|py| match item {
                 Some(Ok(entry)) => entry_to_python(py, entry),
@@ -1427,7 +1427,7 @@ impl PyAukiStreamSubscription {
     /// Idempotently cancel this subscription and await local route release.
     fn cancel<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let cleanup = self.state.begin_cancel();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             wait_cleanup(cleanup)
                 .await
                 .map_err(|error| runtime_error("cancel Stream subscription", error))

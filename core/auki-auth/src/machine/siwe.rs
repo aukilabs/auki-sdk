@@ -132,6 +132,8 @@ fn ethereum_message_digest(message: &str) -> Keccak256 {
 fn new_client() -> Result<Client> {
     Client::builder()
         .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(SiweError::Request)
 }

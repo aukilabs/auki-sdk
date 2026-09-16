@@ -8,6 +8,7 @@ public class AukiSdkExpoModule: Module {
   // Frameworks/AukiSDK.xcframework. canImport(auki_sdk_swiftFFI) gates the API.
   #if canImport(auki_sdk_swiftFFI)
   private let sessions = ExpoSessionRegistry()
+  private let domainData = ExpoDomainDataRegistry()
   private var peers: [String: AukiPeer] = [:]
   private var identities: [String: AukiPeerIdentity] = [:]
   private var streams: [String: AukiStreamSubscription] = [:]
@@ -57,9 +58,39 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("loginDev") { (email: String, password: String) -> String in
+    AsyncFunction("loginDev") { (email: String, password: String, clientId: String?) -> String in
       #if canImport(auki_sdk_swiftFFI)
-      let session = try await withAuthErrors { try await AukiSession.loginDev(email: email, password: password) }
+      let session = try await withAuthErrors {
+        try await AukiSession.loginDev(email: email, password: password, clientId: clientId)
+      }
+      let id = self.newId("session")
+      self.sessions.insert(id: id, session: session)
+      return id
+      #else
+      throw unsupported("AukiSDK XCFramework missing; run scripts/sync-ios-xcframework.sh")
+      #endif
+    }
+
+    AsyncFunction("loginWithEnvironment") {
+      (
+        apiBaseUrl: String,
+        ddsBaseUrl: String,
+        dmsBaseUrl: String,
+        email: String,
+        password: String,
+        clientId: String?
+      ) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let session = try await withAuthErrors {
+        try await AukiSession.loginWithEnvironment(
+          apiBaseUrl: apiBaseUrl,
+          ddsBaseUrl: ddsBaseUrl,
+          dmsBaseUrl: dmsBaseUrl,
+          email: email,
+          password: password,
+          clientId: clientId
+        )
+      }
       let id = self.newId("session")
       self.sessions.insert(id: id, session: session)
       return id
@@ -80,6 +111,385 @@ public class AukiSdkExpoModule: Module {
           "organizationId": domain.organizationId,
         ]
       }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("domainsList") {
+      (sessionId: String, queryJson: String, operationId: String) -> [String: Any] in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.domainData.beginOperation(operationId)
+      defer { self.domainData.finishOperation(operationId) }
+      let query = try Self.domainListQuery(queryJson)
+      let page = try await withDataErrors {
+        try await self.sessions.session(sessionId).domains().list(
+          query: query,
+          cancellation: cancellation
+        )
+      }
+      return Self.mapDomainPage(page)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("domainsForPortal") {
+      (
+        sessionId: String,
+        portal: String,
+        organization: String?,
+        operationId: String
+      ) -> [[String: Any]] in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.domainData.beginOperation(operationId)
+      defer { self.domainData.finishOperation(operationId) }
+      let values = try await withDataErrors {
+        try await self.sessions.session(sessionId).domains().forPortal(
+          portal: portal,
+          organization: organization,
+          cancellation: cancellation
+        )
+      }
+      return values.map(Self.mapPortalDomain)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("domainsPortals") {
+      (sessionId: String, domainId: String, operationId: String) -> [[String: Any]] in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.domainData.beginOperation(operationId)
+      defer { self.domainData.finishOperation(operationId) }
+      let values = try await withDataErrors {
+        try await self.sessions.session(sessionId).domains().portals(
+          domainId: domainId,
+          cancellation: cancellation
+        )
+      }
+      return values.map(Self.mapPortal)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("domainsPortal") {
+      (
+        sessionId: String,
+        domainId: String,
+        portal: String,
+        operationId: String
+      ) -> [String: Any] in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.domainData.beginOperation(operationId)
+      defer { self.domainData.finishOperation(operationId) }
+      let value = try await withDataErrors {
+        try await self.sessions.session(sessionId).domains().portal(
+          domainId: domainId,
+          portal: portal,
+          cancellation: cancellation
+        )
+      }
+      return Self.mapPortal(value)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("domainDataOpen") { (sessionId: String, domainId: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let client = try await withDataErrors {
+        try self.sessions.session(sessionId).data(domainId: domainId)
+      }
+      let id = self.newId("data")
+      self.domainData.insertClient(client, id: id)
+      return id
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("domainDataList") {
+      (clientId: String, queryJson: String, operationId: String) -> [[String: Any]] in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.domainData.beginOperation(operationId)
+      defer { self.domainData.finishOperation(operationId) }
+      let query = try Self.dataListQuery(queryJson)
+      let values = try await withDataErrors {
+        try await self.domainData.client(clientId).list(
+          query: query,
+          cancellation: cancellation
+        )
+      }
+      return values.map(Self.mapDataMetadata)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("domainDataGet") {
+      (clientId: String, dataId: String, operationId: String) -> [String: Any] in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.domainData.beginOperation(operationId)
+      defer { self.domainData.finishOperation(operationId) }
+      let value = try await withDataErrors {
+        try await self.domainData.client(clientId).get(
+          dataId: dataId,
+          cancellation: cancellation
+        )
+      }
+      return Self.mapDataMetadata(value)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("domainDataRead") {
+      (clientId: String, dataId: String, operationId: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.domainData.beginOperation(operationId)
+      defer { self.domainData.finishOperation(operationId) }
+      let bytes = try await withDataErrors {
+        try await self.domainData.client(clientId).read(
+          dataId: dataId,
+          cancellation: cancellation
+        )
+      }
+      return bytes.base64EncodedString()
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("domainDataWrite") {
+      (
+        clientId: String,
+        targetJson: String,
+        bytesBase64: String,
+        operationId: String
+      ) -> [String: Any] in
+      #if canImport(auki_sdk_swiftFFI)
+      guard let bytes = Data(base64Encoded: bytesBase64) else {
+        throw ExpoDataFailure(kind: "input", status: nil, message: "Data bytes are not base64")
+      }
+      let cancellation = self.domainData.beginOperation(operationId)
+      defer { self.domainData.finishOperation(operationId) }
+      let target = try Self.dataWriteTarget(targetJson)
+      let value = try await withDataErrors {
+        try await self.domainData.client(clientId).write(
+          target: target,
+          bytes: bytes,
+          cancellation: cancellation
+        )
+      }
+      return Self.mapDataMetadata(value)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("domainDataDelete") {
+      (clientId: String, dataId: String, operationId: String) in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.domainData.beginOperation(operationId)
+      defer { self.domainData.finishOperation(operationId) }
+      try await withDataErrors {
+        try await self.domainData.client(clientId).delete(
+          dataId: dataId,
+          cancellation: cancellation
+        )
+      }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("domainDataPoses") {
+      (clientId: String, operationId: String) -> [[String: Any]] in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.domainData.beginOperation(operationId)
+      defer { self.domainData.finishOperation(operationId) }
+      let values = try await withDataErrors {
+        try await self.domainData.client(clientId).poses(cancellation: cancellation)
+      }
+      return values.map(Self.mapPortalPose)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("domainDataPose") {
+      (clientId: String, portal: String, operationId: String) -> [String: Any] in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.domainData.beginOperation(operationId)
+      defer { self.domainData.finishOperation(operationId) }
+      let value = try await withDataErrors {
+        try await self.domainData.client(clientId).pose(
+          portal: portal,
+          cancellation: cancellation
+        )
+      }
+      return Self.mapPortalPose(value)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("domainDataClose") { (clientId: String) in
+      #if canImport(auki_sdk_swiftFFI)
+      guard let client = self.domainData.removeClient(clientId) else { return }
+      try await withDataErrors { try await client.close() }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("dataOperationCancel") { (operationId: String) in
+      #if canImport(auki_sdk_swiftFFI)
+      self.domainData.cancelOperation(operationId)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("dataDownloadStart") {
+      (
+        clientId: String,
+        dataId: String,
+        optionsJson: String,
+        operationId: String
+      ) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.domainData.beginOperation(operationId)
+      do {
+        let transfer = try await withDataErrors {
+          try await self.domainData.client(clientId).startDownload(
+            dataId: dataId,
+            options: try Self.transferOptions(optionsJson),
+            cancellation: cancellation
+          )
+        }
+        let id = self.newId("download")
+        self.domainData.insertDownload(transfer, id: id, operationId: operationId)
+        return id
+      } catch {
+        self.domainData.finishOperation(operationId)
+        throw error
+      }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("dataDownloadNext") { (downloadId: String) -> String? in
+      #if canImport(auki_sdk_swiftFFI)
+      let bytes = try await withDataErrors {
+        try await self.domainData.download(downloadId).next()
+      }
+      return bytes?.base64EncodedString()
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("dataDownloadCancel") { (downloadId: String) in
+      #if canImport(auki_sdk_swiftFFI)
+      try await withDataErrors { try self.domainData.download(downloadId).cancel() }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("dataDownloadClose") { (downloadId: String) in
+      #if canImport(auki_sdk_swiftFFI)
+      guard let transfer = self.domainData.removeDownload(downloadId) else { return }
+      try await withDataErrors { try await transfer.close() }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("dataUploadStart") {
+      (
+        clientId: String,
+        targetJson: String,
+        size: Double,
+        optionsJson: String,
+        operationId: String
+      ) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      guard size.isFinite, size.rounded(.towardZero) == size,
+        size >= 1, size <= 9_007_199_254_740_991
+      else {
+        throw ExpoDataFailure(kind: "input", status: nil, message: "size must be a positive safe integer")
+      }
+      let cancellation = self.domainData.beginOperation(operationId)
+      do {
+        let transfer = try await withDataErrors {
+          try await self.domainData.client(clientId).startUpload(
+            target: try Self.dataWriteTarget(targetJson),
+            size: UInt64(size),
+            options: try Self.transferOptions(optionsJson),
+            cancellation: cancellation
+          )
+        }
+        let id = self.newId("upload")
+        self.domainData.insertUpload(transfer, id: id, operationId: operationId)
+        return id
+      } catch {
+        self.domainData.finishOperation(operationId)
+        throw error
+      }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("dataUploadNextMaximum") { (uploadId: String) -> Double? in
+      #if canImport(auki_sdk_swiftFFI)
+      return try await withDataErrors {
+        try await self.domainData.upload(uploadId).nextMaximum().map { Double($0) }
+      }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("dataUploadPush") { (uploadId: String, bytesBase64: String) in
+      #if canImport(auki_sdk_swiftFFI)
+      guard let bytes = Data(base64Encoded: bytesBase64) else {
+        throw ExpoDataFailure(kind: "input", status: nil, message: "Upload chunk is not base64")
+      }
+      try await withDataErrors { try await self.domainData.upload(uploadId).push(bytes: bytes) }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("dataUploadResult") { (uploadId: String) -> [String: Any] in
+      #if canImport(auki_sdk_swiftFFI)
+      let value = try await withDataErrors {
+        try await self.domainData.upload(uploadId).result()
+      }
+      return Self.mapDataMetadata(value)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("dataUploadCancel") { (uploadId: String) in
+      #if canImport(auki_sdk_swiftFFI)
+      try await withDataErrors { try self.domainData.upload(uploadId).cancel() }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("dataUploadClose") { (uploadId: String) in
+      #if canImport(auki_sdk_swiftFFI)
+      guard let transfer = self.domainData.removeUpload(uploadId) else { return }
+      try await withDataErrors { try await transfer.close() }
       #else
       throw unsupported("AukiSDK XCFramework missing")
       #endif
@@ -448,6 +858,132 @@ public class AukiSdkExpoModule: Module {
     return model
   }
 
+  private static func domainListQuery(_ json: String) throws -> AukiDomainListQuery {
+    let value: ExpoDomainListQueryPayload = try decodeDataJson(json)
+    return AukiDomainListQuery(
+      organization: value.organization,
+      domainServerId: value.domainServerId,
+      limit: value.limit,
+      offset: value.offset
+    )
+  }
+
+  private static func dataListQuery(_ json: String) throws -> AukiDataListQuery {
+    let value: ExpoDataListQueryPayload = try decodeDataJson(json)
+    return AukiDataListQuery(ids: value.ids ?? [], name: value.name, dataType: value.dataType)
+  }
+
+  private static func dataWriteTarget(_ json: String) throws -> AukiDataWriteTarget {
+    let value: ExpoDataWriteTargetPayload = try decodeDataJson(json)
+    switch (value.id, value.name, value.dataType) {
+    case let (.some(id), .none, .none): return .byId(id: id)
+    case let (.none, .some(name), .some(dataType)):
+      return .named(name: name, dataType: dataType)
+    default:
+      throw ExpoDataFailure(
+        kind: "input",
+        status: nil,
+        message: "provide id or both name and dataType"
+      )
+    }
+  }
+
+  private static func transferOptions(_ json: String) throws -> AukiTransferOptions {
+    let value: ExpoTransferOptionsPayload = try decodeDataJson(json)
+    return AukiTransferOptions(maxBytes: value.maxBytes, maxChunkBytes: value.maxChunkBytes)
+  }
+
+  private static func decodeDataJson<T: Decodable>(_ json: String) throws -> T {
+    do { return try JSONDecoder().decode(T.self, from: Data(json.utf8)) }
+    catch {
+      throw ExpoDataFailure(kind: "input", status: nil, message: "invalid Domain data options")
+    }
+  }
+
+  private static func mapDomainPage(_ page: AukiDomainPage) -> [String: Any] {
+    [
+      "domains": page.domains.map(mapDomainSummary),
+      "total": Double(page.total),
+      "limit": page.limit,
+      "offset": page.offset,
+    ]
+  }
+
+  private static func mapDomainSummary(_ domain: AukiDomainSummary) -> [String: Any] {
+    [
+      "id": domain.id,
+      "name": domain.name,
+      "organization_id": nullable(domain.organizationId),
+    ]
+  }
+
+  private static func mapPortalDomain(_ value: AukiPortalDomain) -> [String: Any] {
+    [
+      "id": value.id,
+      "name": value.name,
+      "organization_id": nullable(value.organizationId),
+      "is_default": value.isDefault,
+      "added_to_domain_at": value.addedToDomainAt,
+    ]
+  }
+
+  private static func mapPortal(_ value: AukiPortal) -> [String: Any] {
+    [
+      "id": value.id,
+      "short_id": value.shortId,
+      "name": value.name,
+      "size": value.size,
+      "organization_id": nullable(value.organizationId),
+      "default_domain_id": nullable(value.defaultDomainId),
+      "redirect_url": nullable(value.redirectUrl),
+      "created_at": value.createdAt,
+      "updated_at": value.updatedAt,
+    ]
+  }
+
+  private static func mapPortalPose(_ value: AukiPortalPose) -> [String: Any] {
+    [
+      "id": value.id,
+      "short_id": value.shortId,
+      "domain_id": value.domainId,
+      "reported_size": value.reportedSize,
+      "px": value.px,
+      "py": value.py,
+      "pz": value.pz,
+      "rx": value.rx,
+      "ry": value.ry,
+      "rz": value.rz,
+      "rw": value.rw,
+      "latitude": nullable(value.latitude),
+      "longitude": nullable(value.longitude),
+      "altitude": nullable(value.altitude),
+      "vertical_accuracy": nullable(value.verticalAccuracy),
+      "horizontal_accuracy": nullable(value.horizontalAccuracy),
+      "gps_timestamp": nullable(value.gpsTimestamp),
+      "scanner_device_id": value.scannerDeviceId,
+      "scanner_device_name": value.scannerDeviceName,
+      "scanner_device_model": value.scannerDeviceModel,
+      "placed_at": value.placedAt,
+    ]
+  }
+
+  private static func mapDataMetadata(_ value: AukiDataMetadata) -> [String: Any] {
+    [
+      "id": value.id,
+      "domain_id": value.domainId,
+      "name": value.name,
+      "data_type": value.dataType,
+      "size": Double(value.size),
+      "created_at": value.createdAt,
+      "updated_at": value.updatedAt,
+    ]
+  }
+
+  private static func nullable<T>(_ value: T?) -> Any {
+    if let value { return value }
+    return NSNull()
+  }
+
   private static func encodeUrdfLinks(_ links: [AukiUrdfLinkTransform]) throws -> String {
     let mapped: [[String: Any]] = links.map { link in
       var entry: [String: Any] = [
@@ -636,6 +1172,32 @@ public class AukiSdkExpoModule: Module {
     "\(prefix)_\(UUID().uuidString)"
   }
 }
+
+#if canImport(auki_sdk_swiftFFI)
+private struct ExpoDomainListQueryPayload: Decodable {
+  let organization: String?
+  let domainServerId: String?
+  let limit: UInt32?
+  let offset: UInt32?
+}
+
+private struct ExpoDataListQueryPayload: Decodable {
+  let ids: [String]?
+  let name: String?
+  let dataType: String?
+}
+
+private struct ExpoDataWriteTargetPayload: Decodable {
+  let id: String?
+  let name: String?
+  let dataType: String?
+}
+
+private struct ExpoTransferOptionsPayload: Decodable {
+  let maxBytes: UInt64?
+  let maxChunkBytes: UInt64?
+}
+#endif
 
 private func unsupported(_ message: String) -> Exception {
   Exception(name: "AukiSdkExpoUnsupported", description: message)

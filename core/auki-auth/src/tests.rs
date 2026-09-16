@@ -164,6 +164,7 @@ impl MockServer {
     }
 }
 
+mod domain;
 #[cfg(not(target_arch = "wasm32"))]
 mod machine;
 mod zitadel;

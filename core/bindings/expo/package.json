@@ -19,7 +19,8 @@
     "clean": "rm -rf build src/web/generated/*",
     "prepare": "npm run build",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/json-stringify.test.mjs"
+    "test": "node scripts/json-stringify.test.mjs",
+    "test:domain-data": "node scripts/domain-data-bridge.test.cjs"
   },
   "keywords": [
     "react-native",

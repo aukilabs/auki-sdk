@@ -37,6 +37,10 @@ async fn main() -> anyhow::Result<()> {
 To show a Domain picker, call `bootstrap.accessible_domains().await?` before
 starting the peer. Pass the selected `choice.domain.id` to `DomainSelection::new`.
 
+To reuse this login for HTTP data access, pass a cloned session to the
+[Domain data clients](domain-data.md). Close all clients and peers before
+closing the session.
+
 ## Sign in as a backend service
 
 Use `Credentials::app(access_key, secret)` in place of User credentials above.
@@ -76,20 +80,35 @@ issuer, client ID, and optional expiry. The SDK will refresh the tokens;
 stop any other refresh loop for that login.
 
 In Rust, call `AuthClient::import_zitadel_session` with a `ZitadelSessionStore`,
-then `AukiPeerBootstrap::from_session`. Web uses `AukiUserSession.importZitadelDev`;
-Swift and Expo also support import. See the
+then `AukiPeerBootstrap::from_session` if you need a peer. Web uses
+`AukiUserSession.importZitadelDev`; Python uses `AukiSession.import_zitadel_dev`.
+Swift and Expo also support import. The same session supports
+[Domain selection and data access](domain-data.md#reuse-an-imported-login). See the
 [Expo example](../../core/bindings/expo/README.md#import-an-existing-login).
 
 Your storage callback must save all replacement credentials together and await
 every write, including on failure. Keep the session if startup or saving fails.
 On a `persistence` error, retry with that session to save its retained tokens.
 
-Provide a known Domain ID: imported sessions cannot currently list Domains.
-Your DDS deployment must support ZITADEL login for P2P access. On logout, stop
-peers, close the session, then delete stored credentials.
+The SDK selects imported listing from the API's service grant. Owner and scoped
+User grants use the existing DDS User listing route, with the granted
+organization and Domain restrictions. Viewer grants require the separate
+`purpose=p2p` human Domain-allowlist exchange and matching DDS support. The SDK
+preserves listing denials and never sends an imported viewer's App-shaped token
+to the broader legacy listing route.
+
+A known Domain ID can still use the separate data path: the API deployment must
+accept ZITADEL for the ordinary service exchange. DDS must separately support
+direct ZITADEL login for P2P. On logout, close data clients and peers, close the
+session, then delete stored credentials. See the
+[deployment evidence and limits](../../test-support/domain-data-validation.md#provider-compatibility).
 
 ## Build a compute node or robot
 
-[Posemesh runners](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
-already manage machine authentication and execution for DMS tasks. Use the
-entrypoint for your [compute node or robot](../explanation/apps-nodes-and-robots.md).
+Use provisioned DDS credentials for a compute node or robot. Compute nodes
+also need a signing wallet; robots use the deployment's robot audience.
+These credentials are separate from User and App login.
+
+See [Run compute and robot tasks](run-compute-tasks.md) for Rust and Python
+setup, and [apps, services, compute nodes, and robots](../explanation/apps-nodes-and-robots.md)
+for Domain and assignment rules.

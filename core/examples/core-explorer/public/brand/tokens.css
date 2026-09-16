@@ -1,0 +1,245 @@
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(fonts/Space-Grotesk-700.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(fonts/Space-Grotesk-500.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(fonts/Space-Grotesk-400.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(fonts/DM-Sans-400.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url(fonts/DM-Sans-500.ttf) format('truetype');
+}
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(fonts/DM-Sans-700.ttf) format('truetype');
+}
+/* ============================================================
+   Auki Labs — Design Tokens
+   Colors + Type. Single source of truth.
+   ============================================================ */
+
+/* Public example: Space Grotesk and DM Sans are bundled above. */
+
+/* ---------- Color tokens ---------- */
+:root {
+  /* Raw palette */
+  --auki-ink:        #0F0F0F;   /* off-black — primary dark surface */
+  --auki-ink-alt:    #111111;   /* deep panel */
+  --auki-paper:      #F5F5F5;   /* off-white — primary light surface, body text on dark */
+  --auki-orange:     #FD9E2F;   /* accent — CTAs, section labels. USE SPARINGLY */
+  --auki-lime:       #CFFFB0;   /* hover state on primary CTAs */
+  --auki-mist:       #DBEDED;   /* pale blue-green — tertiary / specimen fills */
+  --auki-rule:       #858585;   /* hairlines, secondary text on dark */
+
+  --auki-black:      #000000;
+  --auki-white:      #FFFFFF;
+
+  /* Semantic (dark-first, since brand is dark-default) */
+  --bg:              var(--auki-ink);
+  --bg-raised:       #151515;
+  --bg-alt:          var(--auki-paper);
+
+  --fg:              var(--auki-paper);
+  --fg-muted:        var(--auki-rule);
+  --fg-on-light:     var(--auki-ink);
+  --fg-on-accent:    var(--auki-ink);
+
+  --accent:          var(--auki-orange);
+  --accent-hover:    var(--auki-lime);
+
+  --border:          rgba(255,255,255,0.08);
+  --border-strong:   rgba(255,255,255,0.16);
+  --border-on-light: rgba(0,0,0,0.08);
+
+  --rule:            var(--auki-rule);
+
+  /* ---------- Type tokens ---------- */
+  --font-display:    "Space Grotesk", system-ui, sans-serif;
+  --font-body:       "DM Sans", system-ui, sans-serif;
+  --font-ui:         "DM Sans", system-ui, sans-serif;
+  --font-mono-wordmark: "Monda", "Space Grotesk", system-ui, sans-serif;
+
+  --fw-extralight:   200;
+  --fw-light:        300;
+  --fw-regular:      400;
+  --fw-medium:       500;
+  --fw-semibold:     600;
+  --fw-bold:         700;
+
+  /* Type scale (brand book specimens) */
+  --fs-chapter:      528px;   /* giant chapter numerals */
+  --fs-display:      90px;    /* H1 hero / section titles */
+  --fs-h1:           64px;
+  --fs-h2:           48px;
+  --fs-h3:           35px;    /* brand-book section label size */
+  --fs-h4:           28px;
+  --fs-body-lg:      25px;    /* brand-book body copy */
+  --fs-body:         18px;
+  --fs-body-sm:      16px;
+  --fs-caption:      14px;
+  --fs-ui:           15px;
+  --fs-footer:       30px;    /* page footers in brand book */
+
+  /* Line-heights */
+  --lh-tight:        1.0;     /* display and headings in brand book */
+  --lh-snug:         1.15;
+  --lh-normal:       1.4;
+  --lh-body:         1.5;
+
+  /* Letter-spacing */
+  --ls-tight:        -0.01em;
+  --ls-normal:       0;
+  --ls-wide:         0.08em;
+  --ls-wordmark:     0.2em;   /* AUKI wordmark */
+
+  /* ---------- Spacing (4px base) ---------- */
+  --s-0:   0;
+  --s-1:   4px;
+  --s-2:   8px;
+  --s-3:   12px;
+  --s-4:   16px;
+  --s-5:   24px;
+  --s-6:   32px;
+  --s-7:   48px;
+  --s-8:   64px;
+  --s-9:   96px;
+  --s-10:  128px;
+
+  /* Page / layout */
+  --page-margin:     67px;
+  --page-gutter:     24px;
+
+  /* Radii */
+  --r-0:   0;
+  --r-sm:  4px;
+  --r-md:  8px;
+  --r-lg:  12px;
+  --r-xl:  16px;
+
+  /* Elevation */
+  --elev-0:   none;
+  --elev-1:   0 2px 12px rgba(0,0,0,0.4);
+  --elev-1-light: 0 2px 8px rgba(0,0,0,0.12);
+  --elev-2:   0 8px 48px rgba(0,0,0,0.6);
+  --elev-2-light: 0 8px 32px rgba(0,0,0,0.2);
+
+  /* Motion */
+  --ease-out:   cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-std:   cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-micro:  180ms;
+  --dur-panel:  260ms;
+  --dur-page:   420ms;
+}
+
+/* Light theme variant */
+[data-theme="light"] {
+  --bg:        var(--auki-paper);
+  --bg-raised: var(--auki-white);
+  --bg-alt:    var(--auki-ink);
+  --fg:        var(--auki-ink);
+  --fg-muted:  var(--auki-rule);
+  --border:    rgba(0,0,0,0.08);
+  --border-strong: rgba(0,0,0,0.16);
+}
+
+/* ---------- Base element styles ---------- */
+html, body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-weight: var(--fw-light);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6, .h-display, .h1, .h2, .h3, .h4 {
+  font-family: var(--font-display);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--ls-normal);
+  margin: 0;
+  text-wrap: balance;
+}
+
+.h-display { font-size: var(--fs-display); line-height: 80px; }
+h1, .h1   { font-size: var(--fs-h1); }
+h2, .h2   { font-size: var(--fs-h2); }
+h3, .h3   { font-size: var(--fs-h3); font-weight: var(--fw-regular); }
+h4, .h4   { font-size: var(--fs-h4); }
+
+/* Section label — the orange ALL-CAPS tag seen throughout the brand book */
+.section-label {
+  font-family: var(--font-display);
+  font-weight: var(--fw-regular);
+  font-size: var(--fs-h3);
+  line-height: var(--lh-tight);
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-normal);
+}
+
+/* Body */
+p, .body {
+  font-family: var(--font-body);
+  font-weight: var(--fw-light);
+  font-size: var(--fs-body-lg);
+  line-height: var(--lh-normal);
+  margin: 0;
+  text-wrap: pretty;
+}
+
+.body-md { font-size: var(--fs-body); line-height: var(--lh-body); }
+.body-sm { font-size: var(--fs-body-sm); line-height: var(--lh-body); }
+
+/* UI / button type uses DM Sans */
+button, input, select, textarea, .ui {
+  font-family: var(--font-ui);
+  font-weight: var(--fw-regular);
+  font-size: var(--fs-ui);
+}
+
+code, kbd, pre, samp { font-family: "SF Mono", "JetBrains Mono", ui-monospace, monospace; }
+
+/* Wordmark helper — the "AUKI" secondary lockup */
+.wordmark {
+  font-family: var(--font-mono-wordmark);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--ls-wordmark);
+  text-transform: uppercase;
+}
+
+/* Hairline rules (the signature top/bottom page rules) */
+.hairline {
+  height: 1px;
+  background: var(--rule);
+  border: 0;
+}

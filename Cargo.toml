@@ -15,6 +15,7 @@ members = [
     "core/bindings/python/auki-sdk-py",
     "core/bindings/swift/auki-sdk-swift",
     "core/bindings/web/auki-sdk-web",
+    "core/examples/core-explorer/tests/relay",
     "core/examples/portable-echo",
     "core/examples/portable-echo/native",
     "core/examples/portable-echo/python",

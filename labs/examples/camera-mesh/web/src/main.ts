@@ -1,3 +1,4 @@
+import { jsonStringify } from "@auki/json-stringify";
 import init, { AukiUserSession } from "../pkg-web/auki_sdk_web.js";
 import {
   CameraMesh,
@@ -2181,11 +2182,7 @@ function inspectorRegistryEntry(entry: {
 }
 
 function stringify(value: unknown): string {
-  return JSON.stringify(
-    value,
-    (_key, field: unknown) => typeof field === "bigint" ? field.toString() : field,
-    2,
-  );
+  return jsonStringify(value, 2);
 }
 
 function record(message: string): void {

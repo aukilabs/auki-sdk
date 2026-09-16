@@ -63,7 +63,7 @@ impl PyAukiBlobClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let remote_peer_id = parse_peer_id(&remote_peer_id)?;
         let client = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let receipt = client
                 .fetch(remote_peer_id, sha256)
                 .await
@@ -82,7 +82,7 @@ impl PyAukiBlobClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let (remote_peer_id, route) = parse_target(&remote_peer_id, &route)?;
         let client = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let receipt = client
                 .fetch_exact(remote_peer_id, route, sha256)
                 .await
@@ -324,7 +324,7 @@ impl PyAukiBlobEndpoint {
     /// Stop accepting Blob streams behind one detached, replayable barrier.
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let cleanup = self.owner.begin_close();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             wait_cleanup(cleanup)
                 .await
                 .map_err(|error| runtime_error("close Blob", error))

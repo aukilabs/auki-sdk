@@ -563,3 +563,77 @@ def test_invalid_grants_never_reach_handler(worker_services, override):
             await tasks.close()
             await credential.close()
     asyncio.run(scenario())
+
+
+def test_cancelled_close_keeps_cleanup_owned_and_other_runtime_usable():
+    # An in-loop timeout cannot detect a done callback blocking that same loop.
+    from test_process_exit import run_completion_child
+    run_completion_child("""
+import test_tasks
+fixture = test_tasks.worker_services.__wrapped__()
+services = next(fixture)
+try:
+    test_tasks._cancelled_close_keeps_cleanup_owned_and_other_runtime_usable(services)
+finally:
+    try:
+        next(fixture)
+    except StopIteration:
+        pass
+    else:
+        raise AssertionError("fixture yielded twice")
+print("returned", flush=True)
+""")
+
+
+def _cancelled_close_keeps_cleanup_owned_and_other_runtime_usable(worker_services):
+    async def scenario():
+        started, cleaning, release, cleaned = (asyncio.Event() for _ in range(4))
+
+        async def blocked(task):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cleaning.set()
+                await release.wait()
+                cleaned.set()
+
+        async def independent(task):
+            return {"output_cids": [], "meta": {"independent": True}}
+
+        first, tasks = runtime(worker_services, blocked)
+        second, other = runtime(worker_services, independent)
+        operation = asyncio.ensure_future(tasks.run_once())
+        try:
+            await asyncio.wait_for(started.wait(), 3)
+            closing = tasks.close()
+            await asyncio.wait_for(cleaning.wait(), 3)
+            assert not closing.done()
+            closing.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await closing
+            loop = asyncio.get_running_loop()
+            progressed = loop.create_future()
+            def check_loop_progress():
+                progressed.set_result(not release.is_set() and not cleaned.is_set())
+            # cancel() queued the native cancellation and drain callbacks first.
+            # This callback must run while handler cleanup still needs the loop.
+            loop.call_soon(check_loop_progress)
+            assert await progressed
+            assert not release.is_set()
+            assert not cleaned.is_set()
+            release.set()
+            await asyncio.wait_for(asyncio.gather(tasks.close(), tasks.close()), 3)
+            assert cleaned.is_set()
+            with pytest.raises((asyncio.CancelledError, auki_sdk.TaskRuntimeError)):
+                await operation
+            await first.close()
+            await first.close()
+            assert await other.run_once() == "completed"
+        finally:
+            release.set()
+            await tasks.close()
+            await first.close()
+            await other.close()
+            await second.close()
+    asyncio.run(scenario())

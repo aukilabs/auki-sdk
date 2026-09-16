@@ -4,6 +4,7 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::useless_conversion)]
 
+pub mod async_completion;
 pub mod cleanup;
 mod data;
 mod facade;

@@ -1,7 +1,9 @@
 //! Live exact-route circuit hops, keyed like WSS `direct_connections`.
 //!
 //! One hop per `(target peer, circuit multiaddr)`. Unlike the relay WebSocket,
-//! a circuit slot is scarce, so the last release tears the hop down.
+//! a circuit slot is scarce, so the last owner release tears the hop down.
+//! Releases are idempotent per owner so a cancelled `close` plus `Drop` cannot
+//! drop a sibling stream's hop.
 
 use std::collections::{HashMap, HashSet};
 
@@ -15,11 +17,26 @@ pub(crate) struct CircuitHopKey {
     pub circuit_address: Multiaddr,
 }
 
+/// One `connect_relayed` / `open_exact` owner of a shared hop.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct CircuitHopOwner(u64);
+
+impl CircuitHopOwner {
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn from_raw(id: u64) -> Self {
+        Self(id)
+    }
+}
+
 /// Result of trying to take a ref on a circuit hop before dialing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CircuitAcquire {
     /// Incremented an already-established hop. Skip `dial_circuit`.
-    Live(ConnectionId),
+    Live {
+        connection_id: ConnectionId,
+        owner: CircuitHopOwner,
+    },
     /// Another task is already dialing this hop. Join its waiters.
     Pending,
     /// No live or in-flight hop. Caller must dial.
@@ -31,20 +48,37 @@ pub(crate) struct CircuitHopTable {
     by_key: HashMap<CircuitHopKey, ConnectionId>,
     by_connection: HashMap<ConnectionId, CircuitHopEntry>,
     pending: HashSet<CircuitHopKey>,
+    next_owner: u64,
 }
 
 #[derive(Debug)]
 struct CircuitHopEntry {
     key: CircuitHopKey,
-    refs: usize,
+    owners: HashSet<CircuitHopOwner>,
 }
 
 impl CircuitHopTable {
+    pub(crate) fn next_owner(&mut self) -> CircuitHopOwner {
+        self.next_owner = self.next_owner.wrapping_add(1);
+        if self.next_owner == 0 {
+            self.next_owner = 1;
+        }
+        CircuitHopOwner(self.next_owner)
+    }
+
     pub(crate) fn acquire(&mut self, key: &CircuitHopKey) -> CircuitAcquire {
         if let Some(connection_id) = self.by_key.get(key).copied() {
-            if let Some(entry) = self.by_connection.get_mut(&connection_id) {
-                entry.refs = entry.refs.saturating_add(1);
-                return CircuitAcquire::Live(connection_id);
+            if self.by_connection.contains_key(&connection_id) {
+                let owner = self.next_owner();
+                self.by_connection
+                    .get_mut(&connection_id)
+                    .expect("checked the hop entry exists")
+                    .owners
+                    .insert(owner);
+                return CircuitAcquire::Live {
+                    connection_id,
+                    owner,
+                };
             }
             self.by_key.remove(key);
         }
@@ -59,37 +93,39 @@ impl CircuitHopTable {
         self.pending.insert(key);
     }
 
-    /// Record a finished dial. `refs` is the number of waiters that still want
-    /// the hop. Zero refs means every waiter cancelled; the caller closes the
-    /// connection and this table stores nothing.
+    /// Record a finished dial. Empty owners means every waiter cancelled; the
+    /// caller closes the connection and this table stores nothing.
     pub(crate) fn established(
         &mut self,
         key: CircuitHopKey,
         connection_id: ConnectionId,
-        refs: usize,
+        owners: impl IntoIterator<Item = CircuitHopOwner>,
     ) {
         self.pending.remove(&key);
-        if refs == 0 {
+        let owners: HashSet<_> = owners.into_iter().collect();
+        if owners.is_empty() {
             return;
         }
         self.by_key.insert(key.clone(), connection_id);
         self.by_connection
-            .insert(connection_id, CircuitHopEntry { key, refs });
+            .insert(connection_id, CircuitHopEntry { key, owners });
     }
 
     pub(crate) fn fail_pending(&mut self, key: &CircuitHopKey) {
         self.pending.remove(key);
     }
 
-    /// Decrement one `connect_relayed` / `open_exact` owner. Returns whether
-    /// the swarm should `close_connection`. Unknown IDs close, matching the
-    /// previous CloseConnection behavior.
-    pub(crate) fn release(&mut self, connection_id: ConnectionId) -> bool {
+    /// Drop one owner of `connection_id`. A repeated release of the same owner
+    /// is a no-op and does not close a hop other owners still hold. Unknown
+    /// IDs close, matching the previous CloseConnection behavior.
+    pub(crate) fn release(&mut self, connection_id: ConnectionId, owner: CircuitHopOwner) -> bool {
         let Some(entry) = self.by_connection.get_mut(&connection_id) else {
             return true;
         };
-        entry.refs = entry.refs.saturating_sub(1);
-        if entry.refs > 0 {
+        if !entry.owners.remove(&owner) {
+            return false;
+        }
+        if !entry.owners.is_empty() {
             return false;
         }
         self.by_key.remove(&entry.key);
@@ -97,12 +133,17 @@ impl CircuitHopTable {
         true
     }
 
-    /// Drop a hop after a remote RST even if refs remain, so the next
+    /// Drop a hop after a remote RST even if owners remain, so the next
     /// `open_exact` redials.
     pub(crate) fn invalidate(&mut self, connection_id: ConnectionId) {
         if let Some(entry) = self.by_connection.remove(&connection_id) {
             self.by_key.remove(&entry.key);
         }
+    }
+
+    #[cfg(test)]
+    fn live_connection(&self, key: &CircuitHopKey) -> Option<ConnectionId> {
+        self.by_key.get(key).copied()
     }
 }
 
@@ -131,19 +172,60 @@ mod tests {
         assert_eq!(table.acquire(&hop), CircuitAcquire::Vacant);
         table.mark_pending(hop.clone());
         assert_eq!(table.acquire(&hop), CircuitAcquire::Pending);
-        table.established(hop.clone(), connection(7), 2);
-        assert_eq!(table.acquire(&hop), CircuitAcquire::Live(connection(7)));
+        let owners = [table.next_owner(), table.next_owner()];
+        table.established(hop.clone(), connection(7), owners);
+        match table.acquire(&hop) {
+            CircuitAcquire::Live { connection_id, .. } => {
+                assert_eq!(connection_id, connection(7));
+            }
+            other => panic!("expected a live hop, got {other:?}"),
+        }
     }
 
     #[test]
     fn first_of_two_releases_keeps_the_hop() {
         let mut table = CircuitHopTable::default();
         let hop = key(2);
-        table.established(hop.clone(), connection(8), 2);
-        assert!(!table.release(connection(8)));
-        assert_eq!(table.acquire(&hop), CircuitAcquire::Live(connection(8)));
-        assert!(!table.release(connection(8)));
-        assert!(table.release(connection(8)));
+        let first = table.next_owner();
+        let second = table.next_owner();
+        table.established(hop.clone(), connection(8), [first, second]);
+        assert!(!table.release(connection(8), first));
+        assert_eq!(table.live_connection(&hop), Some(connection(8)));
+        assert!(table.release(connection(8), second));
+        assert_eq!(table.live_connection(&hop), None);
+        assert_eq!(table.acquire(&hop), CircuitAcquire::Vacant);
+    }
+
+    #[test]
+    fn release_is_idempotent_per_owner() {
+        let mut table = CircuitHopTable::default();
+        let hop = key(6);
+        let first = table.next_owner();
+        let second = table.next_owner();
+        table.established(hop.clone(), connection(11), [first, second]);
+        assert!(!table.release(connection(11), first));
+        assert!(!table.release(connection(11), first));
+        assert!(table.release(connection(11), second));
+        assert_eq!(table.acquire(&hop), CircuitAcquire::Vacant);
+    }
+
+    #[test]
+    fn failed_live_delivery_rolls_back() {
+        let mut table = CircuitHopTable::default();
+        let hop = key(7);
+        let original = table.next_owner();
+        table.established(hop.clone(), connection(12), [original]);
+        let CircuitAcquire::Live {
+            connection_id,
+            owner,
+        } = table.acquire(&hop)
+        else {
+            panic!("expected a live hop");
+        };
+        assert_eq!(connection_id, connection(12));
+        assert_ne!(owner, original);
+        assert!(!table.release(connection_id, owner));
+        assert!(table.release(connection(12), original));
         assert_eq!(table.acquire(&hop), CircuitAcquire::Vacant);
     }
 
@@ -151,10 +233,12 @@ mod tests {
     fn invalidate_drops_live_refs_so_the_next_open_redials() {
         let mut table = CircuitHopTable::default();
         let hop = key(3);
-        table.established(hop.clone(), connection(9), 3);
+        let owner = table.next_owner();
+        let other = table.next_owner();
+        table.established(hop.clone(), connection(9), [owner, other]);
         table.invalidate(connection(9));
         assert_eq!(table.acquire(&hop), CircuitAcquire::Vacant);
-        assert!(table.release(connection(9)));
+        assert!(table.release(connection(9), owner));
     }
 
     #[test]
@@ -162,7 +246,7 @@ mod tests {
         let mut table = CircuitHopTable::default();
         let hop = key(4);
         table.mark_pending(hop.clone());
-        table.established(hop.clone(), connection(10), 0);
+        table.established(hop.clone(), connection(10), []);
         assert_eq!(table.acquire(&hop), CircuitAcquire::Vacant);
     }
 

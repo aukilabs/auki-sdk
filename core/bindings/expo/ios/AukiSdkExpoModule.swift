@@ -12,7 +12,7 @@ public class AukiSdkExpoModule: Module {
   private var peers: [String: AukiPeer] = [:]
   private var identities: [String: AukiPeerIdentity] = [:]
   private var streams: [String: AukiStreamSubscription] = [:]
-  private var messageSenders: [String: AukiMessageSender] = [:]
+  private var messageSenders: [String: (peerHandle: String, sender: AukiMessageSender)] = [:]
   private var urdfModels: [String: AukiUrdfModel] = [:]
   #endif
 
@@ -705,7 +705,7 @@ public class AukiSdkExpoModule: Module {
         channel: channel
       )
       let id = self.newId("message")
-      self.messageSenders[id] = sender
+      self.messageSenders[id] = (peerHandle, sender)
       return id
       #else
       throw unsupported("AukiSDK XCFramework missing")
@@ -715,7 +715,7 @@ public class AukiSdkExpoModule: Module {
     AsyncFunction("messageSend") {
       (senderHandle: String, type: String, timestampNs: String, payloadBase64: String) in
       #if canImport(auki_sdk_swiftFFI)
-      guard let sender = self.messageSenders[senderHandle] else {
+      guard let entry = self.messageSenders[senderHandle] else {
         throw unsupported("unknown message sender: \(senderHandle)")
       }
       guard let timestamp = Int64(timestampNs) else {
@@ -729,7 +729,7 @@ public class AukiSdkExpoModule: Module {
       } else {
         throw unsupported("payloadBase64 is not valid base64")
       }
-      try await sender.send(
+      try await entry.sender.send(
         messageType: type,
         timestampNs: timestamp,
         payload: payload
@@ -741,10 +741,10 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("messageClose") { (senderHandle: String) in
       #if canImport(auki_sdk_swiftFFI)
-      guard let sender = self.messageSenders.removeValue(forKey: senderHandle) else {
+      guard let entry = self.messageSenders.removeValue(forKey: senderHandle) else {
         return
       }
-      try await sender.close()
+      try await entry.sender.close()
       #else
       throw unsupported("AukiSDK XCFramework missing")
       #endif
@@ -798,10 +798,10 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("shutdown") { (peerHandle: String) in
       #if canImport(auki_sdk_swiftFFI)
-      let leftover = self.messageSenders
-      self.messageSenders.removeAll()
-      for sender in leftover.values {
-        try? await sender.close()
+      let owned = self.messageSenders.filter { $0.value.peerHandle == peerHandle }
+      for (id, entry) in owned {
+        self.messageSenders.removeValue(forKey: id)
+        try? await entry.sender.close()
       }
       if let peer = self.peers.removeValue(forKey: peerHandle) {
         try await peer.shutdown()

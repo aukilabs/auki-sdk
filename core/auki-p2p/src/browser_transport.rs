@@ -41,7 +41,7 @@ use crate::{
     authentication::{authenticate_duplex, SessionRequirements},
     browser_authority::BrowserAuthority,
     browser_route::{browser_direct_address, parse_browser_relay_route_for_peer},
-    circuit_hop::{CircuitAcquire, CircuitHopKey, CircuitHopTable},
+    circuit_hop::{CircuitAcquire, CircuitHopKey, CircuitHopOwner, CircuitHopTable},
     relay::{
         ObservedRelayLimits, RelayCancellation, RelayProvider, RelayReservationEvent,
         RelayReservationHandle, RelayReservationNode, RelayReservationSnapshot,
@@ -140,6 +140,7 @@ pub struct BrowserRelayRoute {
     relay_peer_id: PeerId,
     target_peer_id: PeerId,
     connection_id: ConnectionId,
+    hop_owner: CircuitHopOwner,
     admission_expires_at: DateTime<Utc>,
     route: Multiaddr,
 }
@@ -301,6 +302,7 @@ impl BrowserRouteControl {
         self.commands
             .send(Command::CloseConnection {
                 connection_id: route.connection_id,
+                hop_owner: route.hop_owner,
                 response,
             })
             .await
@@ -533,8 +535,8 @@ impl BrowserNode {
                 parsed.relay_peer_id,
             )
             .await;
-        let connection_id = match first_connection {
-            Ok(connection_id) => connection_id,
+        let (connection_id, hop_owner) = match first_connection {
+            Ok(claimed) => claimed,
             Err(error) => {
                 if reuse_admission {
                     self.source_admissions
@@ -556,6 +558,7 @@ impl BrowserNode {
             relay_peer_id: parsed.relay_peer_id,
             target_peer_id: parsed.target_peer_id,
             connection_id,
+            hop_owner,
             admission_expires_at,
             route,
         })
@@ -726,7 +729,7 @@ impl BrowserNode {
         peer_id: PeerId,
         address: Multiaddr,
         relay_peer_id: PeerId,
-    ) -> Result<ConnectionId> {
+    ) -> Result<(ConnectionId, CircuitHopOwner)> {
         let permit = self.relay_circuit_dials.acquire().await;
         let (response, receiver) = oneshot::channel();
         self.send(Command::DialCircuit {
@@ -860,10 +863,11 @@ enum Command {
         address: Multiaddr,
         relay_peer_id: PeerId,
         permit: RelayCircuitDialPermit,
-        response: oneshot::Sender<Result<ConnectionId>>,
+        response: oneshot::Sender<Result<(ConnectionId, CircuitHopOwner)>>,
     },
     CloseConnection {
         connection_id: ConnectionId,
+        hop_owner: CircuitHopOwner,
         response: oneshot::Sender<Result<()>>,
     },
     Shutdown {
@@ -907,7 +911,7 @@ enum PendingDial {
         relay_peer_id: PeerId,
         key: CircuitHopKey,
         _permit: RelayCircuitDialPermit,
-        responses: Vec<oneshot::Sender<Result<ConnectionId>>>,
+        responses: Vec<oneshot::Sender<Result<(ConnectionId, CircuitHopOwner)>>>,
     },
 }
 
@@ -943,9 +947,10 @@ impl BrowserRuntime {
             } => self.dial_circuit(swarm, peer_id, address, relay_peer_id, permit, response),
             Command::CloseConnection {
                 connection_id,
+                hop_owner,
                 response,
             } => {
-                if self.circuit_hops.release(connection_id) {
+                if self.circuit_hops.release(connection_id, hop_owner) {
                     swarm.close_connection(connection_id);
                 }
                 let _ = response.send(Ok(()));
@@ -1236,7 +1241,7 @@ impl BrowserRuntime {
         address: Multiaddr,
         relay_peer_id: PeerId,
         permit: RelayCircuitDialPermit,
-        response: oneshot::Sender<Result<ConnectionId>>,
+        response: oneshot::Sender<Result<(ConnectionId, CircuitHopOwner)>>,
     ) {
         if response.is_canceled() {
             return;
@@ -1252,8 +1257,15 @@ impl BrowserRuntime {
             circuit_address: address.clone(),
         };
         match self.circuit_hops.acquire(&key) {
-            CircuitAcquire::Live(connection_id) => {
-                let _ = response.send(Ok(connection_id));
+            CircuitAcquire::Live {
+                connection_id,
+                owner,
+            } => {
+                if response.send(Ok((connection_id, owner))).is_err()
+                    && self.circuit_hops.release(connection_id, owner)
+                {
+                    swarm.close_connection(connection_id);
+                }
                 return;
             }
             CircuitAcquire::Pending => {
@@ -1497,14 +1509,16 @@ impl BrowserRuntime {
                 responses,
                 ..
             } if expected == peer_id && relayed => {
-                let mut refs = 0;
+                let mut owners = Vec::new();
                 for response in responses {
-                    if response.send(Ok(connection_id)).is_ok() {
-                        refs += 1;
+                    let owner = self.circuit_hops.next_owner();
+                    if response.send(Ok((connection_id, owner))).is_ok() {
+                        owners.push(owner);
                     }
                 }
-                self.circuit_hops.established(key, connection_id, refs);
-                if refs == 0 {
+                let delivered = owners.len();
+                self.circuit_hops.established(key, connection_id, owners);
+                if delivered == 0 {
                     swarm.close_connection(connection_id);
                 }
             }
@@ -1951,6 +1965,7 @@ mod tests {
             relay_peer_id,
             target_peer_id,
             connection_id,
+            hop_owner: CircuitHopOwner::from_raw(1),
             admission_expires_at: Utc::now(),
             route,
         };
@@ -1964,6 +1979,7 @@ mod tests {
         match command {
             Command::CloseConnection {
                 connection_id: closed,
+                hop_owner: _,
                 response,
             } => {
                 assert_eq!(closed, connection_id);

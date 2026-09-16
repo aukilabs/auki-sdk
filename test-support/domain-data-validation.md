@@ -3,8 +3,11 @@
 This records the SDK-only completion work for [#388](https://github.com/aukilabs/auki-sdk/pull/388)
 and [#374](https://github.com/aukilabs/auki-sdk/issues/374). Backend source and
 configuration were inspected read-only on 2026-09-15. No provider contracts or
-deployment configuration were changed. The approved live check below created
-temporary dev data and verified its deletion.
+deployment configuration were changed. The approved live checks created
+temporary dev data and verified its deletion. On 2026-09-16, the user also
+authorized creating a dedicated dev App. Its temporary Domain permission was
+removed after validation; the App and its privately stored credentials remain
+available for later testing.
 
 ## Provider compatibility
 
@@ -292,23 +295,113 @@ No Domain or permission was created or changed by this test. The browser and
 private local host were closed. Redacted evidence is in
 `output/playwright/domain-data-owner-dev-20260915/result.json`.
 
+### App and imported-session renewal, 2026-09-16
+
+These checks used the actual Python extension and shared native Rust SDK at
+`8eb6f30c9377f27fa416acda5ebbccca043a592d`, including the Python completion fix
+from [#394](https://github.com/aukilabs/auki-sdk/pull/394). The default-feature
+extension was rebuilt on macOS arm64 / CPython 3.12 with:
+
+~~~sh
+maturin develop --locked --manifest-path core/bindings/python/auki-sdk-py/Cargo.toml
+python -m pytest \
+  core/bindings/python/auki-sdk-py/python_tests/test_domain_data.py \
+  core/bindings/python/auki-sdk-py/python_tests/test_zitadel_session.py \
+  core/bindings/python/auki-sdk-py/python_tests/test_process_exit.py \
+  -q -p no:cacheprovider
+~~~
+
+The build passed and the three local suites passed **18 tests**. The subsequent
+live checks used explicit dev API/DDS/DMS/issuer URLs, without peers, discovery
+advertisements, relay bookings, or task claims. The September 15 workload
+digests above were not rechecked because AWS SSO had expired; the selected
+Domain's live DDS metadata reported filesystem Domain Server `v0.14.6`.
+
+#### ZITADEL rotation and persistence recovery
+
+The user supplied a fresh owner session and confirmed that the originating app
+was stopped, leaving the SDK as its sole refresh owner. The trusted dev issuer
+and public client ID were independently matched to local host configuration
+and its authorization-code browser client, rather than accepted solely from
+JWT claims.
+
+The host imported an expired local expiry hint to trigger early renewal; it did
+not change the provider's token lifetimes. The real refresh token was replaced.
+The storage callback durably retained a recovery copy before deliberately
+rejecting its first canonical-store acknowledgement. The SDK returned the
+structured `persistence` error. Retrying with the same session delivered the
+identical replacement snapshot, which was atomically persisted before the
+operations completed. This is an injected host persistence rejection, not an
+observed filesystem failure.
+
+| Live check | Result |
+| --- | --- |
+| Operation waits for the pending storage callback | Passed |
+| Real refresh-token replacement | Passed |
+| Same-session recovery after the injected persistence rejection | One replacement generation, two identical-snapshot callbacks |
+| Concurrent owned-Domain listing and known-Domain pose reads after saving | 26 owned Domains and 15 poses |
+| Close, reimport the saved credentials, and repeat listing/reads | Passed; zero additional persistence callbacks |
+| Awaited client/session shutdown | Passed |
+
+Latest credentials are stored privately; the original supplied refresh token
+must not be replayed. The redacted result is
+`.domain-data-dev/zitadel-refresh-result.json` in the operator workspace.
+
+#### App allowed and denied operations
+
+The email/password account successfully created and authenticated a dedicated
+App, `sdk-374-live-auth-20260916-cf1d5a23`. The API exposes its secret only at
+creation; credentials were saved privately. The App's organization differs
+from the imported owner's organization; the live DDS contract supports an
+explicit cross-organization App permission.
+
+The earlier `dmtbot-test-domain` has no App permission rows. Adding its first
+row would switch it from unrestricted read-only App access to an explicit
+allowlist, so its permissions were left unchanged. The run instead used an
+owned dev Domain with an existing permission row on the filesystem server.
+Only the new App's row was added, first with `domain:r` and `domain-data:rw`,
+then reduced to `domain:r` for denied-operation checks. Existing rows were
+compared against a saved snapshot.
+
+| Live App check | Result |
+| --- | --- |
+| `login_app_with_environment`, ordinary Domain listing and accessible picker | Passed; 17 own-organization entries and 863 accessible entries; selected Domain present |
+| Pose list | Passed; selected Domain had zero poses |
+| Buffered create/get/read/replace/read/delete | Passed; 1,048,593-byte initial and 1,048,607-byte replacement payloads matched SHA-256 |
+| Multipart create/get/streamed read/replace/streamed read/delete | Both 17,825,809-byte payloads matched SHA-256; bounded transfers passed |
+| Read-only App metadata read of a disposable test record | Passed |
+| Read-only buffered write, multipart write and deletion of that test record | Each preserved HTTP 403 |
+| Data listing and pose reads in a designated inaccessible Domain | Each preserved HTTP 403 and `authorization_denied` |
+| Delete/reconcile only records created by this run; awaited close | Passed; zero temporary records remained |
+| Restore original permission rows and legacy access-control lists | Passed; exact original contents verified |
+
+Permission cleanup exposed an existing provider behavior: deleting an App
+permission row does not remove its ID from the legacy `allowed_app_ids` list.
+The initial cleanup comparison correctly failed. The operator then used a
+data-read-only upsert for this new App to remove only its legacy-list entry,
+deleted that temporary row, and verified both original snapshots exactly.
+See the provider's [upsert and delete implementations](https://github.com/aukilabs/domain-service/blob/a49345e0a0d864a78ae57a3e5d484c3d4d4f6461/dds/db/domain_app_permission.go).
+No backend implementation was changed and no original permission was removed.
+
+The App remains provisioned; its temporary write grant is gone. Redacted local
+evidence is `.domain-data-dev/app-round-trip-result.json`,
+`app-denied-write_delete-result.json`, `app-denied-inaccessible_domain-result.json`,
+`app-denial-cleanup-result.json` (the initial legacy-list mismatch), and
+`app-final-cleanup-result.json` (verified restoration). The operator scripts and
+credential files remain private and are not part of this PR.
+
 ### Remaining live checks
 
-App and restricted imported accounts have not been supplied. Their allowed/
-denied operations and a designated inaccessible Domain remain unvalidated on
-dev. Live OAuth renewal also remains unrun; it requires an established sole
-refresh owner and trusted client configuration.
+App allowed/denied operations and owner-session OAuth renewal/persistence
+recovery now pass live. Successful restricted/viewer listing still needs the
+API/DDS bridge integration in [#384](https://github.com/aukilabs/auki-sdk/issues/384)
+and suitable dev identities. Live permission checks with an actual restricted
+imported user remain outstanding; App denials do not substitute for them.
 
-For each remaining account, run a unique-record round trip
-(write, read, replace, multipart upload/download, delete), then denied-operation
-checks with restricted credentials and a designated inaccessible Domain. Only
-delete records created by that run. Preserve returned HTTP status and redact
-credentials. Do not provision roles, Apps, Domains, robots, or compute nodes as
-part of SDK validation.
-
-Owner listing and data now pass live. Successful restricted/viewer listing
-still needs the API/DDS bridge integration described above and suitable dev
-identities. Preserve viewer denials; never send their App-shaped bearer through
-legacy User listing. The outstanding App/restricted-account/renewal checks and
-review/merge remain before claiming #374 complete. No backend implementation is
-included.
+Preserve viewer denials and never send their App-shaped bearer through legacy
+User listing. Only create/delete uniquely named test records within the
+approved scope. Additional role, App, Domain, robot, or compute provisioning
+requires authorization. Live renewal was exercised through Python/native Rust;
+the other bindings retain their generated runtime and local fixture coverage.
+The restricted-account/backend checks and review/merge remain before claiming
+#374 complete. No backend implementation is included.

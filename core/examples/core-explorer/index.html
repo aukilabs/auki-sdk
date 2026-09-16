@@ -7,60 +7,52 @@
 <title>Auki · Core Explorer</title>
 <link rel="stylesheet" href="/brand/tokens.css">
 </head>
-<body class="guided">
+<body>
 <header class="topbar">
 <div class="brand"><img src="/brand/auki-logo.svg" alt="Auki" class="logo"><strong>Core Explorer</strong></div>
 <div class="session"><span class="eyebrow">Environment / session</span><span id="session-status" role="status">Signed out</span></div>
-<button id="logout">Cancel / log out</button>
+<button data-go="settings" aria-label="Connection settings">Settings</button><button id="logout">Cancel / log out</button>
 </header>
 <main>
 <section id="access" class="access">
-<div class="view-head"><div class="eyebrow">AUKI / CORE EXPLORER</div><h1>Explore your <br>Domains.</h1><p>A window into your spatial data. <br>Sign in, choose a Domain, then look inside.</p></div>
-<form id="login" class="paper">
-<h2>Start exploring.</h2><p>User account sign-in</p>
+<div class="view-head"><div class="eyebrow">AUKI / CORE EXPLORER</div><h1>Explore your<br>Domains.</h1><p>A window into your spatial data.</p></div>
+<form id="login" class="paper"><h2>Start exploring.</h2><p>User account sign-in</p>
 <label>Email<input id="email" type="email" autocomplete="username" required></label>
 <label>Password<input id="password" type="password" autocomplete="off" required></label>
-<details id="connection-settings"><summary>Connection settings · API, DDS &amp; DMS</summary><div class="urls">
-<label>API URL<input id="api" type="url" value="http://127.0.0.1:18114" required></label>
-<label>DDS URL<input id="dds" type="url" value="http://127.0.0.1:18114" required></label>
-<label>DMS URL<input id="dms" type="url" value="http://127.0.0.1:18114" required></label>
-</div></details>
 <p id="environment" class="footnote">Local fixtures / synthetic test data</p>
-<button class="primary" id="signin">Sign in <span aria-hidden="true">→</span></button>
-<p id="login-status" role="status">No service requests until you sign in.</p>
-</form>
+<button type="button" data-go="settings">Connection settings</button><button class="primary" id="signin">Sign in →</button>
+<p id="login-status" role="status">No service requests until you sign in.</p></form>
 </section>
 <div id="workspace" hidden>
-<div class="domain-context"><div><div class="eyebrow">Selected Domain</div><h2 id="selected">Choose a Domain</h2></div><div class="row"><button id="copy-domain">Copy Domain ID</button><button id="refresh-selected">Refresh reads</button></div></div>
-<details id="domain-controls" open><summary>Choose or change Domain</summary>
-<div class="row"><h3>Accessible Domains</h3><button id="refresh-domains">Refresh</button></div>
-<p id="domain-status" role="status"></p><div id="domains"></div>
-<div class="row"><button id="previous">Previous</button><span id="page"></span><button id="next">Next</button></div>
-<details id="manual-controls"><summary>Open a known Domain UUID</summary><form id="manual" class="row"><label>Known Domain UUID<input id="domain-id" required placeholder="00000000-0000-0000-0000-000000000000"></label><button>Open Domain</button></form></details>
-</details>
-<nav aria-label="Chapters"><button data-view="overview" aria-controls="view-overview" aria-current="page"><span class="chapter-num">01</span>Overview</button><button data-view="data" aria-controls="view-data" aria-current="false"><span class="chapter-num">02</span>Data</button><button data-view="networking" aria-controls="view-networking" aria-current="false"><span class="chapter-num">03</span>Networking</button></nav>
-<section id="view-overview" class="view">
-<div class="view-head"><div class="eyebrow">01 / Get your bearings</div><h1 tabindex="-1">Understand <br>the space.</h1><p>Read the Domain context, then explore its stored records.</p><span class="badge">Read-only exploration</span></div>
-<div class="chapter-body"><div class="paper"><div class="eyebrow">Domain field notes</div><h2 id="domain-name">Choose a Domain</h2><div id="domain-facts"></div>
-<details id="domain-technical"><summary>Technical details · Domain JSON</summary><pre id="metadata"></pre></details>
-<div class="spatial-section"><h3>Portals</h3><p class="footnote">Entry references reported by DDS.</p><div id="portals" role="status">Choose a Domain to read portals.</div></div>
-<div class="spatial-section"><h3>Poses</h3><p class="footnote">Position and orientation reported by the Domain Server.</p><div id="poses" role="status">Choose a Domain to read poses.</div></div></div>
-<div class="next-action"><p>Inspect available records and explicitly preview their content.</p><button class="primary" data-go="data">Explore the records →</button></div></div>
-</section>
-<section id="view-data" class="view" hidden>
-<div class="view-head"><div class="eyebrow">02 / Read the space</div><h1 tabindex="-1">Look inside.</h1><p>Filter stored records, inspect their metadata and read their content.</p><span class="badge">Permissions checked per read</span></div>
-<div class="chapter-body"><form id="filters"><div class="row"><label>Name<input id="name" placeholder="Filter by record name"></label><button>Apply filters</button></div><details id="advanced-filters"><summary>Advanced filters · type &amp; IDs</summary><div class="row"><label>Type<input id="type"></label><label>IDs (comma separated)<input id="ids"></label></div></details></form>
-<a id="record-jump" class="record-jump" href="#record-detail" hidden>Jump to selected record ↓</a>
-<p id="data-status" role="status">Choose a Domain to read records.</p><div id="records" aria-label="Stored records"></div>
-<section id="record-detail" tabindex="-1" class="record-detail" aria-label="Selected record"><div class="eyebrow">Selected record</div><h2 id="record-name">Choose a record</h2><div id="record-facts"></div>
-<details id="record-technical"><summary>Technical details · record JSON</summary><pre id="record"></pre></details>
-<div class="row"><button id="copy-record" disabled>Copy record ID</button><button id="preview" disabled>Preview / retry</button><button id="download" disabled>Download</button></div>
-<p class="footnote">Buffered reads: 8 MiB maximum. Redacted text preview: up to 64 KiB. Downloads preserve original bytes as .bin files.</p><pre id="content" role="status">Select a record.</pre></section></div>
-</section>
-<section id="view-networking" class="view" hidden><div class="view-head"><div class="eyebrow">03 / Try an exchange</div><h1 tabindex="-1">Try a simple <br>exchange.</h1><p>Start a peer, choose a candidate, then send an authenticated Echo diagnostic.</p><span class="badge">Optional networking</span></div></section>
-</div>
-<footer class="page-footer"><span>Auki Labs / Core Explorer</span><span>Domain data · optional Echo networking</span><span id="notice" role="status"></span></footer>
+<aside class="sidebar"><div class="domain-context"><div class="eyebrow">Selected Domain</div><h2 id="selected">Choose a Domain</h2><button data-go="domains">Choose or change Domain</button></div>
+<nav aria-label="Primary sections">
+<button data-view="overview" aria-controls="view-overview" aria-current="page"><span class="chapter-num">01</span>Overview</button>
+<button data-view="data" aria-controls="view-data" aria-current="false"><span class="chapter-num">02</span>Data</button>
+<button data-view="portals" aria-controls="view-portals" aria-current="false"><span class="chapter-num">03</span>Portals</button>
+<button data-view="poses" aria-controls="view-poses" aria-current="false"><span class="chapter-num">04</span>Poses</button>
+<button data-view="networking" aria-controls="view-networking" aria-current="false"><span class="chapter-num">05</span>Networking</button>
+</nav><p class="footnote">Domain data and optional Echo networking.</p></aside>
+<div class="screen-area">
+<section id="view-overview" class="view"><div class="view-head"><div class="eyebrow">01 / Overview</div><h1 tabindex="-1">Understand the space.</h1><p>Explore the selected Domain, one view at a time.</p></div>
+<div class="paper"><div class="eyebrow">Domain field notes</div><h2 id="domain-name">Choose a Domain</h2><div id="domain-facts"></div><pre id="metadata" hidden></pre>
+<div class="row"><button id="copy-domain">Copy Domain ID</button><button id="domain-technical">Technical details</button><button id="refresh-selected">Refresh reads</button></div></div>
+<div class="overview-actions"><button class="feature" data-go="data"><span>Stored records</span><strong>Look inside →</strong></button><button class="feature" data-go="portals"><span>Spatial references</span><strong>Explore portals →</strong></button><button class="feature" data-go="poses"><span>Position &amp; orientation</span><strong>Inspect poses →</strong></button></div></section>
+<section id="view-domains" class="view" hidden><div class="view-head"><button data-back>← Back</button><div class="eyebrow">Domain selection</div><h1 tabindex="-1">Choose a Domain.</h1></div>
+<div id="domain-controls"><div class="row"><h2>Accessible Domains</h2><button id="refresh-domains">Refresh</button></div><p id="domain-status" role="status"></p><div id="domains"></div><div class="row"><button id="previous">Previous</button><span id="page"></span><button id="next">Next</button></div>
+<form id="manual" class="panel"><h3>Open a known Domain</h3><label>Known Domain UUID<input id="domain-id" required placeholder="00000000-0000-0000-0000-000000000000"></label><button>Open Domain</button></form></div></section>
+<section id="view-data" class="view" hidden><div class="view-head"><div class="eyebrow">02 / Data</div><h1 tabindex="-1">Look inside.</h1><p>Permissions are checked separately for each read and write.</p></div><div class="row"><button data-go="filters">Filter records</button><button id="refresh-records">Refresh records</button><button id="open-upload" class="primary" disabled>Upload a file</button><button id="record-jump" hidden>Selected record →</button></div><p id="data-status" role="status">Choose a Domain to read records.</p><div id="records" aria-label="Stored records"></div></section>
+<section id="view-filters" class="view" hidden><div class="view-head"><button data-back>← Back</button><h1 tabindex="-1">Filter records.</h1><p>Apply a name, data type or list of record IDs.</p></div><form id="filters" class="panel"><label>Name<input id="name" placeholder="Filter by record name"></label><div id="advanced-filters"><label>Type<input id="type"></label><label>IDs (comma separated)<input id="ids"></label></div><button class="primary">Apply filters</button></form></section>
+<section id="view-record" class="view" hidden><div class="view-head"><button data-back>← Back to records</button><div class="eyebrow">Selected record</div><h1 id="record-name" tabindex="-1">Choose a record</h1></div><section id="record-detail" tabindex="-1" class="panel" aria-label="Selected record"><div id="record-facts"></div><pre id="record" hidden></pre><div class="row"><button id="copy-record" disabled>Copy record ID</button><button id="record-technical">Technical details</button><button id="preview" class="primary" disabled>Preview / retry</button><button id="download" disabled>Download</button></div><p class="footnote">Buffered reads: 8 MiB maximum. Downloads preserve original bytes as .bin files.</p><p id="download-status" role="status"></p></section></section>
+<section id="view-preview" class="view" hidden><div class="view-head"><button data-back>← Back to record</button><h1 tabindex="-1">Content preview.</h1><p>Redacted text, up to 64 KiB. Content is displayed as text.</p></div><pre id="content" role="status">Select a record.</pre><button id="retry-preview">Retry preview</button></section>
+<section id="view-technical" class="view" hidden><div class="view-head"><button data-back>← Back</button><h1 tabindex="-1">Technical details.</h1><p>Redacted metadata from the selected item.</p></div><pre id="technical-content"></pre></section>
+<section id="view-portals" class="view" hidden><div class="view-head"><div class="eyebrow">03 / Portals</div><h1 tabindex="-1">Entry references.</h1><p>Portals reported by DDS for this Domain.</p></div><div id="portals" role="status">Choose a Domain to read portals.</div></section>
+<section id="view-poses" class="view" hidden><div class="view-head"><div class="eyebrow">04 / Poses</div><h1 tabindex="-1">Position in space.</h1><p>Position and orientation reported by the Domain Server.</p></div><div id="poses" role="status">Choose a Domain to read poses.</div></section>
+<section id="view-networking" class="view" hidden><div class="view-head"><div class="eyebrow">05 / Networking</div><h1 tabindex="-1">Try an exchange.</h1><p>An authenticated Echo diagnostic with a real peer.</p></div></section>
+<section id="view-upload" class="view" hidden></section>
+</div></div>
+<section id="view-settings" class="view settings-view" hidden><div class="view-head"><button data-back>← Back</button><h1 tabindex="-1">Connection settings.</h1><p id="settings-status">Enter aligned API, DDS and DMS endpoints before signing in.</p></div><div id="connection-settings" class="panel"><label>API URL<input id="api" type="url" value="http://127.0.0.1:18114" required></label><label>DDS URL<input id="dds" type="url" value="http://127.0.0.1:18114" required></label><label>DMS URL<input id="dms" type="url" value="http://127.0.0.1:18114" required></label><p class="footnote">HTTPS is required outside loopback. No automatic environment fallback.</p><pre id="connected-config" hidden></pre></div></section>
 </main>
+<footer class="page-footer"><span>Auki Labs / Core Explorer</span><span id="notice" role="status"></span></footer>
 <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

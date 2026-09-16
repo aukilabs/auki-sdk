@@ -13,6 +13,7 @@
     "build": "npm run build:wasm && npm run typecheck && vite build",
     "dev": "npm run build:wasm && vite --host 127.0.0.1",
     "test:browser": "node tests/browser.mjs",
+    "test:upload": "node tests/upload-browser.mjs",
     "test:network": "node tests/network-browser.mjs",
     "test:robot": "python3 -m unittest discover -s robot -p 'test_*.py'"
   },

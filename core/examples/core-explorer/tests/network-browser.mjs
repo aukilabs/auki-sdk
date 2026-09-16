@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { assertNetworkStep, assertChapter, chapter, openDetails, reveal, selectDomain, assertLocalFonts, assertUsable, unexpectedConsoleError } from './guided-ui.mjs';
+import { assertNetworkStep, assertChapter, chapter, back, openDetails, reveal, selectDomain, assertLocalFonts, assertUsable, unexpectedConsoleError } from './guided-ui.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -67,8 +67,9 @@ try {
   await assertLocalFonts(page);
   await openDetails(page,'#connection-settings');
   for(const id of ['api','dds','dms'])await page.locator('#'+id).fill(fixture.base);
+  await back(page);
   await page.locator('#email').fill('fixture@example.test');await page.locator('#password').fill('synthetic-password');await page.locator('#signin').click();await contains(page,'#domains','Synthetic lab');
-  await assertChapter(page,'overview');
+  await reveal(page,'#domains');
   await page.getByRole('button',{name:/Synthetic lab/}).click();
   await chapter(page,'networking',true);
   assert.equal(await page.locator('#net-state').innerText(),'stopped');
@@ -87,8 +88,16 @@ try {
   assert.equal(await page.locator('#net-local').innerText(),localPeer,'chapter switching preserves transport identity');
   assert.equal(await page.locator('#selected').innerText(),selectedDomain);
   assert.equal(fixture.state.verifiedProofs,proofs,'chapter switching does not restart peer authentication');
-  await page.locator('#net-discover').click();await contains(page,'#net-candidates',ready.peer);
+  await reveal(page,'#net-discover'); await page.locator('#net-discover').click();await contains(page,'#net-candidates',`${ready.peer.slice(0,12)}…${ready.peer.slice(-8)}`);
   await reveal(page,'#net-candidates');
+  await page.locator('#net-candidates').getByRole('button', { name: 'Candidate technical details' }).first().click();
+  const candidateMetadata = JSON.parse(await page.locator('#net-extra-json').textContent());
+  assert.equal(candidateMetadata.peerId, ready.peer);
+  const redactedRoute = ready.wss.replace('/dns4/127.0.0.1.sslip.io/', '/dns4/[redacted token].[redacted token]/');
+  assert.notEqual(redactedRoute, ready.wss, 'fixture route hostname requires redaction');
+  assert.ok(candidateMetadata.routes.includes(redactedRoute), 'redacted route retains exact port and peer identities');
+  assert.ok(!JSON.stringify(candidateMetadata).includes('127.0.0.1.sslip.io'), 'technical metadata preserves hostname redaction');
+  await page.locator('#net-back').click();
   assert.equal(await page.locator('#net-results').innerText(),'','discovery is not verification');
   assert.equal(await page.locator('#net-results h3').count(),0,'no success heading before a receipt');
   assert.equal(await page.locator('#net-candidates .facts dd').first().innerText(),`${ready.peer.slice(0,12)}…${ready.peer.slice(-8)}`);
@@ -104,15 +113,17 @@ try {
   assert.equal(await page.locator('#net-send').isEnabled(),false,'payload bound is UTF-8 bytes');
   await page.locator('#net-payload').fill('browser to Python diagnostic');await page.locator('#net-send').click();await contains(page,'#net-results','browser to Python diagnostic');
   assert.ok((await page.locator('#net-results').innerText()).includes(`${Buffer.byteLength('browser to Python diagnostic')} bytes echoed`));
-  assert.equal(await page.locator('#net-results details').evaluate(el=>el.open),false);
-  const receiptMetadata=JSON.parse(await page.locator('#net-results details pre').textContent());
+  await assertNetworkStep(page,'result');
+  await page.locator('#net-results').getByRole('button', { name: 'Receipt technical details' }).click();
+  const receiptMetadata=JSON.parse(await page.locator('#net-extra-json').textContent());
+  await page.locator('#net-back').click();
   assert.equal(receiptMetadata.remotePeerId,ready.peer);assert.equal(receiptMetadata.domainId,DOMAIN);
   assert.equal(receiptMetadata.bytes,Buffer.byteLength('browser to Python diagnostic'));
   assert.equal(fixture.state.claims,0);assert.ok(fixture.state.verifiedProofs>=2);assert.ok(bridgeConnections>0);assert.deepEqual(forbidden,[]);
-  await assertUsable(page,['#net-stop','#net-payload','#net-send']);
+  await reveal(page,'#net-payload'); await assertUsable(page,['#net-stop','#net-payload','#net-send']);
   await page.screenshot({path:new URL('../test-artifacts/network-verified.png',import.meta.url).pathname,fullPage:true});
   await page.setViewportSize({width:390,height:844});
-  await assertUsable(page,['#net-stop','#net-payload','#net-send']);
+  await reveal(page,'#net-payload'); await assertUsable(page,['#net-stop','#net-payload','#net-send']);
   await page.screenshot({path:new URL('../test-artifacts/network-verified-mobile.png',import.meta.url).pathname,fullPage:true});
   await page.setViewportSize({width:1280,height:720});
   await page.locator('#net-payload').fill('edited diagnostic');
@@ -124,7 +135,7 @@ try {
   assert.equal(await page.locator('#net-results').innerText(),'','target edit clears verified result');
   assert.equal(await page.locator('#net-send').isEnabled(),false);
   await page.locator('#net-peer-id').fill(ready.peer);
-  await assertNetworkStep(page,'discover');
+  await assertNetworkStep(page,'manual');
   assert.equal(await page.locator('#net-send').isEnabled(),false,'editing requires explicit target confirmation');
   await page.locator('#net-use-manual').click();
   await assertNetworkStep(page,'diagnostic');
@@ -141,7 +152,7 @@ try {
   const send=async(text)=>{
     await reveal(page,'#net-peer-id');
     await page.locator('#net-peer-id').fill(ready.peer);await page.locator('#net-route').fill('/');
-    await assertNetworkStep(page,'discover');
+    await assertNetworkStep(page,'manual');
     assert.ok(await page.locator('#net-route').isVisible(),'first route character must not hide manual form');
     await page.locator('#net-route').fill(ready.wss);
     await page.locator('#net-use-manual').click();

@@ -1,8 +1,8 @@
-# Auki Core Explorer · Milestones 1–2
+# Auki Core Explorer · focused screens and uploads
 
 A TypeScript/Vite example using the actual generated
 [same-module Portable Echo Web wrapper](../portable-echo/web/README.md). Domain
-data exploration is read-only and needs no running peer; Echo networking is
+data browsing and explicit single-file uploads need no running peer; Echo networking is
 optional. It serves Space Grotesk and DM Sans locally and makes no service requests on page load.
 
 ## Setup and run
@@ -15,14 +15,17 @@ npm ci
 npm run build
 # Terminal 1: optional synthetic loopback services
 node tests/fixture.mjs
-# Terminal 2: loopback application
-npm run dev
+# Terminal 2: serve the built application
+npx vite preview --host 127.0.0.1
 ```
 
-Open the URL printed by Vite. Defaults explicitly target local fixtures at
+Open the URL printed by Vite (normally `http://127.0.0.1:4173`). Rebuild after
+changing app code; preview is not hot reload. This uses the existing preview
+workflow without changing Vite's development-server filesystem policy.
+Defaults explicitly target local fixtures at
 `http://127.0.0.1:18114` for API, DDS and DMS. The fixture accepts any synthetic
 email/password (for example `fixture@example.test` / `fixture-only`). It never
-forwards requests and retains only method/path counters. Do not use real
+forwards requests and retains only synthetic data and request observations in memory. Do not use real
 credentials with fixtures. The UI always labels loopback as
 “Local fixtures / synthetic test data”. There is no fallback to shared services.
 
@@ -39,52 +42,69 @@ Errors show fixed messages, never backend bodies. All inspectors use text nodes;
 JSON credential fields and bearer/JWT patterns are redacted recursively. Download
 is an explicit original-byte `.bin` attachment; downloaded bytes are not redacted.
 
-## Guided chapters
+## Focused screens
 
-Choose a Domain in **Choose or change Domain**, or expand the known-UUID option.
-**Overview** shows actual Domain metadata and independently loaded portals and
-poses. **Data** shows stored records; **Apply filters** submits name, type and ID
-filters to the server. Technical disclosures retain complete redacted responses.
-Preview and original-byte download remain explicit actions. On mobile,
-**Jump to selected record** moves focus to its details.
+The viewport-oriented application shows one current task, rather than appending
+details below a long page. **Overview**, **Data**, **Portals**, **Poses** and
+**Networking** are separate primary sections. Long lists and content scroll
+inside the light paper workspace within compact dark navigation; short windows retain access to controls through scrolling. Body copy stays modest and key actions use orange.
 
-**Networking** shows only the current step body from the real peer and confirmed
-target state.
-Choose a discovered candidate route or expand **Advanced · enter a manual route**.
-Confirm a manual target with **Use manual target**; editing its fields keeps the
-form open.
-**Choose another target** returns to selection, and Stop remains available.
-Send is enabled only for a ready peer, a confirmed target and 1–1024 UTF-8 bytes of nonblank
-text. Changing the target or message clears the old response and invalidates any
-in-flight result for that selection. Stop and reselection remain available.
-Short Peer IDs identify candidates and the selected target; Technical details
-retain full IDs, routes and receipt metadata. Verified payload text and byte count
-appear only after a successful receipt.
-Chapter navigation keeps the selected Domain, session and running peer. Domain
-changes and logout keep the existing awaited cleanup behavior.
+Buttons open the Domain picker, connection settings, advanced filters, record,
+preview and technical screens. Domain paging and known-UUID selection remain
+available. Name/type/ID filters still submit to the server; record selection,
+preview and original-byte download remain explicit. Back returns to the originating
+task without discarding the Data filter. Settings cannot silently retarget an
+already signed-in session.
+
+**Networking** shows the current real peer/target step. Manual route entry,
+technical context and verified results have dedicated sub-screens. Confirm a manual
+target with **Use manual target**; editing does not hide the form. Stop remains
+available. Send requires a ready peer, confirmed target and 1–1024 UTF-8 bytes of
+nonblank text. Editing the target/message invalidates old and in-flight results.
+Technical screens retain redacted full IDs, routes and receipt metadata.
+Primary navigation preserves the selected Domain, session, pending reads and
+running peer. Domain changes and logout preserve awaited cleanup.
+
+## Explicit single-file upload
+
+From **Data**, choose **Upload**, select a file and an SDK data type, then review
+the destination Domain, configured environment, generated unique name and size.
+Only the explicit confirmation starts a real `AukiDomainData.write` request.
+Data types are application labels, not MIME types: `/` and other server-disallowed
+punctuation are rejected. The default `core-explorer.file.v1` is valid without editing. This tranche uses buffered named creation, capped at
+**8 MiB**, not multipart streaming or replacement by ID. Existing-name collisions
+are errors, not permission to overwrite.
+
+The server authorizes writes independently of reads. Upload verification fetches
+the returned record metadata with `get`; a completed write whose verification
+cannot be read is not labelled verified. The UI shows operation stages, not an
+invented percentage. There is no application-level automatic retry, overwrite or delete action. Browser transport can retransmit a single JavaScript fetch after a dropped connection; the generated target and bytes remain identical. Server no-overwrite uniqueness is not claimed to be atomic.
+After cancellation, timeout or a lost response, a server record may already exist.
+Keep the generated target and inspect the Domain before explicitly starting another
+upload. Cancellation does not promise rollback. Domain changes/logout abort and
+invalidate old work, suppressing late results. Within the same session an uncertain target remains available after changing Domains. Logout completely clears file, type, destination, target and returned metadata before another account signs in. Review starts at the top with destination and file visible; returned metadata opens a separate redacted technical screen with Back.
 
 The UI uses `/brand/tokens.css`, the official `/brand/auki-logo.svg`, and local
-OFL fonts; it does not load fonts from a CDN. Final Guided verification on
-`develop` (`be769a5`) passed 30 JavaScript unit tests, 6 Python runner tests,
-3 fixture/config tests, both real Chromium suites and five normal robot exits.
-Fresh WASM/Python/relay builds, strict relay lint, formatting and the npm audit
-passed. Independent final review found no consequential blockers; it also
-verified the delayed/concurrent logout regression and retained M1/M2 assertions.
-Desktop/mobile connected, empty, denied, failed and verified-response states
-were visually inspected with fonts loaded locally. These are local synthetic
-fixtures exercising real SDK paths, not deployed-provider compatibility checks.
+OFL fonts; it does not load fonts from a CDN. Final local acceptance passed with
+69 TypeScript unit tests, 7 fixture/config tests and 6 Python tests. Real generated
+SDK/WASM browsing, binary upload/download, cancellation/session isolation and
+browser-to-Python Echo passed; five robot processes exited normally with zero task
+claims. Desktop, mobile, narrow, short and high-scale viewport captures were checked.
+These are synthetic-loopback tests, not deployed-provider validation.
 
 Actual app screenshots: [Overview](screenshots/overview.png),
-[Data](screenshots/domain-explorer.png), [verified Echo](screenshots/networking.png)
-and [mobile Echo](screenshots/networking-mobile.png).
+[Data](screenshots/domain-explorer.png), [verified Echo](screenshots/networking.png),
+[mobile Echo](screenshots/networking-mobile.png),
+[upload review](screenshots/upload-review.png) and
+[mobile upload review](screenshots/upload-review-mobile.png).
 
 ## Verification
 
 The local suite exercises the generated SDK/WASM against synthetic loopback
-services. The current integrated example passed the M1 Chromium regressions and
-the real browser-to-Python network suite with freshly built artifacts, including
-normal robot process exits. This branch includes the SDK shutdown fix from
-[PR394](https://github.com/aukilabs/auki-sdk/pull/394).
+services. Unit and fixture checks are separate from browser/runtime acceptance.
+The browser upload suite counts JavaScript write submissions separately from
+server-observed transport attempts and checks identical targets/bytes, no fixture
+replacement, uncertainty, and account A → logout → account B state clearing.
 See [network setup and validation limits](tests/network-README.md).
 
 ```sh
@@ -94,6 +114,7 @@ npm run build
 # Install once if Chromium is not already available:
 npx playwright install chromium
 npm run test:browser
+npm run test:upload
 ```
 
 Browser tests start the production Vite preview on `127.0.0.1:18116` and HTTP
@@ -120,6 +141,7 @@ synchronization; completing a delayed response cannot satisfy these assertions.
 | Data name/type/IDs filters | `data.list(query, signal)` | Chromium matching and empty results |
 | Record metadata | `data.get(id, signal)` | Chromium inspector |
 | Preview and download | `data.read(id, signal)` | Chromium inert/redacted JSON, 64 KiB display cap, >8 MiB failure, original download bytes |
+| Explicit named upload | `data.write(target, bytes, signal)` then `data.get(id, signal)` | Local real-WASM upload browser suite, separate write denials and completion/verification states |
 | Cleanup | `data.close()`, then `session.close()` | Unit awaited order; Chromium server-observed aborts during pending A→B→A switches and logout |
 | Validation/redaction/timeout | App helpers around public APIs | Deterministic unit tests |
 
@@ -155,7 +177,7 @@ existing example builds and keep iteration bounded; the generated module is abou
 
 ## Future work and explicit exclusions
 
-- Writes, delete, streaming transfers above 8 MiB and spatial visualization.
+- Overwrite/delete controls, streaming transfers above 8 MiB and spatial visualization.
 - Imported ZITADEL/PKCE login and browser machine credentials.
 - Jobs and fleet tooling: this example makes no claim that corresponding Web
   SDK APIs exist.

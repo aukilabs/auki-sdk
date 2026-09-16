@@ -1,54 +1,98 @@
 import './style.css';
 import { facts, technical } from './presentation';
 import { networkingUI } from './network-ui';
+import { uploadUI } from './upload-ui';
+import { ScreenHistory, isScreen, focusScreenTarget, type Screen } from './screens';
 import { Connection, login, type DataMetadata, type DataQuery, type DomainSummary } from './sdk';
 import { endpoint, inspect, isLoopback, ReadLane, previewBytes, safeError, uuid, redact } from './safety';
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const input = (id: string) => $<HTMLInputElement>(id).value.trim();
 const text = (id: string, value: string) => { $(id).textContent = value; };
 const disabled = (id: string, value: boolean) => { $<HTMLButtonElement>(id).disabled = value; };
-function showView(view: string, focus = false) {
-  for (const name of ['overview', 'data', 'networking']) {
-    $(`view-${name}`).hidden = name !== view;
-    document.querySelector(`[data-view="${name}"]`)!.setAttribute('aria-current', name === view ? 'page' : 'false');
-  }
-  if (focus) $(`view-${view}`).querySelector<HTMLElement>('h1')!.focus();
+const navigation = new ScreenHistory();
+const positions = new Map<Screen, { scroll: number; focus: HTMLElement | null }>();
+function savePosition() {
+  const node = navigation.current === 'access' ? $('access') : $(`view-${navigation.current}`);
+  positions.set(navigation.current, { scroll: node.scrollTop, focus: document.activeElement as HTMLElement | null });
 }
-document.querySelectorAll<HTMLButtonElement>('[data-view]').forEach(button => {
-  button.onclick = () => showView(button.dataset.view!);
+function renderView(restore = false) {
+  const view = navigation.current;
+  $('access').hidden = view !== 'access';
+  $('workspace').hidden = !connection.session || view === 'settings' || view === 'access';
+  document.querySelectorAll<HTMLElement>('.view').forEach(node => { node.hidden = node.id !== `view-${view}`; });
+  document.querySelectorAll<HTMLElement>('[data-view]').forEach(button => button.setAttribute('aria-current', button.dataset.view === view ? 'page' : 'false'));
+  const node = view === 'access' ? $('access') : $(`view-${view}`);
+  const saved = restore ? positions.get(view) : undefined;
+  const target = saved?.focus && node.contains(saved.focus) && saved.focus.isConnected ? saved.focus : node.querySelector<HTMLElement>('h1, h2');
+  if (target) focusScreenTarget(target);
+  node.scrollTop = saved?.scroll ?? 0;
+}
+function showView(view: string, _focus = true) {
+  if (!isScreen(view)) return;
+  if (!connection.session && view !== 'settings' && view !== 'access') return;
+  savePosition(); navigation.go(view); renderView(true);
+}
+function backView() { savePosition(); navigation.back(); renderView(true); }
+document.addEventListener('click', event => {
+  const button = (event.target as Element).closest<HTMLElement>('[data-view], [data-go], [data-back]');
+  if (!button || button.onclick || button instanceof HTMLButtonElement && button.disabled) return;
+  if (button.hasAttribute('data-back')) backView();
+  else showView(button.dataset.view ?? button.dataset.go!);
 });
-document.querySelectorAll<HTMLButtonElement>('[data-go]').forEach(button => {
-  button.onclick = () => showView(button.dataset.go!, true);
-});
+function showTechnical(value: unknown) { text('technical-content', inspect(value)); showView('technical'); }
+document.addEventListener('explorer:technical', event => showTechnical((event as CustomEvent).detail));
 const connection = new Connection();
 const lanes = { domains: new ReadLane(), portals: new ReadLane(), poses: new ReadLane(), records: new ReadLane(), record: new ReadLane(), bytes: new ReadLane() };
 let selection = 0, auth = 0, offset = 0;
-let domainId = '', recordId = '';
+let domainId = '', recordId = '', domainName = '';
+let connectedEnvironment = '';
+let connectedUrls: string[] = [];
 let summaries: DomainSummary[] = [];
 const networking = networkingUI(connection, () => domainId);
+const uploader = uploadUI(connection, () => domainId && connection.data ? { domainId, domainName, environment: connectedEnvironment } : undefined, {
+  navigate: showView, onUploaded: () => loadRecords(),
+});
+const closeNetworking = connection.beforeClose;
+connection.beforeClose = async () => {
+  const results = await Promise.allSettled([uploader.cancel(), closeNetworking()]);
+  if (results.some(result => result.status === 'rejected')) throw new Error('Cleanup failed.');
+};
+$('open-upload').onclick = () => uploader.open();
+function settingsState() {
+  const connected = !!connection.session;
+  for (const [index, id] of ['api', 'dds', 'dms'].entries()) {
+    $<HTMLInputElement>(id).disabled = connected;
+    if (connected) $<HTMLInputElement>(id).value = connectedUrls[index];
+  }
+  text('settings-status', connected ? 'Connected endpoints are fixed for this session. Log out to change them.' : 'Enter aligned API, DDS and DMS endpoints before signing in.');
+  $('connected-config').hidden = !connected;
+  text('connected-config', connected ? inspect({ API: connectedUrls[0], DDS: connectedUrls[1], DMS: connectedUrls[2] }) : '');
+}
+
 function clearRecord() {
   lanes.record.cancel(); lanes.bytes.cancel(); recordId = ''; $('record-jump').hidden = true;
-  text('record', ''); text('content', 'Select a record.'); text('record-name', 'Choose a record'); $('record-facts').replaceChildren();
+  text('download-status', ''); text('record', ''); text('content', 'Select a record.'); text('record-name', 'Choose a record'); $('record-facts').replaceChildren();
   $('records').querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', 'false'));
   for (const id of ['copy-record', 'preview', 'download']) disabled(id, true);
 }
 function clearSelection() {
-  selection++;
+  selection++; uploader.clear(); positions.clear();
+  disabled('open-upload', true);
   for (const key of ['portals', 'poses', 'records', 'record', 'bytes'] as const) lanes[key].cancel();
-  domainId = ''; clearRecord();
+  domainId = ''; domainName = ''; clearRecord();
+  text('technical-content', '');
   for (const id of ['metadata', 'portals', 'poses', 'records', 'data-status']) text(id, '');
   text('selected', 'Choose a Domain'); text('domain-name', 'Choose a Domain'); $('domain-facts').replaceChildren();
-  $<HTMLDetailsElement>('domain-controls').open = true;
   networking.refresh();
 }
 async function logout() {
-  auth++; for (const lane of Object.values(lanes)) lane.cancel(); clearSelection();
-  $('workspace').hidden = true; $('access').hidden = false;
+  auth++; for (const lane of Object.values(lanes)) lane.cancel(); uploader.reset(); clearSelection();
+  connectedUrls = []; connectedEnvironment = ''; navigation.reset('access'); renderView();
   text('domains', ''); summaries = []; text('session-status', 'Closing…');
   $<HTMLInputElement>('password').value = ''; disabled('signin', true);
   let message = 'Session closed.';
   try { await connection.close(); } catch { message = 'Session closed with a cleanup error. Reload before reconnecting.'; }
-  text('session-status', 'Signed out'); text('login-status', message); disabled('signin', false);
+  settingsState(); text('session-status', 'Signed out'); text('login-status', message); disabled('signin', false);
 }
 $('logout').onclick = () => { void logout(); };
 $('login').onsubmit = async event => {
@@ -63,9 +107,10 @@ $('login').onsubmit = async event => {
     try {
       if (!await connection.accept(login(urls, input('email'), password)) || attempt !== auth) return;
     } finally { clearTimeout(timer); }
-    $('access').hidden = true; $('workspace').hidden = false;
+    connectedUrls = [...urls];
+    connectedEnvironment = urls.every(url => isLoopback(new URL(url))) ? 'Local fixtures / synthetic test data' : `Configured environment · API ${urls[0]} · DDS ${urls[1]} · DMS ${urls[2]}`;
     text('session-status', urls.every(url => isLoopback(new URL(url))) ? 'Local fixtures / synthetic test data' : 'Connected · configured environment');
-    showView('overview'); offset = 0; loadDomains();
+    settingsState(); navigation.reset('overview'); showView('domains'); offset = 0; loadDomains();
   } catch { if (attempt === auth) text('login-status', 'Sign-in failed. Check credentials and environment, then retry.'); }
   finally { if (attempt === auth) disabled('signin', false); }
 };
@@ -96,17 +141,17 @@ async function selectDomain(id: string) {
   clearSelection(); const version = selection; domainId = id;
   for (const key of ['name', 'type', 'ids']) $<HTMLInputElement>(key).value = '';
   const summary = summaries.find(item => item.id === id);
-  text('selected', String(redact(summary?.name ?? 'Known Domain')));
+  domainName = String(redact(summary?.name ?? 'Known Domain'));
+  text('selected', domainName);
   text('domain-name', String(redact(summary?.name ?? 'Known Domain')));
   $('domain-facts').replaceChildren(facts(summary ? { Name: summary.name, Organization: summary.organization_id } : { Metadata: 'Unavailable unless present in the current Domain page.' }));
-  const picker = $<HTMLDetailsElement>('domain-controls');
-  const focusPicker = picker.contains(document.activeElement); picker.open = false;
-  if (focusPicker) picker.querySelector('summary')!.focus();
+  navigation.reset('overview'); renderView();
   text('metadata', inspect(summary ?? { id, note: 'Metadata unavailable unless present in the current Domain page.' }));
   const data = await connection.select(id);
   if (version !== selection) { await data?.close(); return; }
   connection.data = data;
   if (data) refreshSelected();
+  disabled('open-upload', !data);
   networking.refresh();
 }
 function refreshSelected() {
@@ -134,6 +179,7 @@ function refreshSelected() {
   loadRecords();
 }
 $('refresh-selected').onclick = refreshSelected;
+$('refresh-records').onclick = loadRecords;
 function loadRecords() {
   const data = connection.data; if (!data) return;
   clearRecord(); text('records', '');
@@ -155,10 +201,10 @@ function loadRecords() {
     }
   }, error => text('data-status', safeError(error)));
 }
-$('filters').onsubmit = event => { event.preventDefault(); loadRecords(); };
+$('filters').onsubmit = event => { event.preventDefault(); loadRecords(); showView('data'); };
 for (const id of ['name', 'type', 'ids']) $(id).oninput = () => { lanes.records.cancel(); clearRecord(); text('records', ''); text('data-status', 'Apply filters to read matching records.'); };
 function selectRecord(record: DataMetadata) {
-  clearRecord(); recordId = record.id; $('record-jump').hidden = false;
+  clearRecord(); recordId = record.id; $('record-jump').hidden = false; showView('record');
   text('content', 'Choose Preview to read this record, or Download for original bytes.');
   for (const id of ['copy-record', 'preview', 'download']) disabled(id, false);
   const data = connection.data!; text('record', 'Loading…'); text('record-name', 'Loading…');
@@ -169,20 +215,24 @@ function selectRecord(record: DataMetadata) {
 }
 function readBytes(download: boolean) {
   const data = connection.data, id = recordId; if (!data || !id) return;
-  text('content', 'Loading…');
+  const status = download ? 'download-status' : 'content';
+  text(status, 'Loading…');
   void lanes.bytes.run(signal => data.read(id, signal), bytes => {
     if (download) {
       const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'application/octet-stream' }));
       const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${id}.bin`; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-      text('content', `Downloaded ${bytes.length} bytes.`);
+      text(status, `Downloaded ${bytes.length} bytes.`);
     } else {
       text('content', previewBytes(bytes));
     }
-  }, error => text('content', safeError(error)));
+  }, error => text(status, safeError(error)));
 }
-$('preview').onclick = () => readBytes(false); $('download').onclick = () => readBytes(true);
+$('preview').onclick = () => { showView('preview'); readBytes(false); };
+$('retry-preview').onclick = () => readBytes(false); $('download').onclick = () => readBytes(true);
 async function copyId(id: string) { try { await navigator.clipboard.writeText(id); text('notice', 'ID copied.'); } catch { text('notice', 'Copy unavailable. Select the visible ID to copy.'); } }
 $('copy-domain').onclick = () => { if (domainId) void copyId(domainId); };
-$('record-jump').onclick = () => { $('record-detail').focus(); };
+$('record-jump').onclick = () => showView('record');
+$('domain-technical').onclick = () => { text('technical-content', $('metadata').textContent ?? ''); showView('technical'); };
+$('record-technical').onclick = () => { text('technical-content', $('record').textContent ?? ''); showView('technical'); };
 $('copy-record').onclick = () => { if (recordId) void copyId(recordId); };
 window.addEventListener('pagehide', () => { void logout(); });

@@ -23,5 +23,9 @@ export function facts(values: Record<string, unknown>): HTMLDListElement {
 export function technical(value: unknown): HTMLDetailsElement {
   const details = document.createElement('details'), summary = document.createElement('summary'), pre = document.createElement('pre');
   summary.textContent = 'Technical details · JSON'; pre.textContent = inspect(value);
+  summary.onclick = event => {
+    event.preventDefault();
+    details.dispatchEvent(new CustomEvent('explorer:technical', { bubbles: true, detail: redact(value) }));
+  };
   details.append(summary, pre); return details;
 }

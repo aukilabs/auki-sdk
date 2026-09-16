@@ -1,5 +1,5 @@
 import { AukiDiscoveryMode, AukiPeerReachabilityMode, AukiEchoClient, type AukiPeer, type Connection } from './sdk';
-import { facts, technical, shortPeerId } from './presentation';
+import { facts, shortPeerId } from './presentation';
 import { Networking, diagnosticBytes } from './networking.ts';
 import { inspect, previewBytes, safeError } from './safety';
 export function networkingUI(connection: Connection, selectedDomain: () => string) {
@@ -8,20 +8,22 @@ export function networkingUI(connection: Connection, selectedDomain: () => strin
   section.className = 'chapter-body';
   section.innerHTML = `<div class="network-bar"><span>Local peer <span id="net-state" class="badge" role="status">stopped</span></span><button id="net-stop" disabled>Stop networking</button></div>
     <p id="net-status" role="status">Choose a Domain to enable networking.</p>
-    <div class="network-step" data-step="connect"><h2><span class="step-number">1</span>Start a session</h2><div class="step-body">
+    <div class="actions"><button id="net-back" hidden>Back</button><button id="net-show-technical">Technical details</button><button id="net-show-result" hidden>View verified response</button></div>
+    <div class="network-step" data-network-screen="connect" data-step="connect"><h2 tabindex="-1"><span class="step-number">1</span>Start a session</h2><div class="step-body">
     <p>Start an outbound peer in the selected Domain. Data reads work without networking.</p><button id="net-start" class="primary" disabled>Start networking</button></div></div>
-    <div class="network-step" data-step="discover"><h2><span class="step-number">2</span>Choose a candidate</h2><div class="step-body">
-    <p>Discovery does not prove a candidate is online or authorized.</p><button id="net-discover" disabled>Discover Echo candidates</button><div id="net-candidates"></div>
-    <details id="manual-route"><summary>Advanced · enter a manual route</summary>
-    <label>Target Peer ID<input id="net-peer-id" autocomplete="off"></label><label>Target WSS relay route<input id="net-route" autocomplete="off"></label><button id="net-use-manual" disabled>Use manual target</button></details>
+    <div class="network-step" data-network-screen="discover" data-step="discover" hidden><h2 tabindex="-1"><span class="step-number">2</span>Choose a candidate</h2><div class="step-body">
+    <p>Discovery does not prove a candidate is online or authorized.</p><button id="net-discover" disabled>Discover Echo candidates</button><button id="net-show-manual" disabled>Enter a manual route</button><div id="net-candidates"></div>
     </div></div>
-    <div class="network-step" data-step="diagnostic"><h2><span class="step-number">3</span>Send a diagnostic</h2><div class="step-body">
+    <div id="manual-route" class="network-step" data-network-screen="manual" hidden><h2 tabindex="-1">Enter a manual route</h2>
+    <p>Confirm the target Peer ID and WSS relay route before sending a diagnostic.</p>
+    <label>Target Peer ID<input id="net-peer-id" autocomplete="off"></label><label>Target WSS relay route<input id="net-route" autocomplete="off"></label><button id="net-use-manual" disabled>Use manual target</button></div>
+    <div class="network-step" data-network-screen="diagnostic" data-step="diagnostic" hidden><h2 tabindex="-1"><span class="step-number">3</span>Send a diagnostic</h2><div class="step-body">
     <p id="net-target">Choose a target to continue.</p><button id="net-reselect" disabled>Choose another target</button>
     <label>Diagnostic · 1–1024 UTF-8 bytes<input id="net-payload" value="Core Explorer diagnostic" autocomplete="off"></label>
     <button id="net-send" class="primary" disabled>Send verified Echo</button></div></div>
-    <div id="net-results" role="status"></div>
+    <div class="network-step" data-network-screen="result" hidden><h2 tabindex="-1">Diagnostic result</h2><button id="net-result-back">Back</button><div id="net-results" role="status"></div></div>
     <p class="footnote">Echo checks the authenticated roundtrip only. No robot controls, task dispatch or application authority.</p>
-    <details id="network-technical"><summary>Technical details · local peer and target</summary><pre id="net-local"></pre><pre id="net-target-details"></pre></details>`;
+    <div id="network-technical" class="network-step" data-network-screen="technical" hidden><h2 tabindex="-1">Technical details</h2><h3>Local peer</h3><pre id="net-local"></pre><h3>Target</h3><pre id="net-target-details"></pre><div id="net-extra-details" hidden><h3 id="net-extra-title"></h3><pre id="net-extra-json"></pre></div></div>`;
   document.querySelector('#view-networking')!.append(section);
   const get = (id: string) => section.querySelector<HTMLElement>(`#${id}`)!;
   const field = (id: string) => get(id) as HTMLInputElement;
@@ -29,14 +31,55 @@ export function networkingUI(connection: Connection, selectedDomain: () => strin
   let discovering = false, sending = false, resultVersion = 0;
   let resultKey = '';
   let targetConfirmed = false;
+  type Screen = 'connect' | 'discover' | 'diagnostic' | 'manual' | 'technical' | 'result';
+  let screen: Screen = 'connect';
+  const history: { screen: Screen; focus: HTMLElement | null; scroll: [HTMLElement, number][] }[] = [];
+  const panel = () => section.querySelector<HTMLElement>(`[data-network-screen="${screen}"]`)!;
+  function focusScreen() {
+    if (!section.closest('[hidden]')) panel().querySelector<HTMLElement>('h2')?.focus({ preventScroll: true });
+  }
+  function show(next: Screen, remember = true) {
+    if (screen !== next && remember) {
+      const scroll: [HTMLElement, number][] = [];
+      for (let element: HTMLElement | null = panel(); element; element = element.parentElement) scroll.push([element, element.scrollTop]);
+      history.push({ screen, focus: document.activeElement instanceof HTMLElement ? document.activeElement : null, scroll });
+    }
+    screen = next; render(); focusScreen();
+  }
+  function back() {
+    const previous = history.pop();
+    screen = previous?.screen ?? (net.state === 'ready' ? targetConfirmed ? 'diagnostic' : 'discover' : 'connect');
+    render();
+    if (previous?.focus?.isConnected && !previous.focus.closest('[hidden]')) previous.focus.focus({ preventScroll: true });
+    else focusScreen();
+    for (const [element, top] of previous?.scroll ?? []) element.scrollTop = top;
+  }
+  function showTechnical(title = '', json = '') {
+    get('net-extra-title').textContent = title;
+    get('net-extra-json').textContent = json;
+    get('net-extra-details').hidden = !json;
+    show('technical');
+  }
+  function technicalButton(title: string, value: unknown) {
+    const control = document.createElement('button'), json = inspect(value);
+    control.textContent = title;
+    control.dataset.networkTechnical = '';
+    control.onclick = () => showTechnical(title, json);
+    return control;
+  }
   const identity = () => JSON.stringify([selectedDomain(), field('net-peer-id').value.trim(), field('net-route').value.trim(), field('net-payload').value]);
-  function invalidateResult() { resultVersion++; resultKey = ''; get('net-results').textContent = ''; }
+  function invalidateResult() {
+    resultVersion++; resultKey = ''; get('net-results').textContent = '';
+    get('net-extra-json').textContent = ''; get('net-extra-details').hidden = true;
+  }
   const net = new Networking<AukiPeer, AukiEchoClient>(render);
+  let previousState = net.state;
   function render() {
     get('net-state').textContent = net.state;
     button('net-start').disabled = !connection.session || !selectedDomain() || !['stopped', 'failed'].includes(net.state);
     button('net-stop').disabled = !['starting', 'ready'].includes(net.state);
     button('net-discover').disabled = net.state !== 'ready' || discovering;
+    button('net-show-manual').disabled = net.state !== 'ready';
     const fieldsComplete = !!field('net-peer-id').value.trim() && !!field('net-route').value.trim();
     const target = targetConfirmed && fieldsComplete;
     button('net-use-manual').disabled = net.state !== 'ready' || !fieldsComplete;
@@ -46,12 +89,6 @@ export function networkingUI(connection: Connection, selectedDomain: () => strin
     button('net-reselect').disabled = net.state !== 'ready' || !target;
     for (const id of ['net-peer-id', 'net-route']) field(id).disabled = net.state !== 'ready';
     field('net-payload').disabled = net.state !== 'ready' || !target;
-    const stage = net.state !== 'ready' ? 'connect' : target ? 'diagnostic' : 'discover';
-    section.querySelectorAll<HTMLElement>('[data-step]').forEach(step => {
-      step.classList.toggle('active', step.dataset.step === stage);
-      step.setAttribute('aria-current', step.dataset.step === stage ? 'step' : 'false');
-      step.querySelector<HTMLElement>('.step-body')!.hidden = step.dataset.step !== stage;
-    });
     get('net-target').textContent = target ? `Selected target · ${shortPeerId(field('net-peer-id').value.trim())}` : 'Choose a target to continue.';
     get('net-target-details').textContent = fieldsComplete ? inspect({ targetPeerId: field('net-peer-id').value.trim(), route: field('net-route').value.trim() }) : '';
     if (resultKey && resultKey !== identity()) invalidateResult();
@@ -70,7 +107,33 @@ export function networkingUI(connection: Connection, selectedDomain: () => strin
         : net.state === 'starting' ? 'Starting local peer…'
         : 'Networking stopped. Data reads remain available.';
     }
+    // Primary-view refreshes keep the current local screen. Only lifecycle or
+    // invalidated selections can make a screen unavailable.
+    const oldScreen = screen;
+    if (net.state !== previousState) {
+      if (net.state !== 'ready') { screen = 'connect'; history.length = 0; }
+      else screen = 'discover';
+      previousState = net.state;
+    }
+    if (net.state !== 'ready' && screen !== 'technical') screen = 'connect';
+    if (net.state === 'ready' && (screen === 'connect' || (screen === 'diagnostic' && !target))) screen = 'discover';
+    if (screen === 'result' && !resultKey) screen = net.state === 'ready' ? target ? 'diagnostic' : 'discover' : 'connect';
+    section.querySelectorAll<HTMLElement>('[data-network-screen]').forEach(step => {
+      const active = step.dataset.networkScreen === screen;
+      step.hidden = !active;
+      step.classList.toggle('active', active);
+      if (step.dataset.step) step.setAttribute('aria-current', active ? 'step' : 'false');
+    });
+    get('net-back').hidden = !['manual', 'technical'].includes(screen);
+    get('net-show-technical').hidden = screen === 'technical';
+    get('net-show-result').hidden = !resultKey || screen === 'result' || screen === 'technical';
+    if (oldScreen !== screen) focusScreen();
   }
+  button('net-back').onclick = back;
+  button('net-result-back').onclick = back;
+  button('net-show-manual').onclick = () => { if (net.state === 'ready') show('manual'); };
+  button('net-show-technical').onclick = () => showTechnical();
+  button('net-show-result').onclick = () => { if (resultKey) show('result'); };
   for (const id of ['net-peer-id', 'net-route', 'net-payload']) field(id).oninput = () => {
     if (id !== 'net-payload') targetConfirmed = false;
     invalidateResult();
@@ -78,11 +141,11 @@ export function networkingUI(connection: Connection, selectedDomain: () => strin
     render();
   };
   button('net-reselect').onclick = () => {
-    targetConfirmed = false; resultVersion++; get('net-status').textContent = 'Choose a candidate or edit and confirm a manual route.'; render(); button('net-discover').focus();
+    targetConfirmed = false; resultVersion++; history.length = 0; get('net-status').textContent = 'Choose a candidate or edit and confirm a manual route.'; show('discover', false); button('net-discover').focus();
   };
   button('net-use-manual').onclick = () => {
     if (button('net-use-manual').disabled) return;
-    targetConfirmed = true; invalidateResult(); render(); field('net-payload').focus();
+    targetConfirmed = true; invalidateResult(); history.length = 0; show('diagnostic', false); field('net-payload').focus();
   };
   connection.beforeClose = () => net.stop();
   button('net-start').onclick = () => {
@@ -100,11 +163,11 @@ export function networkingUI(connection: Connection, selectedDomain: () => strin
       for (const candidate of candidates) {
         const row = document.createElement('div'), summary = document.createElement('p');
         summary.textContent = 'Discovered candidate · unverified';
-        row.append(summary, facts({ 'Peer ID': shortPeerId(candidate.peerId) }), technical({ peerId: candidate.peerId, routes: candidate.routes, expiresAt: candidate.expiresAt, source: candidate.source }));
+        row.append(summary, facts({ 'Peer ID': shortPeerId(candidate.peerId) }), technicalButton('Candidate technical details', { peerId: candidate.peerId, routes: candidate.routes, expiresAt: candidate.expiresAt, source: candidate.source }));
         for (const route of candidate.routes.filter(route => /^\/dns4\/[^/]+\/tcp\/\d+\/wss\/p2p\/[^/]+\/p2p-circuit\/p2p\/[^/]+$/.test(route))) {
           const choose = document.createElement('button'), peerId = candidate.peerId;
           choose.textContent = 'Use candidate route';
-          choose.onclick = () => { if (net.state !== 'ready' || sending) return; field('net-peer-id').value = peerId; field('net-route').value = route; targetConfirmed = true; invalidateResult(); get('net-status').textContent = 'Candidate selected. Send a diagnostic to verify this target.'; render(); field('net-payload').focus(); };
+          choose.onclick = () => { if (net.state !== 'ready' || sending) return; field('net-peer-id').value = peerId; field('net-route').value = route; targetConfirmed = true; invalidateResult(); history.length = 0; get('net-status').textContent = 'Candidate selected. Send a diagnostic to verify this target.'; show('diagnostic', false); field('net-payload').focus(); };
           row.append(choose);
         }
         get('net-candidates').append(row);
@@ -129,8 +192,9 @@ export function networkingUI(connection: Connection, selectedDomain: () => strin
       heading.textContent = 'Verified Echo response';
       count.textContent = `${receipt.payload.length} bytes echoed`;
       payload.textContent = previewBytes(receipt.payload);
-      get('net-results').replaceChildren(heading, count, payload, technical({ remotePeerId: receipt.remotePeerId, domainId: domain, bytes: receipt.payload.length }));
+      get('net-results').replaceChildren(heading, count, payload, technicalButton('Receipt technical details', { remotePeerId: receipt.remotePeerId, domainId: domain, bytes: receipt.payload.length }));
       get('net-status').textContent = 'Authenticated diagnostic roundtrip completed. This grants no application or task authority.';
+      if (screen === 'diagnostic') show('result');
     }, () => { if (current()) get('net-status').textContent = safeError(undefined); }, receipt => receipt.free());
     sending = false; render();
   };

@@ -7,21 +7,15 @@
 ))]
 use std::sync::Arc;
 #[cfg(feature = "blob")]
-use std::{collections::HashMap, sync::atomic::AtomicU64, time::Duration};
-#[cfg(any(feature = "blob", feature = "stream"))]
 use std::{
-    future::Future,
-    pin::Pin,
-    sync::{
-        Weak,
-        atomic::{AtomicBool, Ordering},
-    },
-    task::{Context, Poll},
+    collections::HashMap,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
 };
 
 use auki_sdk_rs::{AuthenticatedPeer, Multiaddr, PeerId};
 #[cfg(any(feature = "blob", feature = "stream"))]
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 #[cfg(any(
     feature = "info",
     feature = "catalog",
@@ -36,8 +30,6 @@ use pyo3::{
     types::PyAny,
 };
 #[cfg(any(feature = "blob", feature = "stream"))]
-use pyo3::{sync::GILOnceCell, types::PyModule};
-#[cfg(any(feature = "blob", feature = "stream"))]
 use pyo3_async_runtimes::TaskLocals;
 use serde::Serialize;
 #[cfg(any(
@@ -48,8 +40,6 @@ use serde::Serialize;
     feature = "stream"
 ))]
 use serde::de::DeserializeOwned;
-#[cfg(any(feature = "blob", feature = "stream"))]
-use tokio::sync::{oneshot, watch};
 
 #[cfg(any(
     feature = "info",
@@ -63,269 +53,8 @@ pub(super) type PythonCallback = Arc<Py<PyAny>>;
 #[cfg(any(feature = "blob", feature = "stream"))]
 pub(super) type CompletionHook = Arc<dyn Fn() + Send + Sync>;
 
-/// State for one actual `asyncio.Task` running on its captured event loop.
-///
-/// Keeping the real Task, rather than the outer Future returned by
-/// `run_coroutine_threadsafe`, makes completion a reliable cleanup barrier:
-/// the Rust receiver resolves only after Python cancellation and `finally`
-/// blocks have finished.
 #[cfg(any(feature = "blob", feature = "stream"))]
-pub(super) struct PythonTaskState {
-    event_loop: PythonCallback,
-    task: RwLock<Option<PythonCallback>>,
-    running: AtomicBool,
-    cancel_requested: AtomicBool,
-    completed: watch::Sender<bool>,
-    sender: Mutex<Option<oneshot::Sender<PyResult<PyObject>>>>,
-    completion_hook: Mutex<Option<CompletionHook>>,
-}
-
-#[cfg(any(feature = "blob", feature = "stream"))]
-impl PythonTaskState {
-    pub(super) fn python_references(&self) -> Vec<PythonCallback> {
-        let mut references = vec![Arc::clone(&self.event_loop)];
-        references.extend(self.task.read().iter().cloned());
-        references
-    }
-
-    fn set_task(&self, task: PythonCallback) {
-        self.task.write().replace(task);
-        // Python 3.12's eager task factory may call `running()` from inside
-        // create_task(), before `started()` can give us the Task.
-        if self.running.load(Ordering::Acquire) && self.cancel_requested.load(Ordering::Acquire) {
-            self.schedule_cancel();
-        }
-    }
-
-    fn mark_running(&self) {
-        self.running.store(true, Ordering::Release);
-        if self.cancel_requested.load(Ordering::Acquire) {
-            self.schedule_cancel();
-        }
-    }
-
-    fn schedule_cancel(&self) {
-        let Some(task) = self.task.read().clone() else {
-            return;
-        };
-        Python::with_gil(|py| {
-            let Ok(cancel) = task.bind(py).getattr("cancel") else {
-                return;
-            };
-            let _ = self
-                .event_loop
-                .bind(py)
-                .call_method1("call_soon_threadsafe", (cancel,));
-        });
-    }
-
-    pub(super) fn cancel(&self) {
-        if self.cancel_requested.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        if self.running.load(Ordering::Acquire) {
-            self.schedule_cancel();
-        }
-    }
-
-    fn complete(&self, result: PyResult<PyObject>) {
-        self.task.write().take();
-        if let Some(sender) = self.sender.lock().take() {
-            let _ = sender.send(result);
-        }
-        self.completed.send_replace(true);
-        if let Some(hook) = self.completion_hook.lock().take() {
-            hook();
-        }
-    }
-
-    pub(super) fn is_completed(&self) -> bool {
-        *self.completed.borrow()
-    }
-
-    #[cfg(feature = "blob")]
-    pub(super) async fn wait_completed(&self) {
-        let mut completed = self.completed.subscribe();
-        while !*completed.borrow() {
-            if completed.changed().await.is_err() {
-                return;
-            }
-        }
-    }
-}
-
-#[cfg(any(feature = "blob", feature = "stream"))]
-#[pyclass]
-struct PythonTaskCallbacks {
-    state: Weak<PythonTaskState>,
-}
-
-#[cfg(any(feature = "blob", feature = "stream"))]
-#[pymethods]
-impl PythonTaskCallbacks {
-    fn started(&self, task: &Bound<'_, PyAny>) {
-        if let Some(state) = self.state.upgrade() {
-            state.set_task(Arc::new(task.clone().unbind()));
-        } else {
-            let _ = task.call_method0("cancel");
-        }
-    }
-
-    fn running(&self) {
-        if let Some(state) = self.state.upgrade() {
-            state.mark_running();
-        }
-    }
-
-    fn failed(&self, error: &Bound<'_, PyAny>) {
-        if let Some(state) = self.state.upgrade() {
-            state.complete(Err(PyErr::from_value_bound(error.clone())));
-        }
-    }
-
-    fn __call__(&self, task: &Bound<'_, PyAny>) {
-        let result = task.call_method0("result").map(Bound::unbind);
-        if let Some(state) = self.state.upgrade() {
-            state.complete(result);
-        }
-    }
-}
-
-/// A cancellation-safe Python awaitable backed by an actual `asyncio.Task`.
-#[cfg(any(feature = "blob", feature = "stream"))]
-pub(super) struct CancelablePythonAwaitable {
-    state: Arc<PythonTaskState>,
-    receiver: oneshot::Receiver<PyResult<PyObject>>,
-    finished: bool,
-}
-
-#[cfg(any(feature = "blob", feature = "stream"))]
-impl CancelablePythonAwaitable {
-    #[cfg(feature = "stream")]
-    pub(super) fn schedule(
-        py: Python<'_>,
-        locals: &TaskLocals,
-        awaitable: Bound<'_, PyAny>,
-    ) -> PyResult<Self> {
-        Self::schedule_with_completion(py, locals, awaitable, None)
-    }
-
-    pub(super) fn schedule_with_completion(
-        py: Python<'_>,
-        locals: &TaskLocals,
-        awaitable: Bound<'_, PyAny>,
-        completion_hook: Option<CompletionHook>,
-    ) -> PyResult<Self> {
-        static TASK_STARTER: GILOnceCell<Py<PyAny>> = GILOnceCell::new();
-        let starter = TASK_STARTER.get_or_try_init(py, || {
-            let module = PyModule::from_code_bound(
-                py,
-                concat!(
-                    "import asyncio\n",
-                    "async def _auki_await(value, callbacks):\n",
-                    "    callbacks.running()\n",
-                    "    return await value\n",
-                    "def _auki_close(value):\n",
-                    "    close = getattr(value, 'close', None)\n",
-                    "    if close is not None:\n",
-                    "        close()\n",
-                    "def _auki_start(value, callbacks):\n",
-                    "    wrapper = _auki_await(value, callbacks)\n",
-                    "    try:\n",
-                    "        task = asyncio.get_running_loop().create_task(wrapper)\n",
-                    "    except BaseException as error:\n",
-                    "        wrapper.close()\n",
-                    "        _auki_close(value)\n",
-                    "        callbacks.failed(error)\n",
-                    "        return\n",
-                    "    try:\n",
-                    "        task.add_done_callback(callbacks)\n",
-                    "    except BaseException as error:\n",
-                    "        task.cancel()\n",
-                    "        callbacks.failed(error)\n",
-                    "        return\n",
-                    "    callbacks.started(task)\n",
-                ),
-                "_auki_sdk_awaitable_bridge.py",
-                "_auki_sdk_awaitable_bridge",
-            )?;
-            Ok::<_, PyErr>(module.getattr("_auki_start")?.unbind())
-        })?;
-        let (sender, receiver) = oneshot::channel();
-        let (completed, _) = watch::channel(false);
-        let state = Arc::new(PythonTaskState {
-            event_loop: Arc::new(locals.event_loop(py).unbind()),
-            task: RwLock::new(None),
-            running: AtomicBool::new(false),
-            cancel_requested: AtomicBool::new(false),
-            completed,
-            sender: Mutex::new(Some(sender)),
-            completion_hook: Mutex::new(completion_hook),
-        });
-        let callbacks = Py::new(
-            py,
-            PythonTaskCallbacks {
-                state: Arc::downgrade(&state),
-            },
-        )?;
-        let context = locals.context(py).call_method0("copy")?;
-        let context_run = context.getattr("run")?;
-        if let Err(error) = locals.event_loop(py).call_method1(
-            "call_soon_threadsafe",
-            (context_run, starter.bind(py), awaitable.clone(), callbacks),
-        ) {
-            close_python_awaitable(&awaitable);
-            return Err(error);
-        }
-        Ok(Self {
-            state,
-            receiver,
-            finished: false,
-        })
-    }
-
-    pub(super) fn state(&self) -> Arc<PythonTaskState> {
-        Arc::clone(&self.state)
-    }
-}
-
-#[cfg(any(feature = "blob", feature = "stream"))]
-fn close_python_awaitable(awaitable: &Bound<'_, PyAny>) {
-    if let Ok(close) = awaitable.getattr("close") {
-        let _ = close.call0();
-    }
-}
-
-#[cfg(any(feature = "blob", feature = "stream"))]
-impl Future for CancelablePythonAwaitable {
-    type Output = PyResult<PyObject>;
-
-    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-        match Pin::new(&mut self.receiver).poll(context) {
-            Poll::Ready(Ok(result)) => {
-                self.finished = true;
-                Poll::Ready(result)
-            }
-            Poll::Ready(Err(_)) => {
-                self.finished = true;
-                Poll::Ready(Err(PyRuntimeError::new_err(
-                    "Python awaitable ended without reporting a result",
-                )))
-            }
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
-#[cfg(any(feature = "blob", feature = "stream"))]
-impl Drop for CancelablePythonAwaitable {
-    fn drop(&mut self) {
-        if self.finished {
-            return;
-        }
-        self.state.cancel();
-    }
-}
+pub(super) use crate::python_task::{CancelablePythonAwaitable, PythonTaskState};
 
 #[cfg(feature = "blob")]
 struct PythonTaskRegistryInner {

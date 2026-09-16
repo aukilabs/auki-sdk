@@ -12,6 +12,7 @@ readme = "README.md"
 [dependencies]
 async-trait = { workspace = true }
 auki-auth = { path = "../auki-auth" }
+auki-domain-client = { path = "../auki-domain-client" }
 auki-p2p = { path = "../auki-p2p" }
 auki-relay-booking = { path = "../auki-relay-booking" }
 chrono = { workspace = true }
@@ -32,6 +33,9 @@ uuid = { workspace = true }
 async-channel = { workspace = true }
 uuid = { workspace = true, features = ["js"] }
 wasm-bindgen-futures = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+auki-tasks = { path = "../auki-tasks" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 httpmock = "0.8.2"

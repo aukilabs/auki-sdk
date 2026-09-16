@@ -126,7 +126,7 @@ impl PyAukiMessageClient {
         let remote_peer_id = parse_peer_id(&remote_peer_id)?;
         let channel = channel_from_python(py, channel)?;
         let client = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let sender = client
                 .open(remote_peer_id, &channel)
                 .await
@@ -146,7 +146,7 @@ impl PyAukiMessageClient {
         let (remote_peer_id, route) = parse_target(&remote_peer_id, &route)?;
         let channel = channel_from_python(py, channel)?;
         let client = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let sender = client
                 .open_exact(remote_peer_id, route, &channel)
                 .await
@@ -275,7 +275,7 @@ impl PyAukiMessageEndpoint {
     /// Stop declarations and await all admitted handlers behind one detached barrier.
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let cleanup = self.owner.begin_close();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             wait_cleanup(cleanup)
                 .await
                 .map_err(|error| runtime_error("close Message endpoint", error))
@@ -376,7 +376,7 @@ impl PyAukiMessageSender {
     ) -> PyResult<Bound<'py, PyAny>> {
         let sender = self.owner.sender()?;
         let payload = payload.as_bytes().to_vec();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             sender
                 .send(message_type, timestamp_ns, payload)
                 .await
@@ -387,7 +387,7 @@ impl PyAukiMessageSender {
     /// Close the shared channel behind one detached, replayable cleanup barrier.
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let cleanup = self.owner.begin_close();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             wait_cleanup(cleanup)
                 .await
                 .map_err(|error| runtime_error("close Message sender", error))
@@ -572,11 +572,11 @@ impl PyAukiMessageReceiver {
     /// Only one `next()` may be pending at a time.
     fn next<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let Some(pending) = self.state.begin_next()? else {
-            return pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            return crate::async_completion::future_into_py(py, async move {
                 Ok(Python::with_gil(|py| py.None()))
             });
         };
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let event = receive_next(pending).await;
             Python::with_gil(|py| match event {
                 Some(event) => event_to_python(py, event),
@@ -588,7 +588,7 @@ impl PyAukiMessageReceiver {
     /// Undeclare the channel and await native receiver cleanup behind a detached barrier.
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let cleanup = self.state.begin_close();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             wait_cleanup(cleanup)
                 .await
                 .map_err(|error| runtime_error("close Message receiver", error))

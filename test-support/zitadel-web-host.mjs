@@ -26,7 +26,7 @@ const admissionProbe = async s => {
 export async function run() {
   await init();
   const passed = [];
-  const test = async (name, fn) => { await fn(); const counts = await api('/__stats'); assert(counts.exchange === 0 && counts.domains === 0, 'ZITADEL called a legacy exchange or Domain listing'); passed.push(name); document.querySelector('#result').textContent = passed.join('\n'); };
+  const test = async (name, fn) => { await fn(); passed.push(name); document.querySelector('#result').textContent = passed.join('\n'); };
   await test('synchronous import, acknowledged save, concurrent waiters, restart', async () => {
     await api('/__reset', {});
     const entered = barrier(), release = barrier(); let saves = 0, durable;
@@ -38,13 +38,21 @@ export async function run() {
       entered.resolve(); await release.promise;
     });
     assert(!(s instanceof Promise) && (await api('/__stats')).refresh === 0, 'import must not perform I/O');
-    await errorCode(() => s.accessibleDomains(), 'configuration');
+    const listed = s.accessibleDomains();
     const calls = [admissionProbe(s), admissionProbe(s)];
     await entered.promise;
-    assert((await api('/__stats')).admission === 0, 'must not request admission before durable ACK');
+    const pending = await api('/__stats');
+    assert(pending.exchange === 0 && pending.domains === 0 && pending.admission === 0,
+      'network request crossed the durable-save fence');
     release.resolve();
-    await Promise.all(calls);
+    const [listedDomains] = await Promise.all([listed, ...calls]);
+    assert(listedDomains.length === 1 && listedDomains[0].id === '00000000-0000-0000-0000-000000000099',
+      'owner imported Domain listing lost its result');
     assert(saves === 1 && (await api('/__stats')).refresh === 1, 'refresh/save must be single flight');
+    const listingStats = await api('/__stats');
+    assert(listingStats.exchange === 1 && listingStats.p2pExchange === 0
+      && listingStats.domains === 1,
+    'owner imported listing did not use the ordinary User grant');
     await errorCode(() => s.startPeer('00000000-0000-0000-0000-000000000099'), 'authorization_denied');
     await s.close();
     const restarted = session(async () => { throw new Error('unexpected refresh'); }, durable);

@@ -169,24 +169,8 @@ fn assert_counts(requests: &[RecordedRequest], refresh: usize, challenges: usize
     );
 }
 
-#[tokio::test]
-async fn zitadel_discovery_is_explicitly_unsupported_without_io_or_refresh() {
-    let server = MockServer::start(vec![]).await;
-    let store = Store::new(false, 0);
-    let session = import(&server, store.clone(), true);
-    assert!(matches!(
-        session.accessible_domains().await,
-        Err(Error::InvalidConfiguration(_))
-    ));
-    assert!(server.requests.lock().await.is_empty());
-    assert!(store.attempts.lock().unwrap().is_empty());
-    session.close().await;
-    assert!(matches!(
-        session.accessible_domains().await,
-        Err(Error::SessionClosed)
-    ));
-    server.finish().await;
-}
+#[path = "zitadel_domain.rs"]
+mod domain;
 
 #[tokio::test]
 async fn import_is_local_and_failed_startup_retains_recoverable_session() {

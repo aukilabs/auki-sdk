@@ -411,6 +411,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-domain-client"
+version = "0.1.0"
+dependencies = [
+ "auki-auth",
+ "base64",
+ "bytes",
+ "chrono",
+ "futures",
+ "futures-timer",
+ "httpmock",
+ "js-sys",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+ "web-sys",
+]
+
+[[package]]
 name = "auki-geometry"
 version = "0.0.0"
 dependencies = [
@@ -774,8 +799,10 @@ dependencies = [
  "async-channel",
  "async-trait",
  "auki-auth",
+ "auki-domain-client",
  "auki-p2p",
  "auki-relay-booking",
+ "auki-tasks",
  "base64",
  "chrono",
  "futures",
@@ -803,6 +830,7 @@ dependencies = [
 name = "auki-sdk-py"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "auki-datatypes",
  "auki-protocols",
  "auki-registry",
@@ -817,6 +845,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "uuid",
 ]
 
@@ -831,8 +860,10 @@ dependencies = [
  "auki-registry",
  "auki-sdk",
  "auki-urdf-fk",
+ "base64",
  "chrono",
  "futures",
+ "httpmock",
  "parking_lot",
  "prost",
  "serde",
@@ -840,6 +871,7 @@ dependencies = [
  "sha2",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "uniffi",
  "uuid",
 ]
@@ -861,10 +893,12 @@ dependencies = [
  "send_wrapper",
  "serde",
  "serde-wasm-bindgen",
+ "tokio-util",
  "uuid",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
+ "web-sys",
 ]
 
 [[package]]
@@ -920,6 +954,30 @@ dependencies = [
  "serde_json",
  "sha2",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "auki-tasks"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "auki-auth",
+ "auki-dms",
+ "auki-domain-client",
+ "auki-p2p",
+ "base64",
+ "chrono",
+ "httpmock",
+ "parking_lot",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "url",
  "uuid",
 ]
 

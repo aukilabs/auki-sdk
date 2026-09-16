@@ -4,7 +4,9 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::useless_conversion)]
 
+pub mod async_completion;
 pub mod cleanup;
+mod data;
 mod facade;
 #[cfg(any(
     feature = "info",
@@ -15,6 +17,9 @@ mod facade;
     feature = "stream"
 ))]
 mod protocols;
+mod python_task;
+mod tasks;
+mod zitadel;
 
 use pyo3::prelude::*;
 
@@ -22,7 +27,10 @@ pub use facade::PyAukiPeer;
 
 /// Register the generic facade in a larger, same-module protocol extension.
 pub fn register_facade(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    facade::register(module)
+    facade::register(module)?;
+    data::register(module)?;
+    tasks::register(module)?;
+    zitadel::register(module)
 }
 
 /// Register every protocol role enabled by this crate's Cargo features.

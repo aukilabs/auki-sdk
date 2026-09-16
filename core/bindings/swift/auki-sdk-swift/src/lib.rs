@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+mod data;
 mod zitadel;
 pub use zitadel::{
     AukiAuthFailureKind, AukiPersistenceError, AukiZitadelCredentials, AukiZitadelSessionStore,
@@ -17,8 +18,8 @@ use auki_sdk_rs::{
     AukiDiscoveryError, AukiDiscoverySource as RustAukiDiscoverySource, AukiPeer as RustAukiPeer,
     AukiPeerBootstrap, AukiPeerConfig, AukiPeerExit, AukiPeerFailure, AukiPeerLifecycle,
     AukiPeerProtocols, AukiPeerRoutes as RustAukiPeerRoutes, AukiPeerStatus as RustAukiPeerStatus,
-    AuthClient, AuthEnvironment, AuthFailureKind, Credentials, DdsTrackerMode, DomainDescriptor,
-    DomainSelection, Identity, Multiaddr, PeerId, validate_relay_circuit_routes,
+    AuthClient, AuthEnvironment, AuthFailureKind, AuthSession, Credentials, DdsTrackerMode,
+    DomainDescriptor, DomainSelection, Identity, Multiaddr, PeerId, validate_relay_circuit_routes,
 };
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -112,8 +113,22 @@ pub enum AukiSdkError {
     #[error("authentication failed: {kind:?}")]
     Authentication { kind: AukiAuthFailureKind },
     #[error("{message}")]
+    DomainData {
+        kind: AukiDataFailureKind,
+        status: Option<u16>,
+        auth_kind: Option<AukiAuthFailureKind>,
+        message: String,
+    },
+    #[error("{message}")]
     Operation { message: String },
 }
+
+pub use data::{
+    AukiCancellation, AukiDataDownload, AukiDataFailureKind, AukiDataListQuery, AukiDataMetadata,
+    AukiDataUpload, AukiDataWriteTarget, AukiDomainData, AukiDomainListQuery, AukiDomainPage,
+    AukiDomainSummary, AukiDomains, AukiPortal, AukiPortalDomain, AukiPortalPose,
+    AukiTransferOptions,
+};
 
 pub(crate) fn operation_error(
     context: &'static str,
@@ -463,61 +478,148 @@ impl AukiPeerIdentity {
 /// Authenticated User session used to list Domains and start peers.
 #[derive(uniffi::Object)]
 pub struct AukiSession {
-    bootstrap: AukiPeerBootstrap,
+    session: AuthSession,
+    peer_config: Option<AukiPeerConfig>,
 }
 
 #[uniffi::export(async_runtime = "tokio")]
 impl AukiSession {
     /// Import without network I/O. Keep this handle across startup/save failure.
-    #[uniffi::constructor]
+    #[uniffi::constructor(default(client_id = None))]
     pub fn import_zitadel_dev(
         credentials: Arc<AukiZitadelCredentials>,
         store: Arc<dyn AukiZitadelSessionStore>,
+        client_id: Option<String>,
     ) -> Result<Arc<Self>, AukiSdkError> {
         Self::import_zitadel(
             credentials,
             store,
-            AuthEnvironment::dev(),
-            AukiPeerConfig::dev(),
+            auth_environment(AuthEnvironment::dev(), client_id)?,
+            Some(AukiPeerConfig::dev()),
         )
     }
 
     /// Import with exact API, DDS, and DMS bases; no network I/O at import.
-    #[uniffi::constructor]
+    #[uniffi::constructor(default(client_id = None))]
     pub fn import_zitadel_with_environment(
         api_base_url: String,
         dds_base_url: String,
         dms_base_url: String,
         credentials: Arc<AukiZitadelCredentials>,
         store: Arc<dyn AukiZitadelSessionStore>,
+        client_id: Option<String>,
     ) -> Result<Arc<Self>, AukiSdkError> {
-        let environment =
-            AuthEnvironment::new(api_base_url, dds_base_url).map_err(|e| auth_error(e.kind()))?;
+        let environment = auth_environment(
+            AuthEnvironment::new(api_base_url, dds_base_url).map_err(|e| auth_error(e.kind()))?,
+            client_id,
+        )?;
         let config = AukiPeerConfig::new(dms_base_url)
             .map_err(|_| auth_error(AuthFailureKind::Configuration))?;
-        Self::import_zitadel(credentials, store, environment, config)
+        Self::import_zitadel(credentials, store, environment, Some(config))
+    }
+
+    /// Import an existing public-client login for Domain HTTP access. This does
+    /// not need DMS configuration and cannot start a peer.
+    #[uniffi::constructor(default(client_id = None))]
+    pub fn import_zitadel_data_with_environment(
+        api_base_url: String,
+        dds_base_url: String,
+        credentials: Arc<AukiZitadelCredentials>,
+        store: Arc<dyn AukiZitadelSessionStore>,
+        client_id: Option<String>,
+    ) -> Result<Arc<Self>, AukiSdkError> {
+        let environment = auth_environment(
+            AuthEnvironment::new(api_base_url, dds_base_url).map_err(|e| auth_error(e.kind()))?,
+            client_id,
+        )?;
+        Self::import_zitadel(credentials, store, environment, None)
     }
 
     /// Fence new auth work and drain an outstanding host save. Await completion
     /// before clearing secure storage; if cancelled, await close again. Separately
     /// shut down owned peers. This is not remote token revocation.
     pub async fn close(&self) {
-        self.bootstrap.session().close().await;
+        self.session.close().await;
     }
 
     /// Authenticate a User against the shared development environment.
-    #[uniffi::constructor]
-    pub async fn login_dev(email: String, password: String) -> Result<Arc<Self>, AukiSdkError> {
-        let bootstrap = AukiPeerBootstrap::dev(Credentials::user_password(email, password))
+    #[uniffi::constructor(default(client_id = None))]
+    pub async fn login_dev(
+        email: String,
+        password: String,
+        client_id: Option<String>,
+    ) -> Result<Arc<Self>, AukiSdkError> {
+        let environment = auth_environment(AuthEnvironment::dev(), client_id)?;
+        let session = AuthClient::new(environment)
+            .map_err(|error| auth_error(error.kind()))?
+            .authenticate(Credentials::user_password(email, password))
             .await
-            .map_err(|error| bootstrap_error("authenticate Auki User", error))?;
-        Ok(Arc::new(Self { bootstrap }))
+            .map_err(|error| auth_error(error.kind()))?;
+        Ok(Arc::new(Self {
+            session,
+            peer_config: Some(AukiPeerConfig::dev()),
+        }))
     }
 
-    /// Domain choices for password sessions. ZITADEL sessions require an
-    /// application-supplied Domain ID and return a configuration error here.
+    /// Authenticate a User for Domain HTTP access against exact API and DDS
+    /// bases. No DMS URL or peer startup is required.
+    #[uniffi::constructor(default(client_id = None))]
+    pub async fn login_data_with_environment(
+        api_base_url: String,
+        dds_base_url: String,
+        email: String,
+        password: String,
+        client_id: Option<String>,
+    ) -> Result<Arc<Self>, AukiSdkError> {
+        let environment = auth_environment(
+            AuthEnvironment::new(api_base_url, dds_base_url)
+                .map_err(|error| auth_error(error.kind()))?,
+            client_id,
+        )?;
+        let session = AuthClient::new(environment)
+            .map_err(|error| auth_error(error.kind()))?
+            .authenticate(Credentials::user_password(email, password))
+            .await
+            .map_err(|error| auth_error(error.kind()))?;
+        Ok(Arc::new(Self {
+            session,
+            peer_config: None,
+        }))
+    }
+
+    /// Authenticate a User against exact API, DDS, and DMS bases. The returned
+    /// session can share one credential owner across Domain data and peers.
+    #[uniffi::constructor(default(client_id = None))]
+    pub async fn login_with_environment(
+        api_base_url: String,
+        dds_base_url: String,
+        dms_base_url: String,
+        email: String,
+        password: String,
+        client_id: Option<String>,
+    ) -> Result<Arc<Self>, AukiSdkError> {
+        let environment = auth_environment(
+            AuthEnvironment::new(api_base_url, dds_base_url)
+                .map_err(|error| auth_error(error.kind()))?,
+            client_id,
+        )?;
+        let peer_config = AukiPeerConfig::new(dms_base_url)
+            .map_err(|_| auth_error(AuthFailureKind::Configuration))?;
+        let session = AuthClient::new(environment)
+            .map_err(|error| auth_error(error.kind()))?
+            .authenticate(Credentials::user_password(email, password))
+            .await
+            .map_err(|error| auth_error(error.kind()))?;
+        Ok(Arc::new(Self {
+            session,
+            peer_config: Some(peer_config),
+        }))
+    }
+
+    /// Domain choices available for explicit peer selection. Imported sessions
+    /// use the API-issued human listing profile appropriate to their role.
     pub async fn accessible_domains(&self) -> Result<Vec<AukiDomain>, AukiSdkError> {
-        self.bootstrap
+        self.session
             .accessible_domains()
             .await
             .map(|choices| {
@@ -526,7 +628,7 @@ impl AukiSession {
                     .map(|choice| AukiDomain::from(choice.domain))
                     .collect()
             })
-            .map_err(|error| bootstrap_error("list accessible Auki Domains", error))
+            .map_err(|error| auth_error(error.kind()))
     }
 
     /// Authorize the persisted identity and start a relay-backed peer.
@@ -538,7 +640,7 @@ impl AukiSession {
         let domain_id = Uuid::parse_str(&domain_id)
             .map_err(|error| operation_error("parse Auki Domain ID", error))?;
         let peer = self
-            .bootstrap
+            .peer_bootstrap()?
             .start_peer(DomainSelection::new(domain_id), identity.rust_identity())
             .await
             .map_err(|error| bootstrap_error("start Auki peer", error))?;
@@ -556,8 +658,7 @@ impl AukiSession {
         let domain_id = Uuid::parse_str(&domain_id)
             .map_err(|error| operation_error("parse Auki Domain ID", error))?;
         let peer = self
-            .bootstrap
-            .clone()
+            .peer_bootstrap()?
             .with_dds_tracker(mode.into())
             .start_peer(DomainSelection::new(domain_id), identity.rust_identity())
             .await
@@ -571,15 +672,39 @@ impl AukiSession {
         credentials: Arc<AukiZitadelCredentials>,
         store: Arc<dyn AukiZitadelSessionStore>,
         environment: AuthEnvironment,
-        config: AukiPeerConfig,
+        peer_config: Option<AukiPeerConfig>,
     ) -> Result<Arc<Self>, AukiSdkError> {
         let session = AuthClient::new(environment)
             .map_err(|e| auth_error(e.kind()))?
             .import_zitadel_session(credentials.copy_credentials(), Arc::new(SwiftStore(store)))
             .map_err(|e| auth_error(e.kind()))?;
         Ok(Arc::new(Self {
-            bootstrap: AukiPeerBootstrap::from_session(session, config),
+            session,
+            peer_config,
         }))
+    }
+
+    fn peer_bootstrap(&self) -> Result<AukiPeerBootstrap, AukiSdkError> {
+        let peer_config = self
+            .peer_config
+            .clone()
+            .ok_or_else(|| auth_error(AuthFailureKind::Configuration))?;
+        Ok(AukiPeerBootstrap::from_session(
+            self.session.clone(),
+            peer_config,
+        ))
+    }
+}
+
+fn auth_environment(
+    environment: AuthEnvironment,
+    client_id: Option<String>,
+) -> Result<AuthEnvironment, AukiSdkError> {
+    match client_id {
+        Some(client_id) => environment
+            .with_client_id(client_id)
+            .map_err(|error| auth_error(error.kind())),
+        None => Ok(environment),
     }
 }
 

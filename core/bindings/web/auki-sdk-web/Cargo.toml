@@ -14,26 +14,18 @@ publish = false
 default = []
 info = [
   "dep:auki-protocols",
-  "dep:serde",
-  "dep:serde-wasm-bindgen",
   "auki-protocols/info-endpoint",
 ]
 catalog = [
   "dep:auki-protocols",
-  "dep:serde",
-  "dep:serde-wasm-bindgen",
   "auki-protocols/catalog-endpoint",
 ]
 registry = [
   "dep:auki-protocols",
-  "dep:serde",
-  "dep:serde-wasm-bindgen",
   "auki-protocols/registry-endpoint",
 ]
 blob = [
   "dep:auki-protocols",
-  "dep:serde",
-  "dep:serde-wasm-bindgen",
   "auki-protocols/blob-endpoint",
 ]
 message = [
@@ -41,8 +33,6 @@ message = [
   "dep:auki-protocols",
   "dep:auki-registry",
   "dep:futures",
-  "dep:serde",
-  "dep:serde-wasm-bindgen",
   "auki-protocols/message-endpoint",
 ]
 stream = [
@@ -51,8 +41,6 @@ stream = [
   "dep:auki-protocols",
   "dep:futures",
   "dep:prost",
-  "dep:serde",
-  "dep:serde-wasm-bindgen",
   "auki-protocols/stream-endpoint",
 ]
 finite-protocols = ["info", "catalog", "registry", "blob"]
@@ -74,9 +62,11 @@ auki-registry = { path = "../../../../labs/auki-registry", optional = true }
 futures = { workspace = true, optional = true }
 js-sys = { workspace = true }
 prost = { version = "0.13", optional = true }
-serde = { workspace = true, features = ["derive"], optional = true }
-serde-wasm-bindgen = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde-wasm-bindgen = { workspace = true }
+tokio-util = { workspace = true, features = ["rt"] }
 uuid = { workspace = true, features = ["js"] }
+web-sys = { version = "0.3.98", features = ["AbortController", "AbortSignal", "EventTarget"] }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 

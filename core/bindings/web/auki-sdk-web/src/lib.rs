@@ -10,6 +10,8 @@
 #![forbid(unsafe_code)]
 
 #[cfg(target_arch = "wasm32")]
+mod data;
+#[cfg(target_arch = "wasm32")]
 mod protocol_support;
 #[cfg(target_arch = "wasm32")]
 mod protocols;
@@ -78,7 +80,7 @@ mod facade {
     /// Authenticated User session used to inspect Domains and start peers.
     #[wasm_bindgen]
     pub struct AukiUserSession {
-        bootstrap: AukiPeerBootstrap,
+        pub(crate) bootstrap: AukiPeerBootstrap,
     }
 
     #[wasm_bindgen]
@@ -126,27 +128,45 @@ mod facade {
 
         /// Authenticate against the shared development environment.
         #[wasm_bindgen(js_name = loginDev)]
-        pub async fn login_dev(
+        pub async fn login_dev_with_client_id(
             email: String,
             password: String,
+            client_id: Option<String>,
         ) -> Result<AukiUserSession, JsValue> {
-            let bootstrap = AukiPeerBootstrap::dev(Credentials::user_password(email, password))
-                .await
-                .map_err(|error| bootstrap_error("authenticate User", error))?;
+            let mut environment = AuthEnvironment::dev();
+            if let Some(id) = client_id {
+                environment = environment
+                    .with_client_id(id)
+                    .map_err(|e| auth_error(e.kind()))?;
+            }
+            let client = AuthClient::new(environment).map_err(|e| auth_error(e.kind()))?;
+            let bootstrap = AukiPeerBootstrap::authenticate(
+                client,
+                Credentials::user_password(email, password),
+                AukiPeerConfig::dev(),
+            )
+            .await
+            .map_err(|error| bootstrap_error("authenticate User", error))?;
             Ok(Self { bootstrap })
         }
 
         /// Authenticate against exact API, DDS, and DMS HTTP bases.
         #[wasm_bindgen(js_name = loginWithEnvironment)]
-        pub async fn login_with_environment(
+        pub async fn login_with_environment_and_client_id(
             api_base_url: String,
             dds_base_url: String,
             dms_base_url: String,
             email: String,
             password: String,
+            client_id: Option<String>,
         ) -> Result<AukiUserSession, JsValue> {
-            let environment = AuthEnvironment::new(api_base_url, dds_base_url)
+            let mut environment = AuthEnvironment::new(api_base_url, dds_base_url)
                 .map_err(|error| js_context("configure authentication", error))?;
+            if let Some(id) = client_id {
+                environment = environment
+                    .with_client_id(id)
+                    .map_err(|e| auth_error(e.kind()))?;
+            }
             let peer_config = AukiPeerConfig::new(dms_base_url)
                 .map_err(|error| js_context("configure DMS", error))?;
             let client = AuthClient::new(environment)
@@ -161,8 +181,8 @@ mod facade {
             Ok(Self { bootstrap })
         }
 
-        /// Domain choices for password sessions. ZITADEL sessions require an
-        /// application-supplied Domain ID and return a configuration error here.
+        /// Domain choices for password sessions and imported ZITADEL sessions.
+        /// Imported sessions use a strictly validated, role-appropriate service grant.
         #[wasm_bindgen(js_name = accessibleDomains, unchecked_return_type = "AukiDomain[]")]
         pub async fn accessible_domains(&self) -> Result<Array, JsValue> {
             let choices = self
@@ -218,6 +238,22 @@ mod facade {
     }
 
     impl AukiUserSession {
+        /// Preserve the existing same-module Rust login call.
+        pub async fn login_dev(email: String, password: String) -> Result<Self, JsValue> {
+            Self::login_dev_with_client_id(email, password, None).await
+        }
+
+        /// Preserve the existing same-module Rust endpoint configuration call.
+        pub async fn login_with_environment(
+            api: String,
+            dds: String,
+            dms: String,
+            email: String,
+            password: String,
+        ) -> Result<Self, JsValue> {
+            Self::login_with_environment_and_client_id(api, dds, dms, email, password, None).await
+        }
+
         fn import_zitadel(
             credentials: CredentialsPayload,
             store: StoreCallback,

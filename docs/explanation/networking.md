@@ -34,11 +34,12 @@ You can implement your own protocol. The implementations in
 
 ## Robot and compute tasks
 
-Tasks go through **DMS**, the source of truth for task state.
-[Posemesh runners](https://github.com/aukilabs/posemesh/tree/main/core/compute-node)
-handle orchestration, execution, heartbeats, and results.
+Tasks go through **DMS**, which owns task state, scheduling, and leases.
+[SDK task handlers](../how-to/run-compute-tasks.md) execute work in Rust or
+Python; the managed runtime handles heartbeats and results. Posemesh runners
+provide application-specific execution and storage interfaces.
 
-Use P2P for data exchange, never task dispatch. DMS currently permits one
+Use P2P for data exchange. DMS currently permits one
 active task lease per node, for both compute nodes and robots. A robot runner
 must also keep physical task execution exclusive and reject new tasks while busy.
 

@@ -11,11 +11,118 @@ class AukiSdkExpoModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("AukiSdkExpo")
 
-    AsyncFunction("loginDev") { _: String, _: String ->
+    AsyncFunction("loginDev") { _: String, _: String, _: String? ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("loginWithEnvironment") {
+        _: String,
+        _: String,
+        _: String,
+        _: String,
+        _: String,
+        _: String?,
+      ->
       throw AndroidUnsupportedException()
     }
 
     AsyncFunction("accessibleDomains") { _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("domainsList") { _: String, _: String, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("domainsForPortal") { _: String, _: String, _: String?, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("domainsPortals") { _: String, _: String, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("domainsPortal") { _: String, _: String, _: String, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("domainDataOpen") { _: String, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("domainDataList") { _: String, _: String, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("domainDataGet") { _: String, _: String, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("domainDataRead") { _: String, _: String, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("domainDataWrite") { _: String, _: String, _: String, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("domainDataDelete") { _: String, _: String, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("domainDataPoses") { _: String, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("domainDataPose") { _: String, _: String, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("domainDataClose") { _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("dataOperationCancel") { _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("dataDownloadStart") { _: String, _: String, _: String, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("dataDownloadNext") { _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("dataDownloadCancel") { _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("dataDownloadClose") { _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("dataUploadStart") { _: String, _: String, _: Double, _: String, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("dataUploadNextMaximum") { _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("dataUploadPush") { _: String, _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("dataUploadResult") { _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("dataUploadCancel") { _: String ->
+      throw AndroidUnsupportedException()
+    }
+
+    AsyncFunction("dataUploadClose") { _: String ->
       throw AndroidUnsupportedException()
     }
 

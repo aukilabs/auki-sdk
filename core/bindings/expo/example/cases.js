@@ -32,7 +32,7 @@ const admissionProbe = async session => {
 
 export async function runCases(report) {
   let passed = 0;
-  const test = async (name, fn) => { await fn(); const stats = await fixture('/__stats'); check(stats.exchange === 0 && stats.domains === 0, 'legacy exchange or listing called'); passed++; report(`PASS ${name}`); };
+  const test = async (name, fn) => { await fn(); passed++; report(`PASS ${name}`); };
   await test('import before I/O, durable ACK, concurrent waiters, restart', async () => {
     await fixture('/__reset', {}); await durable.clear();
     const entered = gate(), release = gate(); let saves = 0;
@@ -41,15 +41,23 @@ export async function runCases(report) {
       entered.resolve(); await release.promise; await durable.save(extract(c));
     });
     const zero = await fixture('/__stats'); check(zero.refresh === 0 && zero.admission === 0, 'import performed auth I/O');
-    await failure('configuration', () => Auki.accessibleDomains(session));
+    const listed = Auki.accessibleDomains(session);
     const calls = [admissionProbe(session), admissionProbe(session)];
     await entered.promise;
-    check((await fixture('/__stats')).admission === 0 && await durable.load() === null, 'admission before durable ACK');
+    const pending = await fixture('/__stats');
+    check(pending.exchange === 0 && pending.domains === 0 && pending.admission === 0
+      && await durable.load() === null, 'network request crossed the durable-save fence');
     // A stale ACK must not release this generation.
     check(await Auki._ackZitadelSave(session, 'stale-request', true) === false, 'stale ACK accepted');
     release.resolve();
-    await Promise.all(calls);
+    const [listedDomains] = await Promise.all([listed, ...calls]);
+    check(listedDomains.length === 1 && listedDomains[0].id === '00000000-0000-0000-0000-000000000099',
+      'owner imported Domain listing lost its result');
     check(saves === 1 && (await fixture('/__stats')).refresh === 1, 'single flight lost across Expo');
+    const listingStats = await fixture('/__stats');
+    check(listingStats.exchange === 1 && listingStats.p2pExchange === 0
+      && listingStats.domains === 1,
+    'owner imported listing did not use the ordinary User grant');
     const saved = await durable.load(); check(saved.refreshToken === 'refresh-1' && saved.accessTokenExpiresAt.endsWith('Z'), 'durable snapshot lost rotation or timestamp');
     await closeSession(session);
     const restarted = await importSession(async () => { throw new Error('unexpected refresh'); }, saved);

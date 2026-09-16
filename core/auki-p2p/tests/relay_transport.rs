@@ -265,7 +265,7 @@ async fn overlapping_exact_route_opens_share_one_circuit() {
 
     must_succeed(info.close()).await;
     let mut still_held = message;
-    still_held.write_all(&[b'!']).await.unwrap();
+    still_held.write_all(b"!").await.unwrap();
     still_held.flush().await.unwrap();
     let mut ping = [0_u8; 1];
     still_held.read_exact(&mut ping).await.unwrap();
@@ -286,7 +286,7 @@ async fn overlapping_exact_route_opens_share_one_circuit() {
         requirements,
     ))
     .await;
-    after.write_all(&[b'Z']).await.unwrap();
+    after.write_all(b"Z").await.unwrap();
     after.flush().await.unwrap();
     let mut late = [0_u8; 1];
     after.read_exact(&mut late).await.unwrap();

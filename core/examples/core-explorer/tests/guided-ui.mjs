@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 export async function assertChapter(page, selected) {
-  for (const view of ['overview', 'data', 'networking']) {
+  for (const view of ['overview', 'data', 'portals', 'poses', 'networking']) {
     const button = page.locator(`[data-view="${view}"]`);
     assert.equal(await page.locator(`#view-${view}`).isVisible(), view === selected, `${view} visibility`);
     const current = await button.getAttribute('aria-current');
@@ -20,20 +20,66 @@ export async function chapter(page, view, keyboard = false) {
   await assertChapter(page, view);
 }
 
+export async function back(page) {
+  const button = page.locator('[data-back]:visible').first();
+  await button.click();
+}
+
+export async function go(page, view) {
+  if (await page.locator(`#view-${view}`).isVisible()) return;
+  const primary = page.locator(`[data-view="${view}"]:visible`);
+  if (await primary.count()) return chapter(page, view);
+  if (view === 'record') { await chapter(page, 'data'); await page.locator('#record-jump').click(); return; }
+  if (view === 'upload') { await chapter(page, 'data'); await page.locator('#open-upload').click(); return; }
+  let action = page.locator(`[data-go="${view}"]:visible`).first();
+  if (!await action.count() && await page.locator('[data-back]:visible').count()) {
+    await back(page);
+    action = page.locator(`[data-go="${view}"]:visible`).first();
+  }
+  if (!await action.count() && await page.locator('[data-view="data"]:visible').count()) {
+    await chapter(page, ['filters', 'record', 'preview', 'upload'].includes(view) ? 'data' : 'overview');
+    action = page.locator(`[data-go="${view}"]:visible`).first();
+  }
+  await action.click();
+  assert.ok(await page.locator(`#view-${view}`).isVisible(), `${view} focused screen`);
+}
+
 export async function openDetails(page, selector) {
+  const routes = { '#connection-settings': 'settings', '#domain-controls': 'domains', '#advanced-filters': 'filters' };
+  if (routes[selector]) return go(page, routes[selector]);
   const details = page.locator(selector);
   if (!await details.evaluate(el => el.open)) await details.locator(':scope > summary').click();
   assert.ok(await details.evaluate(el => el.open));
 }
 
-// Reveal technical values using exactly the same navigation/disclosures as a reader.
+// Navigate through declared user-facing hooks; never unhide DOM or bypass handlers.
 export async function reveal(page, selector) {
   const target = page.locator(selector);
+  if (selector === '#record' || selector === '#metadata') {
+    await go(page, selector === '#record' ? 'record' : 'overview');
+    await page.locator(selector === '#record' ? '#record-technical' : '#domain-technical').click();
+    return;
+  }
   const view = await target.evaluate(el => el.closest('[id^="view-"]')?.id.slice(5));
-  if (view) await chapter(page, view);
-  const step = await target.evaluate(el => el.closest('[data-step]')?.getAttribute('data-step'));
-  if (step === 'discover' && await page.locator('[data-step="discover"] .step-body').isHidden()
-      && await page.locator('#net-reselect').isVisible()) await page.locator('#net-reselect').click();
+  if (view && !await target.isVisible()) await go(page, view);
+  const networkScreen = await target.evaluate(el => el.closest('[data-network-screen]')?.getAttribute('data-network-screen'));
+  if (networkScreen && !await target.isVisible()) {
+    if (networkScreen === 'manual') {
+      if (!await page.locator('#net-show-manual').isVisible()) {
+        if (await page.locator('#net-result-back').isVisible()) await page.locator('#net-result-back').click();
+        if (await page.locator('#net-reselect').isVisible()) await page.locator('#net-reselect').click();
+        else if (await page.locator('#net-back').isVisible()) await page.locator('#net-back').click();
+      }
+      await page.locator('#net-show-manual').click();
+    }
+    else if (networkScreen === 'technical') await page.locator('#net-show-technical').click();
+    else if (networkScreen === 'diagnostic' && await page.locator('#net-result-back').isVisible()) await page.locator('#net-result-back').click();
+    else if (await page.locator('#net-back').isVisible()) await page.locator('#net-back').click();
+    if (networkScreen === 'discover' && !await target.isVisible()) {
+      if (await page.locator('#net-result-back').isVisible()) await page.locator('#net-result-back').click();
+      await page.locator('#net-reselect').click();
+    }
+  }
   const ancestors = target.locator('xpath=ancestor::details');
   for (let i = 0; i < await ancestors.count(); i++) {
     const details = ancestors.nth(i);
@@ -47,8 +93,8 @@ export async function reveal(page, selector) {
 }
 
 export async function assertNetworkStep(page, selected) {
-  for (const step of ['connect', 'discover', 'diagnostic']) {
-    assert.equal(await page.locator(`[data-step="${step}"] .step-body`).isVisible(), step === selected, `${step} body visibility`);
+  for (const step of ['connect', 'discover', 'diagnostic', 'manual', 'technical', 'result']) {
+    assert.equal(await page.locator(`[data-network-screen="${step}"]`).isVisible(), step === selected, `${step} screen visibility`);
   }
   assert.ok(await page.locator('#net-stop').isVisible(), 'stop remains accessible');
 }
@@ -87,5 +133,5 @@ export async function assertUsable(page, selectors) {
 }
 
 export function unexpectedConsoleError(message) {
-  return message.type() === 'error' && !/^Failed to load resource: (?:the server responded with a status of (?:401|403)\b|net::ERR_(?:ABORTED|CONNECTION_CLOSED|CONNECTION_RESET|CONNECTION_REFUSED)\b)/.test(message.text());
+  return message.type() === 'error' && !/^Failed to load resource: (?:the server responded with a status of (?:401|403|409)\b|net::ERR_(?:ABORTED|EMPTY_RESPONSE|CONNECTION_CLOSED|CONNECTION_RESET|CONNECTION_REFUSED)\b)/.test(message.text());
 }

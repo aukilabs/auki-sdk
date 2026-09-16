@@ -115,3 +115,17 @@ These use local DDS, DMS, and data fixtures:
 python -m pip install -r core/bindings/python/auki-sdk-py/python_tests/requirements.txt
 python -m pytest core/bindings/python/auki-sdk-py/python_tests/test_domain_data.py core/bindings/python/auki-sdk-py/python_tests/test_zitadel_session.py core/bindings/python/auki-sdk-py/python_tests/test_tasks.py core/bindings/python/auki-sdk-py/python_tests/test_robot_tasks.py -q
 ~~~
+
+The process-exit regression uses fresh subprocesses, synthetic unregistered
+credentials, and no services. It checks normal exit status after awaited close,
+including cancellation and repeated close. Each child has a 10-second deadline;
+a signal or timeout is a failure. Run the extended exit gate with:
+
+~~~sh
+AUKI_PROCESS_EXIT_ATTEMPTS=100 python -m pytest core/bindings/python/auki-sdk-py/python_tests/test_process_exit.py -q
+~~~
+
+The common async completion adapter joins the native bridge completion task in
+an asyncio done callback before resuming awaiters. A ready Python Future alone
+does not prove that native completion has released its Python references.
+Individual closes leave the shared runtime available to other SDK objects.

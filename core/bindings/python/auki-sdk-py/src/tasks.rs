@@ -78,7 +78,7 @@ where
     let cancellation = CancellationToken::new();
     let guard = cancellation.clone().drop_guard();
     let task = pyo3_async_runtimes::tokio::get_runtime().spawn(operation(cancellation));
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+    crate::async_completion::future_into_py(py, async move {
         let _guard = guard;
         task.await
             .map_err(|_| PyRuntimeError::new_err("task runtime stopped unexpectedly"))?
@@ -302,7 +302,7 @@ impl PyTask {
     }
     fn cancelled<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             inner.cancelled().await;
             Ok(())
         })
@@ -314,9 +314,10 @@ impl PyTask {
     ) -> PyResult<Bound<'py, PyAny>> {
         let value = parse(value)?;
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            inner.progress(value).map_err(error)
-        })
+        crate::async_completion::future_into_py(
+            py,
+            async move { inner.progress(value).map_err(error) },
+        )
     }
 
     fn log_event<'py>(
@@ -326,9 +327,10 @@ impl PyTask {
     ) -> PyResult<Bound<'py, PyAny>> {
         let value = parse(value)?;
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            inner.log_event(value).map_err(error)
-        })
+        crate::async_completion::future_into_py(
+            py,
+            async move { inner.log_event(value).map_err(error) },
+        )
     }
 
     #[pyo3(signature = (reason, details=None))]
@@ -343,7 +345,7 @@ impl PyTask {
             .transpose()?
             .unwrap_or(serde_json::Value::Null);
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             inner.set_failure(reason, details).map_err(error)
         })
     }

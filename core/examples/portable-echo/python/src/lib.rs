@@ -94,7 +94,7 @@ impl PyAukiEcho {
     #[staticmethod]
     fn mount<'py>(py: Python<'py>, peer: &PyAukiPeer) -> PyResult<Bound<'py, PyAny>> {
         let protocols = peer.protocols();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        auki_sdk_binding::async_completion::future_into_py(py, async move {
             let endpoint = EchoEndpoint::mount(protocols)
                 .map_err(|error| runtime_error("mount portable echo", error))?;
             let client = endpoint.client();
@@ -129,7 +129,7 @@ impl PyAukiEcho {
         let (remote_peer_id, route) = parse_target(&remote_peer_id, &route)?;
         let payload = payload.as_bytes().to_vec();
         let client = self.client.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        auki_sdk_binding::async_completion::future_into_py(py, async move {
             let receipt = client
                 .send_exact(remote_peer_id, route, payload)
                 .await
@@ -150,7 +150,7 @@ impl PyAukiEcho {
     fn next_served<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.owner.ensure_open()?;
         let events = self.events.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        auki_sdk_binding::async_completion::future_into_py(py, async move {
             let receipt = match events.recv().await {
                 Some(EchoServeEvent::Served(receipt)) => receipt,
                 Some(EchoServeEvent::Failed {
@@ -185,7 +185,7 @@ impl PyAukiEcho {
     /// Stop inbound serving behind one detached, replayable cleanup barrier.
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let cleanup = self.owner.begin_close();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        auki_sdk_binding::async_completion::future_into_py(py, async move {
             wait_cleanup(cleanup)
                 .await
                 .map_err(|error| runtime_error("close portable echo", error))

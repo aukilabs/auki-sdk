@@ -278,7 +278,7 @@ impl PyAukiRegistryClient {
         let remote_peer_id = parse_peer_id(&remote_peer_id)?;
         let kind = parse_registry_kind(&kind)?;
         let client = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let entries = client
                 .list(remote_peer_id, kind)
                 .await
@@ -298,7 +298,7 @@ impl PyAukiRegistryClient {
         let (remote_peer_id, route) = parse_target(&remote_peer_id, &route)?;
         let kind = parse_registry_kind(&kind)?;
         let client = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let entries = client
                 .list_exact(remote_peer_id, route, kind)
                 .await
@@ -319,7 +319,7 @@ impl PyAukiRegistryClient {
         let remote_peer_id = parse_peer_id(&remote_peer_id)?;
         let kind = parse_registry_kind(&kind)?;
         let client = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             fetch_registry_entry(client, remote_peer_id, None, kind, id, hash).await
         })
     }
@@ -337,7 +337,7 @@ impl PyAukiRegistryClient {
         let (remote_peer_id, route) = parse_target(&remote_peer_id, &route)?;
         let kind = parse_registry_kind(&kind)?;
         let client = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             fetch_registry_entry(client, remote_peer_id, Some(route), kind, id, hash).await
         })
     }
@@ -547,7 +547,7 @@ impl PyAukiRegistryEndpoint {
     /// Stop accepting Registry requests behind one detached, replayable barrier.
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let cleanup = self.owner.begin_close();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             wait_cleanup(cleanup)
                 .await
                 .map_err(|error| runtime_error("close Registry", error))

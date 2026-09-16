@@ -51,7 +51,7 @@ impl PyAukiInfoClient {
     fn fetch<'py>(&self, py: Python<'py>, remote_peer_id: String) -> PyResult<Bound<'py, PyAny>> {
         let remote_peer_id = parse_peer_id(&remote_peer_id)?;
         let client = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let info = client
                 .fetch(remote_peer_id)
                 .await
@@ -69,7 +69,7 @@ impl PyAukiInfoClient {
     ) -> PyResult<Bound<'py, PyAny>> {
         let (remote_peer_id, route) = parse_target(&remote_peer_id, &route)?;
         let client = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             let info = client
                 .fetch_exact(remote_peer_id, route)
                 .await
@@ -204,7 +204,7 @@ impl PyAukiInfoEndpoint {
     /// Stop accepting Info requests behind one detached, replayable barrier.
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let cleanup = self.owner.begin_close();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        crate::async_completion::future_into_py(py, async move {
             wait_cleanup(cleanup)
                 .await
                 .map_err(|error| runtime_error("close participant Info", error))

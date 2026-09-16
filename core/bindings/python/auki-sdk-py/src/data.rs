@@ -75,7 +75,7 @@ where
     let token = CancellationToken::new();
     let guard = token.clone().drop_guard();
     let task = pyo3_async_runtimes::tokio::get_runtime().spawn(operation(token));
-    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+    crate::async_completion::future_into_py(py, async move {
         let _guard = guard;
         task.await
             .map_err(|_| PyRuntimeError::new_err("Domain operation stopped unexpectedly"))?

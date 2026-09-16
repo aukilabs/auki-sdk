@@ -45,8 +45,9 @@ impl ExactRoute {
     }
 }
 
-/// An authenticated application stream retaining ownership of its exact relay
-/// circuit until explicit close or Drop.
+/// An authenticated application stream retaining a ref on its exact relay
+/// circuit until explicit close or Drop. Overlapping exact-route streams to
+/// the same circuit share the hop; the last close tears it down.
 pub struct AuthenticatedRouteStream {
     stream: Option<AuthenticatedStream>,
     relay: Option<RelayRouteGuard>,
@@ -193,8 +194,9 @@ impl Drop for RelayRouteGuard {
 
 impl Node {
     /// Open one authenticated application stream over exactly the supplied
-    /// route. Circuit routes retain an RAII close guard and never fall back to
-    /// a direct or sibling-relay connection.
+    /// route. Circuit routes retain an RAII hop ref and never fall back to a
+    /// direct or sibling-relay connection. Overlapping circuit opens share one
+    /// hop.
     pub async fn open_exact_route(
         &self,
         remote_peer_id: PeerId,

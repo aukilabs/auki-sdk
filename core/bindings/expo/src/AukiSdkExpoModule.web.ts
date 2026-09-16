@@ -14,13 +14,16 @@ import type {
   PortalPose,
   ZitadelSessionCredentials,
 } from "./AukiSdkExpo.types";
+import { jsonStringify } from "./json-stringify";
 import { loadAukiSdkWasm, type AukiSdkWasm } from "./web/loadAukiSdkWasm";
 
 type Session = Awaited<ReturnType<AukiSdkWasm["AukiUserSession"]["loginDev"]>>;
 type Peer = Awaited<ReturnType<Session["startPeer"]>>;
 type StreamClient = import("./web/generated/auki_sdk_web.js").AukiStreamClient;
 type CatalogClient = import("./web/generated/auki_sdk_web.js").AukiCatalogClient;
+type MessageClient = import("./web/generated/auki_sdk_web.js").AukiMessageClient;
 type StreamSub = Awaited<ReturnType<StreamClient["subscribeExact"]>>;
+type MessageSender = Awaited<ReturnType<MessageClient["openExact"]>>;
 type DomainDataClient = import("./web/generated/auki_sdk_web.js").AukiDomainData;
 type WebDownload = {
   controller: AbortController;
@@ -52,6 +55,9 @@ function bytesToBase64(bytes: Uint8Array): string {
 }
 
 function base64ToBytes(value: string): Uint8Array {
+  if (!value) {
+    return new Uint8Array();
+  }
   const binary = atob(value);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) {
@@ -85,6 +91,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
   private sessions = new Map<string, Session>();
   private peers = new Map<string, Peer>();
   private streams = new Map<string, StreamSub>();
+  private messages = new Map<string, { peerHandle: string; sender: MessageSender }>();
   private dataClients = new Map<string, { sessionId: string; client: DomainDataClient }>();
   private dataOperations = new Map<string, AbortController>();
   private downloads = new Map<string, WebDownload>();
@@ -587,10 +594,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     const info = await new sdk.AukiInfoClient(this.peer(peerHandle)).fetchExact(
       target,
     );
-    // AukiParticipantInfo.sessionNowNs is bigint — JSON.stringify rejects it.
-    return JSON.stringify(info, (_key, value) =>
-      typeof value === "bigint" ? value.toString() : value,
-    );
+    return jsonStringify(info);
   }
 
   async catalogFetchResourcesExact(
@@ -605,7 +609,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
       target,
       variants as Parameters<CatalogClient["fetchResourcesExact"]>[1],
     );
-    return JSON.stringify(resources);
+    return jsonStringify(resources);
   }
 
   async registryListExact(
@@ -617,7 +621,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     const entries = await new sdk.AukiRegistryClient(
       this.peer(peerHandle),
     ).listExact(target, kind as "device_model");
-    return JSON.stringify(entries);
+    return jsonStringify(entries);
   }
 
   async registryFetchExact(
@@ -631,7 +635,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     const entry = await new sdk.AukiRegistryClient(
       this.peer(peerHandle),
     ).fetchExact(target, kind as "device_model", id, hash);
-    return JSON.stringify(entry);
+    return jsonStringify(entry);
   }
 
   async blobFetchExact(
@@ -654,7 +658,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     } else {
       throw new Error("blobFetchExact: unexpected bytes type");
     }
-    return JSON.stringify({
+    return jsonStringify({
       peerId: receipt.peerId,
       sha256: receipt.sha256,
       relayed: receipt.relayed,
@@ -692,7 +696,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
       return null;
     }
     if (next.kind !== "entry") {
-      return JSON.stringify({
+      return jsonStringify({
         kind: next.kind,
         reason: next.reason,
         entry: null,
@@ -708,7 +712,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     } else if (Array.isArray(payload)) {
       payloadBase64 = bytesToBase64(Uint8Array.from(payload));
     }
-    return JSON.stringify({
+    return jsonStringify({
       kind: "entry",
       entry: {
         timestampNs: String(entry.timestampNs),
@@ -725,6 +729,44 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     }
     await subscription.cancel();
     this.streams.delete(subscriptionId);
+  }
+
+  async messageOpenExact(
+    peerHandle: string,
+    target: AukiExactTarget,
+    channelJson: string,
+  ): Promise<string> {
+    const sdk = await this.sdk();
+    const channel = JSON.parse(channelJson);
+    const sender = await new sdk.AukiMessageClient(
+      this.peer(peerHandle),
+    ).openExact(target, channel);
+    const id = newId("message");
+    this.messages.set(id, { peerHandle, sender });
+    return id;
+  }
+
+  async messageSend(
+    senderHandle: string,
+    type: string,
+    timestampNs: string,
+    payloadBase64: string,
+  ): Promise<void> {
+    const entry = this.messages.get(senderHandle);
+    if (!entry) {
+      throw new Error(`unknown message sender: ${senderHandle}`);
+    }
+    await entry.sender.send(type, BigInt(timestampNs), base64ToBytes(payloadBase64));
+  }
+
+  async messageClose(senderHandle: string): Promise<void> {
+    const entry = this.messages.get(senderHandle);
+    if (!entry) {
+      return;
+    }
+    this.messages.delete(senderHandle);
+    await entry.sender.close();
+    entry.sender.free();
   }
 
   async urdfModelFromXml(_xml: string): Promise<string> {
@@ -751,6 +793,18 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     const peer = this.peers.get(peerHandle);
     if (!peer) {
       return;
+    }
+    const owned = [...this.messages.entries()].filter(
+      ([, entry]) => entry.peerHandle === peerHandle,
+    );
+    for (const [id, entry] of owned) {
+      this.messages.delete(id);
+      try {
+        await entry.sender.close();
+      } catch {
+        /* ignore */
+      }
+      entry.sender.free();
     }
     await peer.shutdown();
     this.peers.delete(peerHandle);

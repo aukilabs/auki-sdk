@@ -41,6 +41,7 @@ use crate::{
     authentication::{authenticate_duplex, SessionRequirements},
     browser_authority::BrowserAuthority,
     browser_route::{browser_direct_address, parse_browser_relay_route_for_peer},
+    circuit_hop::{CircuitAcquire, CircuitHopKey, CircuitHopOwner, CircuitHopTable},
     relay::{
         ObservedRelayLimits, RelayCancellation, RelayProvider, RelayReservationEvent,
         RelayReservationHandle, RelayReservationNode, RelayReservationSnapshot,
@@ -139,6 +140,7 @@ pub struct BrowserRelayRoute {
     relay_peer_id: PeerId,
     target_peer_id: PeerId,
     connection_id: ConnectionId,
+    hop_owner: CircuitHopOwner,
     admission_expires_at: DateTime<Utc>,
     route: Multiaddr,
 }
@@ -161,11 +163,13 @@ impl BrowserRelayRoute {
     }
 }
 
-/// Authenticated browser stream retaining ownership of its exact relay circuit.
+/// Authenticated browser stream retaining a ref on its exact relay circuit.
 ///
-/// Explicit [`Self::close`] waits for circuit cleanup. Dropping an open stream
-/// schedules the same cleanup on the browser's local executor so application
-/// code cannot accidentally leave a connected circuit behind.
+/// Explicit [`Self::close`] waits until this stream's hop ref is released.
+/// The shared hop stays up while another `open_exact` stream still holds it.
+/// Dropping an open stream schedules the same release on the browser's local
+/// executor so application code cannot accidentally leave a connected circuit
+/// behind after the last stream is gone.
 pub struct BrowserAuthenticatedRouteStream {
     stream: Option<AuthenticatedStream>,
     route: Option<BrowserRelayRoute>,
@@ -298,6 +302,7 @@ impl BrowserRouteControl {
         self.commands
             .send(Command::CloseConnection {
                 connection_id: route.connection_id,
+                hop_owner: route.hop_owner,
                 response,
             })
             .await
@@ -530,8 +535,8 @@ impl BrowserNode {
                 parsed.relay_peer_id,
             )
             .await;
-        let connection_id = match first_connection {
-            Ok(connection_id) => connection_id,
+        let (connection_id, hop_owner) = match first_connection {
+            Ok(claimed) => claimed,
             Err(error) => {
                 if reuse_admission {
                     self.source_admissions
@@ -553,6 +558,7 @@ impl BrowserNode {
             relay_peer_id: parsed.relay_peer_id,
             target_peer_id: parsed.target_peer_id,
             connection_id,
+            hop_owner,
             admission_expires_at,
             route,
         })
@@ -589,8 +595,9 @@ impl BrowserNode {
     }
 
     /// Connect through one exact WSS circuit, authenticate the selected
-    /// application stream, and retain the circuit until the returned stream is
-    /// explicitly closed or dropped.
+    /// application stream, and retain a ref on the circuit until the returned
+    /// stream is explicitly closed or dropped. Overlapping opens to the same
+    /// circuit share the hop.
     pub async fn open_exact_route(
         &self,
         expected_peer_id: PeerId,
@@ -722,7 +729,7 @@ impl BrowserNode {
         peer_id: PeerId,
         address: Multiaddr,
         relay_peer_id: PeerId,
-    ) -> Result<ConnectionId> {
+    ) -> Result<(ConnectionId, CircuitHopOwner)> {
         let permit = self.relay_circuit_dials.acquire().await;
         let (response, receiver) = oneshot::channel();
         self.send(Command::DialCircuit {
@@ -856,10 +863,11 @@ enum Command {
         address: Multiaddr,
         relay_peer_id: PeerId,
         permit: RelayCircuitDialPermit,
-        response: oneshot::Sender<Result<ConnectionId>>,
+        response: oneshot::Sender<Result<(ConnectionId, CircuitHopOwner)>>,
     },
     CloseConnection {
         connection_id: ConnectionId,
+        hop_owner: CircuitHopOwner,
         response: oneshot::Sender<Result<()>>,
     },
     Shutdown {
@@ -870,6 +878,7 @@ enum Command {
 struct BrowserRuntime {
     direct_connections: HashMap<PeerId, DirectConnection>,
     pending_dials: HashMap<ConnectionId, PendingDial>,
+    circuit_hops: CircuitHopTable,
     reservations: RelayReservationNode,
     reservation_started: bool,
     reservation_waiter: Option<(
@@ -900,8 +909,9 @@ enum PendingDial {
     Circuit {
         peer_id: PeerId,
         relay_peer_id: PeerId,
+        key: CircuitHopKey,
         _permit: RelayCircuitDialPermit,
-        response: oneshot::Sender<Result<ConnectionId>>,
+        responses: Vec<oneshot::Sender<Result<(ConnectionId, CircuitHopOwner)>>>,
     },
 }
 
@@ -910,6 +920,7 @@ impl BrowserRuntime {
         Self {
             direct_connections: HashMap::new(),
             pending_dials: HashMap::new(),
+            circuit_hops: CircuitHopTable::default(),
             reservations: RelayReservationNode::new(local_peer_id),
             reservation_started: false,
             reservation_waiter: None,
@@ -936,9 +947,12 @@ impl BrowserRuntime {
             } => self.dial_circuit(swarm, peer_id, address, relay_peer_id, permit, response),
             Command::CloseConnection {
                 connection_id,
+                hop_owner,
                 response,
             } => {
-                swarm.close_connection(connection_id);
+                if self.circuit_hops.release(connection_id, hop_owner) {
+                    swarm.close_connection(connection_id);
+                }
                 let _ = response.send(Ok(()));
             }
             Command::Shutdown { .. } => return true,
@@ -1227,7 +1241,7 @@ impl BrowserRuntime {
         address: Multiaddr,
         relay_peer_id: PeerId,
         permit: RelayCircuitDialPermit,
-        response: oneshot::Sender<Result<ConnectionId>>,
+        response: oneshot::Sender<Result<(ConnectionId, CircuitHopOwner)>>,
     ) {
         if response.is_canceled() {
             return;
@@ -1238,6 +1252,42 @@ impl BrowserRuntime {
             )));
             return;
         }
+        let key = CircuitHopKey {
+            target_peer_id: peer_id,
+            circuit_address: address.clone(),
+        };
+        match self.circuit_hops.acquire(&key) {
+            CircuitAcquire::Live {
+                connection_id,
+                owner,
+            } => {
+                if response.send(Ok((connection_id, owner))).is_err()
+                    && self.circuit_hops.release(connection_id, owner)
+                {
+                    swarm.close_connection(connection_id);
+                }
+                return;
+            }
+            CircuitAcquire::Pending => {
+                if let Some(PendingDial::Circuit { responses, .. }) =
+                    self.pending_dials.values_mut().find(|pending| {
+                        matches!(
+                            pending,
+                            PendingDial::Circuit { key: pending_key, .. } if pending_key == &key
+                        )
+                    })
+                {
+                    responses.push(response);
+                    return;
+                }
+                self.circuit_hops.fail_pending(&key);
+                let _ = response.send(Err(Error::Dial(
+                    "pending circuit hop is missing its dial".into(),
+                )));
+                return;
+            }
+            CircuitAcquire::Vacant => {}
+        }
         let dial = DialOpts::peer_id(peer_id)
             .condition(PeerCondition::Always)
             .allocate_new_port()
@@ -1246,13 +1296,15 @@ impl BrowserRuntime {
         let connection_id = dial.connection_id();
         match swarm.dial(dial) {
             Ok(()) => {
+                self.circuit_hops.mark_pending(key.clone());
                 self.pending_dials.insert(
                     connection_id,
                     PendingDial::Circuit {
                         peer_id,
                         relay_peer_id,
+                        key,
                         _permit: permit,
-                        response,
+                        responses: vec![response],
                     },
                 );
             }
@@ -1293,6 +1345,9 @@ impl BrowserRuntime {
                 ..
             } => {
                 if let Some(pending) = self.pending_dials.remove(&connection_id) {
+                    if let PendingDial::Circuit { key, .. } = &pending {
+                        self.circuit_hops.fail_pending(key);
+                    }
                     let reason = error.to_string();
                     if pending.is_reservation() {
                         self.mark_reservation_failed(format!(
@@ -1308,6 +1363,9 @@ impl BrowserRuntime {
                 endpoint,
                 ..
             } => {
+                if endpoint.is_relayed() {
+                    self.circuit_hops.invalidate(connection_id);
+                }
                 if !endpoint.is_relayed()
                     && self
                         .direct_connections
@@ -1447,10 +1505,20 @@ impl BrowserRuntime {
             }
             PendingDial::Circuit {
                 peer_id: expected,
-                response,
+                key,
+                responses,
                 ..
             } if expected == peer_id && relayed => {
-                if response.send(Ok(connection_id)).is_err() {
+                let mut owners = Vec::new();
+                for response in responses {
+                    let owner = self.circuit_hops.next_owner();
+                    if response.send(Ok((connection_id, owner))).is_ok() {
+                        owners.push(owner);
+                    }
+                }
+                let delivered = owners.len();
+                self.circuit_hops.established(key, connection_id, owners);
+                if delivered == 0 {
                     swarm.close_connection(connection_id);
                 }
             }
@@ -1476,6 +1544,9 @@ impl BrowserRuntime {
                 self.begin_reservation(swarm, provider, connection_id, response);
             }
             pending => {
+                if let PendingDial::Circuit { key, .. } = &pending {
+                    self.circuit_hops.fail_pending(key);
+                }
                 swarm.close_connection(connection_id);
                 if pending.is_reservation() {
                     self.mark_reservation_failed(format!(
@@ -1663,8 +1734,10 @@ impl PendingDial {
                     let _ = response.send(Err(Error::Dial(reason.clone())));
                 }
             }
-            Self::Circuit { response, .. } => {
-                let _ = response.send(Err(Error::Dial(reason)));
+            Self::Circuit { responses, .. } => {
+                for response in responses {
+                    let _ = response.send(Err(Error::Dial(reason.clone())));
+                }
             }
             Self::Reservation { response, .. } => {
                 let _ = response.send(Err(Error::Dial(reason)));
@@ -1684,8 +1757,13 @@ impl PendingDial {
                     }));
                 }
             }
-            Self::Circuit { response, .. } => {
-                let _ = response.send(Err(Error::UnexpectedRemotePeer { expected, actual }));
+            Self::Circuit { responses, .. } => {
+                for response in responses {
+                    let _ = response.send(Err(Error::UnexpectedRemotePeer {
+                        expected: expected.clone(),
+                        actual: actual.clone(),
+                    }));
+                }
             }
             Self::Reservation { response, .. } => {
                 let _ = response.send(Err(Error::UnexpectedRemotePeer { expected, actual }));
@@ -1887,6 +1965,7 @@ mod tests {
             relay_peer_id,
             target_peer_id,
             connection_id,
+            hop_owner: CircuitHopOwner::from_raw(1),
             admission_expires_at: Utc::now(),
             route,
         };
@@ -1900,6 +1979,7 @@ mod tests {
         match command {
             Command::CloseConnection {
                 connection_id: closed,
+                hop_owner: _,
                 response,
             } => {
                 assert_eq!(closed, connection_id);

@@ -8,7 +8,13 @@
     "noUncheckedIndexedAccess": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@auki/json-stringify": [
+        "../../../../core/bindings/expo/src/json-stringify.ts"
+      ]
+    }
   },
   "include": ["src/**/*.ts"]
 }

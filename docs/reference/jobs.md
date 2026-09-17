@@ -72,8 +72,9 @@ can become `submission_uncertain`; the host must reconcile before submitting aga
 
 Source audited 2026-09-16: DMS `06bd863` (the same tree advertised by dev `8088111`)
 and DDS `b27c080` (the same tree as dev `v0.14.6`). Public version metadata was checked;
-cluster image digests were not reverified. Native User/App job creation, execution,
-results, and cancellation were exercised against dev; see the
+cluster image digests were not reverified. Native User/App jobs and User jobs
+through Chrome/WASM, macOS Swift and the iOS Simulator were exercised against dev,
+including execution, results and running-job cancellation; see the
 [validation record](../../test-support/jobs-validation.md) for the exact boundaries.
 
 - Third-party dedicated capabilities use a configured default price when no explicit

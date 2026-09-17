@@ -2,9 +2,10 @@
 
 This records the SDK implementation for [#379](https://github.com/aukilabs/auki-sdk/issues/379).
 Offline checks use local HTTP or intercepted Fetch fixtures and synthetic
-credentials. Authorized dev job runs on 2026-09-16 exercised the rebuilt Python
-binding and shared Rust implementation; final job states were checked again on
-2026-09-17. No workers were provisioned and no backend or deployment changes were made.
+credentials. Authorized dev runs exercised Python/shared Rust on 2026-09-16 and
+WASM in Chrome plus Swift on macOS and the iOS Simulator on 2026-09-17. Final
+job states were independently audited through the SDK. No workers were provisioned
+and no backend or deployment changes were made.
 
 ## Provider contract
 
@@ -64,7 +65,7 @@ entry path used `/tmp` while the canonical checkout used `/private/tmp`. The
 isolated native module build above passed. No new jobs flow was run in an Expo
 simulator or on a physical device.
 
-## Live dev results
+## Native Rust/Python live dev results
 
 The run used aligned dev API/DDS/DMS endpoints, the retained test App, and an
 existing dedicated compute fixture. Each run registered a unique third-party
@@ -127,14 +128,69 @@ Additional checks after the URL fix:
 | Venv `python -m pytest core/bindings/python/auki-sdk-py/python_tests/test_jobs.py core/bindings/python/auki-sdk-py/python_tests/test_tasks.py core/bindings/python/auki-sdk-py/python_tests/test_robot_tasks.py -q` | 82 passed |
 | `cargo fmt --all -- --check`, `git diff --check` | Passed |
 
+## WASM and Swift live dev results
+
+On 2026-09-17, the existing dedicated compute fixture served unique Web and
+Swift capabilities for run `dfb9dad3-0283-4fc3-81cd-30d66187246c`. These clients
+used User login; no App secrets or machine credentials entered the browser or
+Swift apps. Each runtime submitted one completion job and one running-cancellation
+job through its public SDK binding, with no submission retries.
+
+| Runtime | Completed job | Canceled job |
+| --- | --- | --- |
+| WASM, Headless Chrome 153 | `e3124a51-6e2f-4b48-ab1e-f8027d1d4f14` | `4a5d2996-36ac-44a4-bba0-98feda59dc2d` |
+| Native Swift, macOS arm64 | `ba6f709e-0698-4a44-bb2f-af0c7566af51` | `449b07f0-3705-484d-b5e8-90e484457501` |
+| Native Swift, iPhone 17 Pro Simulator, iOS 26.5 | `37e2f0ce-3c3e-4733-a2b9-a4355dc2b3d3` | `d61886aa-47de-4b04-948c-30aad28a1bda` |
+
+All three runtimes passed login, decimal-price estimation (`0.002` per job),
+submission, completion/progress, worker receipt checks, exact output-content
+reads, and capability-filtered listing. Cancellation began only after observing
+the task running with its waiting progress; each client then verified canceled
+job/task state and reported credit release. The independent audit verified that
+each cancellation receipt had no outputs. Swift
+also checked the receipt's SHA-256 and byte count. Jobs/data clients and sessions
+were closed with awaited cleanup.
+
+The browser loaded the generated WASM module from `http://127.0.0.1:18139` and
+called the dev API, DDS, DMS and Domain Server directly. Requests were not mocked
+or proxied, and browser security remained enabled. This exercises the actual
+Fetch/CORS path, rather than the intercepted Fetch used by offline tests.
+
+Swift executed the generated UniFFI binding and the typed `Jobs.swift` wrapper.
+The macOS executable linked the freshly built native Rust static library. The
+simulator app linked the branch's generated XCFramework simulator slice
+(`ios-arm64_x86_64-simulator/libauki_sdk_swift.a`) and headers. `vtool` verified
+the app's `IOSSIMULATOR` platform, minimum iOS 17.0, and SDK 26.5. This is a real
+simulator network round trip, not the fake generated object used by the codec test.
+
+Commands and local evidence (private harnesses are intentionally uncommitted):
+
+| Command / artifact | Result |
+| --- | --- |
+| Web binding: `npm run check` | WASM rebuilt and TypeScript checks passed |
+| `npx --yes --package @playwright/cli@0.1.19 playwright-cli --session jobs-379-wasm-20260917 open http://127.0.0.1:18139/ --browser chrome`, then snapshot/click the run button | Real Chrome run passed; sanitized report in `.jobs-dev/wasm-live-report.json` |
+| `.jobs-dev/swift/build.sh` | `cargo build -p auki-sdk-swift --release --features standard-protocols --locked` plus `swiftc` against generated bindings and the Rust static library passed |
+| `.jobs-dev/swift/live-jobs .jobs-dev/platform-config.json .jobs-dev/swift/run-macos` | macOS live run passed; `run-macos/evidence.json` records assertions and IDs |
+| `.jobs-dev/swift/build-ios-simulator.sh` | `xcrun swiftc` targeting `arm64-apple-ios17.0-simulator`, UIKit and the XCFramework simulator slice passed |
+| `xcrun simctl install 7A1E86FA-CB95-45B2-883E-F91CE10B7EC8 .jobs-dev/swift/LiveJobs.app`, then `xcrun simctl launch 7A1E86FA-CB95-45B2-883E-F91CE10B7EC8 com.aukilabs.sdk379-livejobs` | iOS live run passed; `.jobs-dev/swift/run-ios-simulator/evidence.json` records assertions and IDs |
+
+An independent final SDK audit confirmed all six jobs/tasks terminal, all six
+reported credit locks released, and all six created Domain records deleted.
+Completed tasks report `0.006` credits debited in total; canceled tasks report no
+debit. The worker was stopped and its original configuration restored. The browser
+and loopback server were closed; the temporary simulator app was uninstalled, its
+credential copy removed, and the simulator booted for this test was shut down.
+No SDK runtime change was needed for these platform checks.
+
 ## Remaining live validation
 
 Successful imported-ZITADEL execution needs an approved compatible worker in that
 principal's organization. The saved imported session expired after the successful
 listing check; on 2026-09-17 its refresh was rejected as OAuth `InvalidRequest`,
 so further imported checks need a fresh session with the SDK as sole refresh owner.
-No refresh or issuer validation was relaxed. Mobile/browser live checks still need their deployment's
-network and CORS behavior verified; the live run above covers native Python/Rust.
+No refresh or issuer validation was relaxed. The Web/Swift checks above cover User
+login. Expo's live JavaScript-to-native jobs flow and physical-device execution
+remain unrun; the Swift simulator run does not claim those additional paths.
 
 The backend cancellation credit-release finding above remains unresolved; backend
 changes are outside this SDK PR.

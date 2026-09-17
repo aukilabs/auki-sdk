@@ -92,8 +92,12 @@ and DMS
 [`06bd863`](https://github.com/aukilabs/domain-manager-service/commit/06bd863a8b8537dabd761b826818844a72593d2c),
 checked on 2026-09-17. Source compatibility does not establish deployment support.
 Before rollout, verify provider builds, route availability, grants, robot schema,
-and browser CORS in the intended approved environment. Local validation is
-recorded separately in [fleet validation](../../test-support/fleet-validation.md).
+and browser CORS in the intended approved environment. The 2026-09-17 dev run
+passed robot/compute activity, permission differences, direct browser CORS and
+every existing binding, including Swift and Expo iOS Simulator apps. Public dev
+metadata reported DDS `v0.14.6` and DMS `8088111`; this does not establish staging
+or production support. See the separate local and live results in
+[fleet validation](../../test-support/fleet-validation.md).
 
 ## Bounds, errors and lifecycle
 

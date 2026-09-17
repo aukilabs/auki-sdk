@@ -11,7 +11,7 @@ const source = readFileSync(new URL('../src/jobs-ui.ts', import.meta.url), 'utf8
 const tree = ts.createSourceFile('jobs-ui.ts', source, ts.ScriptTarget.Latest, true);
 const selected: string[] = [];
 function visit(node: ts.Node) {
-  if (ts.isFunctionDeclaration(node) && node.name?.text === 'discover'
+  if (ts.isFunctionDeclaration(node) && ['discover', 'finishDiscovery', 'dashboard'].includes(node.name?.text ?? '')
     || ts.isExpressionStatement(node) && node.getText(tree).startsWith("button('jobs-back').onclick")) selected.push(node.getText(tree));
   ts.forEachChild(node, visit);
 }
@@ -32,11 +32,12 @@ for (const mode of ['empty', 'failed', 'ambiguous']) test(`${mode} rediscovery f
   const fleet = new FleetController(() => ({ domainId: domain, session, environment: 'fixture', createFleet: () => ({ list: async () => snapshot('domain'), computePool: async () => snapshot('compute_pool'), close: async () => {}, free() {} }) }));
   const context = { domainId: domain, session, environment: 'fixture', data: { get: async () => ({ id: computeId, domain_id: domain, size: 0 }), readTo: async () => 0 }, createJobs: () => ({ estimate: async () => { estimates++; return { total: '0', tasks: [] }; }, list: async () => ({ items: [] }), close: async () => {} }) } as unknown as JobsContext;
   const controller = new JobsController(() => context), back = { onclick: () => {} };
-  const ui: any = { controller, fleet, generation: 0, override: 'setup', screen: 'setup', draftRole: 'compute', render() {}, button: () => back, options: { navigate() {} } };
+  const ui: any = { controller, fleet, generation: 0, discoveryReady: false, ready: true, section: { hidden: false }, pickerVersion: 0, override: 'setup', screen: 'setup', draftRole: 'compute', invalidateReads() {}, draftInput: '', render() {}, button: () => back, options: { navigate() {} } };
+  ui.act = async (action: () => Promise<void>) => { await action(); };
   runInNewContext(code, ui);
   await ui.discover(); await controller.prepare('compute', computeId); assert.equal(estimates, 1);
-  outcome = mode; ui.screen = 'setup'; ui.override = 'setup'; await ui.discover(); back.onclick();
-  assert.equal(ui.override, 'choose'); assert.equal(controller.state.discoveryRequired, true);
+  outcome = mode; ui.screen = 'setup'; ui.override = 'setup'; await ui.discover(); back.onclick(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ui.override, 'dashboard'); assert.equal(controller.state.discoveryRequired, true);
   assert.equal(controller.state.spec, undefined); await controller.submit(); await controller.prepare('compute', computeId);
   assert.equal(estimates, 1); await controller.list(); assert.equal(controller.state.phase, 'history');
   assert.equal(controller.state.config?.computeId, computeId);

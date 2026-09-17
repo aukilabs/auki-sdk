@@ -54,21 +54,29 @@ try {
   const open = async () => { await page.locator('[data-view="jobs"]').click(); await page.locator('#view-jobs:visible').waitFor(); };
   const step = async name => { await page.locator(`[data-jobs-screen="${name}"]:visible`).waitFor(); assert.equal(await page.locator('[data-jobs-screen]:visible').count(), 1); };
   const configure = async () => {
-    await open(); await page.locator('#jobs-configure').click(); await step('setup');
-    await page.locator('#fleet-refresh').click(); await step('choose');
+    await open(); if (await page.locator('#jobs-back').isVisible()) await page.locator('#jobs-back').click(); await page.waitForFunction(() => document.querySelector('#jobs-configure')?.disabled === false); await page.locator('#jobs-configure').click(); await step('setup');
+    await page.locator('#fleet-refresh').click(); await step('dashboard'); await page.locator('#jobs-new').click(); await step('choose');
+  };
+  const selectInput = async id => {
+    await page.locator(`[data-record-id="${id}"]`).click();
+    await page.waitForFunction(() => { const text = document.querySelector('#jobs-input-preview')?.textContent; return text && !text.includes('Loading preview'); });
+    assert.equal(await page.locator('#jobs-input').inputValue(), id);
   };
   let confirmations = 0;
   const noRetry = async () => { await page.waitForTimeout(700); assert.equal(await page.evaluate(() => window.__jobsPosts.length), confirmations, 'exactly one actual SDK fetch per explicit confirmation'); };
   const prepare = async (role = 'compute', input = INPUT) => {
-    await configure(); await page.locator('#jobs-role').selectOption(role); await page.locator('#jobs-input').fill(input);
+    await configure(); await page.locator(`[data-role="${role}"]`).click(); await selectInput(input);
     const before = state.submissions.length;
     await page.locator('#jobs-estimate').click(); await step('review');
+    await page.waitForFunction(() => document.querySelector('#jobs-confirm')?.disabled === false);
     assert.equal(state.submissions.length, before, 'estimate never submits');
     assert.equal(await page.evaluate(() => window.__jobsPosts.length), confirmations);
+    await page.locator('#jobs-review-technical summary').click();
     const text = await page.locator('#view-jobs').innerText();
-    for (const value of [COST, DOMAIN, CONFIG[`${role}Id`], input, capability(role), `sdk-${CONFIG.installationId}-${role}-{taskId}`, role === 'robot' ? 'example.report.v1' : 'example.text.v1']) assert.ok(text.includes(value));
+    for (const value of [COST, DOMAIN, CONFIG[`${role}Id`], input, capability(role), `sdk-${CONFIG.installationId}-${role}-{taskId}`, role === 'robot' ? 'example.report.v1' : 'example.text.v1']) assert.ok(text.includes(value), `review missing exact value: ${value}`);
     assert.match(text, /synthetic test data/i); assertJobSpec(state.estimates.at(-1));
     assert.equal(state.estimates.at(-1).tasks[0].capability, capability(role));
+    await page.locator('#jobs-review-technical summary').click();
   };
   const submit = async (double = false) => {
     confirmations++;
@@ -78,14 +86,23 @@ try {
     else await page.locator('#jobs-confirm').click();
   };
   await login(); assert.equal(state.requests.length, 0, 'no jobs request until user action');
-  await open(); await step('setup'); assert.match(await page.locator('#view-jobs').innerText(), /activated|activation/i);
+  await open(); await step('dashboard'); await page.waitForFunction(() => document.querySelector('#jobs-new')?.disabled === false); assert.match(await page.locator('#view-jobs').innerText(), /Recent jobs/);
   assert.ok(resources.some(url => /\.wasm(?:\?|$)/.test(url)), 'actual WASM resource loaded');
+  // Actual primary navigation discards the review without hidden picker reads.
+  await prepare();
+  const dataReads = () => fixture.state.requests.filter(r => /\/data(?:[/?]|$)/.test(r)).length;
+  const beforeLeave = dataReads();
+  await page.locator('[data-view="data"]').click(); await open(); await step('dashboard');
+  assert.equal(dataReads(), beforeLeave, 'leaving review must not start hidden picker reads');
+  await page.locator('#jobs-new').click(); await step('choose');
+  assert.equal(await page.locator('#jobs-input').inputValue(), '', 'ordinary navigation clears selected draft');
   for (const role of ['compute', 'robot']) {
     await prepare(role); const estimated = structuredClone(state.estimates.at(-1)); await submit(true); await step('detail'); await noRetry();
     const submitted = state.submissions.at(-1); assert.deepEqual(submitted.body, estimated, 'exact reviewed spec submitted');
     await page.locator('[data-job-output]').waitFor();
     assert.equal(await page.locator('[data-job-output]').count(), 1);
     assert.ok(await page.locator('#jobs-new').isVisible());
+    await page.locator('#jobs-details').click();
     assert.match(await page.locator('#jobs-tasks').innerText(), /Phase|Recent events/);
     assert.match(await page.locator('#jobs-tasks').innerText(), /synthetic fixture result/);
     await page.locator('[data-job-output]').click(); await page.locator('#view-record:visible').waitFor();
@@ -99,19 +116,22 @@ try {
     // The existing record action carries its UUID into the jobs chooser.
     await reveal(page, '#open-record-jobs'); await page.locator('#open-record-jobs').click(); await step('choose');
     assert.equal(await page.locator('#jobs-input').inputValue(), submitted.output);
+    await page.waitForFunction(() => !/Loading/.test(document.querySelector('#jobs-record-status')?.textContent ?? 'Loading'));
+    await page.waitForFunction(() => document.querySelector('#jobs-selected-name')?.textContent.startsWith('sdk-'));
+    await page.waitForFunction(() => { const text = document.querySelector('#jobs-input-preview')?.textContent; return text && !/Loading|Select a record/.test(text); });
   }
   // Edit invalidates the previous review and requires a new exact estimate.
   await prepare(); const count = state.estimates.length; await page.locator('#jobs-edit').click(); await step('choose');
   assert.equal(await page.locator('#jobs-confirm').count(), 0);
-  await page.locator('#jobs-role').selectOption('robot'); await page.locator('#jobs-input').fill(TEXT); await page.locator('#jobs-estimate').click(); await step('review');
+  await page.locator('[data-role="robot"]').click(); await page.locator('#jobs-change-input').click(); await selectInput(TEXT); await page.locator('#jobs-estimate').click(); await step('review');
   assert.equal(state.estimates.length, count + 1); assert.equal(state.estimates.at(-1).tasks[0].meta.input_id, TEXT);
   assert.equal(state.estimates.at(-1).tasks[0].capability, capability('robot'));
-  await page.locator('#jobs-configure').click(); await step('setup'); assert.equal(await page.locator('#jobs-confirm').count(), 0);
+  await page.locator('#jobs-back').click(); await page.locator('#jobs-configure').click(); await step('setup'); assert.equal(await page.locator('#jobs-confirm').count(), 0);
   // Layout and keyboard-reachable controls across desktop and narrow phones.
   const artifacts = new URL('../test-artifacts/', import.meta.url); await mkdir(artifacts, { recursive: true });
   for (const [width, height] of [[1440, 900], [390, 844], [320, 568]]) {
     await page.setViewportSize({ width, height }); await configure();
-    await assertUsable(page, ['#jobs-role', '#jobs-input', '#jobs-estimate', '#jobs-back']);
+    await assertUsable(page, ['[data-role="compute"]', '#jobs-search', '#jobs-estimate', '#jobs-back']);
     await page.screenshot({ path: new URL(`jobs-${width}x${height}.png`, artifacts).pathname, fullPage: true });
   }
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -120,7 +140,7 @@ try {
     assert.equal(await page.locator('[data-job-output]').count(), 0); assert.match(await page.locator('#view-jobs').innerText(), /unverified|mismatch|withheld/i); state[mode] = false;
   }
   for (const mode of ['deny', 'noWorkers']) {
-    await configure(); await page.locator('#jobs-input').fill(INPUT); state[mode] = true;
+    await configure(); await selectInput(INPUT); state[mode] = true;
     const before = state.requests.length; await page.locator('#jobs-estimate').click();
     await fixture.waitFor(() => state.requests.length > before);
     await page.waitForFunction(() => /denied|permission|worker|eligible|available|fail|rejected/i.test(document.querySelector('#jobs-status')?.textContent ?? ''));
@@ -138,25 +158,25 @@ try {
   state.uncertain = true; await prepare(); await submit(); await step('uncertain'); await noRetry();
   assert.equal(await page.locator('#jobs-confirm').count(), 0); assert.match(await page.locator('#view-jobs').innerText(), /reconcile|history/i);
   const ambiguous = state.submissions.at(-1); assert.ok((await page.locator('#view-jobs').innerText()).includes(ambiguous.body.label)); state.uncertain = false;
-  await selectDomain(page, OTHER); await open(); await step('setup');
+  await selectDomain(page, OTHER); await open(); await step('dashboard');
   assert.ok(!(await page.locator('#view-jobs').innerText()).includes(ambiguous.body.label));
   await selectDomain(page, DOMAIN); await open(); await step('uncertain');
   assert.ok((await page.locator('#view-jobs').innerText()).includes(ambiguous.body.label));
   assert.equal(await page.locator('#jobs-confirm').count(), 0);
   assert.equal(await page.locator('#jobs-new:visible').count(), 0); await noRetry();
-  const listed = state.lists.length; await page.locator('#jobs-history').click(); await step('history');
+  const listed = state.lists.length; await page.locator('#jobs-history').click(); await step('dashboard');
   await page.locator(`[data-job-id="${ambiguous.id}"]`).waitFor();
-  assert.equal(state.lists.length, listed + 1); assert.match(await page.locator('#view-jobs').innerText(), /396/); assert.match(await page.locator('#view-jobs').innerText(), /incomplete|skip/i);
+  assert.equal(state.lists.length, listed + 1); assert.match(await page.locator('#view-jobs').innerText(), /History may be incomplete/); assert.match(await page.locator('#view-jobs').innerText(), /incomplete|skip/i);
   assert.ok(await page.locator('[data-job-id]').count() > 0);
   await page.locator(`[data-job-id="${ambiguous.id}"]`).click(); await step('detail');
   await page.locator('[data-job-output]').waitFor();
-  await page.locator('#jobs-history').click(); await step('history');
+  await page.locator('#jobs-back').click(); await step('dashboard');
   await page.waitForFunction(() => document.querySelector('#jobs-next')?.disabled === false);
   const pages = state.lists.length; await page.locator('#jobs-next').click();
   await fixture.waitFor(() => state.lists.length === pages + 1);
   await page.waitForFunction(() => document.querySelector('#jobs-next')?.disabled);
   assert.equal(state.lists.length, pages + 1); assert.equal(new URLSearchParams(state.lists.at(-1)).get('cursor'), CURSOR);
-  assert.match(await page.locator('#view-jobs').innerText(), /not proof|absent|skip/i);
+  assert.match(await page.locator('#view-jobs').innerText(), /incomplete/i);
   await page.locator('#jobs-new').click(); await step('choose');
   // A sent submit whose response is aborted retains recovery through A -> B -> A.
   await prepare(); state.hold = 'all'; await submit();
@@ -164,19 +184,19 @@ try {
   const heldSubmit = fixture.state.exchanges.filter(e => e.path === '/v1/jobs' && e.held).at(-1);
   const sent = state.submissions.at(-1);
   await selectDomain(page, OTHER); await fixture.waitFor(() => heldSubmit.aborted); fixture.release();
-  await open(); await step('setup');
+  await open(); await step('dashboard');
   assert.ok(!(await page.locator('#view-jobs').innerText()).includes(sent.body.label));
   await selectDomain(page, DOMAIN); await open(); await step('uncertain');
   assert.ok((await page.locator('#view-jobs').innerText()).includes(sent.body.label)); await noRetry();
   // Explicit logout wipes unresolved recovery, even on returning to its Domain.
   await page.locator('#logout').click(); await page.waitForFunction(() => document.querySelector('#session-status')?.textContent === 'Signed out');
-  await login('jobs-after-uncertain@example.test', OTHER); await open(); await step('setup');
+  await login('jobs-after-uncertain@example.test', OTHER); await open(); await step('dashboard');
   assert.ok(!(await page.locator('#view-jobs').innerText()).includes(sent.body.label));
-  await selectDomain(page, DOMAIN); await open(); await step('setup');
+  await selectDomain(page, DOMAIN); await open(); await step('dashboard');
   assert.equal(await page.locator('[data-fleet-installation]').count(), 0, 'previous discoveries cleared');
   // Late HTTP results must be aborted and fenced on Domain switch and logout.
   for (const action of ['domain', 'logout']) {
-    await configure(); await page.locator('#jobs-input').fill(INPUT); state.hold = '/estimate';
+    await configure(); await selectInput(INPUT); state.hold = '/estimate';
     await page.locator('#jobs-estimate').click();
     await fixture.waitFor(() => fixture.state.exchanges.some(e => e.path === '/v1/jobs/estimate' && e.held && !e.finished && !e.aborted));
     const pending = fixture.state.exchanges.filter(e => e.path === '/v1/jobs/estimate' && e.held).at(-1);
@@ -186,12 +206,27 @@ try {
     await fixture.waitFor(() => pending.aborted); fixture.release();
     assert.equal(state.cancellations.length, cancelCount, 'closing never cancels a server job');
     if (action === 'logout') await login('jobs-b@example.test', OTHER);
-    await open(); await step('setup');
+    await open(); await step('dashboard');
     assert.equal(await page.locator('[data-fleet-installation]').count(), 0, 'previous discoveries cleared');
     const visible = await page.locator('#view-jobs').innerText();
     for (const old of [DOMAIN, INPUT, COST, CONFIG.installationId, ambiguous.body.label]) assert.ok(!visible.includes(old), 'no previous session/Domain results');
     assert.equal(await page.locator('[data-job-output]').count(), 0); assert.equal(await page.locator('#jobs-confirm').count(), 0);
     await selectDomain(page, DOMAIN);
+  }
+  // Picker-owned list and preview requests participate in Domain/logout cleanup.
+  for (const kind of ['list', 'preview']) {
+    await configure();
+    await page.locator(`[data-record-id="${INPUT}"]`).waitFor();
+    fixture.state.holdReads = true;
+    if (kind === 'list') await page.locator('#jobs-search-button').click();
+    else await page.locator(`[data-record-id="${INPUT}"]`).click();
+    await fixture.waitFor(() => fixture.state.exchanges.some(e => e.held && !e.finished && !e.aborted && e.path.includes('/data')));
+    const held = fixture.state.exchanges.filter(e => e.held && !e.finished && !e.aborted && e.path.includes('/data'));
+    if (kind === 'list') await selectDomain(page, OTHER);
+    else await page.locator('#logout').click();
+    await fixture.waitFor(() => held.every(e => e.aborted)); fixture.release();
+    if (kind === 'list') await selectDomain(page, DOMAIN);
+    else await page.waitForFunction(() => document.querySelector('#session-status')?.textContent === 'Signed out');
   }
   await noRetry();
   assert.deepEqual(await page.evaluate(() => ({ local: Object.keys(localStorage), session: Object.keys(sessionStorage) })), { local: ['core-explorer.client-id'], session: [] });

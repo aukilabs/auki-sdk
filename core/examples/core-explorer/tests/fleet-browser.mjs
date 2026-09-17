@@ -24,13 +24,13 @@ try {
   await page.locator('#email').fill('fleet@example.test'); await page.locator('#password').fill('synthetic-password'); await page.locator('#signin').click();
   await page.waitForFunction(() => document.querySelector('#domains')?.textContent.includes('Synthetic lab')).catch(async error => { console.error('Login status:', await page.locator('#session-status').textContent(), 'Page errors:', errors, 'Routes:', fixture.state.requests); throw error; });
   await selectDomain(page, DOMAIN); await page.locator('[data-view="jobs"]').click();
-  const discover = async () => { await page.locator('#jobs-configure').click(); await page.locator('#fleet-refresh').click(); };
-  const choose = async () => page.locator('[data-jobs-screen="choose"]').waitFor();
+  const discover = async () => { if (await page.locator('#jobs-back').isVisible()) await page.locator('#jobs-back').click(); await page.waitForFunction(() => document.querySelector('#jobs-configure')?.disabled === false); await page.locator('#jobs-configure').click(); await page.locator('#fleet-refresh').click(); };
+  const choose = async () => { await page.locator('[data-jobs-screen="dashboard"]').waitFor(); await page.locator('#jobs-new').click(); await page.locator('[data-jobs-screen="choose"]').waitFor(); };
   const settled = async () => page.waitForFunction(() => document.querySelector('#fleet-refresh')?.disabled === false);
   await discover(); await choose();
   // Initial chooser geometry: no scrollIntoView, trial click or other auto-scroll.
   await page.evaluate(() => document.fonts.ready);
-  for (const selector of ['#jobs-input', '#jobs-estimate']) {
+  for (const selector of ['#jobs-search', '#jobs-estimate']) {
     const geometry = await page.locator(selector).evaluate(el => {
       const box = el.getBoundingClientRect(), pane = el.closest('.view').getBoundingClientRect();
       return { top: box.top, bottom: box.bottom, left: box.left, right: box.right, paneTop: pane.top, paneBottom: pane.bottom, width: innerWidth, height: innerHeight, scroll: el.closest('.view').scrollTop };
@@ -39,8 +39,8 @@ try {
     assert.ok(geometry.top >= geometry.paneTop && geometry.bottom <= Math.min(geometry.height, geometry.paneBottom) && geometry.left >= 0 && geometry.right <= geometry.width, `${selector} fully visible initially: ${JSON.stringify(geometry)}`);
   }
   assert.equal(await page.locator('#jobs-installation').count(), 0);
-  assert.match(await page.locator('#view-jobs').innerText(), /assigned robot/);
-  assert.match(await page.locator('#view-jobs').innerText(), /dedicated candidate/);
+  assert.match(await page.locator('#jobs-workers').textContent(), /Robot:/);
+  assert.match(await page.locator('#jobs-workers').textContent(), /Compute:/);
   assert.ok(resources.some(url => /\.wasm(?:\?|$)/.test(url)));
   assert.ok(fixture.state.requests.some(r => r.includes('/robots')));
   assert.ok(fixture.state.requests.some(r => r.includes('/api/v1/nodes?')));
@@ -49,13 +49,13 @@ try {
   assert.equal(await page.locator('#jobs-estimate').count(), 0);
   await page.locator(`[data-fleet-installation="${CONFIG.installationId}"]`).click(); await choose(); state.fleetMultiple = false;
   state.fleetDuplicate = true; await discover(); await choose();
-  assert.equal(await page.locator('#jobs-role option[value="compute"]').evaluate(el => el.disabled), true, await page.locator('#view-jobs pre').textContent());
+  assert.equal(await page.locator('#jobs-role option[value="compute"]').evaluate(el => el.disabled), true, await page.locator('#view-jobs').textContent());
   assert.equal(await page.locator('#jobs-role').inputValue(), 'robot'); state.fleetDuplicate = false;
   state.fleetMissing = 'robot'; await discover(); await choose();
   assert.equal(await page.locator('#jobs-role option[value="robot"]').evaluate(el => el.disabled), true); state.fleetMissing = undefined;
   for (const mode of ['fleetBusyDenied', 'fleetOffline', 'fleetUnknown']) {
     state[mode] = true; await discover(); await choose();
-    assert.match(await page.locator('#view-jobs').innerText(), mode === 'fleetOffline' ? /offline/ : /unknown/); state[mode] = false;
+    assert.match(await page.locator('#jobs-workers').textContent(), mode === 'fleetOffline' ? /offline/ : /unknown/); state[mode] = false;
   }
   for (const role of ['compute', 'robot']) {
     state.fleetCrossKind = role; await discover(); await choose();
@@ -75,10 +75,11 @@ try {
     await page.locator('#jobs-back').click(); await choose();
     assert.equal(await page.locator('#jobs-estimate').isDisabled(), true, `${mode}: Back must not restore stale submission eligibility`);
     for (const role of ['compute', 'robot']) assert.equal(await page.locator(`#jobs-role option[value="${role}"]`).evaluate(el => el.disabled), true);
-    assert.equal(await page.locator('#jobs-history').isDisabled(), false, 'history remains accessible');
+    assert.equal(await page.locator('#jobs-history').isDisabled(), false, 'dashboard history remains accessible');
     state.fleetEmpty = false; state.fleetWrongDomain = false; state.fleetCrossKind = undefined; state.fleetDenied = undefined;
   }
   for (const action of ['domain', 'logout']) {
+    await page.waitForFunction(() => document.querySelector('#jobs-configure')?.disabled === false);
     state.fleetHold = true; await discover();
     await fixture.waitFor(() => fixture.state.exchanges.some(e => e.held && !e.finished && !e.aborted && (e.path.endsWith('/robots') || e.path === '/api/v1/nodes')));
     const held = fixture.state.exchanges.filter(e => e.held && !e.finished && !e.aborted);

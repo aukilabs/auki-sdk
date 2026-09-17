@@ -39,8 +39,10 @@ Robot audience is always explicit, including custom DDS deployments.
 Keep `domain_id` and `installation_id` stable and equal for both workers and the
 UI. Keep each worker's explicit `client_id` stable across restarts and distinct
 from the other worker. These client IDs are installation identifiers, **not**
-DDS compute/robot record IDs: enter the actual provisioned record IDs in the UI
-and verify receipt executors. Compute receives only its own registration and
+DDS compute/robot record IDs. In the UI, select the approved Domain and use
+**Discover / refresh workers** to read activated workers through Fleet. Choose
+an installation explicitly when several are found; no manual worker UUID entry
+is required. Inspect public IDs in source details and verify receipt executors. Compute receives only its own registration and
 wallet secrets; robot receives only its own registration secret and audience.
 The file schema rejects credentials belonging to the other role.
 

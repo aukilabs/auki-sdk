@@ -3,6 +3,7 @@
 // docs/reference/jobs.md; provider http/routes/jobs.rs and http/auth/app.rs,
 // DDS pkg/authpkg/domain_token.go. Browser callers use the real built WASM SDK.
 import assert from 'node:assert/strict';
+import { fleetResponse } from './fleet-fixture.mjs';
 import { createHash, generateKeyPairSync, randomUUID, sign, verify } from 'node:crypto';
 import { startFixture, DOMAIN, OTHER } from './fixture.mjs';
 export const CONFIG = { installationId: '11111111-1111-4111-8111-111111111111', computeId: '22222222-2222-4222-8222-222222222222', robotId: '33333333-3333-4333-8333-333333333333' };
@@ -54,6 +55,7 @@ export function createJobsModel() {
     if (state.deny) return response(403, { error: 'synthetic-backend-secret' });
     try {
       assert.ok(headers['posemesh-client-id']); assert.match(headers['posemesh-sdk-version'] ?? '', /^auki-sdk\//);
+      if (method === 'GET' && path === '/v1/nodes/busy') return response(state.fleetBusyDenied ? 403 : 200, { nodes: [] });
       if (method === 'POST' && ['/v1/jobs', '/v1/jobs/estimate'].includes(path)) {
         assert.equal(url.search, '');
         const role = assertJobSpec(body);
@@ -81,6 +83,10 @@ export function createJobsModel() {
         const q = url.searchParams;
         assert.equal(q.get('domain_id'), claims.domain_id);
         assert.ok(Number(q.get('limit')) >= 1 && Number(q.get('limit')) <= 100);
+        if (!q.has('capabilities')) {
+          assert.equal(q.get('limit'), '50');
+          return response(200, { items: [], next_cursor: null });
+        }
         assert.deepEqual(q.getAll('capabilities').sort(), [capability('compute'), capability('robot')].sort());
         assert.equal(q.get('match_all_capabilities'), 'false');
         assert.ok([...q.keys()].every(k => ['domain_id', 'limit', 'capabilities', 'match_all_capabilities', 'cursor'].includes(k)));
@@ -108,8 +114,14 @@ export async function startJobsFixture() {
   const model = createJobsModel(), pending = new Set();
   const fixture = await startFixture({ primaryRoute: async ({ req, res, url, dataBase, records, contents, hold }) => {
     const auth = /^\/api\/v1\/domains\/([^/]+)\/auth$/.exec(url.pathname);
-    if (!auth && !url.pathname.startsWith('/v1/jobs')) return false;
+    const inventory = fleetResponse({ method: req.method, url, headers: req.headers }, model.state, { domain: DOMAIN, other: OTHER, config: CONFIG, capability });
+    if (!auth && !inventory && !url.pathname.startsWith('/v1/jobs') && url.pathname !== '/v1/nodes/busy') return false;
     const send = (status, value) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(value)); };
+    if (inventory) {
+      if (model.state.fleetHold) await hold(req.fixtureExchange);
+      if (!res.destroyed) send(inventory.status, inventory.body);
+      return true;
+    }
     if (auth) {
       if (req.method !== 'POST' || req.headers.authorization !== 'Bearer synthetic-service' || ![DOMAIN, OTHER].includes(auth[1])) send(403, {});
       else send(200, model.grant(auth[1], dataBase));
@@ -129,6 +141,6 @@ export async function startJobsFixture() {
   } });
   fixture.records.push({ id: INPUT, domain_id: DOMAIN, name: 'Synthetic jobs input', data_type: 'example.text.v1', size: 21, created_at: timestamp, updated_at: timestamp });
   fixture.contents.set(INPUT, Buffer.from('Synthetic jobs input\n'));
-  const release = () => { model.state.hold = undefined; for (const exchange of pending) exchange.release(); };
+  const release = () => { model.state.hold = undefined; model.state.fleetHold = false; fixture.releaseReads(); for (const exchange of pending) exchange.release(); };
   return { ...fixture, model, release, close: async () => { release(); await fixture.close(); } };
 }

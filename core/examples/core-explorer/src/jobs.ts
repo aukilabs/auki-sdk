@@ -2,13 +2,13 @@ import type { AukiDmsJobs, AukiDomainData, JobSpec, JobEstimate, JobDetails, Job
 import { safeError, uuid } from './safety.ts';
 
 export type Role = 'compute' | 'robot';
-export type DemoConfig = { installationId: string; computeId: string; robotId: string };
+export type DemoConfig = { installationId: string; computeId?: string; robotId?: string };
 export type JobsPort = Pick<AukiDmsJobs, 'estimate' | 'submit' | 'get' | 'cancel' | 'list' | 'close'>;
 export type DataPort = Pick<AukiDomainData, 'get' | 'readTo'>;
 export type JobsContext = { domainId: string; environment: string; session: object; createJobs: () => JobsPort; data: DataPort };
 export type JobsState = {
   phase: 'setup' | 'choose' | 'review' | 'submitting' | 'detail' | 'uncertain' | 'history';
-  message: string; config?: DemoConfig; role?: Role; inputId?: string;
+  message: string; config?: DemoConfig; discoveryRequired?: boolean; role?: Role; inputId?: string;
   estimate?: JobEstimate; spec?: JobSpec; details?: JobDetails; items?: JobListItem[];
   nextCursor?: string; jobId?: string; expectedWorkerId?: string; executorMatch?: boolean;
   /** Only these references are eligible for current-Domain data navigation. */
@@ -58,7 +58,7 @@ export class JobsController {
   }
   private base(phase: JobsState['phase'], message: string): JobsState {
     return { phase, message, config: this.state.config, domainId: this.context?.domainId,
-      environment: this.context?.environment, reconciliation: this.state.reconciliation };
+      environment: this.context?.environment, discoveryRequired: this.state.discoveryRequired, reconciliation: this.state.reconciliation };
   }
   private ready(): boolean {
     if (this.closing) return false;
@@ -78,12 +78,27 @@ export class JobsController {
     this.invalidate();
     try {
       if (!context || !this.matches(context)) throw new ValidationError('Select a connected Domain first.');
-      const normalized = Object.freeze({ installationId: uuid(config.installationId), computeId: uuid(config.computeId), robotId: uuid(config.robotId) });
+      const normalized = Object.freeze({ installationId: uuid(config.installationId), computeId: config.computeId ? uuid(config.computeId) : undefined, robotId: config.robotId ? uuid(config.robotId) : undefined });
       this.context = { ...context, domainId: uuid(context.domainId) };
-      this.publish({ ...this.base('choose', 'Choose a record and action. Worker availability is checked by DMS when estimating.'), config: normalized });
+      this.publish({ ...this.base('choose', 'Choose a record and action. Worker availability is checked by DMS when estimating.'), config: normalized, discoveryRequired: false });
     } catch {
-      this.publish({ ...initial(), reconciliation: this.state.reconciliation, message: 'Select a connected Domain and enter complete installation, compute and robot UUIDs.' });
+      this.publish({ ...initial(), reconciliation: this.state.reconciliation, message: 'Select a connected Domain and discover an unambiguous demo installation.' });
     }
+  }
+
+  /** Retain historical executor IDs/recovery, but revoke permission to prepare. */
+  invalidateDiscovery(): void {
+    if (this.closing || this.writePending()) return;
+    this.invalidate();
+    this.publish({ ...this.state, discoveryRequired: true, estimate: undefined, spec: undefined,
+      phase: this.state.phase === 'review' ? 'choose' : this.state.phase });
+  }
+
+  choose(): void {
+    if (!this.ready() || this.writePending()) return;
+    this.invalidate();
+    this.publish(this.base(this.state.reconciliation ? 'uncertain' : 'choose',
+      this.state.reconciliation ? uncertainMessage : 'Choose a record and action.'));
   }
 
   prepare(role: Role, inputId: string): Promise<void> {
@@ -95,7 +110,9 @@ export class JobsController {
     }
     this.publish({ ...this.base('choose', 'Checking input metadata and bounded contents…'), role });
     return this.run('prepare', async op => {
+      if (this.state.discoveryRequired) throw new ValidationError('Discover an unambiguous executor again before preparing a new job.');
       if (role !== 'compute' && role !== 'robot') throw new ValidationError('Choose compute or robot.');
+      if (!this.state.config?.[role === 'compute' ? 'computeId' : 'robotId']) throw new ValidationError('This role is missing or ambiguous. Discover an unambiguous executor first.');
       let id: string;
       try { id = uuid(inputId); } catch { throw new ValidationError('Enter a complete input record UUID.'); }
       const metadata = await op.context.data.get(id, op.abort.signal);
@@ -274,7 +291,7 @@ export class JobsController {
     if (this.closing || !context || !recovery || recovery.session !== context.session
       || !sameId(context.domainId, recovery.reconciliation.domainId) || context.environment !== recovery.reconciliation.environment) return;
     this.context = context;
-    this.publish({ phase: 'uncertain', message: uncertainMessage, config: recovery.config,
+    this.publish({ phase: 'uncertain', message: uncertainMessage, config: recovery.config, discoveryRequired: true,
       domainId: context.domainId, environment: context.environment, reconciliation: recovery.reconciliation });
   }
 

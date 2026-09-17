@@ -55,8 +55,7 @@ try {
   const step = async name => { await page.locator(`[data-jobs-screen="${name}"]:visible`).waitFor(); assert.equal(await page.locator('[data-jobs-screen]:visible').count(), 1); };
   const configure = async () => {
     await open(); await page.locator('#jobs-configure').click(); await step('setup');
-    for (const [selector, value] of [['#jobs-installation', CONFIG.installationId], ['#jobs-compute-id', CONFIG.computeId], ['#jobs-robot-id', CONFIG.robotId]]) await page.locator(selector).fill(value);
-    await page.locator('#jobs-save-config').click(); await step('choose');
+    await page.locator('#fleet-refresh').click(); await step('choose');
   };
   let confirmations = 0;
   const noRetry = async () => { await page.waitForTimeout(700); assert.equal(await page.evaluate(() => window.__jobsPosts.length), confirmations, 'exactly one actual SDK fetch per explicit confirmation'); };
@@ -174,7 +173,7 @@ try {
   await login('jobs-after-uncertain@example.test', OTHER); await open(); await step('setup');
   assert.ok(!(await page.locator('#view-jobs').innerText()).includes(sent.body.label));
   await selectDomain(page, DOMAIN); await open(); await step('setup');
-  for (const selector of ['#jobs-installation', '#jobs-compute-id', '#jobs-robot-id']) assert.equal(await page.locator(selector).inputValue(), '');
+  assert.equal(await page.locator('[data-fleet-installation]').count(), 0, 'previous discoveries cleared');
   // Late HTTP results must be aborted and fenced on Domain switch and logout.
   for (const action of ['domain', 'logout']) {
     await configure(); await page.locator('#jobs-input').fill(INPUT); state.hold = '/estimate';
@@ -188,7 +187,7 @@ try {
     assert.equal(state.cancellations.length, cancelCount, 'closing never cancels a server job');
     if (action === 'logout') await login('jobs-b@example.test', OTHER);
     await open(); await step('setup');
-    for (const selector of ['#jobs-installation', '#jobs-compute-id', '#jobs-robot-id']) assert.equal(await page.locator(selector).inputValue(), '');
+    assert.equal(await page.locator('[data-fleet-installation]').count(), 0, 'previous discoveries cleared');
     const visible = await page.locator('#view-jobs').innerText();
     for (const old of [DOMAIN, INPUT, COST, CONFIG.installationId, ambiguous.body.label]) assert.ok(!visible.includes(old), 'no previous session/Domain results');
     assert.equal(await page.locator('[data-job-output]').count(), 0); assert.equal(await page.locator('#jobs-confirm').count(), 0);

@@ -273,3 +273,49 @@ test('logout during Domain cleanup erases retained in-flight recovery before new
   await h.controller.configure(config); await h.controller.prepare('compute', input);
   assert.equal(h.controller.state.phase, 'review'); await h.controller.close();
 });
+
+test('missing discovered roles fail before estimation while the other role remains usable', async () => {
+  const h = harness();
+  await h.controller.configure({ installationId: config.installationId, robotId: config.robotId });
+  await h.controller.prepare('compute', input); assert.match(h.controller.state.message, /missing or ambiguous/);
+  assert.deepEqual(h.calls, []); await h.controller.submit(); assert.equal(h.submitted.length, 0);
+  await h.controller.prepare('robot', input); assert.equal(h.controller.state.phase, 'review'); await h.controller.close();
+});
+test('rediscovery revokes old review and Back/new-job eligibility while retaining history IDs', async () => {
+  const h = harness(); await h.controller.configure(config); await h.controller.prepare('compute', input);
+  h.controller.invalidateDiscovery();
+  assert.equal(h.controller.state.spec, undefined); assert.equal(h.controller.state.estimate, undefined);
+  await h.controller.submit(); assert.equal(h.submitted.length, 0);
+  h.controller.choose(); await h.controller.prepare('compute', input);
+  assert.equal(h.calls.filter(c => c === 'estimate').length, 1);
+  assert.match(h.controller.state.message, /Discover/);
+  await h.controller.list(); assert.equal(h.controller.state.phase, 'history');
+  assert.deepEqual(h.controller.state.config, config);
+  await h.controller.inspect(job); assert.equal(h.controller.state.executorMatch, true);
+  h.controller.choose(); await h.controller.prepare('robot', input);
+  assert.equal(h.calls.filter(c => c === 'estimate').length, 1);
+  await h.controller.configure(config); await h.controller.prepare('robot', input);
+  assert.equal(h.controller.state.phase, 'review'); await h.controller.close();
+});
+test('rediscovery invalidation retains uncertainty and reconciliation history', async () => {
+  const h = harness({ submit: async () => { throw { code: 'submission_uncertain' }; } });
+  await h.controller.configure(config); await h.controller.prepare('compute', input); await h.controller.submit();
+  const reconciliation = h.controller.state.reconciliation;
+  h.controller.invalidateDiscovery(); h.controller.choose(); await h.controller.list();
+  assert.deepEqual(h.controller.state.reconciliation, reconciliation); assert.deepEqual(h.controller.state.config, config);
+  await h.controller.prepare('robot', input); await h.controller.submit();
+  assert.equal(h.controller.state.phase, 'uncertain'); assert.equal(h.calls.filter(c => c === 'estimate').length, 1);
+  await h.controller.close();
+});
+test('rediscovery aborts and fences an in-flight estimate', async () => {
+  const entered = deferred<void>(), delayed = deferred<typeof estimate>();
+  let signal: AbortSignal | null | undefined;
+  const h = harness({ estimate: async (_spec, abort) => { signal = abort; entered.resolve(); return delayed.promise; } });
+  await h.controller.configure(config);
+  const preparing = h.controller.prepare('compute', input); await entered.promise;
+  h.controller.invalidateDiscovery(); assert.equal(signal?.aborted, true);
+  delayed.resolve(estimate); await preparing;
+  assert.equal(h.controller.state.spec, undefined); assert.equal(h.controller.state.estimate, undefined);
+  assert.equal(h.controller.state.discoveryRequired, true);
+  await h.controller.submit(); assert.equal(h.submitted.length, 0); await h.controller.close();
+});

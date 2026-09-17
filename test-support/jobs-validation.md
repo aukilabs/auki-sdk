@@ -3,9 +3,11 @@
 This records the SDK implementation for [#379](https://github.com/aukilabs/auki-sdk/issues/379).
 Offline checks use local HTTP or intercepted Fetch fixtures and synthetic
 credentials. Authorized dev runs exercised Python/shared Rust on 2026-09-16 and
-WASM in Chrome plus Swift on macOS and the iOS Simulator on 2026-09-17. Final
-job states were independently audited through the SDK. No workers were provisioned
-and no backend or deployment changes were made.
+WASM in Chrome plus Swift on macOS and the iOS Simulator on 2026-09-17. Imported
+ZITADEL was subsequently exercised in those runtimes and Expo iOS. Final
+job states were independently audited through the SDK. A dedicated dev compute
+node was subsequently provisioned for imported-ZITADEL validation in that
+account's organization. No backend or deployment changes were made.
 
 ## Provider contract
 
@@ -60,10 +62,11 @@ structured failures and cancellation. Expo JavaScript tests exercise its native
 bridge contract and lifecycle. The Swift codec exercise verifies generated API
 compatibility and field conversion; it is not a live DMS round trip.
 
-The full Expo example app harness reached Metro bundling but failed because its
-entry path used `/tmp` while the canonical checkout used `/private/tmp`. The
-isolated native module build above passed. No new jobs flow was run in an Expo
-simulator or on a physical device.
+The initial full Expo example app build reached Metro bundling but failed because
+its entry path used `/tmp` while the canonical checkout used `/private/tmp`.
+A later Release build with a canonical `ENTRY_FILE` override succeeded and ran
+the actual Expo iOS jobs flow described below. Physical-device execution remains
+unrun.
 
 ## Native Rust/Python live dev results
 
@@ -80,7 +83,7 @@ DMS URL ending in `/v1/`.
 | Trusted App single task | Passed: estimate `0.002`, submission, execution, progress/receipt, output read, and filtered listing; the compute fixture matched the App's organization while the permitted Domain had a different owner |
 | Running-job cancellation | Passed: cancel acknowledgment, handler termination, canceled task, provider audit receipt with no outputs, and reported credit release |
 | Read-only App | Passed on 2026-09-17 with a fresh session: Domain data listing succeeded, while job listing and submission both returned HTTP 401. This is the deployed middleware's response for a grant without write scope; no permission changes were needed for this final check |
-| Imported ZITADEL | Domain/job listing passed; estimate returned HTTP 400 with no eligible test worker in this account's organization. No successful job submission/execution is claimed |
+| Imported ZITADEL | Passed after provisioning a dedicated test node in the account's organization: two-stage execution and running cancellation. See the imported-session results below |
 | Cleanup | All six run-owned Domain records deleted; temporary App permissions and legacy access-control fields matched their original snapshots; worker closed and original capabilities/version/mode/concurrency restored |
 
 Job IDs retained for audit:
@@ -182,15 +185,99 @@ and loopback server were closed; the temporary simulator app was uninstalled, it
 credential copy removed, and the simulator booted for this test was shut down.
 No SDK runtime change was needed for these platform checks.
 
-## Remaining live validation
+## Imported ZITADEL live dev results
 
-Successful imported-ZITADEL execution needs an approved compatible worker in that
-principal's organization. The saved imported session expired after the successful
-listing check; on 2026-09-17 its refresh was rejected as OAuth `InvalidRequest`,
-so further imported checks need a fresh session with the SDK as sole refresh owner.
-No refresh or issuer validation was relaxed. The Web/Swift checks above cover User
-login. Expo's live JavaScript-to-native jobs flow and physical-device execution
-remain unrun; the Swift simulator run does not claim those additional paths.
+On 2026-09-17, the user supplied a fresh owner session and authorized provisioning
+a test worker. The API service-token exchange returned an unrestricted
+`user-access` grant for organization `512693fb-63ec-4344-913b-67e3cc592cd6`.
+Using that API-issued grant, DDS created dedicated compute node
+`aa57d4c7-19c2-4825-bcf4-89439625a46c` (`sdk-379-zitadel-1f46cc35-6af`).
+The native SDK registered it using its new registration credential and a locally
+generated wallet key. Registration succeeded without staking or funding changes.
+Only the run-specific third-party capability was advertised; no robot, relay,
+discovery, or existing worker configuration was changed.
+
+Run `1f46cc35-6aff-475b-a197-5255c77a85f7` used the existing dev Domain
+`055a3c82-22a4-413b-968f-73b5c2e2e0db` (`dmtbot-test-domain`).
+
+| Imported-session runtime | Completed job | Canceled job |
+| --- | --- | --- |
+| Native Rust/Python, two-stage graph | `a606305b-cf01-4e52-a960-40884a09c577` | `fbcfcdb7-f9ab-4a0e-911f-b998b2382ddb` |
+| WASM, Headless Chrome 153 | `1e3ca0ad-25ea-4034-a24a-08456e37b463` | `678bd321-5e0c-405f-a07d-2bec17ead2cc` |
+| Native Swift, macOS arm64 | `8019c79e-c6e5-4275-b984-45c3c0680d86` | `752a22ff-6494-4d62-82a9-9c2ed8af153e` |
+| Native Swift, iPhone 17 Pro Simulator, iOS 26.5 | `7724f422-deb8-4d49-a0ef-952517287b1c` | `8f1fefde-8523-4032-a4af-ccd8915a205e` |
+| Expo iOS 26.2 Simulator, initial check | `fc328dea-7d86-4c80-b57b-961e915cd4ae` | `51e3f3c3-8593-4313-9722-349285805c96` |
+| Expo iOS 26.2 Simulator, final check | `169ecd06-632f-49ea-9dea-d02ad46ad7d3` | `bc1b4500-aaf5-4187-a70d-15a9bd666af3` |
+
+Each runtime passed estimate, one-shot submission, progress, worker receipts,
+exact output-content reads, filtered listing, and cancellation after observing
+the task running. Cancellation assertions included terminal tasks, empty-output
+audit receipts, and reported credit release. The native graph also checked
+dependency order. The independent SDK audit confirmed all twelve jobs and
+thirteen tasks terminal, with every reported credit lock released. It verified
+all thirteen run-owned input/output records returned HTTP 404 for metadata lookup
+and their eleven distinct names no longer listed any records. The run's combined
+estimates were `0.026` credits; completed tasks reported `0.014` debited credits.
+
+Python and WASM each exercised a live ZITADEL refresh. Their complete replacement
+snapshots were atomically persisted before the SDK continued. The browser used
+direct Fetch to the issuer and dev services with normal CORS enforcement.
+Swift imported the retained snapshot and used an awaited atomic storage callback.
+Only one runtime owned refresh at a time; clients and session were closed before
+handing the latest snapshot to the next runtime. The Swift simulator app was
+uninstalled and its bundled credential copies removed after retrieving its final
+snapshot. No SDK runtime change or provider configuration change was needed.
+
+Expo ran a Release app using the public JavaScript `importZitadelSession`, `jobs`
+and `data` APIs through the actual iOS native module. Its first private harness
+checked the cancellation receipt as soon as the job status became canceled,
+before worker finalization. The harness was corrected to wait for the receipt;
+final read-only checks on the same job IDs verified canceled tasks, the
+`job_cancel` receipt and reported credit release. The output bytes and receipt
+metadata had already passed before cleanup deleted those records. The read-only
+check recorded the expected output 404 after deletion. No third job pair was
+submitted, and Expo's combined estimate was `0.008` credits. This test adjustment
+reflects the documented asynchronous cancellation contract, not an SDK fix.
+
+After validation, the compute runtime and credential were closed and its process
+exited successfully. The new dedicated node record and private registration/wallet
+credentials are retained for reuse. DDS still reported cached online presence
+immediately after shutdown; no immediate offline transition or node deletion is
+claimed. The browser and loopback servers were closed, temporary simulator apps
+were removed, and the simulator created for Expo was deleted. Temporary Expo
+example changes were restored. The final imported snapshot and its recovery copy
+match, both remain private, and no refresh-owner lock remains.
+
+Private commands/evidence:
+
+- `core/bindings/python/auki-sdk-py/.venv/bin/python .jobs-dev/provision_zitadel_worker.py`
+  refreshed the imported session, exchanged the service grant and created the node.
+- `.jobs-dev/zitadel_worker.py` ran the actual SDK compute runtime;
+  `.jobs-dev/zitadel_native_jobs.py` exercised the native jobs client.
+- The Playwright CLI opened `.jobs-dev/web_zitadel.mjs` through a loopback server;
+  `.jobs-dev/zitadel-wasm-report.json` records the real Chrome checks.
+- `.jobs-dev/swift/live-jobs` and the generated simulator app used the typed Swift
+  jobs API and generated UniFFI binding. Evidence is in
+  `.jobs-dev/swift/run-zitadel-macos/evidence.json` and
+  `.jobs-dev/swift/run-zitadel-ios-simulator/evidence.json`.
+- `.jobs-dev/audit_zitadel_jobs.py` independently queried final jobs and cleanup
+  through the rebuilt Python binding/shared Rust SDK.
+- `.jobs-dev/expo-live/rebundle.sh` built `ZitadelHandoffTest` for Release on the
+  iOS Simulator with `ENTRY_FILE` set to the canonical example `index.js` path.
+  `.jobs-dev/expo-live-report.json` records the final checks; initial/interrupted
+  evidence retains the earlier cancellation timing result. The app used real
+  dev endpoints; the loopback service only supplied credentials and awaited their
+  persistence, and did not proxy backend requests.
+
+## Validation limits and provider follow-ups
+
+Imported-ZITADEL execution is verified above. The earlier estimate failure was
+resolved by provisioning an eligible worker in the session's organization; the
+expired saved session was replaced by a fresh user-supplied session. No refresh,
+issuer, permission, or Domain validation was relaxed. Expo's JavaScript-to-native
+iOS jobs flow is also verified. Physical-device execution and a separate live
+Expo Web wrapper run remain unrun; the Web binding itself was exercised in real
+Chrome, and the Expo Web wrapper passed its offline checks.
 
 The backend cancellation credit-release finding above remains unresolved; backend
 changes are outside this SDK PR.

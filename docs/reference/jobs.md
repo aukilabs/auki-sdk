@@ -72,9 +72,13 @@ can become `submission_uncertain`; the host must reconcile before submitting aga
 
 Source audited 2026-09-16: DMS `06bd863` (the same tree advertised by dev `8088111`)
 and DDS `b27c080` (the same tree as dev `v0.14.6`). Public version metadata was checked;
-cluster image digests were not reverified. Native User/App jobs and User jobs
-through Chrome/WASM, macOS Swift and the iOS Simulator were exercised against dev,
-including execution, results and running-job cancellation; see the
+cluster image digests were not reverified. Live dev checks covered User, trusted
+App and imported ZITADEL in native Rust/Python. Chrome/WASM, macOS Swift and the
+iOS Simulator covered User and imported ZITADEL. These checks included execution,
+results and running-job cancellation. Expo iOS also exercised the imported session
+through its actual JavaScript-to-native bridge. A dedicated dev compute node was
+provisioned through the existing API/DDS contracts for the imported session's
+organization; see the
 [validation record](../../test-support/jobs-validation.md) for the exact boundaries.
 
 - Third-party dedicated capabilities use a configured default price when no explicit
@@ -113,4 +117,4 @@ Rebuild generated bindings and native libraries together. Swift's `AukiSdkError`
 adds the `Jobs` case; applications with exhaustive error switches must handle it.
 Existing endpoint and token formats are unchanged. See the
 [validation record](../../test-support/jobs-validation.md) for checks and live
-validation still required.
+validation boundaries.

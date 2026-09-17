@@ -445,6 +445,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-fleet"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "auki-auth",
+ "auki-dms",
+ "base64",
+ "chrono",
+ "futures",
+ "futures-timer",
+ "httpmock",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
 name = "auki-geometry"
 version = "0.0.0"
 dependencies = [
@@ -810,6 +830,7 @@ dependencies = [
  "auki-auth",
  "auki-dms",
  "auki-domain-client",
+ "auki-fleet",
  "auki-p2p",
  "auki-relay-booking",
  "auki-tasks",

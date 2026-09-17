@@ -227,3 +227,26 @@ abort, close, and fixture cleanup.
 `npm run test:jobs` runs the offline jobs bridge tests for custom capability
 pass-through, paging, cancellation, ambiguous submission handling, persistence
 codes, and awaited close.
+
+## Fleet inventory and activity
+
+```ts
+import { fleet } from "@aukilabs/auki-sdk-expo";
+
+const client = await fleet(sessionId, selectedDomainId);
+try {
+  const inventory = await client.list();
+  const candidates = await client.computePool({ mode: "dedicated", capabilities: ["vendor.example/inspect/v7"] });
+  console.log(inventory.machines, inventory.sources, candidates.complete);
+} finally {
+  await client.close();
+}
+```
+
+Web and iOS share typed queries and snake_case snapshot results. Both operations
+accept an optional `AbortSignal`. `FleetError` retains `kind`, `code`, and
+available `status`; credential persistence and cancellation stay actionable.
+Rebuild/sync the XCFramework with its generated Swift wrappers for iOS. Android
+remains unsupported. Run `npm run test:fleet` for the bridge fixture and see the
+[fleet reference](../../../docs/reference/fleet.md) for permissions, status and
+provider limits. Closing a fleet client leaves the session usable.

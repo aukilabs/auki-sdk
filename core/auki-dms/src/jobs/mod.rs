@@ -18,7 +18,7 @@ use std::{
     time::Duration,
 };
 
-use auki_auth::{AuthSession, DomainAccessProvider};
+use auki_auth::{AuthSession, DomainAccess, DomainAccessProvider};
 use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::sync::RwLock;
@@ -120,6 +120,54 @@ pub struct DomainJobsClient {
 impl DomainJobsClient {
     pub fn domain_id(&self) -> Uuid {
         self.domain_id
+    }
+
+    /// The provider's broad activity feed: public tasks and this User grant's
+    /// organization-scoped dedicated tasks. Entries have no Domain association.
+    /// None means the grant is not a supported User profile; do not interpret
+    /// this as an empty feed or expose entries as selected-Domain jobs.
+    pub async fn busy_nodes_with_cancellation(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<BusyNodeSnapshot>, JobsError> {
+        let mut url = self.client.base.clone();
+        url.path_segments_mut()
+            .expect("validated base URL")
+            .pop_if_empty()
+            .push("nodes")
+            .push("busy");
+        url.query_pairs_mut().append_pair("mode", "all");
+        self.run(cancellation, async {
+            let Some((bytes, grant)) = self
+                .request_with_grant(Method::GET, url, None, cancellation, None, true)
+                .await?
+            else {
+                return Ok(None);
+            };
+            #[derive(Deserialize)]
+            struct Response {
+                nodes: Vec<BusyNode>,
+            }
+            let response: Response = decode(&bytes)?;
+            let mut ids = std::collections::HashSet::new();
+            if response.nodes.iter().any(|node| {
+                node.node_id.is_nil()
+                    || node.task_id.is_nil()
+                    || node.job_id.is_nil()
+                    || !ids.insert(node.node_id)
+                    || !matches!(
+                        node.task_status,
+                        JobTaskStatus::Leased | JobTaskStatus::Running
+                    )
+            }) {
+                return Err(JobsError::InvalidResponse("inconsistent busy-node feed"));
+            }
+            Ok(Some(BusyNodeSnapshot {
+                organization_id: grant.user_organization().expect("checked User profile"),
+                nodes: response.nodes,
+            }))
+        })
+        .await
     }
 
     /// Cancel and drain in-flight HTTP work. This is distinct from canceling a job.
@@ -392,6 +440,22 @@ impl DomainJobsClient {
         cancellation: &CancellationToken,
         sent: Option<&AtomicBool>,
     ) -> Result<Vec<u8>, JobsError> {
+        Ok(self
+            .request_with_grant(method, url, body, cancellation, sent, false)
+            .await?
+            .expect("unrestricted profile request")
+            .0)
+    }
+
+    async fn request_with_grant(
+        &self,
+        method: Method,
+        url: Url,
+        body: Option<&[u8]>,
+        cancellation: &CancellationToken,
+        sent: Option<&AtomicBool>,
+        user_only: bool,
+    ) -> Result<Option<(Vec<u8>, Arc<DomainAccess>)>, JobsError> {
         let mut access = self
             .client
             .session
@@ -405,6 +469,9 @@ impl DomainJobsClient {
                 return Err(JobsError::InvalidResponse(
                     "wrong-Domain, expired, or non-DDS grant",
                 ));
+            }
+            if user_only && access.user_organization().is_none() {
+                return Ok(None);
             }
             let mut request = self
                 .client
@@ -438,7 +505,7 @@ impl DomainJobsClient {
                         .domain_access(self.domain_id, Some(&access), cancellation)
                         .await?;
                 }
-                result => return result,
+                result => return result.map(|bytes| Some((bytes, access))),
             }
         }
         unreachable!("second attempt always returns")

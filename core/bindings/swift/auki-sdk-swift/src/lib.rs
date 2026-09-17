@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 mod data;
+mod fleet;
 mod jobs;
 mod zitadel;
 pub use zitadel::{
@@ -130,6 +131,13 @@ pub enum AukiSdkError {
         message: String,
     },
     #[error("{message}")]
+    Fleet {
+        kind: String,
+        status: Option<u16>,
+        code: String,
+        message: String,
+    },
+    #[error("{message}")]
     Operation { message: String },
 }
 
@@ -139,6 +147,7 @@ pub use data::{
     AukiDomainSummary, AukiDomains, AukiPortal, AukiPortalDomain, AukiPortalPose,
     AukiTransferOptions,
 };
+pub use fleet::AukiDomainFleet;
 pub use jobs::{AukiDomainJobs, AukiJobsFailureKind};
 
 pub(crate) fn operation_error(

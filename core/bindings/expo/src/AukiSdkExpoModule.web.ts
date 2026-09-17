@@ -9,6 +9,8 @@ import type {
   AukiServiceEnvironment,
   DataMetadata,
   DomainPage,
+  ComputePoolQuery,
+  FleetQuery,
   JobListQuery,
   JobSpec,
   Portal,
@@ -27,6 +29,7 @@ type MessageClient = import("./web/generated/auki_sdk_web.js").AukiMessageClient
 type StreamSub = Awaited<ReturnType<StreamClient["subscribeExact"]>>;
 type MessageSender = Awaited<ReturnType<MessageClient["openExact"]>>;
 type DomainDataClient = import("./web/generated/auki_sdk_web.js").AukiDomainData;
+type FleetClient = ReturnType<Session["fleet"]>;
 type JobsClient = ReturnType<Session["jobs"]>;
 type WebDownload = {
   controller: AbortController;
@@ -133,6 +136,9 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
   private messages = new Map<string, { peerHandle: string; sender: MessageSender }>();
   private dataClients = new Map<string, { sessionId: string; client: DomainDataClient }>();
   private dataOperations = new Map<string, AbortController>();
+  private fleetClients = new Map<string, { sessionId: string; client: FleetClient }>();
+  private fleetOperations = new Map<string, AbortController>();
+  private fleetCancelledBeforeStart = new Set<string>();
   private jobsClients = new Map<string, { sessionId: string; client: JobsClient }>();
   private jobsOperations = new Map<string, AbortController>();
   private jobsCancelledBeforeStart = new Set<string>();
@@ -568,6 +574,45 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     }
   }
 
+  async fleetOpen(sessionId: string, domainId: string): Promise<string> {
+    const client = this.session(sessionId).fleet(domainId);
+    const clientId = newId("fleet");
+    this.fleetClients.set(clientId, { sessionId, client });
+    return clientId;
+  }
+
+  async fleetList(clientId: string, queryJson: string, operationId: string): Promise<string> {
+    const query = JSON.parse(queryJson);
+    const converted: FleetQuery = { capabilities: query.capabilities ?? [], matchAllCapabilities: query.match_all_capabilities ?? false };
+    const value = await this.withFleetOperation(operationId, signal => this.fleetClient(clientId).list(converted, signal));
+    return JSON.stringify(value);
+  }
+
+  async fleetComputePool(clientId: string, queryJson: string, operationId: string): Promise<string> {
+    const query = JSON.parse(queryJson);
+    const converted: ComputePoolQuery = { mode: query.mode, capabilities: query.capabilities ?? [], matchAllCapabilities: query.match_all_capabilities ?? false };
+    const value = await this.withFleetOperation(operationId, signal => this.fleetClient(clientId).computePool(converted, signal));
+    return JSON.stringify(value);
+  }
+
+  async fleetOperationCancel(operationId: string): Promise<void> {
+    const operation = this.fleetOperations.get(operationId);
+    if (operation) operation.abort();
+    else if (this.fleetCancelledBeforeStart.size < 1_024) {
+      this.fleetCancelledBeforeStart.add(operationId);
+    }
+  }
+
+  async fleetClose(clientId: string): Promise<void> {
+    const entry = this.fleetClients.get(clientId);
+    if (!entry) return;
+    await entry.client.close();
+    if (this.fleetClients.get(clientId) === entry) {
+      this.fleetClients.delete(clientId);
+      entry.client.free();
+    }
+  }
+
   async jobsOpen(sessionId: string, domainId: string): Promise<string> {
     const client = this.session(sessionId).jobs(domainId);
     const clientId = newId("jobs");
@@ -932,6 +977,28 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     } finally {
       if (this.dataOperations.get(operationId) === controller) {
         this.dataOperations.delete(operationId);
+      }
+    }
+  }
+
+  private fleetClient(clientId: string): FleetClient {
+    const entry = this.fleetClients.get(clientId);
+    if (!entry) throw Object.assign(new Error("The Fleet client is closed"), { kind: "closed", code: "closed" });
+    return entry.client;
+  }
+
+  private async withFleetOperation<T>(
+    operationId: string,
+    operation: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const controller = new AbortController();
+    this.fleetOperations.set(operationId, controller);
+    if (this.fleetCancelledBeforeStart.delete(operationId)) controller.abort();
+    try {
+      return await operation(controller.signal);
+    } finally {
+      if (this.fleetOperations.get(operationId) === controller) {
+        this.fleetOperations.delete(operationId);
       }
     }
   }

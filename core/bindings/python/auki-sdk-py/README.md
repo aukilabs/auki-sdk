@@ -25,6 +25,7 @@ Rust protocols must be compiled into the same extension; see
 | --- | --- | --- |
 | Connect peers | `AukiSession`, `AukiPeer` | [Python Echo](../../../examples/portable-echo/python/README.md) |
 | Read and write Domain data | `session.domains()`, `session.data(domain_id)` | [Domain data guide](../../../../docs/how-to/domain-data.md#use-web-or-python) |
+| Inspect robots and compute activity | `session.fleet(domain_id)` | [Fleet guide](../../../../docs/how-to/inspect-fleet.md) |
 | Submit and monitor DMS jobs | `session.jobs(domain_id)` | `estimate`, `submit`, `list`, `get`, `cancel` |
 | Run compute or robot handlers | `AukiComputeCredential`, `AukiRobotCredential`, `AukiDmsTasks` | [Task guide](../../../../docs/how-to/run-compute-tasks.md) |
 
@@ -170,3 +171,23 @@ The common async completion adapter joins the native bridge completion task in
 an asyncio done callback before resuming awaiters. A ready Python Future alone
 does not prove that native completion has released its Python references.
 Individual closes leave the shared runtime available to other SDK objects.
+
+## Fleet inventory and activity
+
+```python
+fleet = session.fleet(selected_domain_id)
+try:
+    inventory = await fleet.list()
+    candidates = await fleet.compute_pool(mode="dedicated", capabilities=["vendor.example/inspect/v7"])
+    print(inventory["machines"], inventory["sources"])
+finally:
+    await fleet.close()
+```
+
+Results are dictionaries with snake_case fields. Inspect `sources` and
+`work_state`; unknown activity must remain unknown. `AukiFleetError` preserves
+`kind`, `code` and `status`, including credential-persistence failures. App hosts
+can inspect permitted inventory and jobs, but global work state remains unknown.
+See the [fleet reference](../../../../docs/reference/fleet.md).
+Local tests: `python -m pytest core/bindings/python/auki-sdk-py/python_tests/test_fleet.py -q`
+after building the extension in your virtual environment.

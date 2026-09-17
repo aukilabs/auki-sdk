@@ -301,3 +301,34 @@ export type AukiSdkExpoModuleEvents = {
   /** Internal request/ACK bridge. Contains identifiers only, never tokens. */
   onZitadelSaveRequested: (request: { sessionId: string; requestId: string }) => void;
 };
+
+/** Fleet results use the shared Rust wire names, including timestamps and nulls. */
+export interface FleetQuery { capabilities?: string[]; matchAllCapabilities?: boolean }
+export interface ComputePoolQuery extends FleetQuery { mode: JobMode }
+export type FleetPresence = "online" | "offline" | "unknown";
+export type FleetWorkState = "idle" | "busy" | "unknown";
+export type FleetFailureKind = "auth" | "input" | "response" | "http" | "transport" | "timeout" | "cancelled" | "closed" | "limit";
+export interface FleetError extends Error { kind: FleetFailureKind; code: string; status?: number }
+export interface FleetActivity {
+  worker_id: string; job_id: string; task_id: string;
+  task_status: JobTaskStatus; job_status: JobStatus; mode: JobMode; capability: string;
+  lease_expires_at: string | null; last_heartbeat_at: string | null;
+  updated_at: string; observed_at: string;
+}
+export interface FleetMachine {
+  kind: "robot" | "compute"; id: string; organization_id: string; name: string;
+  capabilities: string[]; mode: string; association: "assigned" | "active_task" | "candidate";
+  presence: FleetPresence; provider_status: string; presence_observed_at: string;
+  last_seen_at: string | null; active_lease_expires_at: string | null;
+  work_state: FleetWorkState; work_observed_at: string | null; activity: FleetActivity[];
+}
+export interface FleetSourceReport {
+  source: "robots" | "nodes" | "jobs" | "busy";
+  state: "complete" | "partial" | "denied" | "unsupported" | "unavailable";
+  observed_at: string; codes: string[]; http_status: number | null;
+}
+export interface FleetSnapshot {
+  domain_id: string; view: "domain" | "compute_pool"; observed_at: string;
+  machines: FleetMachine[]; unresolved_activity: FleetActivity[];
+  sources: FleetSourceReport[]; complete: boolean;
+}

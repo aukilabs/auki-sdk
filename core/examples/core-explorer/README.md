@@ -1,8 +1,8 @@
-# Auki Core Explorer · focused screens and uploads
+# Auki Core Explorer · data, Echo and Jobs Playground
 
 A TypeScript/Vite example using the actual generated
 [same-module Portable Echo Web wrapper](../portable-echo/web/README.md). Domain
-data browsing and explicit single-file uploads need no running peer; Echo networking is
+data browsing, explicit single-file uploads and DMS jobs need no running peer; Echo networking is
 optional. It serves Space Grotesk and DM Sans locally and makes no service requests on page load.
 
 ## Setup and run
@@ -45,8 +45,8 @@ is an explicit original-byte `.bin` attachment; downloaded bytes are not redacte
 ## Focused screens
 
 The viewport-oriented application shows one current task, rather than appending
-details below a long page. **Overview**, **Data**, **Portals**, **Poses** and
-**Networking** are separate primary sections. Long lists and content scroll
+details below a long page. **Overview**, **Data**, **Portals**, **Poses**,
+**Networking** and **Jobs** are separate primary sections. Long lists and content scroll
 inside the light paper workspace within compact dark navigation; short windows retain access to controls through scrolling. Body copy stays modest and key actions use orange.
 
 Buttons open the Domain picker, connection settings, advanced filters, record,
@@ -64,6 +64,65 @@ nonblank text. Editing the target/message invalidates old and in-flight results.
 Technical screens retain redacted full IDs, routes and receipt metadata.
 Primary navigation preserves the selected Domain, session, pending reads and
 running peer. Domain changes and logout preserve awaited cleanup.
+
+## Jobs Playground
+
+Jobs use the real `session.jobs(domainId)` Web SDK, not P2P task dispatch or a
+browser control server. The paired [demo workers](workers/README.md) reuse the
+SDK's existing compute/robot handlers:
+
+- **Compute:** read a small UTF-8 record and create its uppercase version.
+- **Robot inspection:** read a small record and create a JSON byte-count/SHA-256
+  report. This is simulated inspection, with no hardware or shell actions.
+
+After selecting a Domain, open **Jobs** and configure the public installation UUID
+and the expected compute/robot node IDs supplied by the operator. Configuration is
+in memory and scoped to the current Domain/session. Domain switching clears visible
+state but retains one unresolved submission and its public configuration in memory
+for reconciliation on returning to that Domain. Until reconciled, new submissions
+are blocked across the session; no recovery entry is evicted. Logout erases all
+configuration and recovery information. Reloading also loses this in-memory recovery. Never paste machine credentials into the browser. Configured IDs are
+**not** an online-status indicator. An operator must activate matching workers
+before real estimation or submission can succeed.
+
+Choose a role and an existing record UUID, or open Jobs from the selected Data
+record. Upload a small input through the existing explicit upload flow if needed.
+The demo input limit is **64 KiB**, independent of the upload limit. Review the
+configured environment, Domain, input, capability, expected executor, output naming
+and DMS decimal-string credit estimate before confirming. Compute inputs must be
+valid UTF-8. Each job has one dedicated task with one maximum attempt. Capability
+names are `/examples/compute-robot/{installationId}/{role}/v1`; this is capability
+routing, not an arbitrary worker-ID selector.
+
+The detail screen reads actual job/task state, worker progress/events, receipts and
+credit-release fields. Executor checks use returned task/receipt information and
+the configured expected ID; configuration alone never proves execution. Accepted
+result references open through the existing selected-Domain Data client. To chain
+operations, open the compute result and explicitly start a robot inspection of it.
+There is no automatic multi-stage pipeline.
+
+All job endpoints, including history and detail reads, require **Domain write
+authority**. Estimates and submission require an eligible online worker and enabled
+credit locking. A read-only data session or successful Echo is not sufficient.
+
+Submission is explicit and is never automatically repeated by the application.
+A unique label helps reconciliation but is **not** an idempotency key. A lost,
+malformed or ambiguous response can mean a job was already created and charged;
+inspect/reconcile it rather than resubmitting blindly. History reads one bounded
+provider page at a time and passes cursors unchanged. Known provider pagination
+issue [#396](https://github.com/aukilabs/auki-sdk/issues/396) means a missing history
+entry does not prove the job was never submitted.
+
+Cancellation requests cancellation of the whole job, not an individual task.
+A canceled job may still have a running task, and an unset `credit_released_at`
+does not prove funds were released. Closing the client, changing Domains or logging
+out aborts/drains local requests; it does **not** cancel remote jobs or undo writes.
+
+Worker configuration examples and supervised-service templates are inert files.
+This PR does not provision identities, install/start services, spend live credits
+or validate deployed-provider execution. Activation requires separate explicit
+environment/Domain/identity approval and a finite test-credit budget. See the
+[worker runbook](workers/README.md) for validation, start/stop and rollback boundaries.
 
 ## Explicit single-file upload
 
@@ -85,18 +144,27 @@ upload. Cancellation does not promise rollback. Domain changes/logout abort and
 invalidate old work, suppressing late results. Within the same session an uncertain target remains available after changing Domains. Logout completely clears file, type, destination, target and returned metadata before another account signs in. Review starts at the top with destination and file visible; returned metadata opens a separate redacted technical screen with Back.
 
 The UI uses `/brand/tokens.css`, the official `/brand/auki-logo.svg`, and local
-OFL fonts; it does not load fonts from a CDN. Final local acceptance passed with
-69 TypeScript unit tests, 7 fixture/config tests and 6 Python tests. Real generated
-SDK/WASM browsing, binary upload/download, cancellation/session isolation and
-browser-to-Python Echo passed; five robot processes exited normally with zero task
-claims. Desktop, mobile, narrow, short and high-scale viewport captures were checked.
-These are synthetic-loopback tests, not deployed-provider validation.
+OFL fonts; it does not load fonts from a CDN. Local checks include 105 TypeScript
+unit tests, 13 fixture/config tests, 25 Jobs worker tests and 6 idle-Echo robot tests.
+Real generated SDK/WASM browsing, binary upload/download and Jobs use synthetic
+loopback services; the separate Echo suite uses a real local Python robot. Jobs
+browser tests do not pretend their synthetic DMS provider executed native workers.
+Separate native-SDK probes exercised both actual Python handlers' bounded data
+reads/writes and exact bytes/hashes against loopback fixtures, using synthetic task
+contexts and User grants rather than real machine leases. Native credential/runtime
+construction and awaited closure also passed under the service template's host
+hardening and resource caps, without starting registration or task polling.
+These checks do not establish deployed-provider compatibility or live availability.
 
 Actual app screenshots: [Overview](screenshots/overview.png),
 [Data](screenshots/domain-explorer.png), [verified Echo](screenshots/networking.png),
 [mobile Echo](screenshots/networking-mobile.png),
-[upload review](screenshots/upload-review.png) and
-[mobile upload review](screenshots/upload-review-mobile.png).
+[upload review](screenshots/upload-review.png),
+[mobile upload review](screenshots/upload-review-mobile.png),
+[Jobs action](screenshots/jobs-choose.png), [Jobs review](screenshots/jobs-review.png),
+[Jobs result](screenshots/jobs-result.png) and
+[mobile Jobs review](screenshots/jobs-review-mobile.png). Jobs captures use explicitly
+labelled synthetic fixtures, not deployed worker results.
 
 ## Verification
 
@@ -115,6 +183,9 @@ npm run build
 npx playwright install chromium
 npm run test:browser
 npm run test:upload
+npm run test:jobs-fixture
+npm run test:workers
+npm run test:jobs
 ```
 
 Browser tests start the production Vite preview on `127.0.0.1:18116` and HTTP
@@ -142,6 +213,7 @@ synchronization; completing a delayed response cannot satisfy these assertions.
 | Record metadata | `data.get(id, signal)` | Chromium inspector |
 | Preview and download | `data.read(id, signal)` | Chromium inert/redacted JSON, 64 KiB display cap, >8 MiB failure, original download bytes |
 | Explicit named upload | `data.write(target, bytes, signal)` then `data.get(id, signal)` | Local real-WASM upload browser suite, separate write denials and completion/verification states |
+| Jobs Playground | `session.jobs(domainId).estimate/submit/get/list/cancel` | Real-WASM synthetic HTTP suite, exact review, executor/result validation, uncertainty, cancellation and session/Domain isolation |
 | Cleanup | `data.close()`, then `session.close()` | Unit awaited order; Chromium server-observed aborts during pending A→B→A switches and logout |
 | Validation/redaction/timeout | App helpers around public APIs | Deterministic unit tests |
 
@@ -179,8 +251,7 @@ existing example builds and keep iteration bounded; the generated module is abou
 
 - Overwrite/delete controls, streaming transfers above 8 MiB and spatial visualization.
 - Imported ZITADEL/PKCE login and browser machine credentials.
-- Jobs and fleet tooling: this example makes no claim that corresponding Web
-  SDK APIs exist.
+- Fleet inventory/online status and one-click multi-stage job graphs.
 - Live provider/deployment validation, permission matrices across real roles,
   and additional browsers/platforms need separate approved environments.
 - No existing CI workflow is present in this checkout. CI integration is left

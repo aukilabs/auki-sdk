@@ -244,3 +244,17 @@ test('coalesced close still cancels a login begun during delayed session cleanup
   assert.equal(await accepting, false); assert.ok(lateClosed); assert.equal(connection.session, undefined);
   release(); await Promise.all([first, second]);
 });
+
+for (const failing of ['shutdown', 'client-free', 'peer-free']) test(`strict networking cleanup reports ${failing} failure and still closes shared session`, async () => {
+  const events: string[] = [];
+  const net = new Networking(() => {});
+  await net.start(async () => ({ shutdown: async () => { events.push('shutdown'); if (failing === 'shutdown') throw new Error('private'); }, free: () => { events.push('peer-free'); if (failing === 'peer-free') throw new Error('private'); } }),
+    () => ({ free: () => { events.push('client-free'); if (failing === 'client-free') throw new Error('private'); } }));
+  const connection = new Connection();
+  await connection.accept(Promise.resolve({ close: async () => { events.push('session-close'); } } as unknown as AukiUserSession));
+  connection.beforeClose = () => net.close();
+  await assert.rejects(connection.close(), /Cleanup failed/);
+  assert.deepEqual(events, ['shutdown', 'client-free', 'peer-free', 'session-close']);
+  await net.stop(); // UI/timer callers retain non-rejecting stop semantics.
+  assert.equal(net.peer, undefined); assert.equal(net.client, undefined);
+});

@@ -39,7 +39,7 @@ export function storeBufferedUpload(records, contents, domainId, upload, timesta
   return { status: 200, body: { data: [record] } };
 }
 
-export async function startFixture() {
+export async function startFixture({ primaryRoute } = {}) {
   const state = { requests: [], denyLogin: false, denyDomains: false, denyPortals: false, denyData: false, emptyDomains: false, holdReads: false, holdLogin: false, aborted: 0, exchanges: [], uploads: [], denyWrite: false, collideWrite: false, failWrite: false, dropWriteResponse: false, holdWrites: false, holdVerification: false, denyVerification: false };
   const events = new EventEmitter();
   const changed = () => events.emit('change');
@@ -136,6 +136,8 @@ export async function startFixture() {
   const dataBase = `http://127.0.0.1:${dataServer.address().port}`;
   let base;
   const primary = http.createServer(wrap(async (req, res, url) => {
+    // Optional synthetic-provider composition; existing fixtures retain all defaults.
+    if (primaryRoute && await primaryRoute({ req, res, url, dataBase, records, contents, hold })) return;
     if (url.pathname === '/user/login') {
       for await (const _ of req) { /* Deliberately do not retain credentials. */ }
       if (state.holdLogin) await hold(req.fixtureExchange);

@@ -1,0 +1,10 @@
+{
+  "role": "compute",
+  "domain_id": "<approved-domain-uuid>",
+  "installation_id": "<stable-installation-uuid-shared-with-ui-and-robot>",
+  "client_id": "<stable-compute-client-uuid>",
+  "dds_url": "https://dds.example.invalid",
+  "dms_url": "https://dms.example.invalid/v1",
+  "registration": "<provisioned-compute-registration-secret>",
+  "wallet_key": "<provisioned-compute-wallet-private-key>"
+}

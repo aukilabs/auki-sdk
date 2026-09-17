@@ -33,3 +33,26 @@ test('Back preserves native and explicit control tabIndex; only headings become 
     assert.equal(target.tabIndex, expected); assert.equal(focused, true);
   }
 });
+
+test('Jobs is a primary screen; output records and previews return to Jobs', () => {
+  assert.equal(isScreen('jobs'), true);
+  const navigation = new ScreenHistory();
+  navigation.reset('data'); navigation.go('record'); navigation.go('jobs');
+  navigation.go('record'); navigation.go('preview');
+  assert.equal(navigation.back(), 'record');
+  assert.equal(navigation.back(), 'jobs');
+  assert.equal(navigation.back(), 'overview');
+  navigation.reset('access');
+  assert.equal(navigation.current, 'access');
+});
+
+import { jobsShouldPoll } from '../src/screens.ts';
+test('Jobs polling stops outside visible detail and when all tasks are terminal', () => {
+  for (const status of ['queued', 'leased', 'running']) {
+    assert.equal(jobsShouldPoll(true, 'detail', [{ status }]), true);
+    assert.equal(jobsShouldPoll(false, 'detail', [{ status }]), false);
+    assert.equal(jobsShouldPoll(true, 'history', [{ status }]), false);
+  }
+  assert.equal(jobsShouldPoll(true, 'detail', []), false);
+  assert.equal(jobsShouldPoll(true, 'detail', ['completed', 'failed', 'canceled'].map(status => ({ status }))), false);
+});

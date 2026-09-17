@@ -9,6 +9,8 @@ Enable the portable `jobs` feature (also re-exported by `auki-sdk`) for
 and cancel jobs using a shared User/App or imported ZITADEL session. The jobs
 client does not require a peer or a machine credential. See the
 [jobs reference](../../docs/reference/jobs.md) for request limits and provider constraints.
+`submit_with_key` supports caller-controlled recovery with a persisted operation
+key after the linked NCS/DMS rollout is verified; existing `submit` stays unkeyed.
 
 Use [`auki-tasks`](../auki-tasks/README.md) to run compute or robot handlers
 with managed heartbeats and cleanup. For existing hosts, see the

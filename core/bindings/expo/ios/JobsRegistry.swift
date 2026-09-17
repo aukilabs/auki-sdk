@@ -48,9 +48,11 @@ final class ExpoJobsFailure: Exception {
   private let failureCode: String
   private let failureReason: String
 
-  init(kind: String, status: UInt16?, code: String?, maximum: UInt64?, source: String?, message: String) {
+  init(kind: String, status: UInt16?, code: String?, maximum: UInt64?, source: String?,
+       retryAfterSeconds: UInt32? = nil, message: String) {
     let authCode = kind == "auth" ? code ?? "" : ""
-    failureCode = ["jobs", kind, status.map(String.init) ?? "", authCode, source ?? ""]
+    failureCode = ["jobs", kind, status.map(String.init) ?? "", authCode, source ?? "",
+                  retryAfterSeconds.map(String.init) ?? ""]
       .joined(separator: ":")
     var reason = message
     if let maximum { reason += " (maximum: \(maximum) bytes)" }
@@ -64,9 +66,9 @@ final class ExpoJobsFailure: Exception {
 
 func withJobsErrors<T>(_ operation: () async throws -> T) async throws -> T {
   do { return try await operation() }
-  catch AukiSdkError.Jobs(let kind, let status, let code, let maximum, let sourceCode, let message) {
+  catch AukiSdkError.Jobs(let kind, let status, let code, let maximum, let sourceCode, let retryAfterSeconds, let message) {
     throw ExpoJobsFailure(kind: expoJobsFailureKind(kind), status: status, code: code,
-      maximum: maximum, source: sourceCode, message: message)
+      maximum: maximum, source: sourceCode, retryAfterSeconds: retryAfterSeconds, message: message)
   }
 }
 
@@ -82,6 +84,7 @@ private func expoJobsFailureKind(_ kind: AukiJobsFailureKind) -> String {
   case .closed: return "closed"
   case .tooLarge: return "too_large"
   case .submissionUncertain: return "submission_uncertain"
+  case .submissionInProgress: return "submission_in_progress"
   }
 }
 #endif

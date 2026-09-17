@@ -11,6 +11,7 @@ worker and requires no machine credential.
 | --- | --- | --- |
 | `estimate(spec)` | `POST jobs/estimate` | Decimal-string total and task estimates |
 | `submit(spec)` | `POST jobs` | Created job UUID |
+| `submit_with_key(spec, key)` | `POST jobs` with `Idempotency-Key` | Created or recovered job UUID; requires a capable deployment |
 | `list(query)` | `GET jobs` | Items with task counts and opaque `next_cursor` |
 | `get(id)` | `GET jobs/{id}` | Job, task counts, tasks, and result receipts |
 | `cancel(id)` | `POST jobs/{id}/cancel` | Job status and update time |
@@ -66,7 +67,52 @@ an ambiguous submission, other HTTP errors, or a failed transport. `JobsError::c
 and `http_status()` expose recovery categories without leaking response bodies.
 Imported-session persistence errors keep their `persistence` category. A timeout,
 cancellation, malformed success, or transport/server failure after submission begins
-can become `submission_uncertain`; the host must reconcile before submitting again.
+can become `submission_uncertain`. Unkeyed submissions require reconciliation before
+submitting again; keyed recovery follows the deployment-gated contract below.
+
+## Recover a keyed submission
+
+Enable keyed submission only after verifying that the target environment has
+[NCS #208](https://github.com/aukilabs/network-credit-service/pull/208) and
+[DMS #43](https://github.com/aukilabs/domain-manager-service/pull/43), including the
+DMS migration, deployed to **all** serving replicas, or equivalent later versions.
+The source baselines below predate that contract. Older DMS silently ignores the
+header, so a successful keyed call does not prove support; mixed old/new replicas
+cannot guarantee deduplication. This SDK does not detect support or enable retries.
+
+Generate a random operation key once and persist it **with the immutable job
+specification before the first send**. Keys contain 1–128 visible ASCII characters,
+without spaces; invalid keys fail locally without authentication or HTTP work.
+The key is a header, not a job field, label, transport peer ID, or credential.
+
+On that verified deployment, `submit_with_key` can recover a lost result by sending
+the same key and specification. DMS scopes the key to the verified DDS issuer,
+token type, subject, organization and selected Domain. Token renewal preserves
+recovery only when that principal scope is unchanged. Refreshing or changing
+credentials does not bypass authentication or write permission checks.
+
+| Outcome | SDK result | Caller action |
+| --- | --- | --- |
+| New job or completed matching replay | Original job UUID | Persist the returned ID |
+| Matching submission still processing | `submission_in_progress`, HTTP 409, `retry_after_seconds()` | Wait at least the supplied delay, then retry the same key/spec with a bound |
+| Same key, changed request | `http_status`, HTTP 409, no retry hint | Stop; recover the original request rather than replacing its key |
+| Transport loss, timeout, cancellation after send, or server failure | `submission_uncertain` with redacted cause/status | Retain key/spec; explicitly retry the same operation when appropriate |
+| Insufficient credits | HTTP 402 | The reserved key remains bound to the original request |
+
+Only a keyed submission's HTTP 409 with a valid numeric `Retry-After` becomes
+`submission_in_progress`. Missing, malformed, or inaccessible hints remain plain
+conflicts. Browsers require CORS permission for `Idempotency-Key` and exposure of
+`Retry-After`; DMS #43's permissive CORS layer provides both. Proxies must preserve
+them. Other retry hints do not change the SDK's conservative error classification.
+
+DMS compares parsed requests with defaults applied: object key order is irrelevant;
+array order and recognized fields matter. Keep the original payload rather than
+reconstructing it after an SDK/default change. Keys are retained indefinitely,
+including after job cancellation/deletion; replay never starts a replacement job.
+New work requires a new key. Canceling the local HTTP operation does not cancel
+an accepted job or erase its reservation. Abandoned pending credit reservations
+need caller recovery or operator reconciliation; no background sweeper is provided.
+See the [provider contract](https://github.com/aukilabs/domain-manager-service/blob/feature/387-job-idempotency/docs/job-submission-idempotency.md).
 
 ## Provider compatibility and known constraints
 
@@ -92,7 +138,8 @@ organization; see the
   job state before explicitly retrying cancellation with a small attempt limit.
   The audited backend's lease-expiry cleanup can leave `credit_released_at` unset
   after cancellation; this requires a backend correction, not an SDK retry loop.
-- Job creation has no idempotency key; application labels are not uniqueness keys.
+- The audited baseline predates keyed submission. Follow the deployment gate above;
+  application labels are not uniqueness keys.
 - Current DMS pagination encodes the discarded overflow row as its next cursor and
   then excludes that row. This can skip one job between pages. The SDK exposes the
   provider's cursor unchanged; a complete listing requires the backend fix tracked
@@ -113,8 +160,22 @@ Each binding exposes jobs from its existing session with explicit Domain selecti
 existing Expo binding. See [Submit and monitor Domain jobs](../how-to/submit-jobs.md)
 for Rust examples.
 
-Rebuild generated bindings and native libraries together. Swift's `AukiSdkError`
-adds the `Jobs` case; applications with exhaustive error switches must handle it.
-Existing endpoint and token formats are unchanged. See the
+The keyed methods are `submit_with_key(spec, idempotency_key)` in Rust/Python,
+`submitWithKey(spec, idempotencyKey, signal?)` in Web/Expo, and
+`submitWithKey(spec, idempotencyKey: key, cancellation: token)` in Swift. Rust also
+has `submit_with_key_and_cancellation`. Python exposes `retry_after_seconds`;
+Web/Expo expose `retryAfterSeconds`; Swift's `Jobs` error includes
+`retryAfterSeconds`. These methods never generate keys or retry automatically.
+Existing `submit` signatures and unkeyed behavior are unchanged.
+
+**Source compatibility:** Rust `JobsError` adds `SubmissionInProgress`; update
+exhaustive matches. Swift `AukiJobsFailureKind` adds `submissionInProgress`, and
+`AukiSdkError.Jobs` adds an optional `retryAfterSeconds` associated value before
+`message`. Rebuild generated bindings and native libraries together and update
+exhaustive Swift error switches/catches. Expo adds a failure-kind union member and
+native bridge method; ship its matching native module with the JavaScript update.
+Existing endpoint, JSON and token formats are unchanged. See the
+[keyed-submission validation](../../test-support/job-idempotency-validation.md) for
+this opt-in API and the original
 [validation record](../../test-support/jobs-validation.md) for checks and live
 validation boundaries.

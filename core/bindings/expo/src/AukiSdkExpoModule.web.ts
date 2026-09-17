@@ -631,6 +631,11 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
       this.jobsClient(clientId).submit(webJobSpec(JSON.parse(specJson)), signal));
   }
 
+  async jobsSubmitWithKey(clientId: string, specJson: string, idempotencyKey: string, operationId: string): Promise<string> {
+    return this.withJobsOperation(operationId, signal =>
+      this.jobsClient(clientId).submitWithKey(webJobSpec(JSON.parse(specJson)), idempotencyKey, signal));
+  }
+
   async jobsList(clientId: string, queryJson: string, operationId: string): Promise<string> {
     const value = await this.withJobsOperation(operationId, signal =>
       this.jobsClient(clientId).list(webJobQuery(JSON.parse(queryJson)), signal));

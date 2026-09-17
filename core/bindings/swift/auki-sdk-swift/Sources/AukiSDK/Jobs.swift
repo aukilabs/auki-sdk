@@ -166,6 +166,12 @@ public extension AukiDomainJobs {
     func submit(_ spec: AukiJobSpec, cancellation: AukiCancellation? = nil) async throws -> String {
         try await submitJson(specJson: AukiJobsJSON.encode(spec), cancellation: cancellation)
     }
+    /// Reuse this persisted key and spec on a verified idempotency-capable DMS.
+    func submitWithKey(_ spec: AukiJobSpec, idempotencyKey: String,
+                       cancellation: AukiCancellation? = nil) async throws -> String {
+        try await submitWithKeyJson(specJson: AukiJobsJSON.encode(spec),
+                                   idempotencyKey: idempotencyKey, cancellation: cancellation)
+    }
     func list(_ query: AukiJobListQuery = .init(), cancellation: AukiCancellation? = nil) async throws -> AukiJobPage {
         try AukiJobsJSON.decode(AukiJobPage.self,
             try await listJson(queryJson: AukiJobsJSON.encode(query), cancellation: cancellation))

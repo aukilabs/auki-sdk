@@ -75,6 +75,13 @@ the underlying `source` code and means the submit request may have succeeded, so
 reconcile with `list` before retrying.
 Always await `jobs.close()` before closing the shared session.
 
+For a deployment verified to support the idempotency contract, use
+`await jobs.submit_with_key(spec, idempotency_key)`. Persist the key and immutable
+specification before the first send and reuse both for recovery; no automatic
+retry is added. An in-progress submission exposes the retry delay through `retry_after_seconds`;
+a plain HTTP 409 is a conflict. Older servers ignore keys, so verify the backend
+rollout before enabling this method. Existing unkeyed `submit` behavior is unchanged.
+
 See the [jobs reference](../../../../docs/reference/jobs.md) for required write
 authority, worker availability and provider limitations.
 

@@ -23,6 +23,7 @@ pub enum AukiJobsFailureKind {
     Closed,
     TooLarge,
     SubmissionUncertain,
+    SubmissionInProgress,
 }
 
 fn jobs_error(error: JobsError) -> AukiSdkError {
@@ -31,6 +32,7 @@ fn jobs_error(error: JobsError) -> AukiSdkError {
         JobsError::InvalidInput(_) => AukiJobsFailureKind::InvalidInput,
         JobsError::InvalidResponse(_) => AukiJobsFailureKind::InvalidResponse,
         JobsError::HttpStatus { .. } => AukiJobsFailureKind::HttpStatus,
+        JobsError::SubmissionInProgress { .. } => AukiJobsFailureKind::SubmissionInProgress,
         JobsError::Transport => AukiJobsFailureKind::Transport,
         JobsError::TimedOut => AukiJobsFailureKind::TimedOut,
         JobsError::Cancelled => AukiJobsFailureKind::Cancelled,
@@ -52,6 +54,7 @@ fn jobs_error(error: JobsError) -> AukiSdkError {
         code: error.code().to_owned(),
         maximum,
         source_code: source,
+        retry_after_seconds: error.retry_after_seconds(),
         message: error.to_string(),
     }
 }
@@ -63,6 +66,7 @@ fn invalid_input(message: impl Into<String>) -> AukiSdkError {
         code: "invalid_input".into(),
         maximum: None,
         source_code: None,
+        retry_after_seconds: None,
         message: message.into(),
     }
 }
@@ -201,6 +205,24 @@ impl AukiDomainJobs {
     }
 
     #[uniffi::method(default(cancellation = None))]
+    pub async fn submit_with_key_json(
+        &self,
+        spec_json: String,
+        idempotency_key: String,
+        cancellation: Option<Arc<AukiCancellation>>,
+    ) -> Result<String, AukiSdkError> {
+        self.owner.ensure_open()?;
+        let spec = Self::decode(&spec_json, "job specification")?;
+        let token = self.owner.operation_token(cancellation);
+        self.owner
+            .inner
+            .submit_with_key_and_cancellation(&spec, &idempotency_key, &token)
+            .await
+            .map(|id| id.to_string())
+            .map_err(jobs_error)
+    }
+
+    #[uniffi::method(default(cancellation = None))]
     pub async fn list_json(
         &self,
         query_json: String,
@@ -315,6 +337,19 @@ mod tests {
                 ref code,
                 ..
             } if code == "http_status"
+        ));
+
+        let busy = jobs_error(JobsError::SubmissionInProgress {
+            retry_after_seconds: 1,
+        });
+        assert!(matches!(
+            busy,
+            AukiSdkError::Jobs {
+                kind: AukiJobsFailureKind::SubmissionInProgress,
+                status: Some(409),
+                retry_after_seconds: Some(1),
+                ..
+            }
         ));
 
         let uncertain = jobs_error(JobsError::SubmissionUncertain {

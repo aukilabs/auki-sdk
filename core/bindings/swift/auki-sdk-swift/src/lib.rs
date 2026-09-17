@@ -128,6 +128,7 @@ pub enum AukiSdkError {
         code: String,
         maximum: Option<u64>,
         source_code: Option<String>,
+        retry_after_seconds: Option<u32>,
         message: String,
     },
     #[error("{message}")]

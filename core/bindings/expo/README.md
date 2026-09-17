@@ -142,6 +142,13 @@ accepted the job. Inspect existing jobs before choosing a recovery action;
 automatic resubmission can duplicate work and charges. Authentication errors
 retain codes such as `persistence`, and HTTP errors retain `status`.
 
+For a deployment verified to support the idempotency contract, use
+`await client.submitWithKey(spec, idempotencyKey, signal)`. Persist the key and immutable
+specification before the first send and reuse both for recovery; no automatic
+retry is added. An in-progress submission exposes the retry delay through `retryAfterSeconds`;
+a plain HTTP 409 is a conflict. Older servers ignore keys, so verify the backend
+rollout before enabling this method. Existing unkeyed `submit` behavior is unchanged.
+
 See the [jobs reference](../../../docs/reference/jobs.md) for required write
 authority, worker availability and provider limitations.
 

@@ -11,6 +11,12 @@ pub enum JobsError {
     InvalidResponse(&'static str),
     #[error("DMS returned HTTP {status}")]
     HttpStatus { status: u16 },
+    /// A matching keyed submission is still being processed. The caller may
+    /// retry the same key and specification after this delay, with a bound.
+    #[error(
+        "job submission is in progress; retry the same key and request after {retry_after_seconds} seconds"
+    )]
+    SubmissionInProgress { retry_after_seconds: u32 },
     #[error("DMS request failed")]
     Transport,
     #[error("DMS request timed out")]
@@ -21,8 +27,9 @@ pub enum JobsError {
     Closed,
     #[error("DMS request or response exceeded {maximum} bytes")]
     TooLarge { maximum: usize },
-    /// DMS may have accepted the submission. Inspect existing jobs before
-    /// choosing whether to submit again; repeating it may duplicate work/charges.
+    /// DMS may have accepted the submission. On a verified capable deployment,
+    /// a keyed request can be retried with the same key and specification.
+    /// Unkeyed submissions require reconciliation to avoid duplicate work/charges.
     #[error("job submission outcome is unknown; do not automatically resubmit: {source}")]
     SubmissionUncertain { source: Box<JobsError> },
 }
@@ -43,6 +50,7 @@ impl JobsError {
             Self::InvalidInput(_) => "invalid_input",
             Self::InvalidResponse(_) => "invalid_response",
             Self::HttpStatus { .. } => "http_status",
+            Self::SubmissionInProgress { .. } => "submission_in_progress",
             Self::Transport => "transport",
             Self::TimedOut => "timed_out",
             Self::Cancelled => "cancelled",
@@ -56,7 +64,17 @@ impl JobsError {
         match self {
             Self::HttpStatus { status }
             | Self::Auth(auki_auth::Error::HttpStatus { status, .. }) => Some(*status),
+            Self::SubmissionInProgress { .. } => Some(409),
             Self::SubmissionUncertain { source } => source.http_status(),
+            _ => None,
+        }
+    }
+
+    pub fn retry_after_seconds(&self) -> Option<u32> {
+        match self {
+            Self::SubmissionInProgress {
+                retry_after_seconds,
+            } => Some(*retry_after_seconds),
             _ => None,
         }
     }
@@ -64,6 +82,10 @@ impl JobsError {
     pub(super) fn ambiguous_after_send(&self) -> bool {
         // All ordinary 4xx responses explicitly reject creation. An upstream
         // timeout, redirect, broken success response, or 5xx cannot prove that.
-        !matches!(self, Self::HttpStatus { status } if (400..500).contains(status) && *status != 408)
+        match self {
+            Self::SubmissionInProgress { .. } => false,
+            Self::HttpStatus { status } if (400..500).contains(status) && *status != 408 => false,
+            _ => true,
+        }
     }
 }

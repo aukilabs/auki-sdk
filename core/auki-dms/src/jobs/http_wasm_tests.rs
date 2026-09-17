@@ -37,15 +37,18 @@ async fn fetch_bounds_json_disables_credential_redirects_and_aborts_dropped_requ
             .get(format!("https://dms.example/v1/jobs/{path}"))
             .bearer_auth("fixture")
     };
-    assert_eq!(send(request("ok"), 100).await.unwrap(), br#"{"ok":true}"#);
+    assert_eq!(
+        send(request("ok"), 100, false).await.unwrap(),
+        br#"{"ok":true}"#
+    );
     assert!(matches!(
-        send(request("large"), 7).await,
+        send(request("large"), 7, false).await,
         Err(JobsError::TooLarge { maximum: 7 })
     ));
-    let denied = send(request("denied"), 100).await.unwrap_err();
+    let denied = send(request("denied"), 100, false).await.unwrap_err();
     assert_eq!(denied.http_status(), Some(403));
     assert!(!format!("{denied:?}").contains("fixture private detail"));
-    let mut pending = Box::pin(send(request("pending"), 100));
+    let mut pending = Box::pin(send(request("pending"), 100, false));
     let waker = std::task::Waker::noop();
     let mut cx = std::task::Context::from_waker(waker);
     assert!(pending.as_mut().poll(&mut cx).is_pending());

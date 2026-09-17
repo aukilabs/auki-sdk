@@ -286,7 +286,8 @@ export type JobsFailureKind =
   | "cancelled"
   | "closed"
   | "too_large"
-  | "submission_uncertain";
+  | "submission_uncertain"
+  | "submission_in_progress";
 
 export type JobsError = Error & {
   readonly kind: JobsFailureKind;
@@ -295,6 +296,8 @@ export type JobsError = Error & {
   readonly code?: AukiAuthFailureCode;
   /** Redacted cause category for an ambiguous submission outcome. */
   readonly source?: string;
+  /** Minimum delay before retrying the same key and spec when submission is in progress. */
+  readonly retryAfterSeconds?: number;
 };
 
 export type AukiSdkExpoModuleEvents = {

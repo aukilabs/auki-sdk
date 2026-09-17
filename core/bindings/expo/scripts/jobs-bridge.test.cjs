@@ -59,6 +59,29 @@ async function main() {
   assert.equal(await client.submit(spec), jobId);
   assert.equal(submitted, 1);
 
+  let keyedCalls = 0;
+  bridge.jobsSubmitWithKey = async (id, payload, key, operation) => {
+    keyedCalls += 1;
+    assert.equal(id, "jobs-client");
+    assert.equal(key, "persisted-key");
+    assert.notEqual(operation, key);
+    assert.equal(JSON.parse(payload).tasks[0].capability_filters.model, "custom");
+    if (keyedCalls === 1) throw Object.assign(new Error("busy"), { code: "jobs:submission_in_progress:409:::1" });
+    if (keyedCalls === 2) throw Object.assign(new Error("uncertain"), { code: "jobs:submission_uncertain:503::http_status:" });
+    return jobId;
+  };
+  await assert.rejects(client.submitWithKey(spec, "persisted-key"), error =>
+    error.kind === "submission_in_progress" && error.status === 409 && error.retryAfterSeconds === 1);
+  assert.equal(keyedCalls, 1, "busy submission was automatically retried");
+  await assert.rejects(client.submitWithKey(spec, "persisted-key"), error =>
+    error.kind === "submission_uncertain" && error.status === 503);
+  assert.equal(keyedCalls, 2, "uncertain keyed submission was automatically retried");
+  assert.equal(await client.submitWithKey(spec, "persisted-key"), jobId);
+  const preCancelled = new AbortController();
+  preCancelled.abort();
+  await assert.rejects(client.submitWithKey(spec, "persisted-key", preCancelled.signal), error => error.kind === "cancelled");
+  assert.equal(keyedCalls, 3, "pre-cancelled submission reached the bridge");
+
   bridge.jobsList = async (_client, query) => {
     assert.deepEqual(JSON.parse(query), { limit: 10, capabilities: ["vendor.example/private-model/v7"], match_all_capabilities: true });
     return JSON.stringify({ items: [], next_cursor: "opaque" });
@@ -141,4 +164,42 @@ async function main() {
   console.log("PASS Expo jobs bridge tests");
 }
 
-main().catch(error => { console.error(error); process.exitCode = 1; });
+async function webAdapter() {
+  const previousLoad = Module._load;
+  Module._load = function load(request, parent, isMain) {
+    if (request === "expo") return { NativeModule: class {}, registerWebModule: type => new type() };
+    if (request === "./web/loadAukiSdkWasm") return { loadAukiSdkWasm: async () => { throw Error("unexpected peer/runtime initialization"); } };
+    return previousLoad.call(this, request, parent, isMain);
+  };
+  const web = require("../src/AukiSdkExpoModule.web.ts").default;
+  let calls = 0;
+  let freed = false;
+  const busy = Object.assign(new Error("busy"), { kind: "submission_in_progress", code: "submission_in_progress", status: 409, retryAfterSeconds: 1 });
+  const native = {
+    submitWithKey: async (request, key, signal) => {
+      assert.equal(key, "persisted-key");
+      assert.equal(request.tasks[0].capabilityFilters.model, "custom");
+      assert.equal(request.idempotency_key, undefined);
+      if (signal.aborted) throw Object.assign(new Error("cancelled"), { kind: "cancelled" });
+      if (++calls === 1) throw busy;
+      return jobId;
+    },
+    close: async () => {},
+    free: () => { freed = true; },
+  };
+  web.sessions.set("session", { jobs: domain => { assert.equal(domain, domainId); return native; } });
+  const id = await web.jobsOpen("session", domainId);
+  const payload = JSON.stringify({label: "job", tasks: [{label: "task", stage: "task", capability: "vendor/v7", capability_filters: {model: "custom"}}]});
+  await assert.rejects(web.jobsSubmitWithKey(id, payload, "persisted-key", "first"), error => error === busy);
+  assert.equal(calls, 1);
+  assert.equal(await web.jobsSubmitWithKey(id, payload, "persisted-key", "retry"), jobId);
+  await web.jobsOperationCancel("cancelled");
+  await assert.rejects(web.jobsSubmitWithKey(id, payload, "persisted-key", "cancelled"), error => error.kind === "cancelled");
+  assert.equal(calls, 2);
+  assert.equal(web.jobsOperations.size, 0);
+  assert.equal(web.jobsCancelledBeforeStart.size, 0);
+  await web.jobsClose(id);
+  assert.equal(freed, true);
+  console.log("PASS Expo Web keyed jobs adapter tests");
+}
+main().then(webAdapter).catch(error => { console.error(error); process.exitCode = 1; });

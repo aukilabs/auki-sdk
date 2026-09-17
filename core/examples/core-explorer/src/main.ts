@@ -1,9 +1,9 @@
 import './style.css';
-import { facts, technical } from './presentation';
+import { facts, technical, recordRow } from './presentation';
 import { networkingUI } from './network-ui';
 import { jobsUI } from './jobs-ui';
 import { uploadUI } from './upload-ui';
-import { ScreenHistory, isScreen, focusScreenTarget, type Screen } from './screens';
+import { ScreenHistory, isScreen, primaryScreen, focusScreenTarget, type Screen } from './screens';
 import { Connection, drainCleanup, login, type DataMetadata, type DataQuery, type DomainSummary } from './sdk';
 import { endpoint, inspect, isLoopback, ReadLane, previewBytes, safeError, uuid, redact } from './safety';
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -19,9 +19,14 @@ function savePosition() {
 function renderView(restore = false) {
   const view = navigation.current;
   $('access').hidden = view !== 'access';
+  $('domain-switch').hidden = !connection.session || view === 'access';
+  $('logout').hidden = !connection.session && !$<HTMLButtonElement>('signin').disabled;
+  $(`view-jobs`).dataset.auxiliary = String(['settings', 'technical'].includes(view));
+  $('space-navigation').hidden = !['overview', 'portals', 'poses'].includes(view);
+  document.querySelectorAll<HTMLElement>('[data-space]').forEach(button => button.setAttribute('aria-current', button.dataset.go === view ? 'page' : 'false'));
   $('workspace').hidden = !connection.session || view === 'settings' || view === 'access';
   document.querySelectorAll<HTMLElement>('.view').forEach(node => { node.hidden = node.id !== `view-${view}`; });
-  document.querySelectorAll<HTMLElement>('[data-view]').forEach(button => button.setAttribute('aria-current', button.dataset.view === view ? 'page' : 'false'));
+  document.querySelectorAll<HTMLElement>('[data-view]').forEach(button => button.setAttribute('aria-current', button.dataset.view === primaryScreen(view) ? 'page' : 'false'));
   const node = view === 'access' ? $('access') : $(`view-${view}`);
   const saved = restore ? positions.get(view) : undefined;
   const target = saved?.focus && node.contains(saved.focus) && saved.focus.isConnected ? saved.focus : node.querySelector<HTMLElement>('h1, h2');
@@ -41,6 +46,12 @@ document.addEventListener('click', event => {
   else showView(button.dataset.view ?? button.dataset.go!);
 });
 function showTechnical(value: unknown) { text('technical-content', inspect(value)); showView('technical'); }
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape' || event.defaultPrevented) return;
+  const localBack = document.querySelector<HTMLButtonElement>('#view-upload:not([hidden]) #upload-back, #view-networking:not([hidden]) #net-back:not([hidden]), #view-networking:not([hidden]) #net-result-back, #view-jobs:not([hidden]) #jobs-back:not([hidden])');
+  if (localBack && !localBack.closest('[hidden]') && !localBack.disabled) { localBack.click(); return; }
+  if (!['access', 'data', 'jobs', 'overview', 'networking'].includes(navigation.current)) backView();
+});
 document.addEventListener('explorer:technical', event => showTechnical((event as CustomEvent).detail));
 const connection = new Connection();
 const lanes = { domains: new ReadLane(), portals: new ReadLane(), poses: new ReadLane(), records: new ReadLane(), record: new ReadLane(), bytes: new ReadLane() };
@@ -108,7 +119,7 @@ async function logout() {
   $<HTMLInputElement>('password').value = ''; disabled('signin', true);
   let message = 'Session closed.';
   try { await connection.close(); } catch { message = 'Session closed with a cleanup error. Reload before reconnecting.'; }
-  settingsState(); text('session-status', 'Signed out'); text('login-status', message); disabled('signin', false);
+  settingsState(); text('session-status', 'Signed out'); text('login-status', message); disabled('signin', false); $('logout').hidden = true; text('logout', 'Log out');
 }
 $('logout').onclick = () => { void logout(); };
 $('login').onsubmit = async event => {
@@ -118,17 +129,17 @@ $('login').onsubmit = async event => {
   $<HTMLInputElement>('password').value = '';
   try {
     const urls = ['api', 'dds', 'dms'].map(id => endpoint(input(id)));
-    disabled('signin', true); text('login-status', 'Signing in…');
+    disabled('signin', true); $('logout').hidden = false; text('logout', 'Cancel'); text('login-status', 'Signing in…');
     const timer = setTimeout(() => { if (attempt === auth) void logout(); }, 30_000);
     try {
       if (!await connection.accept(login(urls, input('email'), password)) || attempt !== auth) return;
     } finally { clearTimeout(timer); }
     connectedUrls = [...urls];
     connectedEnvironment = urls.every(url => isLoopback(new URL(url))) ? 'Local fixtures / synthetic test data' : `Configured environment · API ${urls[0]} · DDS ${urls[1]} · DMS ${urls[2]}`;
-    text('session-status', urls.every(url => isLoopback(new URL(url))) ? 'Local fixtures / synthetic test data' : 'Connected · configured environment');
-    settingsState(); navigation.reset('overview'); showView('domains'); offset = 0; loadDomains();
+    text('session-status', urls.every(url => isLoopback(new URL(url))) ? 'Local fixtures' : 'Configured environment');
+    settingsState(); navigation.reset('data'); showView('domains'); offset = 0; loadDomains();
   } catch { if (attempt === auth) text('login-status', 'Sign-in failed. Check credentials and environment, then retry.'); }
-  finally { if (attempt === auth) disabled('signin', false); }
+  finally { if (attempt === auth) { disabled('signin', false); $('logout').hidden = !connection.session; text('logout', 'Log out'); } }
 };
 for (const id of ['api', 'dds', 'dms']) $(id).oninput = () => {
   try { text('environment', ['api', 'dds', 'dms'].every(key => isLoopback(new URL(endpoint(input(key))))) ? 'Local fixtures / synthetic test data' : 'Explicit environment configuration · sign in to contact these services'); }
@@ -139,12 +150,12 @@ function loadDomains() {
   text('domain-status', 'Loading…'); text('domains', ''); text('page', ''); disabled('previous', true); disabled('next', true);
   void lanes.domains.run(signal => session.domains().list({ limit: 10, offset }, signal), page => {
     summaries = page.domains;
-    text('domain-status', page.domains.length ? 'Select a Domain or enter a known UUID.' : 'Empty — no Domains on this page.');
+    text('domain-status', page.domains.length ? '' : 'Empty — no Domains on this page.');
     text('page', `${page.domains.length ? page.offset + 1 : 0}–${page.domains.length ? page.offset + page.domains.length : 0} / ${page.total}`);
     disabled('previous', page.offset === 0); disabled('next', page.offset + page.limit >= page.total);
     for (const domain of page.domains) {
-      const button = document.createElement('button'); button.className = 'domain';
-      button.textContent = String(redact(`${domain.name}\n${domain.id}`)); button.onclick = () => { void selectDomain(domain.id); };
+      const button = recordRow(domain.name || domain.id, page.domains.filter(item => item.name === domain.name).length > 1 ? domain.id : ''); button.className = 'domain';
+      button.onclick = () => { void selectDomain(domain.id); };
       $('domains').append(button);
     }
   }, error => text('domain-status', safeError(error)));
@@ -160,11 +171,11 @@ async function selectDomain(id: string) {
     clearSelection(); version = selection; domainId = id;
     for (const key of ['name', 'type', 'ids']) $<HTMLInputElement>(key).value = '';
     const summary = summaries.find(item => item.id === id);
-    domainName = String(redact(summary?.name ?? 'Known Domain'));
+    domainName = String(redact(summary?.name || id));
     text('selected', domainName);
-    text('domain-name', String(redact(summary?.name ?? 'Known Domain')));
-    $('domain-facts').replaceChildren(facts(summary ? { Name: summary.name, Organization: summary.organization_id } : { Metadata: 'Unavailable unless present in the current Domain page.' }));
-    navigation.reset('overview'); renderView();
+    text('domain-name', String(redact(summary?.name || id)));
+    $('domain-facts').replaceChildren(facts(summary ? { Organization: summary.organization_id } : { Metadata: 'Unavailable unless present in the current Domain page.' }));
+    navigation.reset('data'); renderView();
     text('metadata', inspect(summary ?? { id, note: 'Metadata unavailable unless present in the current Domain page.' }));
     const data = await connection.select(id);
     if (version !== selection || session !== connection.session) return; // Connection owns stale-client cleanup.
@@ -217,12 +228,10 @@ function loadRecords() {
   catch { lanes.records.cancel(); text('data-status', 'Enter comma-separated UUIDs.'); return; }
   text('data-status', 'Loading…');
   void lanes.records.run(signal => data.list(query, signal), records => {
-    text('data-status', records.length ? `${records.length} records · permissions checked per read` : 'Empty — no matching records.');
+    text('data-status', records.length ? `${records.length} records` : 'Empty — no matching records.');
     for (const record of records) {
-      const button = document.createElement('button'), name = document.createElement('strong'), detail = document.createElement('small');
-      button.className = 'record'; button.setAttribute('aria-pressed', 'false');
-      name.textContent = String(redact(record.name)); detail.textContent = String(redact(`${record.data_type} · ${record.size} bytes`));
-      button.append(name, detail);
+      const button = recordRow(record.name, `${record.data_type} · ${record.size} bytes`);
+      button.setAttribute('aria-pressed', 'false');
       button.onclick = () => { selectRecord(record); button.setAttribute('aria-pressed', 'true'); };
       $('records').append(button);
     }
@@ -237,7 +246,7 @@ function selectRecord(record: DataMetadata) {
   const data = connection.data!; text('record', 'Loading…'); text('record-name', 'Loading…');
   void lanes.record.run(signal => data.get(record.id, signal), value => {
     text('record', inspect(value)); text('record-name', String(redact(value.name)));
-    $('record-facts').replaceChildren(facts({ Name: value.name, Type: value.data_type, Bytes: value.size, Created: value.created_at, Updated: value.updated_at }));
+    $('record-facts').replaceChildren(facts({ Type: value.data_type, Bytes: value.size, Created: value.created_at, Updated: value.updated_at }));
   }, error => { text('record', safeError(error)); text('record-name', 'Metadata unavailable'); text('record-facts', safeError(error)); });
 }
 function readBytes(download: boolean) {

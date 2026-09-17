@@ -65,7 +65,7 @@ try {
     if (await page.locator('#upload-new').isVisible()) await page.locator('#upload-new').click();
     await step('choose');
     await page.locator('#upload-file').setInputFiles({ name: 'fixture.bin', mimeType: 'application/octet-stream', buffer });
-    if (type !== null) await page.locator('#upload-type').fill(type);
+    if (type !== null) { await reveal(page, '#upload-type'); await page.locator('#upload-type').fill(type); }
   };
   const review = async () => {
     await choose(); await page.locator('#upload-review').click(); await step('review');

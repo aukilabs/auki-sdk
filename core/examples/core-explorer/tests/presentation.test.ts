@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { facts, technical, shortPeerId } from '../src/presentation.ts';
+import { facts, technical, shortPeerId, recordRow } from '../src/presentation.ts';
 
 // Minimal DOM sink: assigning HTML is forbidden so these tests exercise text-only rendering.
 class TextSink {
@@ -25,6 +25,11 @@ test('readable facts keep hostile text inert, redact credentials and omit unavai
     assert.match(rendered, /\[redacted\]/);
     assert.doesNotMatch(rendered, /fixture-only|fixture-secret|Absent/);
     assert.match(rendered, /"x": 0/);
+    const row = recordRow('<img src=x>', 'Bearer synthetic-private-token') as unknown as TextSink;
+    assert.equal(row.tag, 'button');
+    assert.equal(row.children[0].textContent, '<img src=x>');
+    assert.match(flatten(row), /Bearer \[redacted\]/);
+    assert.doesNotMatch(flatten(row), /synthetic-private-token/);
     const raw = technical({ name: '<script>fixture</script>', secret: 'fixture-secret' }) as unknown as TextSink;
     assert.equal(raw.tag, 'details');
     assert.match(flatten(raw), /<script>fixture<\/script>/);

@@ -1,18 +1,20 @@
 import assert from 'node:assert/strict';
 
 export async function assertChapter(page, selected) {
-  for (const view of ['overview', 'data', 'portals', 'poses', 'networking']) {
-    const button = page.locator(`[data-view="${view}"]`);
+  for (const view of ['overview', 'data', 'portals', 'poses', 'networking', 'jobs']) {
     assert.equal(await page.locator(`#view-${view}`).isVisible(), view === selected, `${view} visibility`);
-    const current = await button.getAttribute('aria-current');
-    assert.equal(current !== null && current !== 'false', view === selected, `${view} accessible selection`);
+  }
+  const group = ['portals', 'poses'].includes(selected) ? 'overview' : selected;
+  for (const view of ['data', 'jobs', 'overview', 'networking']) {
+    const current = await page.locator(`[data-view="${view}"]`).getAttribute('aria-current');
+    assert.equal(current === 'page', view === group, `${view} accessible selection`);
   }
 }
 
 export async function chapter(page, view, keyboard = false) {
-  const button = page.locator(`[data-view="${view}"]`);
+  if (['portals', 'poses'].includes(view)) await chapter(page, 'overview', keyboard);
+  const button = page.locator(['portals', 'poses'].includes(view) ? `[data-go="${view}"]` : `[data-view="${view}"]`);
   if (keyboard) {
-    // Reach the button through normal sequential keyboard navigation.
     for (let i = 0; i < 100 && !await button.evaluate(el => el === document.activeElement); i++) await page.keyboard.press('Tab');
     assert.ok(await button.evaluate(el => el === document.activeElement), `${view} reachable by Tab`);
     await page.keyboard.press('Enter');
@@ -27,6 +29,7 @@ export async function back(page) {
 
 export async function go(page, view) {
   if (await page.locator(`#view-${view}`).isVisible()) return;
+  if (['portals', 'poses'].includes(view)) return chapter(page, view);
   const primary = page.locator(`[data-view="${view}"]:visible`);
   if (await primary.count()) return chapter(page, view);
   if (view === 'record') { await chapter(page, 'data'); await page.locator('#record-jump').click(); return; }
@@ -46,7 +49,10 @@ export async function go(page, view) {
 
 export async function openDetails(page, selector) {
   const routes = { '#connection-settings': 'settings', '#domain-controls': 'domains', '#advanced-filters': 'filters' };
-  if (routes[selector]) return go(page, routes[selector]);
+  if (routes[selector]) {
+    await go(page, routes[selector]);
+    if (selector !== '#advanced-filters') return;
+  }
   const details = page.locator(selector);
   if (!await details.evaluate(el => el.open)) await details.locator(':scope > summary').click();
   assert.ok(await details.evaluate(el => el.open));

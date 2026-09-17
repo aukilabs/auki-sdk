@@ -1,0 +1,2354 @@
+{
+  "syntheticFixtures": true,
+  "liveSpending": false,
+  "captures": 108,
+  "coverage": {
+    "route": [
+      "access",
+      "view-data",
+      "view-domains",
+      "view-filters",
+      "view-jobs",
+      "view-networking",
+      "view-overview",
+      "view-portals",
+      "view-poses",
+      "view-preview",
+      "view-record",
+      "view-settings",
+      "view-technical",
+      "view-upload"
+    ],
+    "jobsScreen": [
+      "choose",
+      "dashboard",
+      "detail",
+      "review",
+      "setup",
+      "uncertain"
+    ],
+    "networkScreen": [
+      "connect",
+      "diagnostic",
+      "discover",
+      "manual",
+      "result",
+      "technical"
+    ],
+    "uploadStep": [
+      "choose",
+      "result",
+      "review",
+      "sending"
+    ]
+  },
+  "results": [
+    {
+      "name": "signin-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "access",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Sign in"
+      ],
+      "primary": [
+        "Sign in"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "signin-desktop.png",
+      "sha256": "5254cdae434b86fba79ba8a20a04e62a65ce4c1b4eca83fd25f3cd688746cf53"
+    },
+    {
+      "name": "settings-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-settings",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Connection settings"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "settings-desktop.png",
+      "sha256": "a589db21985538c501aa49b29aec4b48ce8a8fa1b0a171717606da5d0f9a40d7"
+    },
+    {
+      "name": "domains-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-domains",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Choose a Domain"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "domains-desktop.png",
+      "sha256": "a1f2979caafddaee00155d0db7f5e81425a02aa5ec1ad79ad9c34305fda372ae"
+    },
+    {
+      "name": "data-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-data",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Data"
+      ],
+      "primary": [
+        "Upload"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "data-desktop.png",
+      "sha256": "1811b99d5ed2338e040d813494456eac3cd945db478c90b88daca713fc344385"
+    },
+    {
+      "name": "overview-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-overview",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Space"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "overview-desktop.png",
+      "sha256": "fc7e0a7e9712ace9ca5f4fa1f91c609ed90f9cf758a419039e90f34d4ac87451"
+    },
+    {
+      "name": "portals-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-portals",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Portals"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "portals-desktop.png",
+      "sha256": "61543333f315c75cc18cc9d0f436fd0ed35e33c2c4db9d1c1bd4f05646cfc5cc"
+    },
+    {
+      "name": "poses-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-poses",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Poses"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "poses-desktop.png",
+      "sha256": "b787caa6faba635cb825273d5a64ec184224787f7359e07ecb5f43bc8022e784"
+    },
+    {
+      "name": "record-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-record",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Lab sample"
+      ],
+      "primary": [
+        "Preview"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "record-desktop.png",
+      "sha256": "608aeb8c1d8fba1dab88e8b87fa571dd4aa56346451f38fbf7d97ee95f8b2474"
+    },
+    {
+      "name": "record-details-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-technical",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Details"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "record-details-desktop.png",
+      "sha256": "099d7a9350a32fa195a4d472cb6d89ed594de772ae4a9cf73df20d15cf16df40"
+    },
+    {
+      "name": "preview-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-preview",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Preview"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "preview-desktop.png",
+      "sha256": "192b99d0cbd0d61421e85da9062f72a85a92325df14a0edc999e5cc9ddbdac18"
+    },
+    {
+      "name": "filters-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-filters",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Filter records"
+      ],
+      "primary": [
+        "Apply filters"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "filters-desktop.png",
+      "sha256": "d6d995d41d05ae67ca6314db98f6a274d3daa95c8c09dec80398843bc85a9a7b"
+    },
+    {
+      "name": "upload-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-upload",
+      "uploadStep": "choose",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Upload file"
+      ],
+      "primary": [
+        "Review upload"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "upload-desktop.png",
+      "sha256": "bffa9cc387e75dc43f4c365a26dc53952f003d53f452718db6a09116811efcc1"
+    },
+    {
+      "name": "upload-review-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-upload",
+      "uploadStep": "review",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Review upload"
+      ],
+      "primary": [
+        "Confirm upload"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "upload-review-desktop.png",
+      "sha256": "2b03781336f31d5737197c29044490ea99906f62eb758fc49fba561aa2d6f858"
+    },
+    {
+      "name": "upload-sending-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-upload",
+      "uploadStep": "sending",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Uploading"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "upload-sending-desktop.png",
+      "sha256": "78c8f57c5d9c2988bc650c10b6898a06fdfada5d5ce454c0fa680b662b378f20"
+    },
+    {
+      "name": "upload-result-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-upload",
+      "uploadStep": "result",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Upload result"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "upload-result-desktop.png",
+      "sha256": "43e983fccf6078bba5a1449b13bff92bfcf4cee76e33518e40cecf4a1d35f64b"
+    },
+    {
+      "name": "network-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-networking",
+      "networkScreen": "connect",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Network"
+      ],
+      "primary": [
+        "Connect"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "network-desktop.png",
+      "sha256": "cd0e7d54fb7140185dfe368c0d682c610e496272be199dc8d7729d62749171a1"
+    },
+    {
+      "name": "jobs-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-jobs",
+      "jobsScreen": "dashboard",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Jobs"
+      ],
+      "primary": [
+        "New job"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "jobs-desktop.png",
+      "sha256": "a5bc0c61eb99f3daf3d9e6f2459d3003879948ed7165e85c281956e090b491f9"
+    },
+    {
+      "name": "workers-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-jobs",
+      "jobsScreen": "setup",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Workers"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "workers-desktop.png",
+      "sha256": "49dd953d057d9bdb246f0b63e96bf42fd6a62dcfd9d25f9db0f0ecd0cf1a4eac"
+    },
+    {
+      "name": "input-picker-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-jobs",
+      "jobsScreen": "choose",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "New job"
+      ],
+      "primary": [
+        "Get estimate"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "input-picker-desktop.png",
+      "sha256": "80ab54646a005821a3ad997e8f22cc7a4d5adf298f5511ccf242cc5a0d45e504"
+    },
+    {
+      "name": "new-job-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-jobs",
+      "jobsScreen": "choose",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "New job"
+      ],
+      "primary": [
+        "Get estimate"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "new-job-desktop.png",
+      "sha256": "41885f4c38b950d738e3d2ce05cb7985e8b977b5f3fccb6d3bac6a4186dd4f67"
+    },
+    {
+      "name": "job-review-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-jobs",
+      "jobsScreen": "review",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Confirm job"
+      ],
+      "primary": [
+        "Confirm & run"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "job-review-desktop.png",
+      "sha256": "68697b75380411ec4100419b58a54f7595d337fef75db9a8db9da5e9db62e344"
+    },
+    {
+      "name": "job-submitting-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-jobs",
+      "jobsScreen": "review",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Submitting\u2026"
+      ],
+      "primary": [
+        "Confirm & run"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "job-submitting-desktop.png",
+      "sha256": "ec6331da4dd72a7c71a20fdbc4f219337a4823892f897fe38aec3bc207c9a9f9"
+    },
+    {
+      "name": "job-result-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-jobs",
+      "jobsScreen": "detail",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "completed"
+      ],
+      "primary": [
+        "Open in Data \u2192"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "job-result-desktop.png",
+      "sha256": "2351ae87b99c7b7fad7f1c13a9e3ec6ffc7f364ea67ab6d55bdac0ffe0b409d1"
+    },
+    {
+      "name": "job-uncertain-desktop",
+      "width": 1440,
+      "height": 900,
+      "route": "view-jobs",
+      "jobsScreen": "uncertain",
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "headings": [
+        "Check submission"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "desktop",
+      "file": "job-uncertain-desktop.png",
+      "sha256": "3c61cf1784190bbd4bc6f48ca869010d0d512ab9f2be59f8a440c438153eecdb"
+    },
+    {
+      "name": "signin-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "access",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Sign in"
+      ],
+      "primary": [
+        "Sign in"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "signin-mobile.png",
+      "sha256": "801b28a0a0ee0a9b5d8131e0bab70ef1b0787b0519190baeeb36118f25c80edc"
+    },
+    {
+      "name": "settings-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-settings",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Connection settings"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "settings-mobile.png",
+      "sha256": "7e2aabf7a417cb0cf9b285a297ed3f71f561f75857504e2e111f11eb656a34e3"
+    },
+    {
+      "name": "domains-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-domains",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Choose a Domain"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "domains-mobile.png",
+      "sha256": "f34c36d182776660ec725332038abefac697a6dd56b2ac6fe1d11ec4ec035d8c"
+    },
+    {
+      "name": "data-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-data",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Data"
+      ],
+      "primary": [
+        "Upload"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "data-mobile.png",
+      "sha256": "4687020c435642fae1deeb56d4f5557d199a262625137be4f0cd515affd61c90"
+    },
+    {
+      "name": "overview-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-overview",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Space"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "overview-mobile.png",
+      "sha256": "22e3b8c296fda617f92a0780f9126eba3fc52ee2b82de7a9541e394d6526d7c2"
+    },
+    {
+      "name": "portals-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-portals",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Portals"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "portals-mobile.png",
+      "sha256": "5d8711b71d642b0ffb4f3b33a8cea6e3b668079b9493fb87edfa54f3c6a9bf27"
+    },
+    {
+      "name": "poses-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-poses",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Poses"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "poses-mobile.png",
+      "sha256": "757abcfb7461a1166b045f191f75d2b20e3c7fb82629d676803c9e30a692dcc4"
+    },
+    {
+      "name": "record-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-record",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Lab sample"
+      ],
+      "primary": [
+        "Preview"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "record-mobile.png",
+      "sha256": "f0e9d1e395f5cdd608bbbae01b8dc58dc482d41411d519cfa20c4cefeea98623"
+    },
+    {
+      "name": "record-details-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-technical",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Details"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "record-details-mobile.png",
+      "sha256": "008b36c8dc79e3e4d71e1e33cab039a4cb11b7d8b1ef4bdb506aedf495063696"
+    },
+    {
+      "name": "preview-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-preview",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Preview"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "preview-mobile.png",
+      "sha256": "83c139e387148e90caf12795eca851c0554318b622e0fe2e5ab32fa8d339ca5e"
+    },
+    {
+      "name": "filters-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-filters",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Filter records"
+      ],
+      "primary": [
+        "Apply filters"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "filters-mobile.png",
+      "sha256": "1d6fb7d11bd33bc18ae0fbb3168fb63ab453c94bde9a7210cdc953e735925744"
+    },
+    {
+      "name": "upload-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-upload",
+      "uploadStep": "choose",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Upload file"
+      ],
+      "primary": [
+        "Review upload"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "upload-mobile.png",
+      "sha256": "a3dccf927e67bf32a6368a0e12d6f1c98a6b574166e7eef67f0ff63eff3fc33e"
+    },
+    {
+      "name": "upload-review-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-upload",
+      "uploadStep": "review",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Review upload"
+      ],
+      "primary": [
+        "Confirm upload"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "upload-review-mobile.png",
+      "sha256": "fd0c57727dde474303f0bd68253f4be0f97883123d1626f1b3d35c4bef6e957d"
+    },
+    {
+      "name": "upload-sending-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-upload",
+      "uploadStep": "sending",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Uploading"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "upload-sending-mobile.png",
+      "sha256": "b0b90a2308663cb988be6786f5c98dc1bdf41871793b581990b3703b3e3bfa93"
+    },
+    {
+      "name": "upload-result-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-upload",
+      "uploadStep": "result",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Upload result"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "upload-result-mobile.png",
+      "sha256": "23c393cd0b7674c4d2548c708a3eaa71453cd0381ca71706e1dce8865d4f6a90"
+    },
+    {
+      "name": "network-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-networking",
+      "networkScreen": "connect",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Network"
+      ],
+      "primary": [
+        "Connect"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "network-mobile.png",
+      "sha256": "41624f90e99a7633aa2b9c4c62646daa550d22e63dcd506b170309f1b1698f62"
+    },
+    {
+      "name": "jobs-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-jobs",
+      "jobsScreen": "dashboard",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Jobs"
+      ],
+      "primary": [
+        "New job"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "jobs-mobile.png",
+      "sha256": "25baf1b3b6fba163283cc0f39fcb2880d42ce893efae2e314f42b4a5d7fb1ad1"
+    },
+    {
+      "name": "workers-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-jobs",
+      "jobsScreen": "setup",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Workers"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "workers-mobile.png",
+      "sha256": "95f982a99d21ae1d84bd4a4626e6c870aabef4a52356a4612b06c65017abc088"
+    },
+    {
+      "name": "input-picker-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-jobs",
+      "jobsScreen": "choose",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "New job"
+      ],
+      "primary": [
+        "Get estimate"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "input-picker-mobile.png",
+      "sha256": "8c5d097e5e12ac3e2359074eb4423ec6150f0b24595e12c919333c71b79ef958"
+    },
+    {
+      "name": "new-job-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-jobs",
+      "jobsScreen": "choose",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "New job"
+      ],
+      "primary": [
+        "Get estimate"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "new-job-mobile.png",
+      "sha256": "2dd6aea0f2fcbe635c2f1eea9912e5f7b40d3ffca6377b6b2c6652b18da2b5e6"
+    },
+    {
+      "name": "job-review-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-jobs",
+      "jobsScreen": "review",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Confirm job"
+      ],
+      "primary": [
+        "Confirm & run"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "job-review-mobile.png",
+      "sha256": "30be92454648353eb4726c5c5ff04c5e873c4302e87890bbf4ed4b61c44574c3"
+    },
+    {
+      "name": "job-submitting-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-jobs",
+      "jobsScreen": "review",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Submitting\u2026"
+      ],
+      "primary": [
+        "Confirm & run"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "job-submitting-mobile.png",
+      "sha256": "d38edf1b2e900ab0700410341d97fa1e2c2b888cc8e9b9975653ea53ff93e1c1"
+    },
+    {
+      "name": "job-result-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-jobs",
+      "jobsScreen": "detail",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "completed"
+      ],
+      "primary": [
+        "Open in Data \u2192"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "job-result-mobile.png",
+      "sha256": "f4a508201fc96dbe55cdd880e72ea63a9e72d1d178cecd08e2ffbfd432f427fe"
+    },
+    {
+      "name": "job-uncertain-mobile",
+      "width": 390,
+      "height": 844,
+      "route": "view-jobs",
+      "jobsScreen": "uncertain",
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "headings": [
+        "Check submission"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "mobile",
+      "file": "job-uncertain-mobile.png",
+      "sha256": "489bbd3cf75075c70a918adef63961e9da09d46780ffc6f8646c0a85a1618f56"
+    },
+    {
+      "name": "signin-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "access",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Sign in"
+      ],
+      "primary": [
+        "Sign in"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "signin-narrow.png",
+      "sha256": "165ba04c2261ada5eecb417bfac6d541a460b411d9f98a6a1e1b0513a41785c6"
+    },
+    {
+      "name": "settings-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-settings",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Connection settings"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "settings-narrow.png",
+      "sha256": "302a7ad564e0578c39c06e56d10e1ff78a27c76516d7175967c6bd9eb7a30774"
+    },
+    {
+      "name": "domains-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-domains",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Choose a Domain"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "domains-narrow.png",
+      "sha256": "53dd67da66281198b5954bd78e088e28f6c4dfb7de64a49bf8ee2d733e6b5ded"
+    },
+    {
+      "name": "data-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-data",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Data"
+      ],
+      "primary": [
+        "Upload"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "data-narrow.png",
+      "sha256": "ffa0955090c8b732c4e3109277beb8ba93a56bbfcaa614ca7d2c5a829f83abe7"
+    },
+    {
+      "name": "overview-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-overview",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Space"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "overview-narrow.png",
+      "sha256": "f5ae78dada518890b7bdead2e021a173066263ed0db9c6e2e70e42732dae2998"
+    },
+    {
+      "name": "portals-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-portals",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Portals"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "portals-narrow.png",
+      "sha256": "39bb64c61c4c4455d1bf1439f8d2dd2bba6c0b1f73ce1ce7c57fa8411d79663a"
+    },
+    {
+      "name": "poses-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-poses",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Poses"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "poses-narrow.png",
+      "sha256": "28e14e8633ec65278168479b86e092ad82ef05aa84a19e4c4c0ae5e5f04dd639"
+    },
+    {
+      "name": "record-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-record",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Lab sample"
+      ],
+      "primary": [
+        "Preview"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "record-narrow.png",
+      "sha256": "ce93a7806bd630bd498767945216779225c1d49d2bba0eb33206992aa90883f9"
+    },
+    {
+      "name": "record-details-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-technical",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Details"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "record-details-narrow.png",
+      "sha256": "e6a55e1d56f51df2f083fa350a6aa84e8f73afe2b77e01665d256a5159db864c"
+    },
+    {
+      "name": "preview-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-preview",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Preview"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "preview-narrow.png",
+      "sha256": "f339128efea82009d713ad7555a1d06262edd70a97f9ea67d9ab3fe7842ba116"
+    },
+    {
+      "name": "filters-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-filters",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Filter records"
+      ],
+      "primary": [
+        "Apply filters"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "filters-narrow.png",
+      "sha256": "e3ed90682a800f30d5bfd5e9102e914b6743214376826da037021663eeadc7ea"
+    },
+    {
+      "name": "upload-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-upload",
+      "uploadStep": "choose",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Upload file"
+      ],
+      "primary": [
+        "Review upload"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "upload-narrow.png",
+      "sha256": "be9ffa13d4bd4316fd9a3607705631b23b7cb94cda2b7ea10e8689e8527aa861"
+    },
+    {
+      "name": "upload-review-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-upload",
+      "uploadStep": "review",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Review upload"
+      ],
+      "primary": [
+        "Confirm upload"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "upload-review-narrow.png",
+      "sha256": "cccbaf0bd37194b2b888d772a027a2184db11be4a5b8e620790ebbec266dfbf6"
+    },
+    {
+      "name": "upload-sending-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-upload",
+      "uploadStep": "sending",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Uploading"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "upload-sending-narrow.png",
+      "sha256": "67b4cb862d04695cfa8dd2c6fe0ca20105ff118d2d7e35b7ff1673232543a8fb"
+    },
+    {
+      "name": "upload-result-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-upload",
+      "uploadStep": "result",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Upload result"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "upload-result-narrow.png",
+      "sha256": "1ca328399b854460b3e76d45867d6ceebb7c62a517704ce89c63915c2417bfeb"
+    },
+    {
+      "name": "network-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-networking",
+      "networkScreen": "connect",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Network"
+      ],
+      "primary": [
+        "Connect"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "network-narrow.png",
+      "sha256": "a1fa15e6a2d26d290328dd902a5011cf8bd671233f69ba1d26c63b62158cce4b"
+    },
+    {
+      "name": "jobs-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-jobs",
+      "jobsScreen": "dashboard",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Jobs"
+      ],
+      "primary": [
+        "New job"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "jobs-narrow.png",
+      "sha256": "997135eeaadc94eff08823a1e0976cc14023ae1c7444553152638c3a177da58e"
+    },
+    {
+      "name": "workers-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-jobs",
+      "jobsScreen": "setup",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Workers"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "workers-narrow.png",
+      "sha256": "00b3d3fd49ee69d6092bb702c7e41e958ad228a95c81d1bee1a676c0192e3666"
+    },
+    {
+      "name": "input-picker-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-jobs",
+      "jobsScreen": "choose",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "New job"
+      ],
+      "primary": [
+        "Get estimate"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "input-picker-narrow.png",
+      "sha256": "bfa5dff5517e6f82941cd1bcb38f0e650a58e260de2887a82ffb05023ccd3d38"
+    },
+    {
+      "name": "new-job-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-jobs",
+      "jobsScreen": "choose",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "New job"
+      ],
+      "primary": [
+        "Get estimate"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "new-job-narrow.png",
+      "sha256": "0e8db027c69b597173601b0d5f0bf4c53ac29608c79f956c88b8137b13f8110b"
+    },
+    {
+      "name": "job-review-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-jobs",
+      "jobsScreen": "review",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Confirm job"
+      ],
+      "primary": [
+        "Confirm & run"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "job-review-narrow.png",
+      "sha256": "8cc889c9d0c6425ee759a43d6e26306278a7dcd32d855be67fa93f2196841f04"
+    },
+    {
+      "name": "job-submitting-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-jobs",
+      "jobsScreen": "review",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Submitting\u2026"
+      ],
+      "primary": [
+        "Confirm & run"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "job-submitting-narrow.png",
+      "sha256": "33e7423140e29799119088d24610d56bce4fddbe124107d6ced716c6173a6239"
+    },
+    {
+      "name": "job-result-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-jobs",
+      "jobsScreen": "detail",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "completed"
+      ],
+      "primary": [
+        "Open in Data \u2192"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "job-result-narrow.png",
+      "sha256": "f495b495d71b6530f68cc6a38521fa44df38c5365f93394a7b2744d68558007d"
+    },
+    {
+      "name": "job-uncertain-narrow",
+      "width": 320,
+      "height": 568,
+      "route": "view-jobs",
+      "jobsScreen": "uncertain",
+      "documentWidth": 320,
+      "documentHeight": 568,
+      "headings": [
+        "Check submission"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "narrow",
+      "file": "job-uncertain-narrow.png",
+      "sha256": "253208731ed6136ac8b75714455d597332a86647fa1ee99edc98a4103f60a54c"
+    },
+    {
+      "name": "signin-short",
+      "width": 640,
+      "height": 360,
+      "route": "access",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Sign in"
+      ],
+      "primary": [
+        "Sign in"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "signin-short.png",
+      "sha256": "0575d607df41dbeef11ee586fd20d0fbc4c80610738943fd1323cef4bc7048b0"
+    },
+    {
+      "name": "settings-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-settings",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Connection settings"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "settings-short.png",
+      "sha256": "bf8aa81fb309ab1d0124c72b82c48d724fac71f226ad12b566d9ba2800469cc4"
+    },
+    {
+      "name": "domains-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-domains",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Choose a Domain"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "domains-short.png",
+      "sha256": "e80c765637138b78d0e9cad9d4f93f84eba3bd9bbdb4a116a3e38339ca79e701"
+    },
+    {
+      "name": "data-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-data",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Data"
+      ],
+      "primary": [
+        "Upload"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "data-short.png",
+      "sha256": "e9815aaaedd54a6843894fd751008990d27bb304b01b6462e3f4480ecc282823"
+    },
+    {
+      "name": "overview-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-overview",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Space"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "overview-short.png",
+      "sha256": "39c7a67911501a4154cbf78aa96f46e853f250b952c65ea28f99e07588df0eba"
+    },
+    {
+      "name": "portals-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-portals",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Portals"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "portals-short.png",
+      "sha256": "44c95ef886fe84df0ae512247e82b7b2de23f9017fd33cd7f631d96d8f356a92"
+    },
+    {
+      "name": "poses-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-poses",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Poses"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "poses-short.png",
+      "sha256": "4aa1907533fe5d3634c0c1bd17eea4ebb38caca338b684de5bde4e944fd48e2a"
+    },
+    {
+      "name": "record-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-record",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Loading\u2026"
+      ],
+      "primary": [
+        "Preview"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "record-short.png",
+      "sha256": "1d0a1ad4918a3a97bdcf308a78853c9273a6883925d0ecf95eccbc7b197686f0"
+    },
+    {
+      "name": "record-details-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-technical",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Details"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "record-details-short.png",
+      "sha256": "6d3efe08e624011b6a6885467716caad82e15ff1f826436ef9000f363fac47be"
+    },
+    {
+      "name": "preview-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-preview",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Preview"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "preview-short.png",
+      "sha256": "3171648f35544e56d5073a14a56e742093693d6e22d5c40ca7303b53e5faa33e"
+    },
+    {
+      "name": "filters-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-filters",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Filter records"
+      ],
+      "primary": [
+        "Apply filters"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "filters-short.png",
+      "sha256": "bb58f2f4f07cbf4a3764338abb5e717177aaf5a33df1388066cf4b751c2bdd3a"
+    },
+    {
+      "name": "upload-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-upload",
+      "uploadStep": "choose",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Upload file"
+      ],
+      "primary": [
+        "Review upload"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "upload-short.png",
+      "sha256": "1c51720e91e1b3e42c0112b2ef2359f38cd0eb1469a35f258b746f3f27dcb79b"
+    },
+    {
+      "name": "upload-review-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-upload",
+      "uploadStep": "review",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Review upload"
+      ],
+      "primary": [
+        "Confirm upload"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "upload-review-short.png",
+      "sha256": "5edc8331f0c852093fbdbe6ebd881cc2f2a91bb251277c036d0e26f7ee3d135c"
+    },
+    {
+      "name": "upload-sending-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-upload",
+      "uploadStep": "sending",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Uploading"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "upload-sending-short.png",
+      "sha256": "b291848860cb174f332f96891e75841c6b721de532de642e1c8052ce037b79e2"
+    },
+    {
+      "name": "upload-result-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-upload",
+      "uploadStep": "result",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Upload result"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "upload-result-short.png",
+      "sha256": "834efdb4afe6f1028ae2ea6feb9ad5f76c55475257a6b3dc5b571d95efdc872a"
+    },
+    {
+      "name": "network-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-networking",
+      "networkScreen": "connect",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Network"
+      ],
+      "primary": [
+        "Connect"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "network-short.png",
+      "sha256": "b308e14ffb46ca5f15cc10ec9370913ccdda0a51e01821a1098cf1cd920a2d12"
+    },
+    {
+      "name": "jobs-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-jobs",
+      "jobsScreen": "dashboard",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Jobs"
+      ],
+      "primary": [
+        "New job"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "jobs-short.png",
+      "sha256": "8fa07f61a5454b595742ce1a9a677fb7643f8cb08bb384eea504baf585cdcc02"
+    },
+    {
+      "name": "workers-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-jobs",
+      "jobsScreen": "setup",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Workers"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "workers-short.png",
+      "sha256": "a834ab2d23cb3e67906bdb6adffa1f387a07ddb089b0db7aba03e22a06ce979a"
+    },
+    {
+      "name": "input-picker-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-jobs",
+      "jobsScreen": "choose",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "New job"
+      ],
+      "primary": [
+        "Get estimate"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "input-picker-short.png",
+      "sha256": "db3ddda186ad8a735820948961171002d7c8155dd67e770efc48f83699bd2b66"
+    },
+    {
+      "name": "new-job-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-jobs",
+      "jobsScreen": "choose",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "New job"
+      ],
+      "primary": [
+        "Get estimate"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "new-job-short.png",
+      "sha256": "31e79b0b1288906b047a16d912d3e9f389bddced9ea6f4577e8062d5b01e914d"
+    },
+    {
+      "name": "job-review-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-jobs",
+      "jobsScreen": "review",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Confirm job"
+      ],
+      "primary": [
+        "Confirm & run"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "job-review-short.png",
+      "sha256": "8484dfd2e0d166d958b666121074bd2fd1e3fc8b8ff846abbef8899f8491908e"
+    },
+    {
+      "name": "job-submitting-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-jobs",
+      "jobsScreen": "review",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Submitting\u2026"
+      ],
+      "primary": [
+        "Confirm & run"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "job-submitting-short.png",
+      "sha256": "87362ce6a433956f779859d2d876a995a62dc951e07f6a82208d4e390f2a588a"
+    },
+    {
+      "name": "job-result-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-jobs",
+      "jobsScreen": "detail",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "completed"
+      ],
+      "primary": [
+        "Open in Data \u2192"
+      ],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "job-result-short.png",
+      "sha256": "6d40f04f50544c77be12df081cfaaae14277bd2f5ac8e49b1dc4527e8a03f505"
+    },
+    {
+      "name": "job-uncertain-short",
+      "width": 640,
+      "height": 360,
+      "route": "view-jobs",
+      "jobsScreen": "uncertain",
+      "documentWidth": 640,
+      "documentHeight": 360,
+      "headings": [
+        "Check submission"
+      ],
+      "primary": [],
+      "fonts": [
+        "Space Grotesk",
+        "DM Sans",
+        "DM Sans",
+        "DM Sans"
+      ],
+      "device": "short",
+      "file": "job-uncertain-short.png",
+      "sha256": "fd085fe872fa62369413f51d59eb38c35a279cf04b41998e2b2e76a9ede85c74"
+    },
+    {
+      "name": "network-connect-desktop",
+      "width": 1440,
+      "height": 900,
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "route": "view-networking",
+      "networkScreen": "connect",
+      "device": "desktop",
+      "file": "network-connect-desktop.png",
+      "sha256": "f92f5f16ff141825779ae8c13e73c5783b888a40330be29aa6fd89d6cd8a041a"
+    },
+    {
+      "name": "network-connect-mobile",
+      "width": 390,
+      "height": 844,
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "route": "view-networking",
+      "networkScreen": "connect",
+      "device": "mobile",
+      "file": "network-connect-mobile.png",
+      "sha256": "b9b470ccfdb861def897bacab005ee4964c8edfcd179e2a572a32f9b5afb281a"
+    },
+    {
+      "name": "network-discover-desktop",
+      "width": 1440,
+      "height": 900,
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "route": "view-networking",
+      "networkScreen": "discover",
+      "device": "desktop",
+      "file": "network-discover-desktop.png",
+      "sha256": "185b0bcd1269a70d48844f3be70eb9232ecd0e0aeac2e6d015ee1c111d772a63"
+    },
+    {
+      "name": "network-discover-mobile",
+      "width": 390,
+      "height": 844,
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "route": "view-networking",
+      "networkScreen": "discover",
+      "device": "mobile",
+      "file": "network-discover-mobile.png",
+      "sha256": "8bc3753088d6999ce0190688e77008b792432e36e7469341ac16594af72f4f94"
+    },
+    {
+      "name": "network-technical-desktop",
+      "width": 1440,
+      "height": 900,
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "route": "view-networking",
+      "networkScreen": "technical",
+      "device": "desktop",
+      "file": "network-technical-desktop.png",
+      "sha256": "25aaf9328f639eedf047a188b39c5740de4aa6563b54216b4ecb4538d4de68c5"
+    },
+    {
+      "name": "network-technical-mobile",
+      "width": 390,
+      "height": 844,
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "route": "view-networking",
+      "networkScreen": "technical",
+      "device": "mobile",
+      "file": "network-technical-mobile.png",
+      "sha256": "9312028e5efd298b9d19fcc5d68e857c1dfbca765366c934f36b2aadfa7cb420"
+    },
+    {
+      "name": "network-diagnostic-desktop",
+      "width": 1440,
+      "height": 900,
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "route": "view-networking",
+      "networkScreen": "diagnostic",
+      "device": "desktop",
+      "file": "network-diagnostic-desktop.png",
+      "sha256": "946b415fa9ccae2c574cf094afb61fd7d2d99dac8e66f15d50d1fe7c19c3a8bc"
+    },
+    {
+      "name": "network-diagnostic-mobile",
+      "width": 390,
+      "height": 844,
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "route": "view-networking",
+      "networkScreen": "diagnostic",
+      "device": "mobile",
+      "file": "network-diagnostic-mobile.png",
+      "sha256": "d3038b3f72d340d5757af0e6a954697109514fb60be357b4b83e4900d5346e1e"
+    },
+    {
+      "name": "network-result-desktop",
+      "width": 1440,
+      "height": 900,
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "route": "view-networking",
+      "networkScreen": "result",
+      "device": "desktop",
+      "file": "network-result-desktop.png",
+      "sha256": "001f0cbf628c5dd00cc257df99e4bc277d58f49447841e84c46bde755be04763"
+    },
+    {
+      "name": "network-result-mobile",
+      "width": 390,
+      "height": 844,
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "route": "view-networking",
+      "networkScreen": "result",
+      "device": "mobile",
+      "file": "network-result-mobile.png",
+      "sha256": "459259411f510be88a11a4d17d69dc89b9e6614d6b99954b62eb9b3763f86a76"
+    },
+    {
+      "name": "network-manual-desktop",
+      "width": 1440,
+      "height": 900,
+      "documentWidth": 1440,
+      "documentHeight": 900,
+      "route": "view-networking",
+      "networkScreen": "manual",
+      "device": "desktop",
+      "file": "network-manual-desktop.png",
+      "sha256": "9b79ce7b9eadc0b6b5bce234d18ffde72cddbb61c471627a700f8f1cb440cd8c"
+    },
+    {
+      "name": "network-manual-mobile",
+      "width": 390,
+      "height": 844,
+      "documentWidth": 390,
+      "documentHeight": 844,
+      "route": "view-networking",
+      "networkScreen": "manual",
+      "device": "mobile",
+      "file": "network-manual-mobile.png",
+      "sha256": "8869901e69674119de8cd548c5b769befa39f975149022bf5f06e66af8b8374d"
+    }
+  ]
+}

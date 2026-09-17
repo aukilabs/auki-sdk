@@ -94,7 +94,7 @@ try {
   }
   await page.screenshot({ path: new URL('domain-data.png', artifacts).pathname, fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
-  await go(page, 'filters'); await assertUsable(page, ['#name', '#type', '#ids']);
+  await go(page, 'filters'); await openDetails(page, '#advanced-filters'); await assertUsable(page, ['#name', '#type', '#ids']);
   await chapter(page, 'data'); await assertUsable(page, ['#record-jump']);
   await page.locator('#record-jump').click();
   await assertUsable(page, ['#preview', '#download']);

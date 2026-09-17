@@ -79,5 +79,6 @@ test('actual refreshContext waits for prior close before exactly one visible rea
 test('render contains no picker or preview read triggers', () => {
   let body = ''; function find(node: ts.Node) { if (ts.isFunctionDeclaration(node) && node.name?.text === 'render') body = node.body!.getText(tree); ts.forEachChild(node, find); } find(tree);
   // Event handlers explicitly initiate reads; rendering itself must not invoke them.
+  assert.ok(!body.includes('schedule();'), 'DOM rendering must not start polling');
   assert.ok(!body.includes('void loadPicker();')); assert.ok(!body.includes('else if (!busy) void previewRecord'));
 });

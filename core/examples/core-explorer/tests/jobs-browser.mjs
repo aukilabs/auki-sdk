@@ -54,7 +54,10 @@ try {
   const open = async () => { await page.locator('[data-view="jobs"]').click(); await page.locator('#view-jobs:visible').waitFor(); };
   const step = async name => { await page.locator(`[data-jobs-screen="${name}"]:visible`).waitFor(); assert.equal(await page.locator('[data-jobs-screen]:visible').count(), 1); };
   const configure = async () => {
-    await open(); if (await page.locator('#jobs-back').isVisible()) await page.locator('#jobs-back').click(); await page.waitForFunction(() => document.querySelector('#jobs-configure')?.disabled === false); await page.locator('#jobs-configure').click(); await step('setup');
+    await open(); if (await page.locator('#jobs-back').isVisible()) await page.getByRole('button', { name: '← Jobs', exact: true }).click();
+    await step('dashboard');
+    await page.waitForFunction(() => document.querySelector('#jobs-new')?.disabled === false, null, { timeout: 10000 });
+    assert.ok(await page.locator('#jobs-new').isEnabled()); await page.waitForFunction(() => document.querySelector('#jobs-configure')?.disabled === false); await page.locator('#jobs-configure').click(); await step('setup');
     await page.locator('#fleet-refresh').click(); await step('dashboard'); await page.locator('#jobs-new').click(); await step('choose');
   };
   const selectInput = async id => {
@@ -86,7 +89,7 @@ try {
     else await page.locator('#jobs-confirm').click();
   };
   await login(); assert.equal(state.requests.length, 0, 'no jobs request until user action');
-  await open(); await step('dashboard'); await page.waitForFunction(() => document.querySelector('#jobs-new')?.disabled === false); assert.match(await page.locator('#view-jobs').innerText(), /Recent jobs/);
+  await open(); await step('dashboard'); await page.waitForFunction(() => document.querySelector('#jobs-new')?.disabled === false); assert.equal(await page.locator('#jobs-history-items').getAttribute('aria-label'), 'Recent jobs');
   assert.ok(resources.some(url => /\.wasm(?:\?|$)/.test(url)), 'actual WASM resource loaded');
   // Actual primary navigation discards the review without hidden picker reads.
   await prepare();
@@ -101,10 +104,17 @@ try {
     const submitted = state.submissions.at(-1); assert.deepEqual(submitted.body, estimated, 'exact reviewed spec submitted');
     await page.locator('[data-job-output]').waitFor();
     assert.equal(await page.locator('[data-job-output]').count(), 1);
-    assert.ok(await page.locator('#jobs-new').isVisible());
+    assert.equal(await page.locator('#jobs-new').isVisible(), false);
+    assert.ok(await page.getByRole('button', { name: '← Jobs', exact: true }).isVisible());
     await page.locator('#jobs-details').click();
     assert.match(await page.locator('#jobs-tasks').innerText(), /Phase|Recent events/);
     assert.match(await page.locator('#jobs-tasks').innerText(), /synthetic fixture result/);
+    await page.getByRole('button', { name: '← Jobs', exact: true }).click(); await step('dashboard');
+    assert.ok(await page.locator('#jobs-new').isVisible());
+    await page.waitForFunction(() => document.querySelector('#jobs-new')?.disabled === false, null, { timeout: 10000 });
+    assert.ok(await page.locator('#jobs-new').isEnabled());
+    await page.locator(`[data-job-id="${submitted.id}"]`).click(); await step('detail');
+    await page.locator('[data-job-output]').waitFor();
     await page.locator('[data-job-output]').click(); await page.locator('#view-record:visible').waitFor();
     const outputName = fixture.records.find(record => record.id === submitted.output).name;
     await page.waitForFunction(name => document.querySelector('#record-name')?.textContent === name, outputName);
@@ -176,6 +186,7 @@ try {
   await fixture.waitFor(() => state.lists.length === pages + 1);
   await page.waitForFunction(() => document.querySelector('#jobs-next')?.disabled);
   assert.equal(state.lists.length, pages + 1); assert.equal(new URLSearchParams(state.lists.at(-1)).get('cursor'), CURSOR);
+  await page.locator('#view-jobs summary').filter({ hasText: /^History limits$/ }).click();
   assert.match(await page.locator('#view-jobs').innerText(), /incomplete/i);
   await page.locator('#jobs-new').click(); await step('choose');
   // A sent submit whose response is aborted retains recovery through A -> B -> A.

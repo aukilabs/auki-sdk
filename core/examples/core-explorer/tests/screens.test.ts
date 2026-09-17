@@ -41,7 +41,7 @@ test('Jobs is a primary screen; output records and previews return to Jobs', () 
   navigation.go('record'); navigation.go('preview');
   assert.equal(navigation.back(), 'record');
   assert.equal(navigation.back(), 'jobs');
-  assert.equal(navigation.back(), 'overview');
+  assert.equal(navigation.back(), 'data');
   navigation.reset('access');
   assert.equal(navigation.current, 'access');
 });
@@ -55,4 +55,18 @@ test('Jobs polling stops outside visible detail and when all tasks are terminal'
   }
   assert.equal(jobsShouldPoll(true, 'detail', []), false);
   assert.equal(jobsShouldPoll(true, 'detail', ['completed', 'failed', 'canceled'].map(status => ({ status }))), false);
+});
+
+import { primaryScreen, primaryScreens } from '../src/screens.ts';
+test('four primary workspaces group Space and preserve its Back path', () => {
+  assert.deepEqual(primaryScreens, ['data', 'jobs', 'overview', 'networking']);
+  const navigation = new ScreenHistory();
+  navigation.reset('overview'); navigation.go('portals'); navigation.go('technical');
+  assert.equal(primaryScreen(navigation.current), undefined);
+  assert.equal(navigation.back(), 'portals');
+  assert.equal(primaryScreen(navigation.current), 'overview');
+  assert.equal(navigation.back(), 'overview');
+  navigation.go('poses'); navigation.go('data');
+  assert.equal(navigation.back(), 'data');
+  for (const route of ['record', 'preview', 'upload', 'filters'] as const) assert.equal(primaryScreen(route), 'data');
 });

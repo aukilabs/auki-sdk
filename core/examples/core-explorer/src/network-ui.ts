@@ -5,25 +5,25 @@ import { inspect, previewBytes, safeError } from './safety';
 export function networkingUI(connection: Connection, selectedDomain: () => string) {
   const section = document.createElement('section');
   // Static markup only. Every user/provider value below uses textContent/value.
-  section.className = 'chapter-body';
-  section.innerHTML = `<div class="network-bar"><span>Local peer <span id="net-state" class="badge" role="status">stopped</span></span><button id="net-stop" disabled>Stop networking</button></div>
+  section.className = 'task-body';
+  section.innerHTML = `<div class="network-bar"><span>Local peer <span id="net-state" class="badge" role="status">stopped</span></span><button id="net-stop" disabled>Stop</button></div>
     <p id="net-status" role="status">Choose a Domain to enable networking.</p>
-    <div class="actions"><button id="net-back" hidden>Back</button><button id="net-show-technical">Technical details</button><button id="net-show-result" hidden>View verified response</button></div>
-    <div class="network-step" data-network-screen="connect" data-step="connect"><h2 tabindex="-1"><span class="step-number">1</span>Start a session</h2><div class="step-body">
-    <p>Start an outbound peer in the selected Domain. Data reads work without networking.</p><button id="net-start" class="primary" disabled>Start networking</button></div></div>
-    <div class="network-step" data-network-screen="discover" data-step="discover" hidden><h2 tabindex="-1"><span class="step-number">2</span>Choose a candidate</h2><div class="step-body">
-    <p>Discovery does not prove a candidate is online or authorized.</p><button id="net-discover" disabled>Discover Echo candidates</button><button id="net-show-manual" disabled>Enter a manual route</button><div id="net-candidates"></div>
+    <div class="actions"><button id="net-back" hidden>Back</button><button id="net-show-technical">Details</button><button id="net-show-result" hidden>View verified response</button></div>
+    <div class="network-step" data-network-screen="connect" data-step="connect"><h2 tabindex="-1">Connect</h2><div class="step-body">
+    <button id="net-start" class="primary" disabled>Connect</button></div></div>
+    <div class="network-step" data-network-screen="discover" data-step="discover" hidden><h2 tabindex="-1">Choose a target</h2><div class="step-body">
+    <p>Targets may be offline or unauthorized.</p><button id="net-discover" disabled>Find targets</button><button id="net-show-manual" disabled>Enter a manual route</button><div id="net-candidates"></div>
     </div></div>
     <div id="manual-route" class="network-step" data-network-screen="manual" hidden><h2 tabindex="-1">Enter a manual route</h2>
-    <p>Confirm the target Peer ID and WSS relay route before sending a diagnostic.</p>
+    <p>Check the Peer ID and WSS relay route.</p>
     <label>Target Peer ID<input id="net-peer-id" autocomplete="off"></label><label>Target WSS relay route<input id="net-route" autocomplete="off"></label><button id="net-use-manual" disabled>Use manual target</button></div>
-    <div class="network-step" data-network-screen="diagnostic" data-step="diagnostic" hidden><h2 tabindex="-1"><span class="step-number">3</span>Send a diagnostic</h2><div class="step-body">
+    <div class="network-step" data-network-screen="diagnostic" data-step="diagnostic" hidden><h2 tabindex="-1">Send Echo</h2><div class="step-body">
     <p id="net-target">Choose a target to continue.</p><button id="net-reselect" disabled>Choose another target</button>
     <label>Diagnostic · 1–1024 UTF-8 bytes<input id="net-payload" value="Core Explorer diagnostic" autocomplete="off"></label>
     <button id="net-send" class="primary" disabled>Send verified Echo</button></div></div>
     <div class="network-step" data-network-screen="result" hidden><h2 tabindex="-1">Diagnostic result</h2><button id="net-result-back">Back</button><div id="net-results" role="status"></div></div>
-    <p class="footnote">Echo checks the authenticated roundtrip only. No robot controls, task dispatch or application authority.</p>
-    <div id="network-technical" class="network-step" data-network-screen="technical" hidden><h2 tabindex="-1">Technical details</h2><h3>Local peer</h3><pre id="net-local"></pre><h3>Target</h3><pre id="net-target-details"></pre><div id="net-extra-details" hidden><h3 id="net-extra-title"></h3><pre id="net-extra-json"></pre></div></div>`;
+
+    <div id="network-technical" class="network-step" data-network-screen="technical" hidden><h2 tabindex="-1">Connection details</h2><p class="footnote">Echo verifies an authenticated roundtrip. It grants no task or application authority.</p><h3>Local peer</h3><pre id="net-local"></pre><h3>Target</h3><pre id="net-target-details"></pre><div id="net-extra-details" hidden><h3 id="net-extra-title"></h3><pre id="net-extra-json"></pre></div></div>`;
   document.querySelector('#view-networking')!.append(section);
   const get = (id: string) => section.querySelector<HTMLElement>(`#${id}`)!;
   const field = (id: string) => get(id) as HTMLInputElement;

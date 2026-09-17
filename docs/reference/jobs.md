@@ -43,6 +43,8 @@ backend page. It neither scans all jobs nor deduplicates or repairs provider cur
 
 User, backend App, and imported ZITADEL sessions reuse their existing `AuthSession`.
 Every job operation requires a DDS-issued grant accepted by DMS with write scope.
+The audited DMS middleware rejects read-only grants with HTTP 401, including for
+listing; the SDK performs its one permitted renewal and then returns that status.
 A read grant or successful P2P connection does not authorize jobs. Raw imported
 ZITADEL tokens and compute/robot worker credentials are not passed to job endpoints.
 App secrets stay on trusted Rust/Python hosts.
@@ -70,7 +72,9 @@ can become `submission_uncertain`; the host must reconcile before submitting aga
 
 Source audited 2026-09-16: DMS `06bd863` (the same tree advertised by dev `8088111`)
 and DDS `b27c080` (the same tree as dev `v0.14.6`). Public version metadata was checked;
-cluster image digests and live jobs were not revalidated for this SDK change.
+cluster image digests were not reverified. Native User/App job creation, execution,
+results, and cancellation were exercised against dev; see the
+[validation record](../../test-support/jobs-validation.md) for the exact boundaries.
 
 - Third-party dedicated capabilities use a configured default price when no explicit
   price exists. Public and reserved Auki names do not use that fallback.
@@ -79,6 +83,10 @@ cluster image digests and live jobs were not revalidated for this SDK change.
   enabled credit locking.
 - Cancellation is for whole jobs. DMS may mark a job canceled while a task remains
   running until a heartbeat or lease cleanup. There is no user-facing task-cancel API.
+- A concurrent heartbeat can cause cancellation to return HTTP 409. Read the current
+  job state before explicitly retrying cancellation with a small attempt limit.
+  The audited backend's lease-expiry cleanup can leave `credit_released_at` unset
+  after cancellation; this requires a backend correction, not an SDK retry loop.
 - Job creation has no idempotency key; application labels are not uniqueness keys.
 - Current DMS pagination encodes the discarded overflow row as its next cursor and
   then excludes that row. This can skip one job between pages. The SDK exposes the

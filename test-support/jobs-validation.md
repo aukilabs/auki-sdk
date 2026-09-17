@@ -1,16 +1,18 @@
 # Domain jobs validation
 
 This records the SDK implementation for [#379](https://github.com/aukilabs/auki-sdk/issues/379).
-All job requests in these checks use local HTTP or intercepted Fetch fixtures and
-synthetic credentials. No shared jobs were submitted, workers provisioned, or
-backend/deployment changes made.
+Offline checks use local HTTP or intercepted Fetch fixtures and synthetic
+credentials. Authorized dev job runs on 2026-09-16 exercised the rebuilt Python
+binding and shared Rust implementation; final job states were checked again on
+2026-09-17. No workers were provisioned and no backend or deployment changes were made.
 
 ## Provider contract
 
 Source and public dev build metadata were checked on 2026-09-16. DMS main
 `06bd863a8b8537dabd761b826818844a72593d2c` has the same source tree as dev build
 `8088111`; DDS main `b27c0804a7ff6c99b228c3b8f36665fb3ebea10f` has the same tree
-as dev `v0.14.6`. Cluster image digests were not rechecked. See the
+as dev `v0.14.6`. Both provider main commits and the DMS dev build were unchanged
+when rechecked on 2026-09-17. Cluster image digests were not rechecked. See the
 [jobs reference](../docs/reference/jobs.md) for the authentication contract,
 third-party dedicated pricing, worker availability, cancellation semantics,
 and provider limitations.
@@ -62,15 +64,80 @@ entry path used `/tmp` while the canonical checkout used `/private/tmp`. The
 isolated native module build above passed. No new jobs flow was run in an Expo
 simulator or on a physical device.
 
+## Live dev results
+
+The run used aligned dev API/DDS/DMS endpoints, the retained test App, and an
+existing dedicated compute fixture. Each run registered a unique third-party
+capability, with one attempt per task. The worker uppercased small test records;
+no robot, P2P, relay, or discovery operation was involved. Job requests used
+`session.jobs(domain_id)` in the actual Python extension, including the configured
+DMS URL ending in `/v1/`.
+
+| Check | Result |
+| --- | --- |
+| User two-stage graph | Passed: estimate `0.004`, submission, dependency order, progress/events, two worker receipts, byte-for-byte output reads, and filtered listing |
+| Trusted App single task | Passed: estimate `0.002`, submission, execution, progress/receipt, output read, and filtered listing; the compute fixture matched the App's organization while the permitted Domain had a different owner |
+| Running-job cancellation | Passed: cancel acknowledgment, handler termination, canceled task, provider audit receipt with no outputs, and reported credit release |
+| Read-only App | Passed on 2026-09-17 with a fresh session: Domain data listing succeeded, while job listing and submission both returned HTTP 401. This is the deployed middleware's response for a grant without write scope; no permission changes were needed for this final check |
+| Imported ZITADEL | Domain/job listing passed; estimate returned HTTP 400 with no eligible test worker in this account's organization. No successful job submission/execution is claimed |
+| Cleanup | All six run-owned Domain records deleted; temporary App permissions and legacy access-control fields matched their original snapshots; worker closed and original capabilities/version/mode/concurrency restored |
+
+Job IDs retained for audit:
+
+| Job | Final state | Purpose |
+| --- | --- | --- |
+| `39f512dd-2956-4731-b63b-30d6ddd1fa1d` | Completed | User graph, two tasks |
+| `a6747d14-51bd-4fa7-8e10-d366c9978063` | Completed | App task |
+| `7a73fe19-c089-450e-b637-e99582697bd3` | Canceled | Running cancellation with awaited heartbeat cleanup |
+| `21da0ea9-4dde-49c2-a674-0ffbdec89001` | Canceled | Initial cancellation conflict, then cancellation followed by worker shutdown and lease expiry |
+| `0687ea9b-3a7c-4d8e-bb55-28528a88e44d` | Canceled | Queued follow-up while the prior lease was still active |
+
+All tasks are terminal. Completed tasks report `0.006` total debited credits;
+the three canceled jobs report no task debit. All five jobs' combined estimates
+were `0.012`, below the harness's `0.10` ceiling. Terminal job/receipt records remain
+as audit evidence. Private harnesses and credential state are ignored and are
+not committed.
+
+### Findings and regression validation
+
+- The initial worker poll returned 404 because the native DMS client appended
+  `tasks` to `/v1/` as `/v1//tasks`. Removing the empty trailing path segment fixes
+  claims, heartbeats, completion, and failure requests. The successful live runs
+  used the rebuilt extension with this fix and the original `/v1/` configuration.
+- An initial cancellation returned 409, consistent with a concurrent heartbeat
+  changing the lease before DMS's guarded task update. A fresh read and explicit
+  cancellation retry succeeded. The SDK continues to expose the conflict without
+  automatic retries.
+- **Backend follow-up:** job `21da0ea9-4dde-49c2-a674-0ffbdec89001` drained through
+  lease expiry and has a cancellation receipt, but its `credit_released_at` was
+  still null on 2026-09-17 for a `0.002` credit lock. The audited DMS sweeper
+  finalizes canceled tasks without calling the credit-release helper, and
+  repeated cancellation returns early for an already canceled job. This records
+  the DMS state; the underlying credit service's lock was not independently
+  inspected or changed. Heartbeat-based and queued cancellation reported release.
+
+Additional checks after the URL fix:
+
+| Command | Result |
+| --- | --- |
+| `cargo test --locked -p auki-dms` | Passed, including the new HTTP regression for all four worker operations with and without a trailing slash |
+| `cargo clippy --locked -p auki-dms --all-targets -- -D warnings` | Passed |
+| `cargo test --locked -p auki-tasks -p auki-sdk --quiet` | 151 passed |
+| Venv `maturin develop --locked --manifest-path core/bindings/python/auki-sdk-py/Cargo.toml` | Rebuilt successfully |
+| Venv `python -m pytest core/bindings/python/auki-sdk-py/python_tests/test_jobs.py core/bindings/python/auki-sdk-py/python_tests/test_tasks.py core/bindings/python/auki-sdk-py/python_tests/test_robot_tasks.py -q` | 82 passed |
+| `cargo fmt --all -- --check`, `git diff --check` | Passed |
+
 ## Remaining live validation
 
-No live job execution has been run for this change. It needs a separately
-approved environment/Domain, an existing compatible worker and an agreed
-credit budget. Exercise User, trusted App and imported ZITADEL grants, a custom
-dedicated task, estimates, progress/results, denied access, and cancellation;
-retain job IDs for cleanup and reconciliation. An imported session must have one
-refresh owner. Mobile/browser live checks also need the target deployment's
-network and CORS behavior verified.
+Successful imported-ZITADEL execution needs an approved compatible worker in that
+principal's organization. The saved imported session expired after the successful
+listing check; on 2026-09-17 its refresh was rejected as OAuth `InvalidRequest`,
+so further imported checks need a fresh session with the SDK as sole refresh owner.
+No refresh or issuer validation was relaxed. Mobile/browser live checks still need their deployment's
+network and CORS behavior verified; the live run above covers native Python/Rust.
+
+The backend cancellation credit-release finding above remains unresolved; backend
+changes are outside this SDK PR.
 
 Current DMS pagination can omit an item between pages; the backend correction is
 tracked separately in [#396](https://github.com/aukilabs/auki-sdk/issues/396).

@@ -73,6 +73,7 @@ impl DmsClient {
         let mut url = self.base.clone();
         url.path_segments_mut()
             .map_err(|_| anyhow!("invalid DMS base URL; cannot be a base"))?
+            .pop_if_empty()
             .extend(segments.iter().copied());
         Ok(url)
     }

@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 mod data;
+mod jobs;
 mod zitadel;
 pub use zitadel::{
     AukiAuthFailureKind, AukiPersistenceError, AukiZitadelCredentials, AukiZitadelSessionStore,
@@ -120,6 +121,15 @@ pub enum AukiSdkError {
         message: String,
     },
     #[error("{message}")]
+    Jobs {
+        kind: AukiJobsFailureKind,
+        status: Option<u16>,
+        code: String,
+        maximum: Option<u64>,
+        source_code: Option<String>,
+        message: String,
+    },
+    #[error("{message}")]
     Operation { message: String },
 }
 
@@ -129,6 +139,7 @@ pub use data::{
     AukiDomainSummary, AukiDomains, AukiPortal, AukiPortalDomain, AukiPortalPose,
     AukiTransferOptions,
 };
+pub use jobs::{AukiDomainJobs, AukiJobsFailureKind};
 
 pub(crate) fn operation_error(
     context: &'static str,

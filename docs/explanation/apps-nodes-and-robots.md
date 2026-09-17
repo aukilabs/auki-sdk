@@ -56,6 +56,10 @@ to execute work.
 
 ## Task execution
 
+User and backend App sessions can [submit and monitor Domain jobs](../how-to/submit-jobs.md)
+with `AukiDmsJobs`, including third-party dedicated capabilities. DMS performs
+admission and scheduling; submitting applications do not need a running peer.
+
 An SDK handler implements a capability in Rust or Python. The managed runtime
 handles registration, authentication, polling, heartbeats, and results.
 Posemesh runners provide application-specific execution and storage interfaces.

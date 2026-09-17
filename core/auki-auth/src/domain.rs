@@ -98,6 +98,12 @@ impl DomainAccess {
     pub fn expires_at(&self) -> DateTime<Utc> {
         self.expires_at
     }
+
+    /// Whether this DDS-issued grant also targets DDS services. A grant scoped
+    /// only to a Domain Server must not be forwarded to DMS or DDS metadata APIs.
+    pub fn has_dds_audience(&self) -> bool {
+        self.dds_audience
+    }
 }
 
 /// Supplies renewable data access without starting a peer or a task heartbeat.

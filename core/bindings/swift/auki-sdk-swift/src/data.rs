@@ -115,7 +115,7 @@ fn operation_token(value: Option<Arc<AukiCancellation>>) -> CancellationToken {
 
 #[derive(uniffi::Object)]
 pub struct AukiCancellation {
-    token: CancellationToken,
+    pub(crate) token: CancellationToken,
 }
 
 #[uniffi::export]

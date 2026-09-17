@@ -22,11 +22,15 @@ Compile the SDK and your Rust adapter into one framework, as in
 [Swift Echo](../../../examples/portable-echo/swift/README.md).
 See [custom protocols](../../../../docs/how-to/protocols.md).
 
-Run the generated Swift API against the offline loopback fixture with:
+Run the offline Swift checks with:
 
 ~~~sh
 core/bindings/swift/auki-sdk-swift/run-domain-data-bindings-test.sh
+core/bindings/swift/auki-sdk-swift/run-jobs-bindings-test.sh
 ~~~
+
+The Domain data check uses a loopback HTTP fixture. The jobs check exercises
+the typed codec against a fake generated UniFFI object.
 
 ## Work with Domains and Domain data
 
@@ -146,3 +150,47 @@ shared session; session close is independent of each data client's cleanup.
 Domain data failures preserve `kind`, optional HTTP `status`, and optional
 authentication `authKind`. Permission statuses such as 403 remain distinct.
 Errors omit response bodies, credentials, URLs, and application bytes.
+
+## Submit and inspect DMS jobs
+
+The same User or imported ZITADEL session can create a Domain-scoped jobs
+client. This does not start a peer or a worker, and it does not poll job state:
+
+~~~swift
+let jobs = try session.jobs(domainId: selectedDomainID)
+let spec = AukiJobSpec(
+    label: "map update",
+    tasks: [AukiJobTaskSpec(
+        label: "reconstruct",
+        stage: "reconstruct",
+        capability: "com.example.private/reconstruct/v1",
+        mode: .dedicated,
+        inputsCids: [inputID]
+    )]
+)
+
+do {
+    let estimate = try await jobs.estimate(spec)
+    showEstimatedCredits(estimate.total) // Decimal text; do not round through Double.
+    let jobID = try await jobs.submit(spec)
+    let details = try await jobs.get(jobID)
+    try await jobs.close()
+} catch {
+    try? await jobs.close()
+    throw error
+}
+~~~
+
+Task dependencies use stage names in `AukiJobEdge`. Capability strings are
+passed through to DMS, including custom dedicated capabilities. `list` returns
+one page and an opaque `nextCursor`; pass that cursor into a new query to fetch
+another page. Use `AukiCancellation` for caller cancellation and always await
+`close()` before closing the shared session.
+
+A `submissionUncertain` failure means DMS may have accepted the job. Inspect
+existing jobs before deciding what to do; automatic resubmission can duplicate
+work and charges. Jobs errors preserve the stable error `code`, HTTP status,
+size limit, and the redacted source category for ambiguous submissions.
+
+See the [jobs reference](../../../../docs/reference/jobs.md) for required write
+authority, worker availability, provider limitations and binding compatibility.

@@ -32,6 +32,60 @@ impl TokenProvider for RotatingProvider {
 }
 
 #[tokio::test]
+async fn operations_preserve_base_path_with_or_without_trailing_slash() {
+    for suffix in ["", "/"] {
+        let server = MockServer::start();
+        let task_id = Uuid::new_v4();
+        let claim = server.mock(|when, then| {
+            when.method(GET).path("/api/v1/tasks");
+            then.status(204);
+        });
+        let heartbeat = server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("/api/v1/tasks/{task_id}/heartbeat"));
+            then.status(200).json_body(json!({}));
+        });
+        let complete = server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("/api/v1/tasks/{task_id}/complete"));
+            then.status(200);
+        });
+        let fail = server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("/api/v1/tasks/{task_id}/fail"));
+            then.status(200);
+        });
+        let client = DmsClient::new(
+            format!("{}/api/v1{suffix}", server.base_url())
+                .parse()
+                .unwrap(),
+            Duration::from_secs(2),
+            Arc::new(RotatingProvider::default()),
+        )
+        .unwrap();
+
+        client.claim("").await.unwrap();
+        client
+            .heartbeat(task_id, &HeartbeatRequest::default())
+            .await
+            .unwrap();
+        client
+            .complete(task_id, &CompleteTaskRequest::default())
+            .await
+            .unwrap();
+        client
+            .fail(task_id, &FailTaskRequest::default())
+            .await
+            .unwrap();
+
+        claim.assert_calls(1);
+        heartbeat.assert_calls(1);
+        complete.assert_calls(1);
+        fail.assert_calls(1);
+    }
+}
+
+#[tokio::test]
 async fn all_operations_replay_once_with_the_new_bearer() {
     for operation in ["lease", "heartbeat", "complete", "fail"] {
         for final_status in [200, 401] {

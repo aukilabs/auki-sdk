@@ -66,6 +66,7 @@ this does not test deployed CORS or a live provider.
 
 | Command | Result |
 | --- | --- |
+| `cargo test --locked -p auki-sdk-swift --lib -q` | 19 passed |
 | `bash core/bindings/swift/auki-sdk-swift/build-xcframework.sh` | All three Apple slices, generated Swift typecheck and XCFramework validation passed |
 | `bash core/bindings/swift/auki-sdk-swift/run-fleet-bindings-test.sh` | macOS generated-UniFFI/native HTTP fixture passed, including typed models, filters, cancellation, close and shared-session reuse |
 | Expo binding: `npm ci --ignore-scripts`, `npm run build`, `npm run typecheck`, `npm test`, `npm run test:domain-data`, `npm run test:jobs`, `npm run test:fleet` | Passed; fleet covers the JS bridge and actual Expo Web adapter against an injected client |

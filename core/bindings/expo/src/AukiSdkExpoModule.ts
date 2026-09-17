@@ -79,6 +79,14 @@ declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents
   dataUploadResult(uploadId: string): Promise<DataMetadata>;
   dataUploadCancel(uploadId: string): Promise<void>;
   dataUploadClose(uploadId: string): Promise<void>;
+  jobsOpen(sessionId: string, domainId: string): Promise<string>;
+  jobsEstimate(clientId: string, specJson: string, operationId: string): Promise<string>;
+  jobsSubmit(clientId: string, specJson: string, operationId: string): Promise<string>;
+  jobsList(clientId: string, queryJson: string, operationId: string): Promise<string>;
+  jobsGet(clientId: string, jobId: string, operationId: string): Promise<string>;
+  jobsCancel(clientId: string, jobId: string, operationId: string): Promise<string>;
+  jobsOperationCancel(operationId: string): Promise<void>;
+  jobsClose(clientId: string): Promise<void>;
   startPeer(sessionId: string, domainId: string): Promise<string>;
   startPeerWithDiscovery(
     sessionId: string,

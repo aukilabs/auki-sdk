@@ -34,6 +34,16 @@ impl AukiPeerBootstrap {
         &self.auth
     }
 
+    /// The explicitly configured DMS API base, shared by jobs and peer relays.
+    pub fn dms_base_url(&self) -> &str {
+        self.peer_config.dms_base_url()
+    }
+
+    /// Create a peer-free jobs client using this session and configured DMS.
+    pub fn jobs(&self) -> Result<crate::AukiDmsJobs, crate::JobsError> {
+        crate::AukiDmsJobs::new(self.auth.clone(), self.dms_base_url())
+    }
+
     /// Authenticate a User or trusted native App and retain the configuration
     /// used for every peer started from this session.
     pub async fn authenticate(

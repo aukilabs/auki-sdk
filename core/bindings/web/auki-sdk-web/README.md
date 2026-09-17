@@ -32,6 +32,43 @@ See [Work with Domain data](../../../../docs/how-to/domain-data.md#use-web-or-py
 for examples and the [reference](../../../../docs/reference/domain-data.md)
 for streaming, cancellation, and errors.
 
+For DMS job submission and monitoring, use `session.jobs(domainId)` without
+starting a peer. User and imported ZITADEL sessions are supported in browsers;
+App secrets are not exposed by this binding. Inputs use typed camel-case fields,
+while response fields preserve the DMS wire names:
+
+~~~ts
+const jobs = session.jobs(selectedDomainId);
+try {
+  const spec: JobSpec = {
+    label: "prepare-assets",
+    tasks: [{
+      label: "convert",
+      stage: "convert",
+      capability: "com.example.convert.v1",
+      mode: "dedicated",
+      capabilityFilters: { format: "glb" },
+    }],
+  };
+  const estimate = await jobs.estimate(spec);
+  const jobId = await jobs.submit(spec);
+  const details = await jobs.get(jobId);
+  const page = await jobs.list({ capabilities: ["com.example.convert.v1"] });
+} finally {
+  await jobs.close();
+}
+~~~
+
+Each operation accepts an optional `AbortSignal`. `AukiJobsError` exposes
+`kind`, `code`, and optional `status`; retain and retry an imported session after
+`code === "persistence"`. When `kind === "submission_uncertain"`, `source`
+identifies the underlying failure and the POST may have succeeded, so reconcile
+through `list` before retrying. Close jobs clients before closing their shared
+session.
+
+See the [jobs reference](../../../../docs/reference/jobs.md) for required write
+authority, worker availability and provider limitations.
+
 Imported ZITADEL sessions support the default `session.domains().list()` query
 for a server-paged picker, plus `session.data(knownDomainId)` and selected-Domain
 portal/pose reads. The SDK strictly validates the ordinary service-token profile:

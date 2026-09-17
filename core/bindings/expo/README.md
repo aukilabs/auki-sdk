@@ -104,6 +104,47 @@ await the operation and `client.close()`. The application owns partial download
 cleanup. See the [Domain data guide](../../../docs/how-to/domain-data.md) for
 permission, conflict, timeout, and retry behavior.
 
+## Submit and inspect DMS jobs
+
+Use the existing session and an explicit Domain ID. This creates no peer and
+does not start a polling loop:
+
+~~~ts
+import { jobs } from "@aukilabs/auki-sdk-expo";
+
+const client = await jobs(session, selectedDomainId);
+try {
+  const spec = {
+    label: "map update",
+    tasks: [{
+      label: "reconstruct",
+      stage: "reconstruct",
+      capability: "com.example.private/reconstruct/v1",
+      mode: "dedicated" as const,
+      inputsCids: [inputId],
+    }],
+  };
+  const estimate = await client.estimate(spec);
+  showEstimatedCredits(estimate.total); // Decimal text, not a JS number.
+  const jobId = await client.submit(spec);
+  const details = await client.get(jobId);
+} finally {
+  await client.close();
+}
+~~~
+
+Edges refer to stage names. Custom capability strings pass through unchanged;
+the SDK has no capability catalogue whitelist. `list` returns one DMS page and
+an opaque `next_cursor`. Every operation accepts an optional `AbortSignal`.
+
+If `submit` rejects with `kind === "submission_uncertain"`, DMS may have
+accepted the job. Inspect existing jobs before choosing a recovery action;
+automatic resubmission can duplicate work and charges. Authentication errors
+retain codes such as `persistence`, and HTTP errors retain `status`.
+
+See the [jobs reference](../../../docs/reference/jobs.md) for required write
+authority, worker availability and provider limitations.
+
 ## Import an existing login
 
 Your app supplies `credentials` from PKCE login and a known `selectedDomainId`.
@@ -182,3 +223,7 @@ The iOS build is written below the repository's
 imported sessions, renewal and storage failure, paged listing, portal/pose
 metadata, CRUD, bounded transfers, permission errors, cancellation, multipart
 abort, close, and fixture cleanup.
+
+`npm run test:jobs` runs the offline jobs bridge tests for custom capability
+pass-through, paging, cancellation, ambiguous submission handling, persistence
+codes, and awaited close.

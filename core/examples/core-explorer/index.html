@@ -19,7 +19,7 @@
 <form id="login" class="surface"><div class="view-head"><h1>Sign in</h1></div>
 <label>Email<input id="email" type="email" autocomplete="username" required></label>
 <label>Password<input id="password" type="password" autocomplete="off" required></label>
-<p id="environment" class="footnote">Local fixtures / synthetic test data</p>
+<p id="environment" class="footnote">Dev · sign in to contact these services</p>
 <div class="actions"><button class="primary" id="signin">Sign in</button></div>
 <p id="login-status" role="status"></p></form>
 </section>
@@ -27,11 +27,11 @@
 <aside class="sidebar"><nav aria-label="Primary sections">
 <button data-view="data" aria-controls="view-data" aria-current="false">Data</button>
 <button id="open-jobs" data-view="jobs" aria-controls="view-jobs" aria-current="false">Jobs</button>
-<button data-view="overview" aria-controls="view-overview" aria-current="false">Space</button>
+<button data-view="overview" aria-controls="view-overview" aria-current="false">Poses/<wbr>Portals</button>
 <button data-view="networking" aria-controls="view-networking" aria-current="false">Network</button>
 </nav></aside>
-<div class="screen-area"><nav id="space-navigation" class="space-tabs" aria-label="Space views" hidden><button data-space data-go="overview">Overview</button><button data-space data-go="portals">Portals</button><button data-space data-go="poses">Poses</button></nav>
-<section id="view-overview" class="view"><div class="view-head"><h1 tabindex="-1">Space</h1></div>
+<div class="screen-area"><nav id="space-navigation" class="space-tabs" aria-label="Poses/Portals views" hidden><button data-space data-go="overview">Overview</button><button data-space data-go="portals">Portals</button><button data-space data-go="poses">Poses</button></nav>
+<section id="view-overview" class="view"><div class="view-head"><h1 tabindex="-1">Poses/Portals</h1></div>
 <div class="surface"><h2 id="domain-name" hidden>Choose a Domain</h2><div id="domain-facts"></div><pre id="metadata" hidden></pre>
 <div class="row"><button id="copy-domain">Copy Domain ID</button><button id="domain-technical">Details</button><button id="refresh-selected">Refresh reads</button></div></div>
 </section>
@@ -44,12 +44,12 @@
 <section id="view-jobs" class="view" hidden aria-label="Jobs playground"></section>
 <section id="view-preview" class="view" hidden><div class="view-head"><button data-back>← Back to record</button><h1 tabindex="-1">Preview</h1></div><pre id="content" role="status">Select a record.</pre><button id="retry-preview">Retry preview</button></section>
 <section id="view-technical" class="view" hidden><div class="view-head"><button data-back>← Back</button><h1 tabindex="-1">Details</h1></div><pre id="technical-content"></pre></section>
-<section id="view-portals" class="view" hidden><div class="view-head"><button data-back>← Space</button><h1 tabindex="-1">Portals</h1></div><div id="portals" role="status">Choose a Domain to read portals.</div></section>
-<section id="view-poses" class="view" hidden><div class="view-head"><button data-back>← Space</button><h1 tabindex="-1">Poses</h1></div><div id="poses" role="status">Choose a Domain to read poses.</div></section>
+<section id="view-portals" class="view" hidden><div class="view-head"><button data-back>← Poses/Portals</button><h1 tabindex="-1">Portals</h1></div><div id="portals" role="status">Choose a Domain to read portals.</div></section>
+<section id="view-poses" class="view" hidden><div class="view-head"><button data-back>← Poses/Portals</button><h1 tabindex="-1">Poses</h1></div><div id="poses" role="status">Choose a Domain to read poses.</div></section>
 <section id="view-networking" class="view" hidden><div class="view-head"><h1 tabindex="-1">Network</h1></div></section>
 <section id="view-upload" class="view" hidden></section>
 </div></div>
-<section id="view-settings" class="view settings-view" hidden><div class="view-head"><button data-back>← Back</button><h1 tabindex="-1">Connection settings</h1><p id="settings-status">Enter aligned API, DDS and DMS endpoints before signing in.</p></div><div id="connection-settings" class="surface"><label>API URL<input id="api" type="url" value="http://127.0.0.1:18114" required></label><label>DDS URL<input id="dds" type="url" value="http://127.0.0.1:18114" required></label><label>DMS URL<input id="dms" type="url" value="http://127.0.0.1:18114" required></label><p class="footnote">HTTPS is required outside loopback. No automatic environment fallback.</p><pre id="connected-config" hidden></pre></div></section>
+<section id="view-settings" class="view settings-view" hidden><div class="view-head"><button data-back>← Back</button><h1 tabindex="-1">Connection settings</h1><p id="settings-status">Enter aligned API, DDS and DMS endpoints before signing in.</p></div><div id="connection-settings" class="surface"><label>API URL<input id="api" type="url" value="https://api.dev.aukiverse.com/" required></label><label>DDS URL<input id="dds" type="url" value="https://dds.dev.aukiverse.com/" required></label><label>DMS URL<input id="dms" type="url" value="https://dms.dev.aukiverse.com/v1/" required></label><p class="footnote">HTTPS is required outside loopback. No automatic environment fallback.</p><pre id="connected-config" hidden></pre></div></section>
 </main>
 <footer class="page-footer"><span id="notice" role="status"></span></footer>
 <script type="module" src="/src/main.ts"></script>

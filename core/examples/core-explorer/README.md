@@ -22,15 +22,24 @@ npx vite preview --host 127.0.0.1
 Open the URL printed by Vite (normally `http://127.0.0.1:4173`). Rebuild after
 changing app code; preview is not hot reload. This uses the existing preview
 workflow without changing Vite's development-server filesystem policy.
-Defaults explicitly target local fixtures at
-`http://127.0.0.1:18114` for API, DDS and DMS. The fixture accepts any synthetic
-email/password (for example `fixture@example.test` / `fixture-only`). It never
-forwards requests and retains only synthetic data and request observations in memory. Do not use real
-credentials with fixtures. The UI always labels loopback as
-“Local fixtures / synthetic test data”. There is no fallback to shared services.
+The editable defaults target **Dev**: API `https://api.dev.aukiverse.com/`,
+DDS `https://dds.dev.aukiverse.com/`, and DMS `https://dms.dev.aukiverse.com/v1/`.
+Loading the app or editing **Connection settings** makes no service requests;
+only explicit **Sign in** contacts the configured services. The Dev label describes
+these exact configured bases, not service availability or deployed compatibility.
+Other configurations show **Custom / mixed environment**; all-loopback bases show
+**Local fixtures / synthetic test data**. There is no environment fallback.
 
-To use an approved shared environment, open **Connection settings** and explicitly enter aligned API, DDS and DMS
-base URLs, then sign in. Non-loopback bases require HTTPS; embedded credentials,
+For the optional local fixture above, open **Connection settings** and replace
+**all three URLs** with `http://127.0.0.1:18114` before signing in. The fixture
+accepts any synthetic email/password (for example `fixture@example.test` /
+`fixture-only`). It never forwards requests and retains only synthetic data and
+request observations in memory. Do not use real credentials with fixtures.
+Browser harnesses explicitly override all three URLs and block nonlocal requests.
+
+For an approved shared environment, verify the aligned API, DDS and DMS bases in
+**Connection settings**, then sign in.
+Non-loopback bases require HTTPS; embedded credentials,
 query strings and fragments are rejected. Data reads do not use DMS. Optional outbound-only networking starts no browser relay booking;
 the remote robot owns its relay booking. Provider deployments
 must support the existing SDK contracts; synthetic tests do not establish live
@@ -45,7 +54,7 @@ is an explicit original-byte `.bin` attachment; downloaded bytes are not redacte
 ## Focused screens
 
 The viewport-oriented application shows one current task, rather than appending
-details below a long page. **Data**, **Jobs**, **Space** and **Network** are the four primary workspaces. Space contains Domain information, Portals and Poses. Domain selection opens Data. One compact header carries environment and selected Domain; lists and details replace one another in the dark workspace. Long content scrolls internally and short windows retain reachable controls. Shared rows, forms, metadata and status treatments use restrained orange actions.
+details below a long page. **Data**, **Jobs**, **Poses/Portals** and **Network** are the four primary workspaces. Poses/Portals contains Domain information, Portals and Poses. Domain selection opens Data. One compact header carries environment and selected Domain; lists and details replace one another in the dark workspace. Long content scrolls internally and short windows retain reachable controls. Shared rows, forms, metadata and status treatments use restrained orange actions.
 
 Buttons open the Domain picker, connection settings, advanced filters, record,
 preview and technical screens. Domain paging and known-UUID selection remain
@@ -155,7 +164,7 @@ upload. Cancellation does not promise rollback. Domain changes/logout abort and
 invalidate old work, suppressing late results. Within the same session an uncertain target remains available after changing Domains. Logout completely clears file, type, destination, target and returned metadata before another account signs in. Review starts at the top with destination and file visible; returned metadata opens a separate redacted technical screen with Back.
 
 The UI uses `/brand/tokens.css`, the official `/brand/auki-logo.svg`, and local
-OFL fonts; it does not load fonts from a CDN. Local checks include 155 TypeScript
+OFL fonts; it does not load fonts from a CDN. Local checks include 160 TypeScript
 unit tests, 17 fixture/config tests, 25 Jobs worker tests and 6 idle-Echo robot tests.
 Real generated SDK/WASM browsing, binary upload/download and Jobs use synthetic
 loopback services; the separate Echo suite uses a real local Python robot. Jobs
@@ -174,13 +183,14 @@ jobs, estimates, uploads or task outputs were created. This proves live discover
 not leased-job execution or billing behavior.
 
 [Complete control-panel screenshot gallery](screenshots/control-panel/README.md):
-108 real-app captures covering all 14 routes and every Jobs, Upload and Network
+112 real-app captures covering all 14 routes and every Jobs, Upload and Network
 step on desktop and mobile, plus narrow/short viewport captures. Includes sign-in,
-settings, Domain selection, Data/details/preview/filter, Space/portals/poses,
+settings, Domain selection, Data/details/preview/filter, Poses/Portals overview, portals and poses,
 upload confirmation/progress/result, workers, input selection, cost confirmation,
 job submission/result/recovery, and connected Echo/technical views.
 [Coverage manifest](screenshots/control-panel/manifest.json) records each route,
-flow step, viewport and image hash. All captures use local synthetic fixtures;
+flow step, viewport and image hash. Pre-login captures show Dev defaults without
+contacting services; signed-in captures use local synthetic fixtures.
 Jobs screenshots are not deployed worker or live billing evidence. Network result
 captures use the real local Chromium/WASM-to-Python Echo fixture.
 Older screenshots outside this gallery describe earlier UI milestones.
@@ -345,7 +355,7 @@ separate parent checks; local fixture success does not establish deployed suppor
 
 The presentation uses local fonts and a dark, terminal-inspired GUI. Back restores
 Data filters, focus and scroll; Escape follows the visible local Back action or
-returns from a secondary screen. Space retains the overview, portal and pose
+returns from a secondary screen. Poses/Portals retains the overview, portal and pose
 capabilities. Network keeps the same peer across navigation. Jobs rendering remains
 request-free; visible entry and explicit actions own reads. Retained uncertain
 submissions keep Recent jobs reachable, and discovery settling while hidden defers

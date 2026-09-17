@@ -19,3 +19,11 @@ test('local font references resolve and responsive scroll escape paths remain pr
   assert.match(css, /\.view\{[^}]*overflow:auto/);
   assert.match(css, /\[hidden\]\{display:none!important/);
 });
+
+test('Poses/Portals visible labels preserve route and space group hooks', () => {
+  assert.match(html, /data-view="overview"[^>]*>Poses\/<wbr>Portals<\/button>/);
+  assert.match(html, /id="view-overview"[^]*?<h1[^>]*>Poses\/Portals<\/h1>/);
+  assert.match(html, /id="space-navigation" class="space-tabs" aria-label="Poses\/Portals views"/);
+  assert.equal([...html.matchAll(/data-back>← Poses\/Portals<\/button>/g)].length, 2);
+  assert.doesNotMatch(html, />Space<|← Space|aria-label="Space views"/);
+});

@@ -1,11 +1,11 @@
 import './style.css';
-import { facts, technical, recordRow } from './presentation';
+import { facts, technical, recordRow, environmentLabel } from './presentation';
 import { networkingUI } from './network-ui';
 import { jobsUI } from './jobs-ui';
 import { uploadUI } from './upload-ui';
 import { ScreenHistory, isScreen, primaryScreen, focusScreenTarget, type Screen } from './screens';
 import { Connection, drainCleanup, login, type DataMetadata, type DataQuery, type DomainSummary } from './sdk';
-import { endpoint, inspect, isLoopback, ReadLane, previewBytes, safeError, uuid, redact } from './safety';
+import { endpoint, inspect, ReadLane, previewBytes, safeError, uuid, redact } from './safety';
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const input = (id: string) => $<HTMLInputElement>(id).value.trim();
 const text = (id: string, value: string) => { $(id).textContent = value; };
@@ -135,16 +135,19 @@ $('login').onsubmit = async event => {
       if (!await connection.accept(login(urls, input('email'), password)) || attempt !== auth) return;
     } finally { clearTimeout(timer); }
     connectedUrls = [...urls];
-    connectedEnvironment = urls.every(url => isLoopback(new URL(url))) ? 'Local fixtures / synthetic test data' : `Configured environment · API ${urls[0]} · DDS ${urls[1]} · DMS ${urls[2]}`;
-    text('session-status', urls.every(url => isLoopback(new URL(url))) ? 'Local fixtures' : 'Configured environment');
+    const label = environmentLabel(urls);
+    connectedEnvironment = label === 'Local fixtures / synthetic test data' ? label : `${label} · API ${urls[0]} · DDS ${urls[1]} · DMS ${urls[2]}`;
+    text('session-status', label === 'Local fixtures / synthetic test data' ? 'Local fixtures' : label);
     settingsState(); navigation.reset('data'); showView('domains'); offset = 0; loadDomains();
   } catch { if (attempt === auth) text('login-status', 'Sign-in failed. Check credentials and environment, then retry.'); }
   finally { if (attempt === auth) { disabled('signin', false); $('logout').hidden = !connection.session; text('logout', 'Log out'); } }
 };
-for (const id of ['api', 'dds', 'dms']) $(id).oninput = () => {
-  try { text('environment', ['api', 'dds', 'dms'].every(key => isLoopback(new URL(endpoint(input(key))))) ? 'Local fixtures / synthetic test data' : 'Explicit environment configuration · sign in to contact these services'); }
+function updateEnvironment() {
+  try { text('environment', `${environmentLabel(['api', 'dds', 'dms'].map(input))} · sign in to contact these services`); }
   catch { text('environment', 'Invalid endpoint: use HTTPS outside loopback; no URL credentials.'); }
-};
+}
+for (const id of ['api', 'dds', 'dms']) $(id).oninput = updateEnvironment;
+updateEnvironment();
 function loadDomains() {
   const session = connection.session; if (!session) return;
   text('domain-status', 'Loading…'); text('domains', ''); text('page', ''); disabled('previous', true); disabled('next', true);

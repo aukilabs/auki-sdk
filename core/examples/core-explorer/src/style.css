@@ -183,3 +183,29 @@ summary { cursor: pointer; padding: 14px 0; color: var(--muted); font-size: 13px
   #view-upload { padding-top: 14px; }
   #view-upload h1 { margin: 8px 0; }
 }
+
+/* Jobs uses one focused task surface and the existing paper/orange palette. */
+.jobs-workspace { max-width: 740px; }
+.jobs-toolbar, .jobs-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.jobs-toolbar { justify-content: space-between; margin-bottom: 18px; }
+.jobs-toolbar button { border: 0; padding-left: 0; }
+.jobs-footer { border-top: 1px solid var(--line); padding-top: 16px; margin-top: 24px; }
+#view-jobs p { font-size: 13px; line-height: 1.6; }
+#jobs-context { max-height: 80px; overflow: auto; }
+.jobs-card { border: 1px solid var(--line); border-radius: 6px; padding: 22px; background: #eeeee8; }
+.jobs-card label + label, .jobs-fields { margin-top: 18px; }
+.jobs-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.jobs-fields label + label { margin-top: 0; }
+.jobs-list { display: grid; gap: 10px; margin: 18px 0; }
+.jobs-list > button { text-align: left; }
+#jobs-status { border-left: 3px solid var(--accent); padding-left: 12px; }
+#jobs-status:empty { display: none; }
+#jobs-heading:focus { outline: none; }
+#view-jobs a { color: #854900; text-underline-offset: 3px; }
+@media (max-width: 640px) {
+  nav { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  nav button { font-size: 10px; }
+  .jobs-fields { grid-template-columns: 1fr; }
+  .jobs-card { padding: 18px; }
+  #view-jobs .actions > button, .jobs-footer > button { flex: 1 1 140px; }
+}

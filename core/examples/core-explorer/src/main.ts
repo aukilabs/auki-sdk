@@ -1,9 +1,10 @@
 import './style.css';
 import { facts, technical } from './presentation';
 import { networkingUI } from './network-ui';
+import { jobsUI } from './jobs-ui';
 import { uploadUI } from './upload-ui';
 import { ScreenHistory, isScreen, focusScreenTarget, type Screen } from './screens';
-import { Connection, login, type DataMetadata, type DataQuery, type DomainSummary } from './sdk';
+import { Connection, drainCleanup, login, type DataMetadata, type DataQuery, type DomainSummary } from './sdk';
 import { endpoint, inspect, isLoopback, ReadLane, previewBytes, safeError, uuid, redact } from './safety';
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const input = (id: string) => $<HTMLInputElement>(id).value.trim();
@@ -52,11 +53,26 @@ const networking = networkingUI(connection, () => domainId);
 const uploader = uploadUI(connection, () => domainId && connection.data ? { domainId, domainName, environment: connectedEnvironment } : undefined, {
   navigate: showView, onUploaded: () => loadRecords(),
 });
+const jobsOutput = new ReadLane();
+const jobs = jobsUI(connection, () => {
+  const session = connection.session, data = connection.data, id = domainId;
+  return session && data && id ? { domainId: id, environment: connectedEnvironment, session, data, createJobs: () => session.jobs(id) } : undefined;
+}, { navigate: showView, openRecord: async id => {
+  const data = connection.data, session = connection.session, version = selection, originalDomain = domainId;
+  if (!data || !session || !originalDomain) return;
+  const validId = uuid(id);
+  let failed = false;
+  await jobsOutput.run(signal => data.get(validId, signal), record => {
+    if (version === selection && session === connection.session && data === connection.data && originalDomain === domainId) selectRecord(record);
+  }, () => { failed = true; });
+  if (failed) throw new Error('Output read failed.');
+} });
+$('open-jobs').onclick = () => jobs.open();
+$('open-record-jobs').onclick = () => { if (recordId) jobs.open(recordId); };
 const closeNetworking = connection.beforeClose;
-connection.beforeClose = async () => {
-  const results = await Promise.allSettled([uploader.cancel(), closeNetworking()]);
-  if (results.some(result => result.status === 'rejected')) throw new Error('Cleanup failed.');
-};
+connection.beforeClose = () => drainCleanup(
+  () => jobs.close(connection.session), () => uploader.cancel(), () => closeNetworking(),
+);
 $('open-upload').onclick = () => uploader.open();
 function settingsState() {
   const connected = !!connection.session;
@@ -73,13 +89,13 @@ function clearRecord() {
   lanes.record.cancel(); lanes.bytes.cancel(); recordId = ''; $('record-jump').hidden = true;
   text('download-status', ''); text('record', ''); text('content', 'Select a record.'); text('record-name', 'Choose a record'); $('record-facts').replaceChildren();
   $('records').querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', 'false'));
-  for (const id of ['copy-record', 'preview', 'download']) disabled(id, true);
+  for (const id of ['copy-record', 'preview', 'download', 'open-record-jobs']) disabled(id, true);
 }
 function clearSelection() {
-  selection++; uploader.clear(); positions.clear();
+  selection++; jobsOutput.cancel(); uploader.clear(); positions.clear();
   disabled('open-upload', true);
   for (const key of ['portals', 'poses', 'records', 'record', 'bytes'] as const) lanes[key].cancel();
-  domainId = ''; domainName = ''; clearRecord();
+  domainId = ''; domainName = ''; jobs.refreshContext(); clearRecord();
   text('technical-content', '');
   for (const id of ['metadata', 'portals', 'poses', 'records', 'data-status']) text(id, '');
   text('selected', 'Choose a Domain'); text('domain-name', 'Choose a Domain'); $('domain-facts').replaceChildren();
@@ -138,21 +154,32 @@ $('previous').onclick = () => { offset = Math.max(0, offset - 10); loadDomains()
 $('next').onclick = () => { offset += 10; loadDomains(); };
 $('manual').onsubmit = event => { event.preventDefault(); try { void selectDomain(uuid(input('domain-id'))); } catch { text('domain-status', 'Enter a complete Domain UUID.'); } };
 async function selectDomain(id: string) {
-  clearSelection(); const version = selection; domainId = id;
-  for (const key of ['name', 'type', 'ids']) $<HTMLInputElement>(key).value = '';
-  const summary = summaries.find(item => item.id === id);
-  domainName = String(redact(summary?.name ?? 'Known Domain'));
-  text('selected', domainName);
-  text('domain-name', String(redact(summary?.name ?? 'Known Domain')));
-  $('domain-facts').replaceChildren(facts(summary ? { Name: summary.name, Organization: summary.organization_id } : { Metadata: 'Unavailable unless present in the current Domain page.' }));
-  navigation.reset('overview'); renderView();
-  text('metadata', inspect(summary ?? { id, note: 'Metadata unavailable unless present in the current Domain page.' }));
-  const data = await connection.select(id);
-  if (version !== selection) { await data?.close(); return; }
-  connection.data = data;
-  if (data) refreshSelected();
-  disabled('open-upload', !data);
-  networking.refresh();
+  let version = selection;
+  const session = connection.session;
+  try {
+    clearSelection(); version = selection; domainId = id;
+    for (const key of ['name', 'type', 'ids']) $<HTMLInputElement>(key).value = '';
+    const summary = summaries.find(item => item.id === id);
+    domainName = String(redact(summary?.name ?? 'Known Domain'));
+    text('selected', domainName);
+    text('domain-name', String(redact(summary?.name ?? 'Known Domain')));
+    $('domain-facts').replaceChildren(facts(summary ? { Name: summary.name, Organization: summary.organization_id } : { Metadata: 'Unavailable unless present in the current Domain page.' }));
+    navigation.reset('overview'); renderView();
+    text('metadata', inspect(summary ?? { id, note: 'Metadata unavailable unless present in the current Domain page.' }));
+    const data = await connection.select(id);
+    if (version !== selection || session !== connection.session) return; // Connection owns stale-client cleanup.
+    connection.data = data;
+    jobs.refreshContext();
+    if (data) refreshSelected();
+    disabled('open-upload', !data);
+    networking.refresh();
+  } catch {
+    if (version !== selection || session !== connection.session) return;
+    clearSelection();
+    const message = 'Domain selection failed. Log out and reconnect before retrying.';
+    text('domain-status', message); text('notice', message);
+    showView('domains');
+  }
 }
 function refreshSelected() {
   const data = connection.data, session = connection.session, id = domainId;
@@ -206,7 +233,7 @@ for (const id of ['name', 'type', 'ids']) $(id).oninput = () => { lanes.records.
 function selectRecord(record: DataMetadata) {
   clearRecord(); recordId = record.id; $('record-jump').hidden = false; showView('record');
   text('content', 'Choose Preview to read this record, or Download for original bytes.');
-  for (const id of ['copy-record', 'preview', 'download']) disabled(id, false);
+  for (const id of ['copy-record', 'preview', 'download', 'open-record-jobs']) disabled(id, false);
   const data = connection.data!; text('record', 'Loading…'); text('record-name', 'Loading…');
   void lanes.record.run(signal => data.get(record.id, signal), value => {
     text('record', inspect(value)); text('record-name', String(redact(value.name)));

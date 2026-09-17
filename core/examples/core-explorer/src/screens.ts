@@ -1,4 +1,4 @@
-export const primaryScreens = ['overview', 'data', 'portals', 'poses', 'networking'] as const;
+export const primaryScreens = ['overview', 'data', 'portals', 'poses', 'networking', 'jobs'] as const;
 export const screens = [...primaryScreens, 'domains', 'settings', 'filters', 'record', 'preview', 'technical', 'upload', 'access'] as const;
 export type Screen = typeof screens[number];
 export function isScreen(value: string): value is Screen { return (screens as readonly string[]).includes(value); }
@@ -21,4 +21,9 @@ export class ScreenHistory {
 export function focusScreenTarget(target: Pick<HTMLElement, 'tagName' | 'tabIndex' | 'focus'>): void {
   if (/^H[1-6]$/.test(target.tagName)) target.tabIndex = -1;
   target.focus({ preventScroll: true });
+}
+
+/** Only visible, nonterminal task details warrant bounded polling. */
+export function jobsShouldPoll(visible: boolean, screen: string, tasks: readonly { status: string }[]): boolean {
+  return visible && screen === 'detail' && tasks.some(task => ['queued', 'leased', 'running'].includes(task.status));
 }

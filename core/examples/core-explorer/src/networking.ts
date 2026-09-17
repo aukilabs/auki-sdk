@@ -28,7 +28,7 @@ export class Networking<P extends ManagedPeer = ManagedPeer, C extends Client = 
     this.starting = (async () => {
       try {
         const peer = await factory();
-        if (generation !== this.generation) { try { await peer.shutdown(); } catch { this.cleanupFailed = true; } finally { peer.free(); } return; }
+        if (generation !== this.generation) { try { await peer.shutdown(); } catch { this.cleanupFailed = true; } finally { try { peer.free(); } catch { this.cleanupFailed = true; } } return; }
         this.peer = peer;
         this.client = mount?.(peer);
         this.state = 'ready'; this.changed();
@@ -38,7 +38,7 @@ export class Networking<P extends ManagedPeer = ManagedPeer, C extends Client = 
       } catch {
         if (generation === this.generation) {
           // Also clean up a peer if adapter construction failed.
-          if (this.peer) { try { await this.peer.shutdown(); } catch {} finally { this.peer.free(); this.peer = undefined; } }
+          if (this.peer) { try { await this.peer.shutdown(); } catch { this.cleanupFailed = true; } finally { try { this.peer.free(); } catch { this.cleanupFailed = true; } this.peer = undefined; } }
           this.state = 'failed'; this.changed();
         }
       } finally { clearTimeout(timer); }
@@ -59,6 +59,10 @@ export class Networking<P extends ManagedPeer = ManagedPeer, C extends Client = 
     this.operations.add(pending);
     try { await pending; } finally { this.operations.delete(pending); }
   }
+  async close(): Promise<void> {
+    await this.stop();
+    if (this.cleanupFailed) throw new Error('Networking cleanup failed.');
+  }
   stop(failed = false): Promise<void> {
     if (this.stopping) return this.stopping;
     ++this.generation;
@@ -67,9 +71,10 @@ export class Networking<P extends ManagedPeer = ManagedPeer, C extends Client = 
       await this.starting;
       const peer = this.peer, client = this.client;
       this.peer = undefined; this.client = undefined;
-      try { await peer?.shutdown(); } catch { failed = true; }
+      try { await peer?.shutdown(); } catch { this.cleanupFailed = true; }
       await Promise.allSettled([...this.operations]);
-      client?.free(); peer?.free();
+      try { client?.free(); } catch { this.cleanupFailed = true; }
+      try { peer?.free(); } catch { this.cleanupFailed = true; }
       this.state = failed || this.cleanupFailed ? 'failed' : 'stopped';
       this.stopping = undefined; this.changed();
     })();

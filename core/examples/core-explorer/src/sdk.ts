@@ -8,6 +8,12 @@ export async function login(urls: string[], email: string, password: string) {
   return AukiUserSession.loginWithEnvironment(urls[0], urls[1], urls[2], email, password, id);
 }
 export { AukiDiscoveryMode, AukiPeerReachabilityMode, AukiEchoClient, type AukiPeer } from '../../portable-echo/web/pkg-web/auki_portable_echo_web.js';
+// Start every child even if one throws synchronously; report failure only once
+// all children have drained. Callers retain this aggregate until it settles.
+export async function drainCleanup(...children: (() => unknown)[]): Promise<void> {
+  const results = await Promise.allSettled(children.map(async child => child()));
+  if (results.some(result => result.status === 'rejected')) throw new Error('Cleanup failed.');
+}
 export class Connection {
   beforeClose: () => Promise<void> = async () => {};
   session?: AukiUserSession;
@@ -20,6 +26,8 @@ export class Connection {
     const generation = ++this.generation;
     ++this.selection;
     const session = await pending;
+    // Do not publish a new session into an older, coalesced logout.
+    if (generation === this.generation) await this.teardown?.catch(() => {});
     if (generation !== this.generation) { await session.close(); return false; }
     this.session = session;
     return true;
@@ -27,10 +35,11 @@ export class Connection {
   async select(id: string) {
     const selection = ++this.selection;
     const session = this.session;
+    if (!session) { await this.closing; return; }
     const previous = this.data;
     this.data = undefined;
-    const closing = Promise.all([this.beforeClose(), previous?.close()]);
-    this.closing = Promise.all([this.closing, closing]).then(() => undefined);
+    const earlier = this.closing;
+    this.closing = drainCleanup(() => earlier, () => this.beforeClose(), () => previous?.close());
     await this.closing;
     if (selection === this.selection && session && session === this.session) {
       this.data = session.data(id);
@@ -45,7 +54,8 @@ export class Connection {
     const data = this.data;
     this.session = undefined;
     this.data = undefined;
-    const results = Promise.allSettled([this.closing, this.beforeClose(), data?.close()]);
+    const earlier = this.closing;
+    const results = Promise.allSettled([drainCleanup(() => earlier, () => this.beforeClose(), () => data?.close())]);
     const teardown = (async () => {
       const cleanup = await results;
       const sessionResult = await Promise.allSettled([Promise.resolve().then(() => session?.close())]);

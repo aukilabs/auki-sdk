@@ -147,7 +147,7 @@ export function networkingUI(connection: Connection, selectedDomain: () => strin
     if (button('net-use-manual').disabled) return;
     targetConfirmed = true; invalidateResult(); history.length = 0; show('diagnostic', false); field('net-payload').focus();
   };
-  connection.beforeClose = () => net.stop();
+  connection.beforeClose = () => net.close();
   button('net-start').onclick = () => {
     const session = connection.session, domain = selectedDomain();
     if (!session || !domain) return;

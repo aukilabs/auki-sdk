@@ -4,3 +4,5 @@ export { importZitadelSession, closeSession, ZitadelCredentialsSnapshot } from "
 export type { ZitadelSessionStore } from "./ZitadelSession";
 export { AukiDomains, AukiDomainData, domains, data } from "./DomainData";
 export { AukiJobs, jobs } from "./Jobs";
+
+export { AukiFleet, fleet } from "./Fleet";

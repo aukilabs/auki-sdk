@@ -194,3 +194,26 @@ size limit, and the redacted source category for ambiguous submissions.
 
 See the [jobs reference](../../../../docs/reference/jobs.md) for required write
 authority, worker availability, provider limitations and binding compatibility.
+
+## Fleet inventory and activity
+
+```swift
+let fleet = try session.fleet(domainId: selectedDomainId)
+do {
+    let inventory = try await fleet.list()
+    let candidates = try await fleet.computePool(.init(mode: .dedicated))
+    print(inventory.machines, inventory.sources, candidates.complete)
+    try await fleet.close()
+} catch {
+    try? await fleet.close()
+    throw error
+}
+```
+
+`Fleet.swift` supplies typed Codable snapshots and queries. Pass an
+`AukiCancellation` via `cancellation:` to cancel one call. Await close before
+closing the session. Handle `AukiSdkError.Fleet(kind:status:code:message:)` in
+exhaustive error switches and regenerate the matching UniFFI/XCFramework output.
+See the [fleet reference](../../../../docs/reference/fleet.md).
+After `build-xcframework.sh`, run `bash core/bindings/swift/auki-sdk-swift/run-fleet-bindings-test.sh`
+from the repository root for a generated Swift/native loopback HTTP exercise.

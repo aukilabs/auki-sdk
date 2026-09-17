@@ -16,3 +16,13 @@ with managed heartbeats and cleanup. For existing hosts, see the
 including capability selection when updating an older SDK dependency.
 
 For relay bookings, use [`auki-relay-booking`](../auki-relay-booking/README.md).
+
+## Fleet activity observations
+
+With the `jobs` feature, `DomainJobsClient::busy_nodes_with_cancellation` reads
+DMS's bounded busy feed using a User-type Domain grant. The snapshot records the
+organization of the grant used by the successful request, including renewal.
+Unsupported App profiles return `None`. Entries cover public tasks and the User
+organization's dedicated tasks; they do not establish a selected-Domain
+association. The [fleet client](../auki-fleet/README.md) joins only authorized
+Domain job references and keeps global unknown status explicit.

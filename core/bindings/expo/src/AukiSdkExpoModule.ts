@@ -79,6 +79,12 @@ declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents
   dataUploadResult(uploadId: string): Promise<DataMetadata>;
   dataUploadCancel(uploadId: string): Promise<void>;
   dataUploadClose(uploadId: string): Promise<void>;
+  fleetOpen(sessionId: string, domainId: string): Promise<string>;
+  fleetList(clientId: string, queryJson: string, operationId: string): Promise<string>;
+  fleetComputePool(clientId: string, queryJson: string, operationId: string): Promise<string>;
+  fleetOperationCancel(operationId: string): Promise<void>;
+  fleetClose(clientId: string): Promise<void>;
+
   jobsOpen(sessionId: string, domainId: string): Promise<string>;
   jobsEstimate(clientId: string, specJson: string, operationId: string): Promise<string>;
   jobsSubmit(clientId: string, specJson: string, operationId: string): Promise<string>;

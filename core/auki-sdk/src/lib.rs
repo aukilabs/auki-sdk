@@ -66,6 +66,11 @@ pub use auki_domain_client::{
     DomainDataClient, DomainListQuery, DomainPage, DomainSummary, Portal, PortalDomain, PortalId,
     PortalPose, TransferOptions,
 };
+pub use auki_fleet::{
+    AukiFleet, ComputePoolQuery, DomainFleetClient, FleetActivity, FleetAssociation, FleetError,
+    FleetLimits, FleetMachine, FleetMachineKind, FleetPresence, FleetQuery, FleetSnapshot,
+    FleetSource, FleetSourceReport, FleetSourceState, FleetView, FleetWorkState,
+};
 #[cfg(target_arch = "wasm32")]
 pub use auki_p2p::BrowserAuthenticatedRouteStream as AuthenticatedRouteStream;
 pub use auki_p2p::{

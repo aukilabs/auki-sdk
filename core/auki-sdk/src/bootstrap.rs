@@ -44,6 +44,11 @@ impl AukiPeerBootstrap {
         crate::AukiDmsJobs::new(self.auth.clone(), self.dms_base_url())
     }
 
+    /// Read-only machine observations using the same session and environment.
+    pub fn fleet(&self) -> Result<crate::AukiFleet, crate::FleetError> {
+        crate::AukiFleet::new(self.auth.clone(), self.dms_base_url())
+    }
+
     /// Authenticate a User or trusted native App and retain the configuration
     /// used for every peer started from this session.
     pub async fn authenticate(

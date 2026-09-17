@@ -68,6 +68,7 @@ pub use client::domain::{
     DomainAccess, DomainAccessProvider, DomainListQuery, DomainPage, DomainSummary, Portal,
     PortalDomain, PortalId,
 };
+pub use client::inventory::{InventoryNode, InventoryRobot};
 pub use client::{AuthClient, AuthEnvironment, AuthLimits, AuthSession};
 pub use error::{AuthFailureKind, Error, Result};
 pub use secret::SecretString;

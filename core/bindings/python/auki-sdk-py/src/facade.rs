@@ -510,6 +510,15 @@ impl PyAukiSession {
                 .in_domain(crate::data::id(domain_id)?),
         })
     }
+    fn fleet(&self, domain_id: &str) -> PyResult<crate::fleet::PyFleet> {
+        Ok(crate::fleet::PyFleet {
+            inner: self
+                .bootstrap
+                .fleet()
+                .map_err(crate::fleet::error)?
+                .in_domain(crate::data::id(domain_id)?),
+        })
+    }
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let session = self.bootstrap.session().clone();
         crate::async_completion::future_into_py(py, async move {

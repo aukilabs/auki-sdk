@@ -274,3 +274,23 @@ pub struct JobCancellation {
     pub status: JobStatus,
     pub updated_at: DateTime<Utc>,
 }
+
+/// An observed active lease, without a Domain ID or machine kind. The broader
+/// feed is not authorization to fetch or disclose the referenced job details.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BusyNode {
+    pub node_id: Uuid,
+    pub task_id: Uuid,
+    pub task_status: JobTaskStatus,
+    pub task_mode: JobMode,
+    pub job_id: Uuid,
+    pub job_status: JobStatus,
+}
+
+#[derive(Clone, Debug)]
+pub struct BusyNodeSnapshot {
+    /// Taken from the actual grant used for the successful request, including
+    /// after renewal. Dedicated activity is visible only in this organization.
+    pub organization_id: Uuid,
+    pub nodes: Vec<BusyNode>,
+}

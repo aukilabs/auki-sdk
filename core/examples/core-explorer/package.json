@@ -18,7 +18,8 @@
     "test:jobs": "node tests/jobs-browser.mjs",
     "test:jobs-fixture": "node --test tests/jobs-fixture.test.mjs",
     "test:workers": "python3 -m unittest discover -s workers -p 'test_*.py'",
-    "test:robot": "python3 -m unittest discover -s robot -p 'test_*.py'"
+    "test:robot": "python3 -m unittest discover -s robot -p 'test_*.py'",
+    "test:fleet": "node tests/fleet-browser.mjs"
   },
   "devDependencies": {
     "playwright": "1.62.1",

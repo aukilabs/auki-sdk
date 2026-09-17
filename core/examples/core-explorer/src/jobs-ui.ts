@@ -1,3 +1,5 @@
+import { FleetController } from './fleet.ts';
+import { renderFleet } from './fleet-ui.ts';
 import type { Connection } from './sdk';
 import { JobsController, type JobsContext, type Role } from './jobs.ts';
 import { inspect, redact, uuid } from './safety.ts';
@@ -14,7 +16,7 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
     <p id="jobs-context" class="footnote"></p>
     <div id="jobs-screen"></div>
     <p id="jobs-status" role="status" aria-live="polite"></p>
-    <div class="jobs-footer"><button id="jobs-new" type="button">New job</button><button id="jobs-configure" type="button">Worker configuration</button><button id="jobs-history" type="button">Job history</button></div>
+    <div class="jobs-footer"><button id="jobs-new" type="button">New job</button><button id="jobs-configure" type="button">Discover workers</button><button id="jobs-history" type="button">Job history</button></div>
   </div>`;
   const get = (id: string) => section.querySelector<HTMLElement>(`#${id}`)!;
   const field = (id: string) => get(id) as HTMLInputElement;
@@ -25,6 +27,22 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
   let timer: ReturnType<typeof setTimeout> | undefined, polls = 0;
   let closing: Promise<void> = Promise.resolve();
   const controller = new JobsController(getContext, render);
+  const fleet = new FleetController(() => {
+    const current = getContext(), session = connection.session;
+    return current && session ? { ...current, createFleet: () => session.fleet(current.domainId) } : undefined;
+  }, () => { if (screen === 'setup') { screen = ''; render(); } });
+  async function discover() {
+    const version = generation;
+    controller.invalidateDiscovery();
+    await fleet.refresh();
+    if (version !== generation) return;
+    if (controller.state.reconciliation || fleet.state.installations.length !== 1) return;
+    const choice = fleet.state.installations[0];
+    if (choice.config.computeId || choice.config.robotId) {
+      override = undefined; screen = ''; draftRole = choice.config.computeId ? 'compute' : 'robot';
+      await controller.configure(choice.config); render();
+    }
+  }
   function stopPolling() { clearTimeout(timer); timer = undefined; }
   function schedule() {
     stopPolling();
@@ -68,33 +86,40 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
     if (changed || !host.firstElementChild || !['setup', 'choose'].includes(screen)) {
       const pane = document.createElement('section'); pane.dataset.jobsScreen = screen; host.replaceChildren(pane);
       if (screen === 'setup') {
-        text('jobs-heading', 'Configure your demo.');
-        pane.innerHTML = `<p>Use the public IDs of your activated demo workers. Configuration does not start workers or establish online status.</p>
-          <form id="jobs-setup-form" class="jobs-card"><label>Installation UUID<input id="jobs-installation" required autocomplete="off" spellcheck="false"></label>
-          <div class="jobs-fields"><label>Expected compute UUID<input id="jobs-compute-id" required autocomplete="off" spellcheck="false"></label><label>Expected robot UUID<input id="jobs-robot-id" required autocomplete="off" spellcheck="false"></label></div>
-          <p class="footnote">Public identifiers only. Kept in memory for this Domain and session. Unresolved submissions survive Domain changes until reconciled; logout erases recovery. Activation is a separate operator step.</p><button id="jobs-save-config" class="primary">Use this configuration →</button></form>`;
-        field('jobs-installation').value = state.config?.installationId ?? '';
-        field('jobs-compute-id').value = state.config?.computeId ?? '';
-        field('jobs-robot-id').value = state.config?.robotId ?? '';
-        get('jobs-setup-form').onsubmit = event => {
-          event.preventDefault();
-          try {
-            const config = { installationId: uuid(field('jobs-installation').value), computeId: uuid(field('jobs-compute-id').value), robotId: uuid(field('jobs-robot-id').value) };
-            override = undefined; void act(() => controller.configure(config));
-          } catch { text('jobs-status', 'Enter three complete public UUIDs. Do not enter credentials.'); }
-        };
+        text('jobs-heading', 'Discover your demo.');
+        renderFleet(pane, fleet, choice => {
+          override = undefined; screen = ''; draftRole = choice.config.computeId ? 'compute' : 'robot';
+          void act(() => controller.configure(choice.config));
+        }, () => { void act(discover); });
       } else if (screen === 'choose') {
         text('jobs-heading', 'One record. One action.');
-        pane.innerHTML = `<p>Run a small, dedicated demo task. Choose an existing record or upload one from Data.</p><form id="jobs-choose-form" class="jobs-card">
+        pane.innerHTML = `<p>Choose a record for a dedicated demo task.</p><form id="jobs-choose-form" class="jobs-card">
           <label>Action<select id="jobs-role"><option value="compute">Compute · uppercase text</option><option value="robot">Robot · simulated inspection</option></select></label>
           <p id="jobs-action-help" class="footnote"></p><label>Input record UUID<input id="jobs-input" required autocomplete="off" spellcheck="false" aria-describedby="jobs-input-help"></label>
-          <p id="jobs-input-help" class="footnote">Maximum 64 KiB (65,536 bytes). Compute requires valid UTF-8. Robot reports byte count and hash; no hardware actions.</p>
+          <p id="jobs-input-help" class="footnote">Up to 64 KiB. Compute needs UTF-8; inspection is simulated.</p>
           <div class="actions"><button id="jobs-estimate" class="primary">Estimate &amp; review →</button><button type="button" id="jobs-browse-data">Choose from Data</button></div></form>`;
-        field('jobs-input').value = draftInput; field('jobs-role').value = draftRole;
-        const help = () => text('jobs-action-help', `Expected ${draftRole} worker: ${draftRole === 'compute' ? state.config?.computeId : state.config?.robotId}. Availability is checked only when you estimate.`);
+        field('jobs-input').value = draftInput;
+        if (!state.config?.[draftRole === 'compute' ? 'computeId' : 'robotId']) draftRole = state.config?.computeId ? 'compute' : 'robot';
+        field('jobs-role').value = draftRole;
+        for (const role of ['compute', 'robot'] as const) {
+          const option = section.querySelector<HTMLOptionElement>(`#jobs-role option[value="${role}"]`)!;
+          option.disabled = !!state.discoveryRequired || !state.config?.[role === 'compute' ? 'computeId' : 'robotId'];
+          if (option.disabled) option.textContent += ' · unavailable';
+        }
+        const help = () => text('jobs-action-help', state.discoveryRequired ? 'Rediscover workers to enable this action.' : `Discovered ${draftRole === 'compute' ? 'dedicated compute candidate' : 'assigned robot'}. DMS schedules the task.`);
         field('jobs-role').onchange = () => { draftRole = field('jobs-role').value as Role; help(); };
         field('jobs-input').oninput = () => { draftInput = field('jobs-input').value; };
         help();
+        const observations = document.createElement('p'); observations.className = 'footnote';
+        const choice = fleet.state.installations.find(item => item.config.installationId === state.config?.installationId);
+        observations.textContent = String(redact([fleet.state.message, ...(choice ? [...choice.robot, ...choice.compute].map(m => `${m.name}: ${m.association === 'assigned' ? 'assigned robot' : 'dedicated candidate'} · ${m.presence} · work ${m.work_state}`) : [])].join(' ')));
+        pane.append(observations);
+        const diagnostics = document.createElement('details'), summary = document.createElement('summary'), json = document.createElement('pre');
+        summary.textContent = 'Source diagnostics and public IDs';
+        json.textContent = inspect({ config: state.config, inventory: fleet.state.inventory, dedicated_pool: fleet.state.pool });
+        const safety = document.createElement('p');
+        safety.textContent = 'Observations are not reservations. DMS decides availability when estimating and scheduling. Compute requires valid UTF-8; robot inspection reports byte count and hash with no hardware actions. Maximum input: 65,536 bytes.';
+        diagnostics.append(summary, safety, json); pane.append(diagnostics);
         button('jobs-browse-data').onclick = () => options.navigate('data');
         get('jobs-choose-form').onsubmit = event => { event.preventDefault(); override = undefined; polls = 0; void act(() => controller.prepare(draftRole, draftInput.trim())); };
       } else if (screen === 'review') {
@@ -160,15 +185,17 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
     for (const control of section.querySelectorAll<HTMLInputElement | HTMLSelectElement>('#jobs-screen input, #jobs-screen select')) control.disabled = busy || !context;
     if (!changed && focusId && !section.hidden) section.querySelector<HTMLElement>(`#${focusId}`)?.focus({ preventScroll: true });
     if (changed && !section.hidden) { section.scrollTop = 0; get('jobs-heading').focus({ preventScroll: true }); }
+    const estimateButton = section.querySelector<HTMLButtonElement>('#jobs-estimate');
+    if (estimateButton) estimateButton.disabled = busy || !context || !!state.discoveryRequired || !state.config?.[draftRole === 'compute' ? 'computeId' : 'robotId'];
     schedule();
   }
   function edit() {
     const state = controller.state;
     draftInput = state.inputId ?? draftInput; draftRole = state.role ?? draftRole;
-    if (state.config) { override = 'choose'; void act(() => controller.configure(state.config!)); }
+    if (state.config) { override = 'choose'; void act(() => controller.choose()); }
   }
   button('jobs-new').onclick = edit;
-  button('jobs-configure').onclick = () => { override = 'setup'; if (controller.state.config) void act(() => controller.configure(controller.state.config!)); else render(); };
+  button('jobs-configure').onclick = () => { override = 'setup'; screen = ''; render(); };
   button('jobs-history').onclick = () => { override = undefined; void act(() => controller.list()); };
   button('jobs-back').onclick = () => {
     if (screen === 'review') edit();
@@ -181,14 +208,14 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
   function close(retainSession?: object) {
     ++generation; busy = false; stopPolling(); override = undefined; draftInput = ''; draftRole = 'compute'; screen = ''; polls = 0;
     context = getContext();
-    const pending = controller.close(retainSession);
+    const pending = Promise.allSettled([controller.close(retainSession), fleet.close()]).then(results => { if (results.some(r => r.status === 'rejected')) throw Error('Jobs or Fleet cleanup failed.'); });
     closing = Promise.allSettled([closing, pending]).then(results => { if (results.some(result => result.status === 'rejected')) throw new Error('Jobs cleanup failed.'); });
     render(); return closing;
   }
   render();
   return {
     open(inputId) {
-      if (inputId && !busy && !['uncertain', 'submitting'].includes(controller.state.phase)) { draftInput = uuid(inputId); if (controller.state.config) { override = 'choose'; void act(() => controller.configure(controller.state.config!)); } }
+      if (inputId && !busy && !['uncertain', 'submitting'].includes(controller.state.phase)) { draftInput = uuid(inputId); if (controller.state.config) { override = 'choose'; void act(() => controller.choose()); } }
       options.navigate('jobs'); render(); get('jobs-heading').focus({ preventScroll: true });
     },
     close,

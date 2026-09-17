@@ -75,15 +75,30 @@ SDK's existing compute/robot handlers:
 - **Robot inspection:** read a small record and create a JSON byte-count/SHA-256
   report. This is simulated inspection, with no hardware or shell actions.
 
-After selecting a Domain, open **Jobs** and configure the public installation UUID
-and the expected compute/robot node IDs supplied by the operator. Configuration is
-in memory and scoped to the current Domain/session. Domain switching clears visible
-state but retains one unresolved submission and its public configuration in memory
-for reconciliation on returning to that Domain. Until reconciled, new submissions
-are blocked across the session; no recovery entry is evicted. Logout erases all
-configuration and recovery information. Reloading also loses this in-memory recovery. Never paste machine credentials into the browser. Configured IDs are
-**not** an online-status indicator. An operator must activate matching workers
-before real estimation or submission can succeed.
+After selecting a Domain, open **Jobs** and choose **Discover / refresh workers**.
+The real `session.fleet(domainId)` client reads assigned robots with `list({})`
+and organization-dedicated compute candidates with `computePool({mode: "dedicated"})`.
+Only exact lowercase canonical `/examples/compute-robot/{UUID}/{compute|robot}/v1`
+capabilities form installations. A single installation with an unambiguous role
+opens action selection without UUID setup. Multiple installations require an
+explicit readable choice; roles are never paired across installations. Missing
+or duplicate executors disable that role, including exact-capability collisions
+across machine kinds. Both robot and compute inventories must be complete to
+establish uniqueness; activity denials alone do not block selection. Partial inventory cannot establish a
+unique executor; denied busy/activity sources retain useful inventory with unknown
+work observations. Online/offline/busy/unknown are observations, not reservations.
+Source reports, public IDs and unresolved activity are available under details.
+
+Discovery is explicit, bounded by the SDK and never polled. Domain switches and
+logout abort and drain Fleet before session closure, then free the WASM handle.
+Cleanup errors remain visible. Configuration stays in memory for the current
+Domain/session. One unresolved submission survives Domain changes for reconciliation
+on returning; new submissions remain blocked across that session. Discovery and
+navigation do not erase recovery. Rediscovery invalidates old reviews and new-job
+eligibility until an unambiguous installation is selected again; Back cannot
+restore stale executors. Historical executor IDs remain available for history and
+receipt verification. Logout or page reload erases in-memory recovery.
+Never paste machine credentials into the browser. An operator must activate workers.
 
 Choose a role and an existing record UUID, or open Jobs from the selected Data
 record. Upload a small input through the existing explicit upload flow if needed.
@@ -144,8 +159,8 @@ upload. Cancellation does not promise rollback. Domain changes/logout abort and
 invalidate old work, suppressing late results. Within the same session an uncertain target remains available after changing Domains. Logout completely clears file, type, destination, target and returned metadata before another account signs in. Review starts at the top with destination and file visible; returned metadata opens a separate redacted technical screen with Back.
 
 The UI uses `/brand/tokens.css`, the official `/brand/auki-logo.svg`, and local
-OFL fonts; it does not load fonts from a CDN. Local checks include 105 TypeScript
-unit tests, 13 fixture/config tests, 25 Jobs worker tests and 6 idle-Echo robot tests.
+OFL fonts; it does not load fonts from a CDN. Local checks include 121 TypeScript
+unit tests, 17 fixture/config tests, 25 Jobs worker tests and 6 idle-Echo robot tests.
 Real generated SDK/WASM browsing, binary upload/download and Jobs use synthetic
 loopback services; the separate Echo suite uses a real local Python robot. Jobs
 browser tests do not pretend their synthetic DMS provider executed native workers.
@@ -154,7 +169,13 @@ reads/writes and exact bytes/hashes against loopback fixtures, using synthetic t
 contexts and User grants rather than real machine leases. Native credential/runtime
 construction and awaited closure also passed under the service template's host
 hardening and resource caps, without starting registration or task polling.
-These checks do not establish deployed-provider compatibility or live availability.
+Fixture checks alone do not establish deployed-provider compatibility or live
+availability. Separately, an explicitly authorized Chromium run against dev verified
+Fleet discovery of the hosted demo pair, matching installation/executor IDs, both
+action choices without manual worker UUID entry, and normal logout. Its network
+guard allowed read-only service requests and authentication exchanges only: no live
+jobs, estimates, uploads or task outputs were created. This proves live discovery,
+not leased-job execution or billing behavior.
 
 Actual app screenshots: [Overview](screenshots/overview.png),
 [Data](screenshots/domain-explorer.png), [verified Echo](screenshots/networking.png),
@@ -163,8 +184,10 @@ Actual app screenshots: [Overview](screenshots/overview.png),
 [mobile upload review](screenshots/upload-review-mobile.png),
 [Jobs action](screenshots/jobs-choose.png), [Jobs review](screenshots/jobs-review.png),
 [Jobs result](screenshots/jobs-result.png) and
-[mobile Jobs review](screenshots/jobs-review-mobile.png). Jobs captures use explicitly
-labelled synthetic fixtures, not deployed worker results.
+[mobile Jobs review](screenshots/jobs-review-mobile.png),
+[Fleet discovery](screenshots/fleet-discovery.png), and
+[mobile Fleet action](screenshots/fleet-choose-mobile.png). Jobs/Fleet captures use
+explicitly labelled synthetic fixtures, not deployed worker results.
 
 ## Verification
 
@@ -251,7 +274,7 @@ existing example builds and keep iteration bounded; the generated module is abou
 
 - Overwrite/delete controls, streaming transfers above 8 MiB and spatial visualization.
 - Imported ZITADEL/PKCE login and browser machine credentials.
-- Fleet inventory/online status and one-click multi-stage job graphs.
+- One-click multi-stage job graphs.
 - Live provider/deployment validation, permission matrices across real roles,
   and additional browsers/platforms need separate approved environments.
 - No existing CI workflow is present in this checkout. CI integration is left
@@ -304,3 +327,20 @@ The compiled robot, relay and browser gates run separately from
 the narrow unit/fixture checks. The M1 browser suite remains loopback-only and exercises the
 combined generated WASM plus networking-off data reads; it does not prove a
 browser-to-robot roundtrip. Provider deployment compatibility remains unverified.
+
+Fleet validation uses provider-shaped DDS robot/node and DMS busy/jobs routes,
+with the rebuilt Web WASM binding (no frontend SDK substitute):
+
+```sh
+npm run typecheck
+npm test
+node --test tests/jobs-fixture.test.mjs tests/fleet-fixture.test.mjs
+npm run test:fleet
+```
+
+`test:fleet` starts a loopback Vite server without rebuilding WASM; the parent must
+supply the matching generated artifact first. The existing `test:jobs` suite
+retains all submission, receipt, uncertainty and lifecycle assertions and now
+discovers its workers through the same provider fixture. Its preview assets must
+be rebuilt by the parent. Screenshots and approved live read-only discovery are
+separate parent checks; local fixture success does not establish deployed support.

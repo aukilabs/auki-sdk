@@ -58,6 +58,7 @@ pub struct DomainAccess {
     token: SecretString,
     expires_at: DateTime<Utc>,
     dds_audience: bool,
+    user_organization: Option<Uuid>,
 }
 
 impl DomainAccess {
@@ -103,6 +104,12 @@ impl DomainAccess {
     /// only to a Domain Server must not be forwarded to DMS or DDS metadata APIs.
     pub fn has_dds_audience(&self) -> bool {
         self.dds_audience
+    }
+
+    /// Organization in a DDS-issued User grant. This only selects a supported
+    /// client operation; the receiving service must verify the signed token.
+    pub fn user_organization(&self) -> Option<Uuid> {
+        self.user_organization
     }
 }
 
@@ -337,7 +344,7 @@ impl AuthSession {
         Ok(())
     }
 
-    async fn data_dds_json<T: DeserializeOwned>(
+    pub(super) async fn data_dds_json<T: DeserializeOwned>(
         &self,
         state: &mut SessionState,
         url: Url,
@@ -528,6 +535,10 @@ struct DataClaims {
     domain_id: Uuid,
     exp: i64,
     aud: Vec<String>,
+    #[serde(default, rename = "type")]
+    token_type: Option<String>,
+    #[serde(default)]
+    org: Option<Uuid>,
 }
 
 impl AccessResponse {
@@ -565,6 +576,9 @@ impl AccessResponse {
             token,
             expires_at,
             dds_audience: claims.aud.iter().any(|aud| aud == "dds"),
+            user_organization: claims
+                .org
+                .filter(|org| !org.is_nil() && claims.token_type.as_deref() == Some("user-access")),
         })
     }
 }

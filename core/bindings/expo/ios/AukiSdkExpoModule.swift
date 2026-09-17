@@ -9,6 +9,7 @@ public class AukiSdkExpoModule: Module {
   #if canImport(auki_sdk_swiftFFI)
   private let sessions = ExpoSessionRegistry()
   private let domainData = ExpoDomainDataRegistry()
+  private let fleet = ExpoFleetRegistry()
   private let jobs = ExpoJobsRegistry()
   private var peers: [String: AukiPeer] = [:]
   private var identities: [String: AukiPeerIdentity] = [:]
@@ -491,6 +492,61 @@ public class AukiSdkExpoModule: Module {
       #if canImport(auki_sdk_swiftFFI)
       guard let transfer = self.domainData.removeUpload(uploadId) else { return }
       try await withDataErrors { try await transfer.close() }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("fleetOpen") { (sessionId: String, domainId: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let client = try await withFleetErrors { try self.sessions.session(sessionId).fleet(domainId: domainId) }
+      let id = self.newId("fleet")
+      self.fleet.insert(client, id: id)
+      return id
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("fleetList") {
+      (clientId: String, queryJson: String, operationId: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.fleet.beginOperation(operationId)
+      defer { self.fleet.finishOperation(operationId) }
+      return try await withFleetErrors {
+        try await self.fleet.client(clientId).listJson(queryJson: queryJson, cancellation: cancellation)
+      }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("fleetComputePool") {
+      (clientId: String, queryJson: String, operationId: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.fleet.beginOperation(operationId)
+      defer { self.fleet.finishOperation(operationId) }
+      return try await withFleetErrors {
+        try await self.fleet.client(clientId).computePoolJson(queryJson: queryJson, cancellation: cancellation)
+      }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("fleetOperationCancel") { (operationId: String) in
+      #if canImport(auki_sdk_swiftFFI)
+      self.fleet.cancelOperation(operationId)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("fleetClose") { (clientId: String) in
+      #if canImport(auki_sdk_swiftFFI)
+      guard let client = self.fleet.existing(clientId) else { return }
+      try await withFleetErrors { try await client.close() }
+      self.fleet.remove(clientId)
       #else
       throw unsupported("AukiSDK XCFramework missing")
       #endif

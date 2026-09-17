@@ -14,6 +14,9 @@ import {
   AukiPeerReachabilityMode,
   AukiUserSession,
   AukiDmsJobs,
+  AukiFleet,
+  type FleetSnapshot,
+  type AukiFleetError,
   AukiRegistryClient,
   AukiRegistryEndpoint,
   AukiStreamClient,
@@ -401,3 +404,11 @@ async function domainDataContract(session: import("../pkg-test/auki_sdk_web").Au
   await data.close();
 }
 void domainDataContract;
+
+const fleetClient: AukiFleet = imported.fleet("00000000-0000-0000-0000-000000000001");
+const fleetSnapshot: Promise<FleetSnapshot> = fleetClient.list({ capabilities: ["vendor.example/inspect/v7"], matchAllCapabilities: true });
+const fleetPool: Promise<FleetSnapshot> = fleetClient.computePool({ mode: "dedicated" }, new AbortController().signal);
+const fleetClosed: Promise<void> = fleetClient.close();
+declare const fleetError: AukiFleetError;
+if (fleetError.code === "persistence") void fleetSnapshot;
+void [fleetPool, fleetClosed];

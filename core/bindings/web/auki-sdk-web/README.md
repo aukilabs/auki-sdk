@@ -103,3 +103,24 @@ Chromium integration tests, return to the repository root and set
 ~~~sh
 bash test-support/run-domain-data-browser-tests.sh
 ~~~
+
+## Fleet inventory and activity
+
+```ts
+const fleet = session.fleet(selectedDomainId);
+try {
+  const inventory = await fleet.list({});
+  const candidates = await fleet.computePool({ mode: "dedicated", capabilities: ["vendor.example/inspect/v7"] });
+  console.log(inventory.machines, inventory.sources, candidates.complete);
+} finally {
+  await fleet.close();
+  fleet.free();
+}
+```
+
+Both calls accept an optional `AbortSignal`. Queries use camelCase; typed snapshot
+results use snake_case. Errors preserve `kind`, `code`, and available `status`.
+Domain members and candidates are separate; missing busy information stays
+unknown. See the [fleet reference](../../../../docs/reference/fleet.md).
+The repository's `test-support/run-domain-data-browser-tests.sh` includes two
+fleet fixtures exercising the actual WASM/Fetch path in Chromium.

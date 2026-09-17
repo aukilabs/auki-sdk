@@ -75,14 +75,14 @@ fn id(value: &str) -> Result<Uuid, JsValue> {
     Uuid::parse_str(value).map_err(|_| error(JobsError::InvalidInput("expected UUID")))
 }
 
-struct Cancellation {
-    token: CancellationToken,
+pub(crate) struct Cancellation {
+    pub(crate) token: CancellationToken,
     signal: Option<web_sys::AbortSignal>,
     listener: Closure<dyn FnMut()>,
 }
 
 impl Cancellation {
-    fn new(signal: Option<web_sys::AbortSignal>) -> Result<Self, JsValue> {
+    pub(crate) fn new(signal: Option<web_sys::AbortSignal>) -> Result<Self, JsValue> {
         let token = CancellationToken::new();
         let notify = token.clone();
         let listener = Closure::new(move || notify.cancel());

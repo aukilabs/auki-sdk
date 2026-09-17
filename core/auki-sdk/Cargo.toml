@@ -10,6 +10,7 @@ description = "Mechanical runtime facade for authenticated Auki peers"
 readme = "README.md"
 
 [dependencies]
+auki-fleet = { path = "../auki-fleet" }
 async-trait = { workspace = true }
 auki-auth = { path = "../auki-auth" }
 auki-domain-client = { path = "../auki-domain-client" }

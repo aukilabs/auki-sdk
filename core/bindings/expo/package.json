@@ -21,7 +21,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node scripts/json-stringify.test.mjs",
     "test:domain-data": "node scripts/domain-data-bridge.test.cjs",
-    "test:jobs": "node scripts/jobs-bridge.test.cjs"
+    "test:jobs": "node scripts/jobs-bridge.test.cjs",
+    "test:fleet": "node scripts/fleet-bridge.test.cjs"
   },
   "keywords": [
     "react-native",

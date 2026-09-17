@@ -8,6 +8,7 @@ pub mod async_completion;
 pub mod cleanup;
 mod data;
 mod facade;
+mod fleet;
 mod jobs;
 #[cfg(any(
     feature = "info",
@@ -31,6 +32,7 @@ pub fn register_facade(module: &Bound<'_, PyModule>) -> PyResult<()> {
     facade::register(module)?;
     data::register(module)?;
     jobs::register(module)?;
+    fleet::register(module)?;
     tasks::register(module)?;
     zitadel::register(module)
 }

@@ -30,6 +30,9 @@ use uuid::Uuid;
 #[path = "domain.rs"]
 pub(crate) mod domain;
 
+#[path = "inventory.rs"]
+pub(crate) mod inventory;
+
 #[cfg(not(target_arch = "wasm32"))]
 use crate::AppCredentials;
 use crate::{

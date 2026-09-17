@@ -18,6 +18,7 @@ Echo example. For Python, Web, Swift, or Expo, see
 | --- | --- |
 | Sign in and choose a Domain | [Authenticate](docs/how-to/authenticate.md) |
 | Read and write Domain data | [Work with Domain data](docs/how-to/domain-data.md) |
+| Inspect robots and compute activity | [Inspect a fleet](docs/how-to/inspect-fleet.md) |
 | Submit and monitor Domain jobs | [Submit jobs](docs/how-to/submit-jobs.md) |
 | Run compute or robot handlers | [Run tasks](docs/how-to/run-compute-tasks.md) |
 | Use discovery or connect to a known address | [Connect to a peer](docs/how-to/connect.md) |

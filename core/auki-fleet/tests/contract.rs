@@ -1,0 +1,862 @@
+#![cfg(not(target_arch = "wasm32"))]
+use auki_auth::{
+    AuthClient, AuthEnvironment, AuthSession, Credentials, DomainAccessProvider,
+    ZitadelSessionCredentials, ZitadelSessionStore,
+};
+use auki_dms::jobs::JobMode;
+use auki_fleet::*;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use httpmock::{
+    Method::{GET, POST},
+    Mock, MockServer,
+};
+use serde_json::{Value, json};
+use std::{sync::Arc, time::Duration};
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+struct Fixture {
+    server: MockServer,
+    session: AuthSession,
+    domain: Uuid,
+    org: Uuid,
+    robot: Uuid,
+    node: Uuid,
+    job: Uuid,
+    task: Uuid,
+}
+
+fn token(claims: Value) -> String {
+    format!("e30.{}.fixture", URL_SAFE_NO_PAD.encode(claims.to_string()))
+}
+
+impl Fixture {
+    async fn new(app: bool) -> Self {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/user/login");
+                then.header("content-type", "application/json").json_body(
+                    json!({"access_token":"fixture-user","refresh_token":"fixture-refresh"}),
+                );
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/service/domains-access-token");
+                then.header("content-type", "application/json")
+                    .json_body(json!({"access_token":"fixture-dds"}));
+            })
+            .await;
+        let auth =
+            AuthClient::new(AuthEnvironment::new(server.base_url(), server.base_url()).unwrap())
+                .unwrap();
+        let session = auth
+            .authenticate(if app {
+                Credentials::app("fixture-key", "fixture-secret")
+            } else {
+                Credentials::user_password("fixture@example.test", "fixture-password")
+            })
+            .await
+            .unwrap();
+        let fixture = Self {
+            server,
+            session,
+            domain: Uuid::new_v4(),
+            org: Uuid::new_v4(),
+            robot: Uuid::new_v4(),
+            node: Uuid::new_v4(),
+            job: Uuid::new_v4(),
+            task: Uuid::new_v4(),
+        };
+        let grant = token(
+            json!({"iss":"dds", "type":if app {"app-access"} else {"user-access"},
+            "org":fixture.org,"domain_id":fixture.domain,"aud":[fixture.server.base_url(),"dds"],
+            "exp":chrono::Utc::now().timestamp()+3600}),
+        );
+        fixture.server.mock_async(|when, then| {
+            when.method(POST).path(format!("/api/v1/domains/{}/auth", fixture.domain));
+            then.header("content-type", "application/json").json_body(json!({"id":fixture.domain,"domain_server":{"url":fixture.server.base_url()},"access_token":grant}));
+        }).await;
+        fixture
+    }
+    fn client(&self) -> DomainFleetClient {
+        AukiFleet::new(
+            self.session.clone(),
+            &format!("{}/v1/", self.server.base_url()),
+        )
+        .unwrap()
+        .in_domain(self.domain)
+    }
+    async fn get(&self, path: impl Into<String>, value: Value) -> Mock<'_> {
+        let path = path.into();
+        self.server
+            .mock_async(|when, then| {
+                when.method(GET).path(path);
+                then.header("content-type", "application/json")
+                    .json_body(value);
+            })
+            .await
+    }
+    fn robot_json(&self) -> Value {
+        json!({"id":self.robot,"organization_id":self.org,"assigned_domain_id":self.domain,
+            "name":"inspection robot","capabilities":["com.example.inspect.v1"],"status":"online",
+            "last_seen_at":chrono::Utc::now().to_rfc3339(),"active_lease_expires_at":null})
+    }
+    fn node_json(&self) -> Value {
+        json!({"id":self.node,"organization_id":self.org,"name":"converter",
+            "capabilities":["com.example.convert.v1"],"mode":"dedicated","status":"online"})
+    }
+    async fn inventory(&self) {
+        self.get(
+            format!("/api/v1/domains/{}/robots", self.domain),
+            json!({"robots":[self.robot_json()]}),
+        )
+        .await;
+        self.get("/api/v1/nodes", json!({"nodes":[self.node_json()]}))
+            .await;
+    }
+    fn summary(&self, running: u32) -> Value {
+        json!({"queued":0,"leased":0,"running":running,"completed":0,"failed":0,"canceled":0})
+    }
+    fn job_json(&self) -> Value {
+        json!({"id":self.job,"label":"inspection","domain_id":self.domain,"organization_id":self.org,
+            "status":"canceled","priority":0,"created_at":chrono::Utc::now().to_rfc3339(),
+            "updated_at":chrono::Utc::now().to_rfc3339(),"meta":{}})
+    }
+    fn task_json(&self, worker: Uuid, seconds: i64) -> Value {
+        let now = chrono::Utc::now();
+        json!({"id":self.task,"job_id":self.job,"label":"inspect","stage":"inspect",
+            "capability":"com.example.inspect.v1","capability_filters":{},"status":"running",
+            "deps_remaining":0,"priority":0,"inputs_cids":[],"outputs_prefix":null,
+            "organization_id":self.org,"attempts":1,"max_attempts":1,"reserved_by":worker,
+            "lease_expires_at":(now+chrono::Duration::seconds(seconds)).to_rfc3339(),"meta":{},
+            "last_heartbeat_at":now.to_rfc3339(),"created_at":now.to_rfc3339(),"updated_at":now.to_rfc3339(),
+            "mode":"dedicated","billing_units":"0"})
+    }
+    async fn activity(&self, worker: Option<Uuid>, seconds: i64) {
+        let items = if worker.is_some() {
+            vec![json!({"job":self.job_json(),"tasks_summary":self.summary(1)})]
+        } else {
+            vec![]
+        };
+        self.get("/v1/jobs", json!({"items":items,"next_cursor":null}))
+            .await;
+        if let Some(worker) = worker {
+            self.get(
+                format!("/v1/jobs/{}", self.job),
+                json!({"job":self.job_json(),"tasks_summary":self.summary(1),
+                "tasks":[self.task_json(worker, seconds)],"receipts":[]}),
+            )
+            .await;
+        }
+    }
+    async fn busy(&self, worker: Option<Uuid>) -> Mock<'_> {
+        let nodes = worker
+            .map(|worker| {
+                vec![
+                    json!({"node_id":worker,"task_id":self.task,"job_id":self.job,
+            "task_status":"running","job_status":"canceled","task_mode":"dedicated"}),
+                ]
+            })
+            .unwrap_or_default();
+        self.get("/v1/nodes/busy", json!({"nodes":nodes})).await
+    }
+}
+
+fn source(snapshot: &FleetSnapshot, source: FleetSource) -> &FleetSourceReport {
+    snapshot
+        .sources
+        .iter()
+        .find(|report| report.source == source)
+        .unwrap()
+}
+
+#[tokio::test]
+async fn domain_inventory_and_candidate_pool_keep_different_associations() {
+    let f = Fixture::new(false).await;
+    f.inventory().await;
+    f.activity(Some(f.robot), 120).await;
+    f.busy(Some(f.robot)).await;
+    let fleet = f.client();
+    let domain = fleet.list(&FleetQuery::default()).await.unwrap();
+    assert!(domain.complete);
+    assert_eq!(domain.machines.len(), 1);
+    assert_eq!(domain.machines[0].kind, FleetMachineKind::Robot);
+    assert_eq!(domain.machines[0].association, FleetAssociation::Assigned);
+    assert_eq!(domain.machines[0].work_state, FleetWorkState::Busy);
+    // Terminal job status does not erase the still-running task.
+    assert_eq!(domain.machines[0].activity.len(), 1);
+    let pool = fleet
+        .compute_pool(&ComputePoolQuery {
+            mode: JobMode::Dedicated,
+            capabilities: vec!["com.example.convert.v1".into()],
+            match_all_capabilities: true,
+        })
+        .await
+        .unwrap();
+    assert_eq!(pool.machines.len(), 1);
+    assert_eq!(pool.machines[0].association, FleetAssociation::Candidate);
+    assert_eq!(pool.machines[0].work_state, FleetWorkState::Idle);
+    assert!(pool.machines[0].last_seen_at.is_none());
+    fleet.close().await;
+    assert_eq!(
+        fleet.list(&FleetQuery::default()).await.unwrap_err().code(),
+        "closed"
+    );
+    // Closing one fleet handle never closes the shared login.
+    assert!(
+        f.session
+            .inventory_nodes(&CancellationToken::new())
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn app_can_observe_domain_tasks_but_cannot_infer_global_busy_or_idle() {
+    let f = Fixture::new(true).await;
+    f.inventory().await;
+    f.activity(Some(f.node), 120).await;
+    let busy = f.busy(Some(f.node)).await;
+    let snapshot = f.client().list(&FleetQuery::default()).await.unwrap();
+    assert!(!snapshot.complete);
+    assert_eq!(snapshot.machines.len(), 2);
+    assert_eq!(
+        source(&snapshot, FleetSource::Busy).state,
+        FleetSourceState::Unsupported
+    );
+    assert!(
+        snapshot
+            .machines
+            .iter()
+            .all(|machine| machine.work_state == FleetWorkState::Unknown)
+    );
+    let node = snapshot
+        .machines
+        .iter()
+        .find(|machine| machine.id == f.node)
+        .unwrap();
+    assert_eq!(node.association, FleetAssociation::ActiveTask);
+    assert_eq!(node.activity.len(), 1);
+    busy.assert_calls_async(0).await;
+}
+
+#[tokio::test]
+async fn missing_inventory_preserves_robots_and_unresolved_task_identity() {
+    let f = Fixture::new(false).await;
+    f.get(
+        format!("/api/v1/domains/{}/robots", f.domain),
+        json!({"robots":[f.robot_json()]}),
+    )
+    .await;
+    f.server
+        .mock_async(|when, then| {
+            when.method(GET).path("/api/v1/nodes");
+            then.status(503);
+        })
+        .await;
+    f.activity(Some(f.node), 120).await;
+    f.busy(Some(f.node)).await;
+    let snapshot = f.client().list(&FleetQuery::default()).await.unwrap();
+    assert_eq!(snapshot.machines.len(), 1);
+    assert_eq!(snapshot.unresolved_activity[0].worker_id, f.node);
+    assert_eq!(
+        source(&snapshot, FleetSource::Nodes).state,
+        FleetSourceState::Unavailable
+    );
+    assert!(!snapshot.complete);
+}
+
+#[tokio::test]
+async fn denied_busy_feed_does_not_convert_missing_activity_to_idle() {
+    let f = Fixture::new(false).await;
+    f.inventory().await;
+    f.activity(None, 0).await;
+    f.server
+        .mock_async(|when, then| {
+            when.method(GET).path("/v1/nodes/busy");
+            then.status(403);
+        })
+        .await;
+    let snapshot = f.client().list(&FleetQuery::default()).await.unwrap();
+    assert_eq!(snapshot.machines[0].work_state, FleetWorkState::Unknown);
+    assert_eq!(
+        source(&snapshot, FleetSource::Busy).state,
+        FleetSourceState::Denied
+    );
+    assert_eq!(source(&snapshot, FleetSource::Busy).http_status, Some(403));
+}
+
+#[tokio::test]
+async fn expired_task_lease_does_not_assert_current_work_state() {
+    let f = Fixture::new(false).await;
+    f.inventory().await;
+    f.activity(Some(f.robot), -30).await;
+    f.busy(Some(f.robot)).await;
+    let snapshot = f.client().list(&FleetQuery::default()).await.unwrap();
+    assert_eq!(snapshot.machines[0].work_state, FleetWorkState::Unknown);
+    assert_eq!(snapshot.machines[0].activity.len(), 1);
+}
+
+#[tokio::test]
+async fn conflicting_busy_assignment_preserves_activity_without_claiming_busy() {
+    let f = Fixture::new(false).await;
+    f.inventory().await;
+    f.activity(Some(f.robot), 120).await;
+    f.get(
+        "/v1/nodes/busy",
+        json!({"nodes":[{"node_id":f.robot,"task_id":Uuid::new_v4(),
+        "job_id":f.job,"task_status":"running","job_status":"running","task_mode":"dedicated"}]}),
+    )
+    .await;
+    let snapshot = f.client().list(&FleetQuery::default()).await.unwrap();
+    assert_eq!(snapshot.machines[0].work_state, FleetWorkState::Unknown);
+    assert_eq!(snapshot.machines[0].activity[0].task_id, f.task);
+}
+
+#[tokio::test]
+async fn absent_busy_entry_cannot_make_offline_or_unknown_presence_idle() {
+    for status in ["offline", "future-provider-status"] {
+        let f = Fixture::new(false).await;
+        let mut robot = f.robot_json();
+        robot["status"] = json!(status);
+        f.get(
+            format!("/api/v1/domains/{}/robots", f.domain),
+            json!({"robots":[robot]}),
+        )
+        .await;
+        f.get("/api/v1/nodes", json!({"nodes":[]})).await;
+        f.activity(None, 0).await;
+        f.busy(None).await;
+        let snapshot = f.client().list(&FleetQuery::default()).await.unwrap();
+        assert_eq!(snapshot.machines[0].work_state, FleetWorkState::Unknown);
+        assert_eq!(snapshot.machines[0].provider_status, status);
+    }
+}
+
+#[tokio::test]
+async fn broad_busy_feed_does_not_disclose_unrelated_job_references() {
+    let f = Fixture::new(false).await;
+    f.inventory().await;
+    f.activity(None, 0).await;
+    f.busy(Some(f.robot)).await;
+    let snapshot = f.client().list(&FleetQuery::default()).await.unwrap();
+    assert_eq!(snapshot.machines[0].work_state, FleetWorkState::Busy);
+    assert!(snapshot.machines[0].activity.is_empty());
+    assert!(
+        !serde_json::to_string(&snapshot)
+            .unwrap()
+            .contains(&f.job.to_string())
+    );
+}
+
+#[tokio::test]
+async fn busy_absence_does_not_cover_other_organizations_dedicated_robots() {
+    let f = Fixture::new(false).await;
+    let mut robot = f.robot_json();
+    robot["organization_id"] = json!(Uuid::new_v4());
+    f.get(
+        format!("/api/v1/domains/{}/robots", f.domain),
+        json!({"robots":[robot]}),
+    )
+    .await;
+    f.get("/api/v1/nodes", json!({"nodes":[]})).await;
+    f.activity(None, 0).await;
+    f.busy(None).await;
+    let snapshot = f.client().list(&FleetQuery::default()).await.unwrap();
+    assert_eq!(snapshot.machines[0].work_state, FleetWorkState::Unknown);
+}
+
+#[tokio::test]
+async fn wrong_domain_robot_fails_closed() {
+    let f = Fixture::new(false).await;
+    let mut robot = f.robot_json();
+    robot["assigned_domain_id"] = json!(Uuid::new_v4());
+    f.get(
+        format!("/api/v1/domains/{}/robots", f.domain),
+        json!({"robots":[robot]}),
+    )
+    .await;
+    f.get("/api/v1/nodes", json!({"nodes":[]})).await;
+    f.activity(None, 0).await;
+    f.busy(None).await;
+    assert_eq!(
+        f.client()
+            .list(&FleetQuery::default())
+            .await
+            .unwrap_err()
+            .code(),
+        "invalid_response"
+    );
+}
+
+#[tokio::test]
+async fn duplicate_or_ambiguous_worker_identity_fails_closed() {
+    let f = Fixture::new(false).await;
+    let mut node = f.node_json();
+    node["id"] = json!(f.robot);
+    f.get(
+        format!("/api/v1/domains/{}/robots", f.domain),
+        json!({"robots":[f.robot_json()]}),
+    )
+    .await;
+    f.get("/api/v1/nodes", json!({"nodes":[node]})).await;
+    f.activity(None, 0).await;
+    f.busy(None).await;
+    assert_eq!(
+        f.client()
+            .list(&FleetQuery::default())
+            .await
+            .unwrap_err()
+            .code(),
+        "invalid_response"
+    );
+}
+
+#[tokio::test]
+async fn node_filters_preserve_custom_capabilities_and_exclude_infrastructure() {
+    let f = Fixture::new(false).await;
+    let mut relay = f.node_json();
+    relay["id"] = json!(Uuid::new_v4());
+    relay["capabilities"] = json!(["/p2p/circuit-relay/v1"]);
+    f.get("/api/v1/nodes", json!({"nodes":[f.node_json(),relay]}))
+        .await;
+    f.activity(None, 0).await;
+    f.busy(None).await;
+    let fleet = f.client();
+    let mut query = ComputePoolQuery {
+        mode: JobMode::Dedicated,
+        capabilities: vec![],
+        match_all_capabilities: false,
+    };
+    assert_eq!(fleet.compute_pool(&query).await.unwrap().machines.len(), 1);
+    query.capabilities = vec!["com.example.convert.v1".into(), "different".into()];
+    assert_eq!(fleet.compute_pool(&query).await.unwrap().machines.len(), 1);
+    query.match_all_capabilities = true;
+    assert!(
+        fleet
+            .compute_pool(&query)
+            .await
+            .unwrap()
+            .machines
+            .is_empty()
+    );
+    query.mode = JobMode::Public;
+    query.capabilities.clear();
+    assert!(
+        fleet
+            .compute_pool(&query)
+            .await
+            .unwrap()
+            .machines
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn bounded_job_pagination_remains_explicitly_partial() {
+    let f = Fixture::new(false).await;
+    f.inventory().await;
+    f.busy(None).await;
+    f.get(
+        "/v1/jobs",
+        json!({"items":[],"next_cursor":"opaque-cursor"}),
+    )
+    .await;
+    let snapshot = f.client().list(&FleetQuery::default()).await.unwrap();
+    assert!(!snapshot.complete);
+    let jobs = source(&snapshot, FleetSource::Jobs);
+    assert!(
+        jobs.codes
+            .contains(&"provider_pagination_unreliable".into())
+    );
+    assert!(jobs.codes.contains(&"repeated_job_cursor".into()));
+}
+
+#[tokio::test]
+async fn cancellation_and_close_drain_inflight_work() {
+    let f = Fixture::new(false).await;
+    f.inventory().await;
+    f.busy(None).await;
+    let delayed = f
+        .server
+        .mock_async(|when, then| {
+            when.method(GET).path("/v1/jobs");
+            then.delay(Duration::from_secs(5))
+                .header("content-type", "application/json")
+                .json_body(json!({"items":[],"next_cursor":null}));
+        })
+        .await;
+    let fleet = f.client();
+    let operation = tokio::spawn({
+        let fleet = fleet.clone();
+        async move { fleet.list(&FleetQuery::default()).await }
+    });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while delayed.calls_async().await == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), fleet.close())
+        .await
+        .unwrap();
+    assert_eq!(operation.await.unwrap().unwrap_err().code(), "closed");
+    let token = CancellationToken::new();
+    token.cancel();
+    assert_eq!(
+        f.client()
+            .list_with_cancellation(&FleetQuery::default(), &token)
+            .await
+            .unwrap_err()
+            .code(),
+        "cancelled"
+    );
+    f.session.close().await;
+    assert_eq!(
+        f.client()
+            .list(&FleetQuery::default())
+            .await
+            .unwrap_err()
+            .code(),
+        "closed"
+    );
+}
+
+struct NoopStore;
+#[async_trait::async_trait]
+impl ZitadelSessionStore for NoopStore {
+    async fn save(&self, _: &ZitadelSessionCredentials) -> Result<(), auki_auth::Error> {
+        panic!("unexpected refresh")
+    }
+}
+
+#[tokio::test]
+async fn imported_viewer_and_scoped_user_never_query_broad_node_inventory() {
+    for viewer in [true, false] {
+        let server = MockServer::start_async().await;
+        let domain = Uuid::new_v4();
+        let grant = token(
+            json!({"iss":"api","type":if viewer {"app-access"} else {"user-access"},
+            "org":Uuid::new_v4(),"sub":"fixture-human","aud":["domain-service"],
+            "domains":if viewer {vec![]} else {vec![domain]},
+            "iat":chrono::Utc::now().timestamp()-30,"exp":chrono::Utc::now().timestamp()+3600}),
+        );
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/service/domains-access-token");
+                then.header("content-type", "application/json")
+                    .json_body(json!({"access_token":grant}));
+            })
+            .await;
+        let nodes = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/api/v1/nodes");
+                then.header("content-type", "application/json")
+                    .json_body(json!({"nodes":[]}));
+            })
+            .await;
+        let robots = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(format!("/api/v1/domains/{domain}/robots"));
+                then.header("content-type", "application/json")
+                    .json_body(json!({"robots":[]}));
+            })
+            .await;
+        let auth =
+            AuthClient::new(AuthEnvironment::new(server.base_url(), server.base_url()).unwrap())
+                .unwrap();
+        let session = auth
+            .import_zitadel_session(
+                ZitadelSessionCredentials::new(
+                    "fixture-access",
+                    "fixture-refresh",
+                    "public-client",
+                    server.base_url().parse().unwrap(),
+                    None,
+                )
+                .unwrap(),
+                Arc::new(NoopStore),
+            )
+            .unwrap();
+        let cancel = CancellationToken::new();
+        assert!(session.inventory_nodes(&cancel).await.unwrap().is_none());
+        assert_eq!(
+            session
+                .inventory_robots(domain, &cancel)
+                .await
+                .unwrap()
+                .is_some(),
+            !viewer
+        );
+        if !viewer {
+            assert!(matches!(
+                session.inventory_robots(Uuid::new_v4(), &cancel).await,
+                Err(auki_auth::Error::DomainNotAccessible)
+            ));
+        }
+        nodes.assert_calls_async(0).await;
+        robots.assert_calls_async(if viewer { 0 } else { 1 }).await;
+    }
+}
+
+fn imported_claims() -> Value {
+    json!({"iss":"api","type":"user-access","org":Uuid::new_v4(),"sub":"fixture-human",
+        "aud":["domain-service"],"domains":[],"iat":chrono::Utc::now().timestamp()-30,
+        "exp":chrono::Utc::now().timestamp()+3600})
+}
+
+fn imported(
+    server: &MockServer,
+    store: Arc<dyn ZitadelSessionStore>,
+    expired: bool,
+) -> AuthSession {
+    AuthClient::new(AuthEnvironment::new(server.base_url(), server.base_url()).unwrap())
+        .unwrap()
+        .import_zitadel_session(
+            ZitadelSessionCredentials::new(
+                "old-access",
+                "old-refresh",
+                "public-client",
+                server.base_url().parse().unwrap(),
+                expired.then(|| chrono::Utc::now() - chrono::Duration::seconds(1)),
+            )
+            .unwrap(),
+            store,
+        )
+        .unwrap()
+}
+
+#[tokio::test]
+async fn imported_inventory_rejects_wrong_audience_issuer_expiry_and_organization() {
+    for (field, value) in [
+        ("aud", json!(["wrong-service"])),
+        ("iss", json!("wrong-issuer")),
+        ("exp", json!(1)),
+        ("org", json!(Uuid::nil())),
+    ] {
+        let server = MockServer::start_async().await;
+        let mut claims = imported_claims();
+        claims[field] = value;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/service/domains-access-token");
+                then.header("content-type", "application/json")
+                    .json_body(json!({"access_token":token(claims)}));
+            })
+            .await;
+        let nodes = server
+            .mock_async(|when, then| {
+                when.method(GET).path("/api/v1/nodes");
+                then.header("content-type", "application/json")
+                    .json_body(json!({"nodes":[]}));
+            })
+            .await;
+        let session = imported(&server, Arc::new(NoopStore), false);
+        assert!(
+            session
+                .inventory_nodes(&CancellationToken::new())
+                .await
+                .is_err(),
+            "accepted {field}"
+        );
+        nodes.assert_calls_async(0).await;
+    }
+}
+
+struct FailingOnceStore(std::sync::Mutex<Vec<(String, String)>>);
+#[async_trait::async_trait]
+impl ZitadelSessionStore for FailingOnceStore {
+    async fn save(&self, credentials: &ZitadelSessionCredentials) -> Result<(), auki_auth::Error> {
+        let mut attempts = self.0.lock().unwrap();
+        attempts.push((
+            credentials.access_token().expose_secret().into(),
+            credentials.refresh_token().expose_secret().into(),
+        ));
+        if attempts.len() == 1 {
+            Err(auki_auth::Error::Persistence)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[tokio::test]
+async fn inventory_refresh_awaits_persistence_and_recovers_the_same_snapshot() {
+    let server = MockServer::start_async().await;
+    server.mock_async(|when,then| {
+        when.method(GET).path("/.well-known/openid-configuration");
+        then.header("content-type","application/json").json_body(json!({"issuer":server.base_url(),
+            "token_endpoint":format!("{}/oauth/v2/token",server.base_url()),
+            "token_endpoint_auth_methods_supported":["none"],"grant_types_supported":["refresh_token"]}));
+    }).await;
+    let refresh = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/oauth/v2/token")
+                .body_includes("refresh_token=old-refresh");
+            then.header("content-type", "application/json")
+                .json_body(json!({"access_token":"replacement-access",
+            "refresh_token":"replacement-refresh","expires_in":3600,"token_type":"Bearer"}));
+        })
+        .await;
+    let exchange = server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/service/domains-access-token")
+                .header("authorization", "Bearer replacement-access");
+            then.header("content-type", "application/json")
+                .json_body(json!({"access_token":token(imported_claims())}));
+        })
+        .await;
+    let nodes = server
+        .mock_async(|when, then| {
+            when.method(GET).path("/api/v1/nodes");
+            then.header("content-type", "application/json")
+                .json_body(json!({"nodes":[]}));
+        })
+        .await;
+    let store = Arc::new(FailingOnceStore(std::sync::Mutex::new(vec![])));
+    let session = imported(&server, store.clone(), true);
+    let cancel = CancellationToken::new();
+    assert!(matches!(
+        session.inventory_nodes(&cancel).await,
+        Err(auki_auth::Error::Persistence)
+    ));
+    exchange.assert_calls_async(0).await;
+    nodes.assert_calls_async(0).await;
+    assert!(
+        session
+            .inventory_nodes(&cancel)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_empty()
+    );
+    let attempts = store.0.lock().unwrap().clone();
+    assert_eq!(attempts.len(), 2);
+    assert_eq!(attempts[0], attempts[1]);
+    refresh.assert_calls_async(1).await;
+    exchange.assert_calls_async(1).await;
+    nodes.assert_calls_async(1).await;
+}
+
+#[tokio::test]
+async fn renewed_busy_grant_changes_idle_coverage_to_the_successful_organization() {
+    let f = Fixture::new(false).await;
+    let old = f
+        .session
+        .domain_access(f.domain, None, &CancellationToken::new())
+        .await
+        .unwrap();
+    f.server.reset_async().await;
+    let new_org = Uuid::new_v4();
+    let grant = token(json!({"iss":"dds","type":"user-access","org":new_org,
+        "domain_id":f.domain,"aud":[f.server.base_url(),"dds"],"exp":chrono::Utc::now().timestamp()+3600}));
+    f.server
+        .mock_async(|when, then| {
+            when.method(POST).path("/service/domains-access-token");
+            then.header("content-type", "application/json")
+                .json_body(json!({"access_token":"fixture-dds"}));
+        })
+        .await;
+    let renewed = f
+        .server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path(format!("/api/v1/domains/{}/auth", f.domain));
+            then.header("content-type", "application/json")
+                .json_body(json!({"id":f.domain,
+            "domain_server":{"url":f.server.base_url()},"access_token":grant}));
+        })
+        .await;
+    let rejected = f
+        .server
+        .mock_async(|when, then| {
+            when.method(GET).path("/v1/nodes/busy").header(
+                "authorization",
+                format!("Bearer {}", old.bearer().expose_secret()),
+            );
+            then.status(401);
+        })
+        .await;
+    let accepted = f
+        .server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/v1/nodes/busy")
+                .header("authorization", format!("Bearer {grant}"));
+            then.header("content-type", "application/json")
+                .json_body(json!({"nodes":[]}));
+        })
+        .await;
+    f.inventory().await;
+    f.activity(None, 0).await;
+    let snapshot = f.client().list(&FleetQuery::default()).await.unwrap();
+    assert_eq!(snapshot.machines[0].work_state, FleetWorkState::Unknown);
+    assert_eq!(
+        source(&snapshot, FleetSource::Busy).state,
+        FleetSourceState::Complete
+    );
+    rejected.assert_calls_async(1).await;
+    renewed.assert_calls_async(1).await;
+    accepted.assert_calls_async(1).await;
+}
+
+#[tokio::test]
+async fn oversized_inventory_preserves_robot_results_and_reports_its_limit() {
+    let f = Fixture::new(false).await;
+    let mut node = f.node_json();
+    node["name"] = json!("x".repeat(600_000));
+    f.get("/api/v1/nodes", json!({"nodes":[node]})).await;
+    f.get(
+        format!("/api/v1/domains/{}/robots", f.domain),
+        json!({"robots":[f.robot_json()]}),
+    )
+    .await;
+    f.activity(None, 0).await;
+    f.busy(None).await;
+    let snapshot = f.client().list(&FleetQuery::default()).await.unwrap();
+    assert!(!snapshot.complete);
+    assert_eq!(snapshot.machines.len(), 1);
+    assert_eq!(
+        source(&snapshot, FleetSource::Nodes).codes,
+        vec!["too_large"]
+    );
+}
+
+#[tokio::test]
+async fn snapshot_deadline_cancels_slow_sources_and_allows_awaited_close() {
+    let f = Fixture::new(false).await;
+    f.inventory().await;
+    f.busy(None).await;
+    f.server
+        .mock_async(|when, then| {
+            when.method(GET).path("/v1/jobs");
+            then.delay(Duration::from_secs(5))
+                .header("content-type", "application/json")
+                .json_body(json!({"items":[],"next_cursor":null}));
+        })
+        .await;
+    let fleet = AukiFleet::with_limits(
+        f.session.clone(),
+        &format!("{}/v1", f.server.base_url()),
+        FleetLimits {
+            snapshot_timeout: Duration::from_millis(100),
+            ..Default::default()
+        },
+    )
+    .unwrap()
+    .in_domain(f.domain);
+    assert!(matches!(
+        fleet.list(&FleetQuery::default()).await,
+        Err(FleetError::TimedOut)
+    ));
+    tokio::time::timeout(Duration::from_secs(1), fleet.close())
+        .await
+        .unwrap();
+}

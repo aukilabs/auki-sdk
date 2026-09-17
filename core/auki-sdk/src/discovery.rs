@@ -20,20 +20,20 @@ use reqwest::{
     header::{ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, HeaderValue},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
+use crate::{AukiPeerIdentity, AukiResolvedPeer};
 
 #[cfg(not(target_arch = "wasm32"))]
 use auki_p2p::RouteCatalog;
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::{sync::watch, task::JoinHandle};
 #[cfg(not(target_arch = "wasm32"))]
-use tokio_util::sync::CancellationToken;
-#[cfg(not(target_arch = "wasm32"))]
 use tracing::warn;
 #[cfg(target_arch = "wasm32")]
 use {
     futures::{channel::oneshot, future::Shared},
-    tokio_util::sync::CancellationToken,
     wasm_bindgen_futures::spawn_local,
 };
 
@@ -171,6 +171,47 @@ impl AukiDiscovery {
         protocol_id: impl AsRef<str>,
     ) -> Result<Vec<AukiDiscoveryCandidate>, AukiDiscoveryError> {
         self.inner.discover_protocol(protocol_id.as_ref()).await
+    }
+
+    /// Resolve an exact Peer, Robot or Compute identity advertising one protocol.
+    ///
+    /// Returns every matching current advertisement in stable Peer-ID order. A
+    /// machine can have several peers: the caller must select one explicitly.
+    /// Empty means no matching advertisement, not proof that a machine is offline.
+    /// Missing provider support, rejected filters, or incomplete pagination are
+    /// errors; the SDK never falls back to scanning an unfiltered Domain.
+    /// The complete lookup is bounded to 30 seconds and canceled on peer shutdown.
+    /// Use [`crate::AukiPeerProtocols::open_resolved`] to verify the requested
+    /// identity against signed remote claims before sending application bytes.
+    pub async fn resolve(
+        &self,
+        identity: AukiPeerIdentity,
+        protocol_id: impl AsRef<str>,
+    ) -> Result<Vec<AukiResolvedPeer>, AukiDiscoveryError> {
+        let protocol_id = protocol_id.as_ref();
+        let lookup = self.inner.client.discover_filtered(
+            self.inner.domain_id,
+            self.inner.local_peer_id,
+            Some(protocol_id),
+            Some(identity),
+        );
+        let lookup = crate::resolution::before_deadline(lookup, Duration::from_secs(30)).fuse();
+        let stopped = self.inner.cancellation.cancelled().fuse();
+        pin_mut!(lookup, stopped);
+        let candidates = futures::select_biased! {
+            () = stopped => return Err(AukiDiscoveryError::Authentication),
+            result = lookup => result.ok_or(AukiDiscoveryError::RequestTimedOut)??,
+        };
+        Ok(candidates
+            .into_iter()
+            .filter(|candidate| candidate.expires_at() > Utc::now())
+            .map(|candidate| AukiResolvedPeer {
+                identity,
+                domain_id: self.inner.domain_id,
+                protocol_id: protocol_id.to_owned(),
+                candidate,
+            })
+            .collect())
     }
 }
 
@@ -375,18 +416,35 @@ impl DdsTrackerClient {
         local_peer_id: PeerId,
         protocol: Option<&str>,
     ) -> Result<Vec<AukiDiscoveryCandidate>, AukiDiscoveryError> {
+        self.discover_filtered(domain_id, local_peer_id, protocol, None)
+            .await
+    }
+
+    async fn discover_filtered(
+        &self,
+        domain_id: Uuid,
+        local_peer_id: PeerId,
+        protocol: Option<&str>,
+        identity: Option<AukiPeerIdentity>,
+    ) -> Result<Vec<AukiDiscoveryCandidate>, AukiDiscoveryError> {
         let protocol = protocol.map(validate_filter).transpose()?;
+        let filters = DiscoveryFilters::new(protocol.as_deref(), identity);
         let mut candidates = BTreeMap::<String, AukiDiscoveryCandidate>::new();
         let mut cursors = HashSet::new();
         let mut cursor: Option<String> = None;
 
         for _ in 0..MAX_PAGES {
-            let url =
-                self.collection_endpoint(domain_id, protocol.as_deref(), cursor.as_deref())?;
+            let url = self.collection_endpoint(domain_id, &filters, cursor.as_deref())?;
             let raw = self
                 .send("list", Method::GET, url, None, StatusCode::OK)
                 .await?;
             let page: ListResponse = decode_json("list", &raw)?;
+            if identity.is_some() && page.applied_filters.as_ref() != Some(&filters) {
+                return Err(invalid_response(
+                    "resolve",
+                    "DDS did not confirm the exact identity filters; provider support is required",
+                ));
+            }
             if page.advertisements.len() > PAGE_LIMIT {
                 return Err(invalid_response(
                     "list",
@@ -397,6 +455,12 @@ impl DdsTrackerClient {
                 let Some(candidate) = validate_advertisement(wire, "list")? else {
                     continue;
                 };
+                if identity.is_some_and(|expected| !expected.matches_candidate(&candidate)) {
+                    return Err(invalid_response(
+                        "resolve",
+                        "identity-filtered page contains a non-matching candidate",
+                    ));
+                }
                 if candidate.peer_id == local_peer_id {
                     continue;
                 }
@@ -474,7 +538,7 @@ impl DdsTrackerClient {
     fn collection_endpoint(
         &self,
         domain_id: Uuid,
-        protocol: Option<&str>,
+        filters: &DiscoveryFilters,
         cursor: Option<&str>,
     ) -> Result<Url, AukiDiscoveryError> {
         let mut url = self.endpoint(&[
@@ -488,8 +552,15 @@ impl DdsTrackerClient {
         {
             let mut query = url.query_pairs_mut();
             query.append_pair("limit", &PAGE_LIMIT.to_string());
-            if let Some(protocol) = protocol {
-                query.append_pair("protocol", protocol);
+            for (name, value) in [
+                ("protocol", &filters.protocol),
+                ("peer_type", &filters.peer_type),
+                ("peer_id", &filters.peer_id),
+                ("subject_id", &filters.subject_id),
+            ] {
+                if !value.is_empty() {
+                    query.append_pair(name, value);
+                }
             }
             if let Some(cursor) = cursor {
                 query.append_pair("cursor", cursor);
@@ -599,6 +670,7 @@ pub(crate) struct DdsDiscovery {
     client: DdsTrackerClient,
     domain_id: Uuid,
     local_peer_id: PeerId,
+    cancellation: CancellationToken,
 }
 
 impl DdsDiscovery {
@@ -612,7 +684,13 @@ impl DdsDiscovery {
             client: DdsTrackerClient::new(config, auth)?,
             domain_id,
             local_peer_id,
+            cancellation: CancellationToken::new(),
         })
+    }
+
+    pub(crate) fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
+        self.cancellation = cancellation;
+        self
     }
 
     pub(crate) async fn discover(&self) -> Result<Vec<AukiDiscoveryCandidate>, AukiDiscoveryError> {
@@ -1097,6 +1175,39 @@ struct ListResponse {
     advertisements: Vec<WireAdvertisement>,
     #[serde(default)]
     next_cursor: Option<String>,
+    #[serde(default)]
+    applied_filters: Option<DiscoveryFilters>,
+}
+
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+struct DiscoveryFilters {
+    protocol: String,
+    peer_type: String,
+    peer_id: String,
+    subject_id: String,
+}
+
+impl DiscoveryFilters {
+    fn new(protocol: Option<&str>, identity: Option<AukiPeerIdentity>) -> Self {
+        let mut filters = Self {
+            protocol: protocol.unwrap_or_default().to_owned(),
+            ..Self::default()
+        };
+        match identity {
+            Some(AukiPeerIdentity::Peer(id)) => filters.peer_id = id.to_string(),
+            Some(AukiPeerIdentity::Robot(id)) => {
+                filters.subject_id = id.to_string();
+                filters.peer_type = "robot".into();
+            }
+            Some(AukiPeerIdentity::Compute(id)) => {
+                filters.subject_id = id.to_string();
+                filters.peer_type = "compute".into();
+            }
+            None => {}
+        }
+        filters
+    }
 }
 
 fn validate_advertisement(
@@ -1443,6 +1554,256 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
                 "{invalid}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn resolve_machine_keeps_all_peers_and_filters_on_every_page() {
+        for (kind, identity) in [
+            ("robot", AukiPeerIdentity::Robot(Uuid::new_v4())),
+            ("compute", AukiPeerIdentity::Compute(Uuid::new_v4())),
+        ] {
+            let server = MockServer::start();
+            let domain = Uuid::new_v4();
+            let filters = DiscoveryFilters::new(Some(INFO), Some(identity));
+            let mut peers = [peer(), peer()];
+            peers.sort_by_key(ToString::to_string);
+            let mut records = peers.map(|id| advertisement(id, 4001, &[INFO]));
+            for record in &mut records {
+                record["subject_id"] = json!(filters.subject_id);
+                record["peer_type"] = json!(kind);
+            }
+            let applied =
+                json!({"protocol": INFO, "subject_id": filters.subject_id, "peer_type": kind});
+            let first = server.mock(|when, then| {
+                when.method(GET)
+                    .path(format!("/api/v1/domains/{domain}/p2p/advertisements"))
+                    .query_param("protocol", INFO)
+                    .query_param("subject_id", filters.subject_id.clone())
+                    .query_param("peer_type", kind)
+                    .query_param("limit", "100")
+                    .query_param_missing("cursor")
+                    .query_param_missing("peer_id");
+                then.status(200).header("cache-control", "no-store")
+                    .header("content-type", "application/json")
+                    .json_body(json!({"advertisements": [records[0]], "next_cursor": "page-two", "applied_filters": applied}));
+            });
+            let second = server.mock(|when, then| {
+                when.method(GET)
+                    .query_param("protocol", INFO)
+                    .query_param("subject_id", filters.subject_id.clone())
+                    .query_param("peer_type", kind)
+                    .query_param("cursor", "page-two");
+                then.status(200)
+                    .header("cache-control", "no-store")
+                    .header("content-type", "application/json")
+                    .json_body(json!({"advertisements": [records[1]], "applied_filters": applied}));
+            });
+            let discovery = AukiDiscovery::new(
+                DdsDiscovery::new(
+                    &DdsTrackerConfig::new(server.base_url(), DdsTrackerMode::DiscoverOnly)
+                        .unwrap(),
+                    domain,
+                    peer(),
+                    RotatingAuth::new("original-token"),
+                )
+                .unwrap(),
+            );
+            let resolved = discovery.resolve(identity, INFO).await.unwrap();
+            assert_eq!(resolved.len(), 2);
+            for (index, result) in resolved.iter().enumerate() {
+                assert_eq!(result.identity(), identity);
+                assert_eq!(result.domain_id(), domain);
+                assert_eq!(result.protocol_id(), INFO);
+                assert_eq!(result.candidate().peer_id(), peers[index]);
+            }
+            first.assert_calls(1);
+            second.assert_calls(1);
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_peer_uses_exact_filter_and_requires_provider_acknowledgement() {
+        let server = MockServer::start();
+        let domain = Uuid::new_v4();
+        let id = peer();
+        let applied = json!({"protocol": INFO, "peer_id": id.to_string()});
+        let tracker = client(&server, RotatingAuth::new("original-token"));
+        for response in [
+            json!({"advertisements": []}),
+            json!({"advertisements": [], "applied_filters": {"protocol": INFO}}),
+            json!({"advertisements": [], "applied_filters": {"protocol": INFO, "peer_id": peer().to_string()}}),
+        ] {
+            let mut unsupported = server.mock(|when, then| {
+                when.method(GET)
+                    .query_param("peer_id", id.to_string())
+                    .query_param("protocol", INFO);
+                then.status(200)
+                    .header("cache-control", "no-store")
+                    .header("content-type", "application/json")
+                    .json_body(response);
+            });
+            assert!(matches!(
+                tracker
+                    .discover_filtered(domain, peer(), Some(INFO), Some(AukiPeerIdentity::Peer(id)))
+                    .await,
+                Err(AukiDiscoveryError::InvalidResponse {
+                    operation: "resolve",
+                    ..
+                })
+            ));
+            unsupported.assert_calls(1);
+            unsupported.delete();
+        }
+        let supported = server.mock(|when, then| {
+            when.method(GET).query_param("peer_id", id.to_string())
+                .query_param_missing("subject_id").query_param_missing("peer_type");
+            then.status(200).header("cache-control", "no-store")
+                .header("content-type", "application/json")
+                .json_body(json!({"advertisements": [advertisement(id, 4001, &[INFO])], "applied_filters": applied}));
+        });
+        let found = tracker
+            .discover_filtered(domain, peer(), Some(INFO), Some(AukiPeerIdentity::Peer(id)))
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].peer_id(), id);
+        supported.assert_calls(1);
+    }
+
+    #[tokio::test]
+    async fn resolve_rejects_mismatched_identity_metadata_and_incomplete_results() {
+        let server = MockServer::start();
+        let domain = Uuid::new_v4();
+        let subject = Uuid::new_v4();
+        let identity = AukiPeerIdentity::Robot(subject);
+        let applied = json!({"protocol": INFO, "peer_type": "robot", "subject_id": subject});
+        let tracker = client(&server, RotatingAuth::new("original-token"));
+        for (actual_subject, actual_type) in [
+            (Some(subject.to_string()), Some("compute")),
+            (Some(Uuid::new_v4().to_string()), Some("robot")),
+            (None, Some("robot")),
+            (Some(subject.to_string()), None),
+        ] {
+            let mut record = advertisement(peer(), 4001, &[INFO]);
+            record["subject_id"] = json!(actual_subject);
+            record["peer_type"] = json!(actual_type);
+            let mut mismatched = server.mock(|when, then| {
+                when.method(GET);
+                then.status(200)
+                    .header("cache-control", "no-store")
+                    .header("content-type", "application/json")
+                    .json_body(json!({"advertisements": [record], "applied_filters": applied}));
+            });
+            assert!(
+                tracker
+                    .discover_filtered(domain, peer(), Some(INFO), Some(identity))
+                    .await
+                    .is_err()
+            );
+            mismatched.delete();
+        }
+        let mut record = advertisement(peer(), 4001, &[INFO]);
+        record["subject_id"] = json!(subject);
+        record["peer_type"] = json!("robot");
+        let first = server.mock(|when, then| {
+            when.method(GET).query_param_missing("cursor");
+            then.status(200).header("cache-control", "no-store")
+                .header("content-type", "application/json")
+                .json_body(json!({"advertisements": [record], "next_cursor": "second", "applied_filters": applied}));
+        });
+        let second = server.mock(|when, then| {
+            when.method(GET).query_param("cursor", "second");
+            then.status(200)
+                .header("cache-control", "no-store")
+                .header("content-type", "application/json")
+                .json_body(json!({"advertisements": []}));
+        });
+        assert!(
+            tracker
+                .discover_filtered(domain, peer(), Some(INFO), Some(identity))
+                .await
+                .is_err()
+        );
+        first.assert_calls(1);
+        second.assert_calls(1);
+    }
+
+    #[tokio::test]
+    async fn resolved_open_rejects_wrong_domain_expiry_and_unsupported_routes_before_dialing() {
+        let domain = Uuid::new_v4();
+        let node = auki_p2p::Node::start(
+            auki_p2p::Identity::generate(),
+            auki_p2p::DdsTokenVerifier::from_es256_pem(TEST_DDS_PUBLIC_KEY).unwrap(),
+            std::iter::empty::<Multiaddr>(),
+        )
+        .unwrap();
+        let protocols = crate::AukiPeerProtocols::new(
+            node.clone(),
+            domain,
+            std::iter::empty(),
+            crate::context::ContextLifecycle::new(),
+        );
+        let remote = peer();
+        let candidate = validate_advertisement(
+            serde_json::from_value(advertisement(remote, 4001, &[INFO])).unwrap(),
+            "test",
+        )
+        .unwrap()
+        .unwrap();
+        let mut resolved = AukiResolvedPeer {
+            identity: AukiPeerIdentity::Peer(remote),
+            domain_id: Uuid::new_v4(),
+            protocol_id: INFO.into(),
+            candidate,
+        };
+        assert!(matches!(
+            protocols.open_resolved(&resolved).await,
+            Err(crate::AukiPeerConnectError::WrongDomain)
+        ));
+        resolved.domain_id = domain;
+        resolved.candidate.expires_at = Utc::now() - chrono::Duration::seconds(1);
+        assert!(matches!(
+            protocols.open_resolved(&resolved).await,
+            Err(crate::AukiPeerConnectError::Expired)
+        ));
+        resolved.candidate.expires_at = Utc::now() + chrono::Duration::minutes(1);
+        resolved.candidate.routes = vec![
+            format!(
+                "/dns4/relay.example.com/tcp/443/wss/p2p/{}/p2p-circuit/p2p/{remote}",
+                peer()
+            )
+            .parse()
+            .unwrap(),
+        ];
+        assert!(matches!(
+            protocols.open_resolved(&resolved).await,
+            Err(crate::AukiPeerConnectError::NoSupportedRoutes)
+        ));
+        node.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn resolve_shutdown_cancels_a_pending_lookup() {
+        let server = MockServer::start();
+        let stop = CancellationToken::new();
+        let discovery = AukiDiscovery::new(
+            DdsDiscovery::new(
+                &DdsTrackerConfig::new(server.base_url(), DdsTrackerMode::DiscoverOnly).unwrap(),
+                Uuid::new_v4(),
+                peer(),
+                Arc::new(HangingAuth),
+            )
+            .unwrap()
+            .with_cancellation(stop.clone()),
+        );
+        let lookup = discovery.resolve(AukiPeerIdentity::Peer(peer()), INFO);
+        tokio::pin!(lookup);
+        assert!(futures::poll!(&mut lookup).is_pending());
+        stop.cancel();
+        assert_eq!(
+            lookup.await.unwrap_err(),
+            AukiDiscoveryError::Authentication
+        );
     }
 
     #[tokio::test]
@@ -1890,6 +2251,131 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
 mod browser_tests {
     use super::*;
     use wasm_bindgen_test::wasm_bindgen_test;
+
+    use serde_json::json;
+    use wasm_bindgen::prelude::wasm_bindgen;
+
+    #[wasm_bindgen(inline_js = r#"
+let savedIdentityFetch;
+let identityFetchCalls;
+export function identityFixture(pagesJson) {
+    savedIdentityFetch = globalThis.fetch;
+    const pages = JSON.parse(pagesJson);
+    identityFetchCalls = 0;
+    globalThis.fetch = async input => {
+        const page = pages[identityFetchCalls++];
+        if (!page) throw new Error('unexpected discovery request');
+        const url = new URL(input.url ?? String(input));
+        for (const [key, value] of Object.entries(page.query)) {
+            if (url.searchParams.get(key) !== value) throw new Error('incorrect discovery query: ' + key);
+        }
+        if (url.searchParams.has('peer_id') && url.searchParams.has('subject_id')) throw new Error('ambiguous identity');
+        const response = new Response(JSON.stringify(page.body), {
+            status: 200, headers: {'Content-Type': 'application/json', 'Cache-Control': 'no-store'},
+        });
+        Object.defineProperty(response, 'url', {value: url.href});
+        return response;
+    };
+}
+export function identityFixtureCalls() { return identityFetchCalls; }
+export function restoreIdentityFixture() { globalThis.fetch = savedIdentityFetch; }
+"#)]
+    extern "C" {
+        #[wasm_bindgen(js_name = identityFixture)]
+        fn identity_fixture(pages: &str);
+        #[wasm_bindgen(js_name = identityFixtureCalls)]
+        fn identity_fixture_calls() -> u32;
+        #[wasm_bindgen(js_name = restoreIdentityFixture)]
+        fn restore_identity_fixture();
+    }
+
+    struct FixtureGuard;
+    impl Drop for FixtureGuard {
+        fn drop(&mut self) {
+            restore_identity_fixture();
+        }
+    }
+
+    struct FixtureAuth;
+    #[async_trait(?Send)]
+    impl DdsAuthorizationProvider for FixtureAuth {
+        async fn authorization(&self) -> Result<DdsAuthorizationSnapshot, AukiDiscoveryError> {
+            let mut header = HeaderValue::from_static("Bearer synthetic-identity-fixture");
+            header.set_sensitive(true);
+            Ok(DdsAuthorizationSnapshot::new(header, 1))
+        }
+        async fn refresh_after_unauthorized(&self, _: u64) -> Result<(), AukiDiscoveryError> {
+            Err(AukiDiscoveryError::Authentication)
+        }
+    }
+
+    #[wasm_bindgen_test(async)]
+    async fn browser_resolves_exact_identity_through_fetch_and_rejects_old_providers() {
+        const PROTOCOL: &str = "/example/identity/1.0.0";
+        let id = auki_p2p::Identity::generate().peer_id();
+        let machine = Uuid::new_v4();
+        let config =
+            DdsTrackerConfig::new("http://127.0.0.1:18107", DdsTrackerMode::DiscoverOnly).unwrap();
+        let discovery = AukiDiscovery::new(
+            DdsDiscovery::new(
+                &config,
+                Uuid::new_v4(),
+                auki_p2p::Identity::generate().peer_id(),
+                Arc::new(FixtureAuth),
+            )
+            .unwrap(),
+        );
+        for identity in [
+            AukiPeerIdentity::Peer(id),
+            AukiPeerIdentity::Robot(machine),
+            AukiPeerIdentity::Compute(machine),
+        ] {
+            let filters = DiscoveryFilters::new(Some(PROTOCOL), Some(identity));
+            let mut query = json!({"protocol": PROTOCOL, "limit": "100"});
+            let mut applied = json!({"protocol": PROTOCOL});
+            for (name, value) in [
+                ("peer_id", &filters.peer_id),
+                ("peer_type", &filters.peer_type),
+                ("subject_id", &filters.subject_id),
+            ] {
+                if !value.is_empty() {
+                    query[name] = json!(value);
+                    applied[name] = json!(value);
+                }
+            }
+            let record = json!({
+                "peer_id": id.to_string(), "subject_id": machine, "peer_type": if filters.peer_type.is_empty() { "robot" } else { &filters.peer_type },
+                "routes": ["/ip4/127.0.0.1/tcp/4001"], "protocols": [PROTOCOL],
+                "expires_at": Utc::now() + chrono::Duration::minutes(1),
+            });
+            let mut second_query = query.clone();
+            second_query["cursor"] = json!("next");
+            identity_fixture(&json!([
+                {"query": query, "body": {"advertisements": [record], "next_cursor": "next", "applied_filters": applied}},
+                {"query": second_query, "body": {"advertisements": [], "applied_filters": applied}},
+            ]).to_string());
+            let guard = FixtureGuard;
+            let resolved = discovery.resolve(identity, PROTOCOL).await.unwrap();
+            assert_eq!(resolved.len(), 1);
+            assert_eq!(resolved[0].identity(), identity);
+            assert_eq!(resolved[0].candidate().peer_id(), id);
+            assert_eq!(identity_fixture_calls(), 2);
+            drop(guard);
+
+            identity_fixture(
+                &json!([{"query": query, "body": {"advertisements": []}}]).to_string(),
+            );
+            let _guard = FixtureGuard;
+            assert!(matches!(
+                discovery.resolve(identity, PROTOCOL).await,
+                Err(AukiDiscoveryError::InvalidResponse {
+                    operation: "resolve",
+                    ..
+                })
+            ));
+            assert_eq!(identity_fixture_calls(), 1);
+        }
+    }
 
     #[wasm_bindgen_test]
     fn abandoned_startup_cancels_the_background_publisher() {

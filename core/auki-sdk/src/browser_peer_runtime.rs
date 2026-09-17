@@ -292,7 +292,7 @@ impl AukiPeer {
                         authority: Arc::downgrade(&authority),
                     }),
                 ) {
-                    Ok(discovery) => discovery,
+                    Ok(discovery) => discovery.with_cancellation(protocols.cancellation_token()),
                     Err(error) => {
                         protocols.abort_all();
                         let _ = supervisor.stop().await;
@@ -371,6 +371,20 @@ impl AukiPeer {
             .as_ref()
             .ok_or(AukiDiscoveryError::Disabled)?
             .discover()
+            .await
+    }
+
+    /// Resolve an exact identity to every current peer advertising one protocol.
+    ///
+    /// Select a result explicitly, then use `protocols().open_resolved(&result)`
+    /// to verify signed remote identity before sending application bytes.
+    pub async fn resolve(
+        &self,
+        identity: crate::AukiPeerIdentity,
+        protocol_id: impl AsRef<str>,
+    ) -> Result<Vec<crate::AukiResolvedPeer>, AukiDiscoveryError> {
+        self.discovery_handle()?
+            .resolve(identity, protocol_id)
             .await
     }
 

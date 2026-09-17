@@ -6,6 +6,7 @@ provides Domain data clients and a managed runtime for compute and robot tasks.
 | Task | Start with |
 | --- | --- |
 | Connect peers with `AukiPeer` | [Connect two peers](../../docs/tutorials/first-peer.md) |
+| Resolve a Peer, Robot or Compute identity | [Identity resolution](../../docs/reference/peer-resolution.md) |
 | Read and write with `AukiDomains` and `AukiDomainData` | [Work with Domain data](../../docs/how-to/domain-data.md) |
 | Inspect inventory with `AukiFleet` | [Inspect a fleet](../../docs/how-to/inspect-fleet.md) |
 | Submit and monitor with `AukiDmsJobs` | [Submit Domain jobs](../../docs/how-to/submit-jobs.md) |

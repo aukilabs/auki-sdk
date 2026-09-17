@@ -2,7 +2,7 @@ import { FleetController, type Installation } from './fleet.ts';
 import { inspect, redact } from './safety.ts';
 /** All provider labels are inert, redacted text. IDs and source details are secondary. */
 export function renderFleet(host: HTMLElement, fleet: FleetController, select: (choice: Installation) => void, refresh: () => void) {
-  host.innerHTML = '<p>Discover activated demo workers using your current session. Robots are assigned to this Domain; dedicated compute candidates belong to the organization pool.</p><button id="fleet-refresh" type="button">Discover / refresh workers</button><p id="fleet-status" role="status"></p><div id="fleet-choices" class="jobs-list"></div><details><summary>Source diagnostics and public IDs</summary><pre id="fleet-diagnostics"></pre></details>';
+  host.innerHTML = '<p class="footnote">Assigned robots and dedicated compute workers. Choose one installation.</p><button id="fleet-refresh" type="button">Refresh</button><p id="fleet-status" role="status"></p><div id="fleet-choices" class="jobs-list"></div><details><summary>Details · sources and public IDs</summary><pre id="fleet-diagnostics"></pre></details>';
   const state = fleet.state;
   const button = host.querySelector<HTMLButtonElement>('#fleet-refresh')!; button.disabled = state.loading; button.onclick = refresh;
   host.querySelector('#fleet-status')!.textContent = state.message;
@@ -17,7 +17,7 @@ export function renderFleet(host: HTMLElement, fleet: FleetController, select: (
     }
     for (const issue of choice.issues) { const p = document.createElement('p'); p.textContent = issue; card.append(p); }
     const use = document.createElement('button'); use.type = 'button'; use.dataset.fleetInstallation = choice.config.installationId;
-    use.textContent = 'Use this installation →'; use.disabled = !choice.config.computeId && !choice.config.robotId;
+    use.textContent = 'Use installation'; use.disabled = !choice.config.computeId && !choice.config.robotId;
     use.onclick = () => select(choice); card.append(use); host.querySelector('#fleet-choices')!.append(card);
   }
   host.querySelector('#fleet-diagnostics')!.textContent = inspect({ inventory: state.inventory, dedicated_pool: state.pool });

@@ -14,7 +14,7 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
   section.innerHTML = `<div class="jobs-workspace">
     <div class="jobs-toolbar"><button id="jobs-back" type="button">← Jobs</button><h1 id="jobs-heading" tabindex="-1">Jobs</h1><button id="jobs-new" class="primary" type="button">New job</button></div>
     <p id="jobs-context" class="footnote"></p>
-    <div class="jobs-worker-strip"><span id="jobs-workers"></span><button id="jobs-configure" type="button">Workers · details</button><button id="jobs-discover" type="button">Refresh workers</button></div>
+    <div class="jobs-worker-strip"><button id="jobs-configure" type="button">Workers</button><span id="jobs-workers" hidden></span><button id="jobs-discover" type="button" hidden>Refresh workers</button></div>
     <p id="jobs-status" role="status" aria-live="polite"></p>
     <div id="jobs-screen"></div>
     <button id="jobs-history" type="button">Recent jobs</button>
@@ -31,19 +31,27 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
   const previewStates = new Map<string, string>();
   const names = new Map<string, string>();
   const previews = new Map<string, string>();
+  let historyPage: { items: NonNullable<JobsController['state']['items']>; nextCursor?: string; config: string; scroll: number; selected: string } | undefined;
+  let restoreHistory = false;
   const summaries = new Map<string, { action: string; input: string; result: string; evidence: string }>();
   const records = new JobsRecords(() => {
     const current = getContext(), data = connection.data;
     return current && data ? { domainId: current.domainId, data } : undefined;
   });
-  function invalidateReads() {
-    pickerVersion++; previewVersion++; pickerStarted = false; previewStates.clear(); previews.clear();
+  function invalidateReads(preservePreview = false) {
+    pickerVersion++; previewVersion++; pickerStarted = false; previewStates.clear();
+    if (preservePreview) {
+      for (const [id, preview] of previews) previewStates.set(id, preview);
+      pickerStarted = !!draftInput && previews.has(draftInput);
+    }
+    else previews.clear();
     void records.close();
   }
   function evidence(job: unknown) { return JSON.stringify([job, controller.state.config]); }
   function selectedInput() {
     if (screen !== 'choose') return;
     get('jobs-picker').hidden = !!draftInput;
+    get('jobs-input-preview').hidden = !draftInput;
     get('jobs-change-input').hidden = !draftInput;
     text('jobs-selected-name', draftInput ? names.get(draftInput) || 'Selected record' : '');
   }
@@ -95,9 +103,11 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
       if (current()) { previewStates.set(id, 'Preview unavailable. Check permission and size (64 KiB maximum).'); text(target, previewStates.get(id)); button(output ? 'jobs-output-retry' : 'jobs-preview-retry').hidden = false; }
     }
   }
-  async function dashboard() {
+  async function dashboard(cached = false) {
+    restoreHistory = cached && !!historyPage && historyPage.config === JSON.stringify(controller.state.config) && !controller.state.reconciliation;
+    if (!restoreHistory) historyPage = undefined;
     invalidateReads(); draftInput = ''; override = 'dashboard'; controller.choose(); screen = ''; render();
-    if (controller.state.config) await controller.list();
+    if (controller.state.config && !restoreHistory) await controller.list();
   }
 
   const controller = new JobsController(getContext, render);
@@ -106,6 +116,7 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
     return current && session ? { ...current, createFleet: () => session.fleet(current.domainId) } : undefined;
   }, () => { if (screen === 'setup') { screen = ''; render(); } });
   async function discover() {
+    historyPage = undefined; restoreHistory = false;
     const version = generation;
     controller.invalidateDiscovery();
     await fleet.refresh();
@@ -142,7 +153,7 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
     busy = true; stopPolling();
     try { const pending = action(); render(); await pending; }
     catch { failed = true; }
-    finally { if (version === generation) { busy = false; render(); activateReads(); if (failed) text('jobs-status', 'Unable to complete this action. Check configuration and permissions.'); } }
+    finally { if (version === generation) { busy = false; render(); activateReads(); schedule(); if (failed) text('jobs-status', 'Unable to complete this action. Check configuration and permissions.'); } }
   }
   function facts(values: Record<string, unknown>) {
     const dl = document.createElement('dl'); dl.className = 'facts';
@@ -154,23 +165,23 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
   }
   const phaseText = (value: unknown): string => typeof value === 'string' ? String(redact(value)).slice(0, 120) : 'Not reported';
   function render() {
-    const state = controller.state;
+    const state = restoreHistory && historyPage ? { ...controller.state, items: historyPage.items, nextCursor: historyPage.nextCursor } : controller.state;
     const next = state.phase === 'uncertain' && override !== 'dashboard' ? 'uncertain' : override ?? (state.phase === 'submitting' ? 'review' : state.phase === 'history' || state.phase === 'setup' ? 'dashboard' : state.phase);
     const changed = screen !== next; screen = next;
     const focusId = section.contains(document.activeElement) ? (document.activeElement as HTMLElement).id : '';
     const technicalOpen = section.querySelector('details')?.open ?? false;
-    text('jobs-context', context ? `${options.domainName?.() || 'Selected Domain'} · ${context.environment}` : 'Choose a Domain before configuring or running a job.');
+    text('jobs-context', context ? '' : 'Choose a Domain to view jobs.');
     text('jobs-status', state.reconciliation ? `Submission uncertain. A job may exist and consume credits. Reconcile the saved label before submitting again. ${state.message}` : state.message !== HISTORY_WARNING && state.message !== 'Observed executor matches the configured worker.' && (state.errorCode || state.reconciliation || ['detail', 'uncertain', 'submitting'].includes(state.phase) || /fail|denied|unresolved|exceeds|must|invalid|changed|missing|ambiguous/i.test(state.message)) ? state.message : '');
     const choice = fleet.state.installations.find(item => item.config.installationId === state.config?.installationId);
     text('jobs-workers', fleet.state.loading ? 'Discovering workers…' : choice ? [...choice.compute, ...choice.robot].map(m => `${m.association === 'assigned' ? 'Robot' : 'Compute'}: ${m.presence} · ${m.work_state}`).join(' / ') : fleet.state.message || 'Workers not yet observed');
     button('jobs-discover').disabled = busy || !context || !!state.reconciliation;
     button('jobs-back').hidden = screen === 'dashboard';
-    get('jobs-workers').parentElement!.hidden = ['choose', 'review', 'detail'].includes(screen);
+    get('jobs-workers').parentElement!.hidden = ['setup', 'choose', 'review', 'detail', 'uncertain'].includes(screen);
     button('jobs-history').hidden = screen !== 'uncertain' && !state.reconciliation;
     button('jobs-configure').disabled = busy || !context || state.phase === 'submitting' || !!state.reconciliation;
     button('jobs-history').disabled = busy || !connection.session || !context || !state.config;
     button('jobs-back').disabled = busy;
-    button('jobs-new').hidden = !!state.reconciliation || ['choose', 'review'].includes(screen);
+    button('jobs-new').hidden = !!state.reconciliation || screen !== 'dashboard';
     button('jobs-new').disabled = busy || !context;
     const host = get('jobs-screen');
     // One local screen exists at a time; no hidden duplicate controls or stale results.
@@ -185,17 +196,17 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
       } else if (screen === 'choose') {
         text('jobs-heading', 'New job');
         pane.innerHTML = `<form id="jobs-choose-form" class="jobs-card">
-          <div class="jobs-action-cards"><button type="button" data-role="compute">Uppercase text</button><button type="button" data-role="robot">Inspect file <small>Simulated robot</small></button></div>
+          <div class="jobs-action-cards"><button type="button" data-role="compute">Uppercase text</button><button type="button" data-role="robot">Inspect file <small>Byte count · SHA-256</small></button></div>
           <select id="jobs-role" aria-label="Action" hidden><option value="compute">Uppercase text</option><option value="robot">Inspect file</option></select>
           <p id="jobs-action-help" class="footnote"></p>
-          <div id="jobs-picker"><label>Find a Domain record<input id="jobs-search" type="search" placeholder="Exact record name" autocomplete="off"></label>
+          <div id="jobs-picker"><label>Exact record name<input id="jobs-search" type="search" placeholder="Exact record name" autocomplete="off"></label>
           <button type="button" id="jobs-search-button">Search</button>
           <p id="jobs-record-status" role="status"></p><div id="jobs-records" class="jobs-record-picker"></div></div>
           <strong id="jobs-selected-name"></strong><button id="jobs-change-input" type="button" hidden>Change input</button>
           <pre id="jobs-input-preview" class="jobs-preview">Select a record to preview.</pre><button id="jobs-preview-retry" type="button" hidden>Retry preview</button>
-          <details><summary>Advanced · action limits and record UUID</summary><p class="footnote">DMS schedules the task; observations are not reservations. Uppercase output is limited to 64 KiB. Unicode expansion can exceed this limit even for valid input and a successful estimate; credit consequences of failure are unknown.</p><label>Input record UUID<input id="jobs-input" autocomplete="off" spellcheck="false"></label></details>
-          <div class="actions"><button id="jobs-estimate" class="primary">Get estimate →</button></div></form>`;
-        button('jobs-change-input').onclick = () => { previewVersion++; draftInput = ''; field('jobs-input').value = ''; selectedInput(); text('jobs-input-preview', 'Select a record to preview.'); };
+          <details><summary>Record UUID</summary><label>Input record UUID<input id="jobs-input" autocomplete="off" spellcheck="false"></label></details>
+          <div class="actions"><button id="jobs-estimate" class="primary">Get estimate</button></div></form>`;
+        button('jobs-change-input').onclick = changeInput;
         button('jobs-preview-retry').onclick = () => { previewStates.delete(draftInput); if (draftInput) void previewRecord(draftInput); };
         button('jobs-search-button').onclick = () => { void loadPicker(field('jobs-search').value.trim()); };
         field('jobs-search').onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); void loadPicker(field('jobs-search').value.trim()); } };
@@ -207,7 +218,7 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
           option.disabled = !!state.discoveryRequired || !state.config?.[role === 'compute' ? 'computeId' : 'robotId'];
           if (option.disabled) option.textContent += ' · unavailable';
         }
-        const help = () => text('jobs-action-help', state.discoveryRequired ? 'Rediscover workers to enable this action.' : '');
+        const help = () => text('jobs-action-help', state.discoveryRequired ? 'Rediscover workers to enable this action.' : draftRole === 'robot' ? 'Simulated robot · up to 64 KiB' : 'UTF-8 · up to 64 KiB');
         field('jobs-role').onchange = () => { draftRole = field('jobs-role').value as Role; help(); };
         for (const card of section.querySelectorAll<HTMLButtonElement>('[data-role]')) {
           const role = card.dataset.role as Role;
@@ -223,11 +234,16 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
       } else if (screen === 'review') {
         text('jobs-heading', state.phase === 'submitting' ? 'Submitting…' : 'Confirm job');
         pane.append(facts({ Action: state.role === 'robot' ? 'Inspect file · simulated robot' : 'Uppercase text', Input: names.get(state.inputId ?? '') || state.inputId,
-          Domain: options.domainName?.() || 'Selected Domain', 'Estimated credits': state.estimate?.total }));
-        pane.insertAdjacentHTML('beforeend', `<p class="footnote">Submitting may lock credits. This estimate is not a worker reservation.</p><div class="actions"><button id="jobs-confirm" type="button" class="primary">Confirm &amp; run</button><button id="jobs-edit" type="button">Change action or input</button></div><details id="jobs-review-technical"><summary>Technical details</summary></details>`);
+          Domain: options.domainName?.() && options.domainName?.() !== 'Known Domain' ? options.domainName() : context?.domainId, Environment: context?.environment, 'Estimated credits': state.estimate?.total ?? 'Unavailable' }));
+        pane.insertAdjacentHTML('beforeend', `<pre id="jobs-review-preview" class="jobs-preview"></pre><p class="footnote">May lock credits; worker availability is not reserved. A lost response requires reconciliation.</p><div class="actions"><button id="jobs-confirm" type="button" class="primary">Confirm &amp; run</button><button id="jobs-edit" type="button">Change action or input</button></div><details id="jobs-review-technical"><summary>Details</summary></details>`);
+        if (state.role === 'compute') {
+          const warning = document.createElement('p'); warning.className = 'footnote';
+          warning.textContent = 'Unicode expansion can exceed the 64 KiB output limit. Failure billing is unknown.'; pane.append(warning);
+        }
+        text('jobs-review-preview', previews.get(state.inputId ?? '') || 'Input preview unavailable. Return to the input to inspect its bytes before confirming.');
         get('jobs-review-technical').append(facts({ 'Domain ID': context?.domainId, 'Input ID': state.inputId,
           Capability: state.spec?.tasks[0].capability, 'Output name': `sdk-${state.config?.installationId}-${state.role}-{taskId}`,
-          'Output format': state.role === 'robot' ? 'JSON inspection report' : 'UTF-8 text',
+          'Output format': state.role === 'robot' ? 'JSON byte-count / SHA-256 report' : 'UTF-8 text',
           'Expected worker': state.expectedWorkerId, Mode: 'Dedicated · one task · maximum one attempt' }));
         // These are local protocol constants, not provider strings or credentials.
         const outputType = document.createElement('p');
@@ -240,23 +256,31 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
         button('jobs-edit').onclick = edit;
       } else if (screen === 'dashboard') {
         text('jobs-heading', 'Jobs');
-        pane.innerHTML = `<h2>Recent jobs</h2><p class="footnote">History may be incomplete · <a href="https://github.com/aukilabs/auki-sdk/issues/396" target="_blank" rel="noreferrer">Why?</a></p><div id="jobs-history-items" class="jobs-list"></div><button id="jobs-next" type="button">Next provider page →</button>`;
+        pane.innerHTML = `<div id="jobs-history-items" class="jobs-list" aria-label="Recent jobs"></div><div class="actions"><button id="jobs-refresh-history" type="button">Refresh</button><button id="jobs-next" type="button">Next page</button></div><details><summary>History limits</summary><p class="footnote">History may be incomplete · <a href="https://github.com/aukilabs/auki-sdk/issues/396" target="_blank" rel="noreferrer">Provider issue</a></p></details>`;
         if (state.reconciliation) pane.prepend(facts({ 'Reconcile submission label': state.reconciliation.label, 'Original Domain': state.reconciliation.domainId }));
         for (const item of state.items ?? []) {
-          const entry = document.createElement('button'); entry.type = 'button'; entry.dataset.jobId = item.job.id;
+          const entry = document.createElement('button'); entry.type = 'button'; entry.dataset.jobId = item.job.id; entry.id = `jobs-row-${item.job.id}`;
           const cached = summaries.get(item.job.id), summary = cached?.evidence === evidence(item.job) ? cached : undefined;
           const date = item.job.created_at ? new Date(item.job.created_at) : undefined;
           const time = date && Number.isFinite(date.getTime()) ? date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Time unavailable';
           entry.textContent = String(redact(`${summary?.action || 'Demo job'} · ${item.job.status}\n${summary?.input ? summary.input + ' · ' : ''}${time}\n${summary?.result || 'Inspect details →'}`)); entry.disabled = busy;
-          entry.onclick = () => { invalidateReads(); override = undefined; polls = 0; void act(() => controller.inspect(item.job.id)); }; get('jobs-history-items').append(entry);
+          entry.onclick = () => {
+            historyPage = { items: state.items ?? [], nextCursor: state.nextCursor,
+              config: JSON.stringify(state.config), scroll: section.scrollTop, selected: entry.id };
+            restoreHistory = false; invalidateReads(); override = undefined; polls = 0;
+            void act(() => controller.inspect(item.job.id));
+          };
+          get('jobs-history-items').append(entry);
         }
         if (!state.items?.length) text('jobs-history-items', busy ? 'Loading recent jobs…' : state.reconciliation ? 'No matching jobs on this page. Use Recent jobs to check again for the saved submission label.' : state.config ? 'No matching jobs on this page. Start with New job.' : 'Choose an available worker installation to see recent jobs.');
         button('jobs-next').disabled = busy || !state.nextCursor;
-        button('jobs-next').onclick = () => { void act(() => controller.list(state.nextCursor ?? undefined)); };
+        button('jobs-next').onclick = () => { historyPage = undefined; restoreHistory = false; void act(() => controller.list(state.nextCursor ?? undefined)); };
+        button('jobs-refresh-history').disabled = busy;
+        button('jobs-refresh-history').onclick = () => { void act(dashboard); };
       } else if (screen === 'uncertain') {
-        text('jobs-heading', 'Submission needs checking.');
+        text('jobs-heading', 'Check submission');
         pane.append(facts({ 'Original Domain': state.reconciliation?.domainId ?? state.domainId, 'Original environment': state.reconciliation?.environment ?? state.environment, 'Submission label': state.reconciliation?.label ?? state.spec?.label }));
-        pane.insertAdjacentHTML('beforeend', '<p>The response was lost or could not be verified. The job may already exist. Use Job history to reconcile this label in the original Domain before another submission. Only one unresolved submission is retained per session; new jobs are blocked until it is reconciled. Labels are not idempotency keys. Logout or reload erases this in-memory recovery.</p>');
+        pane.insertAdjacentHTML('beforeend', '<p>The response was lost or could not be verified. The job may already exist. Use Recent jobs to reconcile this label in the original Domain before another submission. Only one unresolved submission is retained per session; new jobs are blocked until it is reconciled. Labels are not idempotency keys. Logout or reload erases this in-memory recovery.</p>');
       } else {
         text('jobs-heading', state.details?.job.status ?? 'Job details');
         const details = state.details;
@@ -264,7 +288,7 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
         const active = !['completed', 'failed', 'canceled'].includes(details?.job.status ?? '');
         const label = document.createElement('p');
         label.textContent = String(redact(`${state.role === 'compute' ? 'Uppercase text' : state.role === 'robot' ? 'Inspect file · simulated robot' : 'Demo job'} · ${names.get(String(details?.tasks[0]?.meta.input_id)) || 'Input details below'} · ${state.executorMatch ? 'Worker verified' : 'Unverified — outputs withheld'}`)); pane.append(label);
-        pane.insertAdjacentHTML('beforeend', `<pre id="jobs-output-preview" class="jobs-preview" hidden></pre><div id="jobs-outputs" class="actions"></div><button id="jobs-output-retry" type="button" hidden>Retry preview</button><div class="actions"><button id="jobs-refresh" type="button">Refresh status</button><button id="jobs-cancel" type="button" ${active ? '' : 'hidden'}>Cancel whole job…</button></div>${active ? '<p class="footnote">Cancellation does not prove task shutdown or credit release. Automatic refresh pauses after 60 checks.</p>' : ''}<details><summary id="jobs-details">Technical details · redacted</summary><div id="jobs-tasks" class="jobs-list"></div><pre id="jobs-json"></pre></details>`);
+        pane.insertAdjacentHTML('beforeend', `<pre id="jobs-output-preview" class="jobs-preview" hidden></pre><div id="jobs-outputs" class="actions"></div><button id="jobs-output-retry" type="button" hidden>Retry preview</button><div class="actions"><button id="jobs-refresh" type="button">Refresh status</button><button id="jobs-cancel" type="button" ${active ? '' : 'hidden'}>Cancel whole job…</button></div>${active ? '<p class="footnote">Cancellation does not prove task shutdown or credit release. Automatic refresh pauses after 60 checks.</p>' : ''}<details><summary id="jobs-details">Details · redacted</summary><div id="jobs-tasks" class="jobs-list"></div><pre id="jobs-json"></pre></details>`);
         get('jobs-tasks').append(facts({ 'Input ID': details?.tasks[0]?.meta.input_id, 'Job label': details?.job.label, 'Locked credits': details?.job.credit_lock_amount, 'Credits released at': details?.job.credit_released_at }));
         for (const task of details?.tasks ?? []) get('jobs-tasks').append(facts({ Task: task.label, Status: task.status, Attempts: `${task.attempts} / ${task.max_attempts}`, Phase: phaseText((task.meta.progress as { phase?: unknown } | undefined)?.phase), 'Recent events': Array.isArray(task.meta.events) ? task.meta.events.slice(-3).map(event => typeof event === 'object' && event ? phaseText((event as { phase?: unknown }).phase) : 'Event').join(' → ') : 'Not reported' }));
         // Defense in depth: only completed tasks with matching actual receipts expose UUID links.
@@ -296,9 +320,17 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
     for (const control of section.querySelectorAll<HTMLInputElement | HTMLSelectElement>('#jobs-screen input, #jobs-screen select')) control.disabled = busy || !context;
     if (!changed && focusId && !section.hidden) section.querySelector<HTMLElement>(`#${focusId}`)?.focus({ preventScroll: true });
     if (changed && !section.hidden) { section.scrollTop = 0; get('jobs-heading').focus({ preventScroll: true }); }
+    if (screen === 'dashboard' && restoreHistory && historyPage && !busy && !section.hidden) {
+      section.querySelector<HTMLElement>(`#${historyPage.selected}`)?.focus({ preventScroll: true });
+      section.scrollTop = historyPage.scroll;
+    }
     const estimateButton = section.querySelector<HTMLButtonElement>('#jobs-estimate');
     if (estimateButton) estimateButton.disabled = busy || !context || !!state.discoveryRequired || !state.config?.[draftRole === 'compute' ? 'computeId' : 'robotId'];
-    schedule();
+  }
+  function changeInput() {
+    previewVersion++; draftInput = ''; field('jobs-input').value = '';
+    selectedInput(); text('jobs-input-preview', 'Select a record to preview.');
+    void loadPicker();
   }
   function edit() {
     const state = controller.state;
@@ -306,11 +338,11 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
     invalidateReads();
     if (state.config) { override = 'choose'; screen = ''; void act(() => controller.choose()); } else { override = 'setup'; screen = ''; render(); }
   }
-  button('jobs-new').onclick = () => { draftInput = ''; invalidateReads(); override = 'choose'; screen = ''; if (controller.state.config) void act(() => controller.choose()); else { override = 'setup'; render(); } };
+  button('jobs-new').onclick = () => { historyPage = undefined; restoreHistory = false; draftInput = ''; invalidateReads(); override = 'choose'; screen = ''; if (controller.state.config) void act(() => controller.choose()); else { override = 'setup'; render(); } };
   button('jobs-configure').onclick = () => { invalidateReads(); override = 'setup'; controller.choose(); screen = ''; render(); };
   button('jobs-discover').onclick = () => { void act(discover); };
   button('jobs-history').onclick = () => { void act(dashboard); };
-  button('jobs-back').onclick = () => { void act(dashboard); };
+  button('jobs-back').onclick = () => { void act(() => dashboard(true)); };
   function enterVisible() {
     if (section.hidden || !context || !ready) return;
     if (discoveryReady && !busy) { void act(finishDiscovery); return; }
@@ -322,13 +354,24 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
   }
   new MutationObserver(() => {
     if (section.hidden) {
-      stopPolling(); invalidateReads(); draftInput = ''; override = 'dashboard';
-      if (['review', 'choose'].includes(controller.state.phase)) controller.choose();
+      stopPolling();
+      const auxiliary = section.dataset?.auxiliary === 'true';
+      invalidateReads(auxiliary);
+      if (auxiliary) {
+        if (['review', 'choose'].includes(screen) && ['review', 'choose'].includes(controller.state.phase)) {
+          draftInput = controller.state.inputId ?? draftInput; draftRole = controller.state.role ?? draftRole;
+          override = 'choose'; controller.choose(); screen = '';
+        }
+      } else {
+        draftInput = ''; override = 'dashboard'; historyPage = undefined; restoreHistory = false;
+        if (['review', 'choose'].includes(controller.state.phase)) controller.choose();
+      }
       render();
     } else enterVisible();
   }).observe(section, { attributes: true, attributeFilter: ['hidden'] });
   document.addEventListener('visibilitychange', schedule);
   function close(retainSession?: object) {
+    historyPage = undefined; restoreHistory = false;
     ++generation; ready = false; entered = false; discoveryReady = false; invalidateReads(); names.clear(); previews.clear(); summaries.clear(); busy = false; stopPolling(); override = undefined; draftInput = ''; draftRole = 'compute'; screen = ''; polls = 0;
     context = getContext();
     const pending = Promise.allSettled([controller.close(retainSession), fleet.close(), records.close()]).then(results => { if (results.some(r => r.status === 'rejected')) throw Error('Jobs or Fleet cleanup failed.'); });

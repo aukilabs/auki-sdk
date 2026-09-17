@@ -11,7 +11,9 @@ const tree = ts.createSourceFile('main.ts', source, ts.ScriptTarget.Latest, true
 const selected = tree.statements.filter(node =>
   ts.isFunctionDeclaration(node) && ['selectDomain', 'loadDomains'].includes(node.name?.text ?? '') ||
   ts.isExpressionStatement(node) && node.getText(tree).startsWith("$('manual').onsubmit"));
-const code = ts.transpileModule(selected.map(node => node.getText(tree)).join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const presentation = ts.createSourceFile('presentation.ts', readFileSync(new URL('../src/presentation.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true);
+const row = presentation.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'recordRow')!;
+const code = ts.transpileModule(row.getText(presentation).replace('export ', '') + '\n' + selected.map(node => node.getText(tree)).join('\n'), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 const checkpoint = () => new Promise<void>(resolve => setImmediate(resolve));
 function deferred() {
   let resolve!: (value?: unknown) => void, reject!: (error: unknown) => void;
@@ -34,7 +36,7 @@ function harness() {
     redact: (value: unknown) => value, inspect: JSON.stringify, facts: () => [], safeError: () => 'Safe read error.',
     navigation: { reset: () => {} }, renderView: () => {}, showView: () => {},
     jobs: { refreshContext: () => {} }, networking: { refresh: () => {} }, refreshSelected: () => {},
-    document: { createElement: () => ({}) },
+    document: { createElement: () => ({ append() {} }) },
     lanes: { domains: { run: async (read: any, success: any) => success(await read()) } },
   };
   runInNewContext(code, context);

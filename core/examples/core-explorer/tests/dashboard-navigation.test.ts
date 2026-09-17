@@ -11,7 +11,7 @@ const source = readFileSync(new URL('../src/jobs-ui.ts', import.meta.url), 'utf8
 const tree = ts.createSourceFile('jobs-ui.ts', source, ts.ScriptTarget.Latest, true);
 const pieces: string[] = [];
 function visit(n: ts.Node) {
-  if (ts.isFunctionDeclaration(n) && ['render', 'enterVisible', 'discover', 'finishDiscovery', 'dashboard', 'act', 'close', 'edit'].includes(n.name?.text ?? '')) pieces.push(n.getText(tree));
+  if (ts.isFunctionDeclaration(n) && ['render', 'changeInput', 'evidence', 'selectedInput', 'enterVisible', 'discover', 'finishDiscovery', 'dashboard', 'act', 'close', 'edit'].includes(n.name?.text ?? '')) pieces.push(n.getText(tree));
   if (ts.isExpressionStatement(n) && (n.getText(tree).startsWith('new MutationObserver') || /^button\('jobs-(history|back)'\).onclick/.test(n.getText(tree)))) pieces.push(n.getText(tree));
   ts.forEachChild(n, visit);
 }
@@ -22,12 +22,12 @@ const domain = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', worker = 'bbbbbbbb-bbbb-4
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 function harness(choices = 1) {
   const nodes = new Map<string, any>();
-  const node = (): any => ({ dataset: {}, parentElement: { hidden: false }, hidden: false, disabled: false, open: false, append() {}, prepend() {}, replaceChildren() {}, insertAdjacentHTML() {}, focus() {}, setAttribute() {}, querySelector: node, querySelectorAll: () => [] });
+  const node = (): any => ({ dataset: {}, parentElement: { hidden: false }, hidden: false, disabled: false, open: false, children: [], append(...items: any[]) { this.children.push(...items); }, prepend() {}, replaceChildren(...items: any[]) { this.children = items; }, insertAdjacentHTML() {}, focus() { this.focused = true; }, setAttribute() {}, querySelector: node, querySelectorAll: () => [] });
   const get = (id: string) => { if (!nodes.has(id)) nodes.set(id, node()); return nodes.get(id); };
   let observer!: () => void, reads = 0, discoveries = 0, submissions = 0;
   const discovery = deferred<void>(), submission = deferred<void>();
-  const ui: any = { ready: true, entered: true, busy: false, generation: 0, discoveryReady: false, screen: 'dashboard', override: 'dashboard', draftInput: '', draftRole: 'compute', polls: 0, closing: Promise.resolve(),
-    section: { hidden: false, contains: () => false, querySelector: () => null, querySelectorAll: () => [] },
+  const ui: any = { historyPage: undefined, restoreHistory: false, ready: true, entered: true, busy: false, generation: 0, discoveryReady: false, screen: 'dashboard', override: 'dashboard', draftInput: '', draftRole: 'compute', polls: 0, closing: Promise.resolve(),
+    section: { dataset: {}, scrollTop: 0, hidden: false, contains: () => false, querySelector: (selector: string) => selector === 'details' ? get('details') : get('jobs-history-items').children?.findLast((child: any) => '#' + child.id === selector) ?? get(selector), querySelectorAll: () => [] },
     document: { activeElement: null, createElement: node }, get, button: get, field: get, text(id: string, value: unknown) { get(id).textContent = value; }, redact: (x: unknown) => x, inspect: JSON.stringify, facts: node,
     names: new Map(), previews: new Map(), summaries: new Map(), previewStates: new Map(), options: {},
     invalidateReads() {}, stopPolling() {}, activateReads() {}, schedule() {}, records: { close: async () => {} },
@@ -106,5 +106,70 @@ test('close discards discovery already settled while hidden when the Domain cont
   h.visible(true); await tick();
   assert.equal(h.ui.controller.state.config, undefined);
   assert.equal(h.counts().reads, 0);
+  await h.close();
+});
+
+for (const route of ['settings', 'technical']) test(`actual auxiliary ${route} return keeps input and role but invalidates spending review`, async () => {
+  const h = harness(), { ui } = h;
+  await ui.controller.configure({ installationId: domain, computeId: worker });
+  ui.override = undefined;
+  await ui.controller.prepare('compute', input);
+  assert.equal(ui.controller.state.phase, 'review');
+  assert.equal(ui.controller.state.estimate.total, '0.123456789012345678');
+  ui.previews.set(input, 'Retained useful preview');
+  ui.section.dataset.auxiliary = 'true';
+  h.visible(false);
+  assert.equal(ui.draftInput, input);
+  assert.equal(ui.draftRole, 'compute');
+  assert.equal(ui.controller.state.estimate, undefined);
+  assert.equal(ui.controller.state.spec, undefined);
+  h.visible(true);
+  assert.equal(ui.screen, 'choose');
+  assert.equal(ui.previews.get(input), 'Retained useful preview');
+  assert.equal(h.counts().submissions, 0);
+  await ui.controller.submit();
+  assert.equal(h.counts().submissions, 0, 'old review cannot submit on return');
+  await h.close();
+});
+
+test('actual history row and Back handlers restore cached page, selected row and scroll without provider read', async () => {
+  const h = harness(), { ui } = h;
+  let lists = 0;
+  const original = ui.context.createJobs;
+  ui.context.createJobs = () => ({ ...original(), list: async () => {
+    lists++; return { items: [{ job: { id: input, status: 'completed' } }], next_cursor: 'opaque-page-two' };
+  }, get: async () => { throw Error('offline detail unavailable'); } });
+  await ui.controller.configure({ installationId: domain, computeId: worker });
+  await ui.controller.list('opaque-current-page');
+  ui.section.scrollTop = 214;
+  h.get('jobs-history-items').children.at(-1).onclick();
+  await tick();
+  assert.equal(ui.screen, 'detail');
+  h.get('jobs-back').onclick(); await tick();
+  assert.equal(ui.screen, 'dashboard');
+  assert.equal(lists, 1, 'Back uses the unchanged cached page');
+  ui.section.dataset.auxiliary = 'true'; h.visible(false); h.visible(true);
+  assert.equal(ui.screen, 'dashboard', 'cached history stays history across Settings');
+  assert.equal(lists, 1);
+  assert.equal(ui.section.scrollTop, 214);
+  assert.ok(h.get('jobs-history-items').children.at(-1).focused);
+  assert.equal(h.get('jobs-next').disabled, false);
+  h.get('jobs-refresh-history').onclick(); await tick();
+  assert.equal(lists, 2, 'explicit Refresh reaches the provider');
+  await h.close();
+});
+
+test('actual review shows known Domain identity and exact decimal cost outside Details', async () => {
+  const h = harness(), { ui } = h;
+  const rendered: Record<string, unknown>[] = [];
+  ui.facts = (value: Record<string, unknown>) => { rendered.push(value); return {}; };
+  ui.options.domainName = () => 'Known Domain';
+  await ui.controller.configure({ installationId: domain, computeId: worker });
+  ui.override = undefined;
+  await ui.controller.prepare('compute', input);
+  const review = rendered.find(value => 'Estimated credits' in value);
+  assert.equal(review?.Domain, domain);
+  assert.equal(review?.Environment, 'fixture');
+  assert.equal(review?.['Estimated credits'], '0.123456789012345678');
   await h.close();
 });

@@ -45,9 +45,7 @@ is an explicit original-byte `.bin` attachment; downloaded bytes are not redacte
 ## Focused screens
 
 The viewport-oriented application shows one current task, rather than appending
-details below a long page. **Overview**, **Data**, **Portals**, **Poses**,
-**Networking** and **Jobs** are separate primary sections. Long lists and content scroll
-inside the light paper workspace within compact dark navigation; short windows retain access to controls through scrolling. Body copy stays modest and key actions use orange.
+details below a long page. **Data**, **Jobs**, **Space** and **Network** are the four primary workspaces. Space contains Domain information, Portals and Poses. Domain selection opens Data. One compact header carries environment and selected Domain; lists and details replace one another in the dark workspace. Long content scrolls internally and short windows retain reachable controls. Shared rows, forms, metadata and status treatments use restrained orange actions.
 
 Buttons open the Domain picker, connection settings, advanced filters, record,
 preview and technical screens. Domain paging and known-UUID selection remain
@@ -56,7 +54,7 @@ preview and original-byte download remain explicit. Back returns to the originat
 task without discarding the Data filter. Settings cannot silently retarget an
 already signed-in session.
 
-**Networking** shows the current real peer/target step. Manual route entry,
+**Network** shows the current real peer/target step. Manual route entry,
 technical context and verified results have dedicated sub-screens. Confirm a manual
 target with **Use manual target**; editing does not hide the form. Stop remains
 available. Send requires a ready peer, confirmed target and 1–1024 UTF-8 bytes of
@@ -157,7 +155,7 @@ upload. Cancellation does not promise rollback. Domain changes/logout abort and
 invalidate old work, suppressing late results. Within the same session an uncertain target remains available after changing Domains. Logout completely clears file, type, destination, target and returned metadata before another account signs in. Review starts at the top with destination and file visible; returned metadata opens a separate redacted technical screen with Back.
 
 The UI uses `/brand/tokens.css`, the official `/brand/auki-logo.svg`, and local
-OFL fonts; it does not load fonts from a CDN. Local checks include 144 TypeScript
+OFL fonts; it does not load fonts from a CDN. Local checks include 155 TypeScript
 unit tests, 17 fixture/config tests, 25 Jobs worker tests and 6 idle-Echo robot tests.
 Real generated SDK/WASM browsing, binary upload/download and Jobs use synthetic
 loopback services; the separate Echo suite uses a real local Python robot. Jobs
@@ -175,19 +173,17 @@ guard allowed read-only service requests and authentication exchanges only: no l
 jobs, estimates, uploads or task outputs were created. This proves live discovery,
 not leased-job execution or billing behavior.
 
-Actual app screenshots: [Overview](screenshots/overview.png),
-[Data](screenshots/domain-explorer.png), [verified Echo](screenshots/networking.png),
-[mobile Echo](screenshots/networking-mobile.png),
-[upload review](screenshots/upload-review.png),
-[mobile upload review](screenshots/upload-review-mobile.png),
-[Jobs dashboard](screenshots/jobs-dashboard.png),
-[mobile Jobs dashboard](screenshots/jobs-dashboard-mobile.png),
-[Jobs action](screenshots/jobs-choose.png), [Jobs review](screenshots/jobs-review.png),
-[Jobs result](screenshots/jobs-result.png) and
-[mobile Jobs review](screenshots/jobs-review-mobile.png),
-[Fleet discovery](screenshots/fleet-discovery.png), and
-[mobile Fleet action](screenshots/fleet-choose-mobile.png). Jobs/Fleet captures use
-explicitly labelled synthetic fixtures, not deployed worker results.
+[Complete control-panel screenshot gallery](screenshots/control-panel/README.md):
+108 real-app captures covering all 14 routes and every Jobs, Upload and Network
+step on desktop and mobile, plus narrow/short viewport captures. Includes sign-in,
+settings, Domain selection, Data/details/preview/filter, Space/portals/poses,
+upload confirmation/progress/result, workers, input selection, cost confirmation,
+job submission/result/recovery, and connected Echo/technical views.
+[Coverage manifest](screenshots/control-panel/manifest.json) records each route,
+flow step, viewport and image hash. All captures use local synthetic fixtures;
+Jobs screenshots are not deployed worker or live billing evidence. Network result
+captures use the real local Chromium/WASM-to-Python Echo fixture.
+Older screenshots outside this gallery describe earlier UI milestones.
 
 ## Verification
 
@@ -344,3 +340,19 @@ retains all submission, receipt, uncertainty and lifecycle assertions and now
 discovers its workers through the same provider fixture. Its preview assets must
 be rebuilt by the parent. Screenshots and approved live read-only discovery are
 separate parent checks; local fixture success does not establish deployed support.
+
+## Focused control panel rewrite
+
+The presentation uses local fonts and a dark, terminal-inspired GUI. Back restores
+Data filters, focus and scroll; Escape follows the visible local Back action or
+returns from a secondary screen. Space retains the overview, portal and pose
+capabilities. Network keeps the same peer across navigation. Jobs rendering remains
+request-free; visible entry and explicit actions own reads. Retained uncertain
+submissions keep Recent jobs reachable, and discovery settling while hidden defers
+history activation until Jobs is visible. Inspect file produces the real JSON
+byte-count/SHA-256 report, never simulated line counts. Estimate review shows the
+input preview, destination, environment and decimal-string credits before submission.
+
+The rewrite has lightweight unit/type/config validation; fresh production builds,
+browser screenshots and viewport acceptance are delegated to the parent. Existing
+screenshots above predate this rewrite and are not evidence of its visual acceptance.

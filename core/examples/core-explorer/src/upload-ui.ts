@@ -7,22 +7,22 @@ export function uploadUI(connection: Connection, getContext: () => UploadContext
 }): { open(): void; clear(): void; reset(): void; cancel(): Promise<void> } {
   const section = document.querySelector<HTMLElement>('#view-upload')!;
   // Static markup only; all file, environment and provider values use text nodes.
-  section.innerHTML = `<div class="chapter-body">
+  section.innerHTML = `<div class="task-body">
     <button id="upload-back" type="button" data-back="data">Back to Data</button>
-    <h1 id="upload-heading" tabindex="-1">Upload one file</h1>
-    <p id="upload-intro">Buffered upload · maximum 8 MiB (8,388,608 bytes). Each upload uses a generated unique name. No overwrite or automatic retry.</p>
+    <h1 id="upload-heading" tabindex="-1">Upload file</h1>
+    <p id="upload-intro">Up to 8 MiB · new record</p>
     <div id="upload-choose"><label>File<input id="upload-file" type="file"></label>
-      <label>Data type<input id="upload-type" value="${DEFAULT_UPLOAD_TYPE}" autocomplete="off" aria-describedby="upload-type-help"></label>
-      <p id="upload-type-help">SDK named data types allow 1–128 UTF-8 bytes and exclude punctuation such as /. The default core-explorer.file.v1 works for this example.</p>
+      <details id="upload-advanced"><summary>Advanced</summary><label>Data type<input id="upload-type" value="${DEFAULT_UPLOAD_TYPE}" autocomplete="off" aria-describedby="upload-type-help"></label>
+      <p id="upload-type-help">1–128 UTF-8 bytes. Use an application label, not a MIME type; “/” is not allowed.</p></details>
       <button id="upload-review" type="button" class="primary">Review upload</button></div>
     <div id="upload-destination" hidden><h2 id="upload-destination-title">Destination</h2><dl id="upload-facts"></dl>
       <label>Generated target<input id="upload-target" readonly></label></div>
-    <div id="upload-review-step" hidden><p>Confirm the Domain, connected environment, target, type and size above. Read access does not grant write permission.</p>
+    <div id="upload-review-step" hidden><p>Creates one record. Write permission is checked separately.</p>
       <button id="upload-confirm" type="button" class="primary">Confirm upload</button>
       <button id="upload-edit" type="button">Change file or type</button></div>
     <div id="upload-sending" hidden><p>Keep this page open while the SDK completes the request. Cancelling after send may leave a server record.</p></div>
-    <div id="upload-result" hidden><button id="upload-metadata" type="button">Returned metadata · redacted</button>
-      <p>For uncertain completion, copy the generated target above and check it with the Data name filter in the original Domain before deciding to upload again.</p>
+    <div id="upload-result" hidden><button id="upload-metadata" type="button">Details · redacted</button>
+      <p id="upload-uncertain">Check the generated target in the original Domain before uploading again. The write may have completed.</p>
       <button id="upload-new" type="button">Choose another file</button></div>
     <p id="upload-status" role="status" aria-live="polite"></p>
     <button id="upload-cancel" type="button">Cancel upload</button>
@@ -50,10 +50,12 @@ export function uploadUI(connection: Connection, getContext: () => UploadContext
     button('upload-edit').disabled = controller.busy;
     button('upload-new').disabled = controller.busy;
     button('upload-cancel').disabled = !controller.busy && step !== 'review';
-    get('upload-status').textContent = chooseNew ? 'Choose one file and review its destination. The previous target remains available below for checking.' : state.message;
+    button('upload-cancel').hidden = !controller.busy && step !== 'review';
+    get('upload-uncertain').hidden = state.outcome !== 'uncertain';
+    get('upload-status').textContent = chooseNew ? 'Previous target retained below.' : ['Choose one file, then review its destination.', 'Confirm this exact destination to send one buffered upload. Read access does not imply write permission.'].includes(state.message) ? '' : state.message;
     get('upload-destination-title').textContent = chooseNew ? 'Previous destination' : 'Destination';
     button('upload-metadata').disabled = !state.metadata;
-    get('upload-heading').textContent = step === 'review' ? 'Review upload' : step === 'sending' ? 'Uploading' : step === 'result' ? 'Upload result' : 'Upload one file';
+    get('upload-heading').textContent = step === 'review' ? 'Review upload' : step === 'sending' ? 'Uploading' : step === 'result' ? 'Upload result' : 'Upload file';
     get('upload-intro').hidden = step !== 'choose';
     get('upload-facts').replaceChildren();
     if (state.review) {
@@ -79,7 +81,7 @@ export function uploadUI(connection: Connection, getContext: () => UploadContext
   };
   button('upload-confirm').onclick = () => { void controller.confirm(); };
   button('upload-cancel').onclick = () => { void controller.cancel(); };
-  button('upload-edit').onclick = () => { controller.clear(); chooseNew = true; render(); field('upload-type').focus(); };
+  button('upload-edit').onclick = () => { controller.clear(); chooseNew = true; render(); field('upload-file').focus(); };
   button('upload-new').onclick = () => { chooseNew = true; field('upload-file').value = ''; render(); field('upload-file').focus(); };
   button('upload-back').onclick = () => { controller.clear(); options.navigate('data'); };
   render();

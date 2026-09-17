@@ -735,6 +735,88 @@ fn put_urdf_package(
     Ok(dict.into_any().unbind())
 }
 
+/// Sibling ``manifest.json`` → ``mesh_substitutions`` for [`put_urdf_package`].
+///
+/// Returns ``None`` when the sidecar is missing. Keys are the raw URDF
+/// ``filename=`` strings; values are ``advertised_path`` / ``source_path``.
+#[pyfunction]
+fn mesh_substitutions_from_manifest(
+    py: Python<'_>,
+    urdf_path: PathBuf,
+) -> PyResult<Option<PyObject>> {
+    let manifest_path = urdf_path.with_file_name("manifest.json");
+    if !manifest_path.is_file() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(&manifest_path)
+        .map_err(|error| PyOSError::new_err(format!("{}: {error}", manifest_path.display())))?;
+    let raw: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|error| PyValueError::new_err(format!("{}: {error}", manifest_path.display())))?;
+    let object = raw.as_object().ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "manifest.json must be an object: {}",
+            manifest_path.display()
+        ))
+    })?;
+    let package_dir = urdf_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let out = PyDict::new_bound(py);
+    for (link, entry) in object {
+        let Some(entry) = entry.as_object() else {
+            continue;
+        };
+        let stl = entry
+            .get("stl")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "manifest.json[{link:?}] needs string stl and draco fields"
+                ))
+            })?;
+        let draco = entry
+            .get("draco")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "manifest.json[{link:?}] needs string stl and draco fields"
+                ))
+            })?;
+        let advertised = strip_robot_zip_root(draco);
+        let source = package_dir.join(&advertised);
+        if !source.is_file() {
+            return Err(PyOSError::new_err(format!(
+                "manifest.json maps {stl:?} → {advertised:?} but missing {}",
+                source.display()
+            )));
+        }
+        let item = PyDict::new_bound(py);
+        item.set_item("advertised_path", &advertised)?;
+        item.set_item(
+            "source_path",
+            source
+                .canonicalize()
+                .unwrap_or(source)
+                .to_string_lossy()
+                .into_owned(),
+        )?;
+        out.set_item(stl, item)?;
+    }
+    if out.len() == 0 {
+        Ok(None)
+    } else {
+        Ok(Some(out.into_any().unbind()))
+    }
+}
+
+fn strip_robot_zip_root(draco_path: &str) -> String {
+    let path = draco_path.trim();
+    let stripped = path
+        .strip_prefix("/robot/")
+        .unwrap_or_else(|| path.trim_start_matches('/'));
+    stripped.to_string()
+}
+
 fn parse_mesh_substitutions(
     mesh_substitutions: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<Option<std::collections::HashMap<String, registry::MeshSubstitution>>> {
@@ -886,6 +968,7 @@ fn auki_registry(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_blob, m)?)?;
     m.add_function(wrap_pyfunction!(sha256_hex, m)?)?;
     m.add_function(wrap_pyfunction!(put_urdf_package, m)?)?;
+    m.add_function(wrap_pyfunction!(mesh_substitutions_from_manifest, m)?)?;
     m.add_function(wrap_pyfunction!(list_device_models, m)?)?;
     m.add_function(wrap_pyfunction!(read_frame, m)?)?;
     m.add_function(wrap_pyfunction!(read_sensor, m)?)?;
@@ -922,7 +1005,8 @@ mod tests {
             assert!(module.getattr("rangefinder_sensor_entry").is_ok());
             assert!(module.getattr("write_sensor").is_ok());
             assert!(module.getattr("voxel_map_entry").is_ok());
-            assert!(module.getattr("write_map").is_ok());
+            assert!(module.getattr("put_urdf_package").is_ok());
+            assert!(module.getattr("mesh_substitutions_from_manifest").is_ok());
         });
     }
 

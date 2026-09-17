@@ -11,7 +11,14 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{Duration as ChronoDuration, Utc};
 use httpmock::prelude::*;
 use serde_json::{Value, json};
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -655,4 +662,97 @@ async fn managed_execute_cancels_during_initial_heartbeat_before_entering_handle
     assert!(token.get().is_err());
     runtime.close().await.unwrap();
     heartbeat.assert_calls(1);
+}
+
+/// Regression test for #402.
+///
+/// A handler that fails is a completed task, not a broken runtime: the receipt
+/// is already sent by the time `run` sees `TaskError::Handler`. Before the fix
+/// that variant fell into the catch-all arm and returned out of the loop, so
+/// one failed job stopped a robot from claiming work for the rest of the
+/// process's life -- with its peer still up and its endpoints still serving, so
+/// it looked healthy from outside.
+#[tokio::test]
+async fn a_failed_handler_does_not_stop_the_claim_loop() {
+    let server = MockServer::start();
+    let task_id = Uuid::new_v4();
+    let response = grant(&server, task_id, Uuid::new_v4());
+    server.mock(|when, then| {
+        when.method(GET).path("/tasks");
+        then.json_body(response.clone());
+    });
+    server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/tasks/{task_id}/heartbeat"));
+        then.json_body(response.clone());
+    });
+    let failure = server.mock(|when, then| {
+        when.method(POST).path(format!("/tasks/{task_id}/fail"));
+        then.status(200);
+    });
+    let complete = server.mock(|when, then| {
+        when.method(POST).path(format!("/tasks/{task_id}/complete"));
+        then.status(200);
+    });
+
+    // Only the first claim fails, so `fail` is called exactly once however many
+    // times the loop goes round -- which is what makes the count meaningful.
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let handler = Handler(move |task: TaskContext| {
+        let seen = seen.clone();
+        async move {
+            if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+                task.set_failure("navigation failed", Value::Null)?;
+                return Err(TaskError::Handler);
+            }
+            Ok(TaskResult::default())
+        }
+    });
+    let mut handlers: BTreeMap<String, Arc<dyn TaskHandler>> = BTreeMap::new();
+    handlers.insert("/example/v1".into(), Arc::new(handler));
+
+    let client = DmsClient::new(
+        server.base_url().parse().unwrap(),
+        Duration::from_secs(2),
+        Arc::new(Auth),
+    )
+    .unwrap();
+    let runtime = AukiDmsTasks::from_client(
+        client,
+        "native-fixture".into(),
+        vec!["/example/v1".into()],
+        TasksConfig {
+            // The default one-second poll would make this test sleep between
+            // iterations for no benefit; nothing here depends on the interval.
+            poll_interval: Duration::from_millis(10),
+            ..TasksConfig::default()
+        },
+    )
+    .unwrap();
+
+    let cancel = CancellationToken::new();
+    let child = cancel.clone();
+    let owner = runtime.clone();
+    let running = tokio::spawn(async move { owner.run(&handlers, &child).await });
+
+    // Two handler calls means the loop claimed again AFTER the failed one.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while calls.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the loop stopped claiming after the handler failed");
+
+    cancel.cancel();
+    // Cancellation is a clean stop, so the loop reports success: it ended
+    // because it was asked to, not because a job failed.
+    running.await.unwrap().unwrap();
+    failure.assert_calls(1);
+    assert!(
+        complete.calls() >= 1,
+        "no task completed after the failed one"
+    );
+    runtime.close().await.unwrap();
 }

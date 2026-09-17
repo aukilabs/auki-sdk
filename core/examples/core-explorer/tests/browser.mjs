@@ -27,9 +27,18 @@ try {
   await page.goto('http://127.0.0.1:18116');
   await assertLocalFonts(page);
   assert.equal(await page.locator('#view-settings').isVisible(), false);
+  assert.equal(await page.locator('#environment').textContent(), 'Dev · sign in to contact these services');
+  assert.deepEqual(forbidden, [], 'Dev defaults make no nonlocal requests before sign-in');
+  assert.equal(fixture.state.requests.length, 0, 'Dev defaults make no fixture requests before sign-in');
   await openDetails(page, '#connection-settings');
+  for (const [id, url] of Object.entries({ api: 'https://api.dev.aukiverse.com/', dds: 'https://dds.dev.aukiverse.com/', dms: 'https://dms.dev.aukiverse.com/v1/' })) {
+    assert.equal(await page.locator('#' + id).inputValue(), url);
+    assert.ok(await page.locator('#' + id).isEditable());
+  }
   for (const id of ['api', 'dds', 'dms']) await page.locator('#' + id).fill(fixture.base);
   await back(page);
+  assert.match(await page.locator('#environment').textContent(), /^Local fixtures \/ synthetic test data/);
+  assert.deepEqual(forbidden, [], 'editing settings makes no nonlocal requests');
   await assertUsable(page, ['#email', '#password', '#signin']);
   assert.equal(fixture.state.requests.length, 0, 'no login or service access on page load');
   await page.screenshot({ path: new URL('signed-out.png', artifacts).pathname, fullPage: true });
@@ -93,6 +102,15 @@ try {
     assert.ok(!preview.includes('SYNTHETIC_'));
   }
   await page.screenshot({ path: new URL('domain-data.png', artifacts).pathname, fullPage: true });
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await chapter(page, 'overview');
+    assert.equal(await page.locator('[data-view="overview"]').textContent(), 'Poses/Portals');
+    await assertUsable(page, ['[data-view="overview"]', '[data-go="portals"]', '[data-go="poses"]']);
+    await chapter(page, 'portals');
+    assert.equal(await page.locator('#view-portals [data-back]').textContent(), '← Poses/Portals');
+    await assertUsable(page, ['#view-portals [data-back]']);
+  }
   await page.setViewportSize({ width: 390, height: 844 });
   await go(page, 'filters'); await openDetails(page, '#advanced-filters'); await assertUsable(page, ['#name', '#type', '#ids']);
   await chapter(page, 'data'); await assertUsable(page, ['#record-jump']);

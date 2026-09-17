@@ -1,6 +1,6 @@
 # Core Explorer — complete screen gallery
 
-108 real browser captures using **local synthetic fixtures**. No live worker jobs, live uploads or spending.
+112 real browser captures: **Dev defaults before sign-in**, and **local synthetic fixtures** for signed-in flows. No live worker jobs, live uploads or spending.
 
 Coverage verified programmatically against all 14 main routes, 6 Jobs views, 6 Network views and 4 Upload steps, for both desktop and mobile. Additional narrow/short captures exercise the nonconnected-network flow. These counts overlap: flow steps live inside their parent route.
 
@@ -11,12 +11,13 @@ Each screenshot is an actual viewport; long technical content scrolls inside the
 ## Desktop
 
 - [Sign in](signin-desktop.png)
-- [Connection settings](settings-desktop.png)
+- [Dev defaults — connection settings](dev-defaults-settings-desktop.png)
+- [Connection settings (fixture override)](settings-desktop.png)
 - [Choose Domain](domains-desktop.png)
 - [Data records](data-desktop.png)
-- [Space overview](overview-desktop.png)
-- [Space portals](portals-desktop.png)
-- [Space poses](poses-desktop.png)
+- [Poses/Portals overview](overview-desktop.png)
+- [Portals](portals-desktop.png)
+- [Poses](poses-desktop.png)
 - [Record detail](record-desktop.png)
 - [Record technical details](record-details-desktop.png)
 - [Record preview](preview-desktop.png)
@@ -44,12 +45,13 @@ Each screenshot is an actual viewport; long technical content scrolls inside the
 ## Mobile
 
 - [Sign in](signin-mobile.png)
-- [Connection settings](settings-mobile.png)
+- [Dev defaults — connection settings](dev-defaults-settings-mobile.png)
+- [Connection settings (fixture override)](settings-mobile.png)
 - [Choose Domain](domains-mobile.png)
 - [Data records](data-mobile.png)
-- [Space overview](overview-mobile.png)
-- [Space portals](portals-mobile.png)
-- [Space poses](poses-mobile.png)
+- [Poses/Portals overview](overview-mobile.png)
+- [Portals](portals-mobile.png)
+- [Poses](poses-mobile.png)
 - [Record detail](record-mobile.png)
 - [Record technical details](record-details-mobile.png)
 - [Record preview](preview-mobile.png)
@@ -77,12 +79,13 @@ Each screenshot is an actual viewport; long technical content scrolls inside the
 ## Narrow
 
 - [Sign in](signin-narrow.png)
-- [Connection settings](settings-narrow.png)
+- [Dev defaults — connection settings](dev-defaults-settings-narrow.png)
+- [Connection settings (fixture override)](settings-narrow.png)
 - [Choose Domain](domains-narrow.png)
 - [Data records](data-narrow.png)
-- [Space overview](overview-narrow.png)
-- [Space portals](portals-narrow.png)
-- [Space poses](poses-narrow.png)
+- [Poses/Portals overview](overview-narrow.png)
+- [Portals](portals-narrow.png)
+- [Poses](poses-narrow.png)
 - [Record detail](record-narrow.png)
 - [Record technical details](record-details-narrow.png)
 - [Record preview](preview-narrow.png)
@@ -104,12 +107,13 @@ Each screenshot is an actual viewport; long technical content scrolls inside the
 ## Short
 
 - [Sign in](signin-short.png)
-- [Connection settings](settings-short.png)
+- [Dev defaults — connection settings](dev-defaults-settings-short.png)
+- [Connection settings (fixture override)](settings-short.png)
 - [Choose Domain](domains-short.png)
 - [Data records](data-short.png)
-- [Space overview](overview-short.png)
-- [Space portals](portals-short.png)
-- [Space poses](poses-short.png)
+- [Poses/Portals overview](overview-short.png)
+- [Portals](portals-short.png)
+- [Poses](poses-short.png)
 - [Record detail](record-short.png)
 - [Record technical details](record-details-short.png)
 - [Record preview](preview-short.png)

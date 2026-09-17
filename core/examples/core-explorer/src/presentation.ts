@@ -1,4 +1,4 @@
-import { inspect, redact } from './safety.ts';
+import { endpoint, inspect, isLoopback, redact } from './safety.ts';
 
 export function shortPeerId(value: string): string {
   const safe = String(redact(value));
@@ -38,4 +38,13 @@ export function recordRow(name: unknown, description: unknown): HTMLButtonElemen
   title.textContent = String(redact(name)); detail.textContent = String(redact(description));
   button.append(title, detail);
   return button;
+}
+
+/** Describe only the configured bases; this does not probe service availability. */
+export function environmentLabel(values: readonly string[]): string {
+  const urls = values.map(endpoint);
+  if (urls.length !== 3) throw new Error('API, DDS and DMS are required.');
+  if (urls.every(url => isLoopback(new URL(url)))) return 'Local fixtures / synthetic test data';
+  const dev = ['https://api.dev.aukiverse.com', 'https://dds.dev.aukiverse.com', 'https://dms.dev.aukiverse.com/v1'];
+  return urls.every((url, index) => url === dev[index]) ? 'Dev' : 'Custom / mixed environment';
 }

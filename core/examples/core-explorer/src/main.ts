@@ -57,7 +57,7 @@ const jobsOutput = new ReadLane();
 const jobs = jobsUI(connection, () => {
   const session = connection.session, data = connection.data, id = domainId;
   return session && data && id ? { domainId: id, environment: connectedEnvironment, session, data, createJobs: () => session.jobs(id) } : undefined;
-}, { navigate: showView, openRecord: async id => {
+}, { domainName: () => domainName, navigate: showView, openRecord: async id => {
   const data = connection.data, session = connection.session, version = selection, originalDomain = domainId;
   if (!data || !session || !originalDomain) return;
   const validId = uuid(id);

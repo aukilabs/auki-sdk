@@ -75,12 +75,12 @@ SDK's existing compute/robot handlers:
 - **Robot inspection:** read a small record and create a JSON byte-count/SHA-256
   report. This is simulated inspection, with no hardware or shell actions.
 
-After selecting a Domain, open **Jobs** and choose **Discover / refresh workers**.
+After selecting a Domain, open **Jobs**. The dashboard automatically performs one read-only worker discovery and loads one recent-jobs page for an unambiguous installation. Use **Refresh workers** to repeat discovery or **Workers · details** to inspect sources and choose among multiple installations.
 The real `session.fleet(domainId)` client reads assigned robots with `list({})`
 and organization-dedicated compute candidates with `computePool({mode: "dedicated"})`.
 Only exact lowercase canonical `/examples/compute-robot/{UUID}/{compute|robot}/v1`
 capabilities form installations. A single installation with an unambiguous role
-opens action selection without UUID setup. Multiple installations require an
+enables **New job** without UUID setup. Multiple installations require an
 explicit readable choice; roles are never paired across installations. Missing
 or duplicate executors disable that role, including exact-capability collisions
 across machine kinds. Both robot and compute inventories must be complete to
@@ -89,7 +89,7 @@ unique executor; denied busy/activity sources retain useful inventory with unkno
 work observations. Online/offline/busy/unknown are observations, not reservations.
 Source reports, public IDs and unresolved activity are available under details.
 
-Discovery is explicit, bounded by the SDK and never polled. Domain switches and
+Discovery runs once on entry, is bounded by the SDK and is never polled. Domain switches and
 logout abort and drain Fleet before session closure, then free the WASM handle.
 Cleanup errors remain visible. Configuration stays in memory for the current
 Domain/session. One unresolved submission survives Domain changes for reconciliation
@@ -100,17 +100,15 @@ restore stale executors. Historical executor IDs remain available for history an
 receipt verification. Logout or page reload erases in-memory recovery.
 Never paste machine credentials into the browser. An operator must activate workers.
 
-Choose a role and an existing record UUID, or open Jobs from the selected Data
-record. Upload a small input through the existing explicit upload flow if needed.
+Choose **New job**, then **Uppercase text** or **Inspect file** (simulated robot). Search existing Domain records by exact name, select a record and inspect its bounded preview. The picker displays at most 100 matches; narrow the search when needed. Record UUID entry is under Advanced. You can also open Jobs from the selected Data record. Upload a small input through the existing explicit upload flow if needed.
 The demo input limit is **64 KiB**, independent of the upload limit. Review the
 configured environment, Domain, input, capability, expected executor, output naming
 and DMS decimal-string credit estimate before confirming. Compute inputs must be
-valid UTF-8. Each job has one dedicated task with one maximum attempt. Capability
+valid UTF-8. The existing worker also caps output at 64 KiB: Unicode uppercase expansion can exceed this cap even when input is valid and estimation succeeds (for example 11,000 U+0390 characters expand from 22,000 to 66,000 UTF-8 bytes in the Python handler). Such a job can deterministically fail; billing consequences are unknown. This pre-existing controller/worker limit is deferred, not changed by the dashboard repair. Each job has one dedicated task with one maximum attempt. Capability
 names are `/examples/compute-robot/{installationId}/{role}/v1`; this is capability
 routing, not an arbitrary worker-ID selector.
 
-The detail screen reads actual job/task state, worker progress/events, receipts and
-credit-release fields. Executor checks use returned task/receipt information and
+The detail screen leads with status, input and verified output, including a bounded preview and **Open in Data**. Technical details contain worker progress/events and raw receipts. Recent jobs are the dashboard, with no separate history destination. Action/input/result names observed in this session enrich rows; provider history does not contain those fields, so unseen jobs show “Demo job” and “Inspect details”. Cached enrichment is discarded when the job or executor configuration changes. Human-readable times use provider timestamps. No per-row metadata requests are made. Executor checks use returned task/receipt information and
 the configured expected ID; configuration alone never proves execution. Accepted
 result references open through the existing selected-Domain Data client. To chain
 operations, open the compute result and explicitly start a robot inspection of it.
@@ -159,7 +157,7 @@ upload. Cancellation does not promise rollback. Domain changes/logout abort and
 invalidate old work, suppressing late results. Within the same session an uncertain target remains available after changing Domains. Logout completely clears file, type, destination, target and returned metadata before another account signs in. Review starts at the top with destination and file visible; returned metadata opens a separate redacted technical screen with Back.
 
 The UI uses `/brand/tokens.css`, the official `/brand/auki-logo.svg`, and local
-OFL fonts; it does not load fonts from a CDN. Local checks include 121 TypeScript
+OFL fonts; it does not load fonts from a CDN. Local checks include 144 TypeScript
 unit tests, 17 fixture/config tests, 25 Jobs worker tests and 6 idle-Echo robot tests.
 Real generated SDK/WASM browsing, binary upload/download and Jobs use synthetic
 loopback services; the separate Echo suite uses a real local Python robot. Jobs
@@ -170,7 +168,7 @@ contexts and User grants rather than real machine leases. Native credential/runt
 construction and awaited closure also passed under the service template's host
 hardening and resource caps, without starting registration or task polling.
 Fixture checks alone do not establish deployed-provider compatibility or live
-availability. Separately, an explicitly authorized Chromium run against dev verified
+availability. During the preceding Fleet tranche, an explicitly authorized Chromium run against dev verified
 Fleet discovery of the hosted demo pair, matching installation/executor IDs, both
 action choices without manual worker UUID entry, and normal logout. Its network
 guard allowed read-only service requests and authentication exchanges only: no live
@@ -182,6 +180,8 @@ Actual app screenshots: [Overview](screenshots/overview.png),
 [mobile Echo](screenshots/networking-mobile.png),
 [upload review](screenshots/upload-review.png),
 [mobile upload review](screenshots/upload-review-mobile.png),
+[Jobs dashboard](screenshots/jobs-dashboard.png),
+[mobile Jobs dashboard](screenshots/jobs-dashboard-mobile.png),
 [Jobs action](screenshots/jobs-choose.png), [Jobs review](screenshots/jobs-review.png),
 [Jobs result](screenshots/jobs-result.png) and
 [mobile Jobs review](screenshots/jobs-review-mobile.png),

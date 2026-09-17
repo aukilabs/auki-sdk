@@ -470,3 +470,36 @@ def test_parity_sensor_audio_pcm() -> None:
     )
     canonical = auki_registry.canonical_json_sensor(sensor)
     assert canonical == fixture, f"\nExpected: {fixture}\n  Actual: {canonical}"
+
+
+def test_mesh_substitutions_from_manifest_missing_returns_none(tmp_path: pathlib.Path) -> None:
+    import auki_registry
+
+    urdf = tmp_path / "robot.urdf"
+    urdf.write_text("<robot name='x'/>")
+    assert auki_registry.mesh_substitutions_from_manifest(str(urdf)) is None
+
+
+def test_mesh_substitutions_from_manifest_maps_draco(tmp_path: pathlib.Path) -> None:
+    import auki_registry
+
+    urdf = tmp_path / "robot.urdf"
+    urdf.write_text("<robot name='k1'/>")
+    draco = tmp_path / "draco"
+    draco.mkdir()
+    (draco / "Trunk.glb").write_bytes(b"glb")
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "Trunk": {
+                    "stl": "meshes/Trunk.STL",
+                    "draco": "draco/Trunk.glb",
+                    "bytes": {"stl": 1, "draco": 1},
+                }
+            }
+        )
+    )
+    subs = auki_registry.mesh_substitutions_from_manifest(str(urdf))
+    assert subs is not None
+    assert subs["meshes/Trunk.STL"]["advertised_path"] == "draco/Trunk.glb"
+    assert pathlib.Path(subs["meshes/Trunk.STL"]["source_path"]).is_file()

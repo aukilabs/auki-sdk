@@ -34,10 +34,6 @@ class AukiSdkExpoModule : Module() {
       throw AndroidUnsupportedException()
     }
 
-    AsyncFunction("domainsDiscover") { _: String, _: String, _: String ->
-      throw AndroidUnsupportedException()
-    }
-
     AsyncFunction("domainsForPortalPage") { _: String, _: String, _: String, _: Int, _: String?, _: String ->
       throw AndroidUnsupportedException()
     }

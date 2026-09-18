@@ -11,8 +11,8 @@ use std::{
 
 use async_trait::async_trait;
 use auki_auth::{
-    AuthClient, AuthEnvironment, AuthSession, Credentials, Error as AuthError,
-    ZitadelSessionCredentials, ZitadelSessionStore,
+    AuthClient, AuthEnvironment, AuthSession, Credentials, DomainAccessProvider,
+    Error as AuthError, ZitadelSessionCredentials, ZitadelSessionStore,
 };
 use auki_dms::jobs::{
     AukiDmsJobs, JobEdge, JobListQuery, JobMode, JobSpec, JobStatus, JobTaskSpec, JobsError,
@@ -83,7 +83,6 @@ struct Fixture {
     session: AuthSession,
     domain: Uuid,
     job: Uuid,
-    principal: Principal,
 }
 
 impl Fixture {
@@ -145,7 +144,6 @@ impl Fixture {
             session,
             domain: Uuid::new_v4(),
             job: Uuid::new_v4(),
-            principal,
         }
     }
 
@@ -159,10 +157,6 @@ impl Fixture {
             URL_SAFE_NO_PAD.encode(
                 json!({
                     "iss": "dds",
-                    "type": if matches!(self.principal, Principal::App) { "app-access" } else { "user-access" },
-                    "org": Uuid::from_u128(0xaaaa),
-                    "sub": "fixture-operator",
-                    "scopes": ["domain-data:rw"],
                     "domain_id": domain,
                     "aud": audiences,
                     "exp": chrono::Utc::now().timestamp() + seconds,
@@ -607,7 +601,7 @@ async fn concurrent_401_rejections_share_one_replacement_grant_and_both_succeed(
     let (old_token, old_auth) = f.valid_auth("old-generation").await;
     let old_access = f
         .session
-        .domain_job_access(f.domain, None, &CancellationToken::new())
+        .domain_access(f.domain, None, &CancellationToken::new())
         .await
         .unwrap();
     old_auth.assert_calls_async(1).await;
@@ -698,7 +692,6 @@ async fn imported_refresh_persistence_failure_blocks_submission_and_retries_same
         URL_SAFE_NO_PAD.encode(
             json!({
                 "iss":"dds","domain_id":domain,"aud":[base,"dds"],
-                "type":"user-access", "sub":"fixture-operator", "org":Uuid::from_u128(0xaaaa), "scopes":["domain-data:rw"],
                 "exp":chrono::Utc::now().timestamp()+3600
             })
             .to_string()
@@ -1070,7 +1063,7 @@ async fn keyed_submit_preserves_key_and_body_through_one_grant_renewal() {
         let f = Fixture::new(principal).await;
         let (old_token, old_auth) = f.valid_auth("keyed-old").await;
         f.session
-            .domain_job_access(f.domain, None, &CancellationToken::new())
+            .domain_access(f.domain, None, &CancellationToken::new())
             .await
             .unwrap();
         old_auth.delete_async().await;

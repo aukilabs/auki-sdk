@@ -1,11 +1,5 @@
 # Domain data platform validation
 
-> Historical evidence for the earlier service-exchange implementation. Current
-> imported discovery/data contracts and rollout gates are documented in
-> [DDS discovery](../docs/how-to/discover-domains.md); the older live checks below
-> do not demonstrate support for those new routes.
-
-
 This records the SDK-only completion work for [#388](https://github.com/aukilabs/auki-sdk/pull/388)
 and [#374](https://github.com/aukilabs/auki-sdk/issues/374). Backend source and
 configuration were inspected read-only on 2026-09-15. No provider contracts or

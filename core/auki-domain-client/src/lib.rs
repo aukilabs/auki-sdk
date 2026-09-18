@@ -10,10 +10,7 @@ mod portals;
 mod transfer;
 mod types;
 
-pub use auki_auth::{
-    DiscoveredDomain, DomainDiscoveryPage, DomainDiscoveryQuery, DomainListQuery, DomainPage,
-    DomainPermission, DomainSummary, Portal, PortalDomain, PortalId,
-};
+pub use auki_auth::{DomainListQuery, DomainPage, DomainSummary, Portal, PortalDomain, PortalId};
 pub use data::{AukiDomainData, DomainDataClient};
 pub use error::DataError;
 pub use types::{DataLimits, DataListQuery, DataMetadata, DataWrite, PortalPose, TransferOptions};
@@ -28,15 +25,6 @@ pub struct AukiDomains(AuthSession);
 impl AukiDomains {
     pub fn new(credential: AuthSession) -> Self {
         Self(credential)
-    }
-
-    /// Discover effective permissions without issuing or billing Domain tokens.
-    pub async fn discover(
-        &self,
-        query: &DomainDiscoveryQuery,
-        cancellation: &CancellationToken,
-    ) -> Result<DomainDiscoveryPage, DataError> {
-        Ok(self.0.discover_domains(query, cancellation).await?)
     }
 
     pub async fn for_portal(

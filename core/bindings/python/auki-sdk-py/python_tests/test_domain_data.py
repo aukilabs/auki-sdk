@@ -162,6 +162,12 @@ def test_shared_session_portals_poses_and_streaming(services):
             assert (await domains.list(limit=1))["total"] == 1
             assert (await domains.for_portal("abc12345678"))[0]["is_default"]
             assert (await domains.portals(DOMAIN))[0]["id"] == DATA
+            associations = await domains.for_portal_page("abc12345678", limit=1)
+            assert associations["items"][0]["is_default"]
+            assert associations["next_cursor"] is None and not associations["paginated"]
+            portals = await domains.portals_page(DOMAIN, limit=1)
+            assert portals["items"][0]["id"] == DATA
+            assert portals["next_cursor"] is None and not portals["paginated"]
             assert (await domains.portal(DOMAIN, DATA))["id"] == DATA
             assert (await data.poses())[0]["px"] == 1
             assert (await data.pose(DATA))["domain_id"] == DOMAIN

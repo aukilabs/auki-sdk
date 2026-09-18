@@ -90,16 +90,18 @@ Your storage callback must save all replacement credentials together and await
 every write, including on failure. Keep the session if startup or saving fails.
 On a `persistence` error, retry with that session to save its retained tokens.
 
-Use `session.domains().discover` for a permission-aware picker. Imported sessions
-send their original access token directly to DDS, which lists its own catalog
-and checks policy per Domain. Known-Domain data authorization uses the separate
-DDS `/auth/zitadel` route. API's Domain store is not consulted. P2P admission
-remains a separate DDS contract.
+The SDK selects imported listing from the API's service grant. Owner and scoped
+User grants use the existing DDS User listing route, with the granted
+organization and Domain restrictions. Viewer grants require the separate
+`purpose=p2p` human Domain-allowlist exchange and matching DDS support. The SDK
+preserves listing denials and never sends an imported viewer's App-shaped token
+to the broader legacy listing route.
 
-These routes require the [coordinated provider rollout](discover-domains.md#provider-rollout).
-Legacy `list`/`accessible_domains` remain compatibility APIs for older service
-grant profiles; identity-only viewers must use `discover`. On logout, close data
-clients and peers, close the session, then delete stored credentials.
+A known Domain ID can still use the separate data path: the API deployment must
+accept ZITADEL for the ordinary service exchange. DDS must separately support
+direct ZITADEL login for P2P. On logout, close data clients and peers, close the
+session, then delete stored credentials. See the
+[deployment evidence and limits](../../test-support/domain-data-validation.md#provider-compatibility).
 
 ## Build a compute node or robot
 

@@ -31,8 +31,7 @@ client; the first data operation obtains its access grant:
 let data = AukiDomainData::new(credential.clone())?.in_domain(selected_domain_id);
 ~~~
 
-For a picker filtered by effective permissions, use [Domain discovery](discover-domains.md).
-The Domain Server checks
+Domain listing shows what the account can discover. The Domain Server checks
 read, write, and delete permission separately.
 
 ## Read and write records
@@ -93,6 +92,25 @@ To read all records, use `domains.portals(selected_domain_id, &cancellation)`
 and `data.poses(&cancellation)`. Portal metadata and pose reads require pose
 read permission. These APIs return the service's fields without converting
 coordinates or changing the spatial format.
+
+## Read portal pages
+
+`AukiDomains::for_portal_page` and `portals_page` request DDS cursor pages of
+1–100 records. Python uses the same names; Web, Swift and Expo use
+`forPortalPage` and `portalsPage`. Pass a nonempty `next_cursor` unchanged with
+the same filters until it is absent. Bound the number of pages your app follows.
+
+Each page contains `items`, `next_cursor`, and `paginated`. A first response from
+an older DDS may contain a bounded complete list with `paginated=false`;
+continuation requires versioned pagination acknowledgement. Existing complete
+list methods retain their behavior. Selected-Domain portal reads use the existing
+Domain grant and pose-read permission. Imported portal-to-Domain association
+lookup remains unsupported.
+
+Provider: [DDS #569](https://github.com/aukilabs/domain-service/pull/569).
+Deploy pagination support across DDS replicas before relying on continuation.
+No authentication migration is required. Domain Server pose/data lists remain
+bounded complete responses.
 
 ## Stream larger files
 
@@ -199,28 +217,29 @@ try {
 }
 ~~~
 
-Imported discovery and data grants send the original access token directly to
-DDS. DDS enumerates its own catalog and checks each selected Domain with policy;
-API's legacy Domain table is not involved. Data clients and peers share one
-refresh owner and await persistence of the complete replacement credentials.
-Stop the application's previous refresh loop before importing.
-
-Use `session.domains().discover({ allows: ["domain-data:r"], limit: 50 })`
-for a picker. Continue with `next_cursor` even when a filtered page is empty.
-The response previews effective permissions without issuing tokens or billing
-for every entry; actual data requests recheck authority. See
-[permission discovery](discover-domains.md) for all bindings and rollout gates.
-Imported data now requires DDS `/api/v1/domains/{id}/auth/zitadel`; unsupported
-providers fail closed, without falling back to broad API role grants.
-
-The older `list`/`accessible_domains` methods remain compatibility paths for
-legacy User/viewer service profiles. They do not offer policy-aware discovery,
-and new identity-only viewers receive an explicit configuration error directing
-them to `discover`. Portal-to-Domain association lookup remains unsupported for
-imported sessions. Selecting a Domain never grants P2P or task authority.
-
+The SDK exchanges the imported bearer through the ordinary API service-token
+route and DDS Domain authentication. It retains rotated credentials until the
+host has saved the complete replacement. Data clients and peers share this
+refresh owner; stop the application's previous refresh loop before importing.
 On logout, close all clients and peers, await `session.close()`, then clear
 secure storage.
+
+The same session provides a paged picker through
+`session.domains().list({ limit: 50, offset: 0 })`. The SDK uses the ordinary
+API-issued User grant for owner and scoped User sessions, applying its
+organization and Domain restrictions. Imported viewer grants require the
+separate `purpose=p2p` human Domain-allowlist exchange and matching DDS route.
+Use default organization selection and no Domain Server filter for imported
+sessions. The SDK rejects unsupported token profiles and preserves denials.
+
+The viewer bridge currently enumerates the API's Domain registry before
+checking read visibility. A Domain that exists only in DDS can therefore
+support known-Domain data access without appearing through that bridge.
+Preserve this distinction in your app; a listing failure does not invalidate
+the whole session.
+Portal-to-Domain association lookup remains unsupported for imported sessions.
+Read, write, delete, and pose access remain separate server permission checks;
+successful exchange or listing does not authorize an operation.
 
 ## Close clients and the shared session
 

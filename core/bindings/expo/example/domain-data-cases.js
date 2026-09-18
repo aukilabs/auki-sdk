@@ -181,15 +181,9 @@ export async function runDomainDataCases(report) {
     stats = await domainFixture('/__stats');
     check(stats.importedRefreshes === 1 && snapshots.join(',') === 'imported-refresh-1,imported-refresh-1', 'imported retry rotated credentials twice');
 
-    const discovered = await domains(importedSession).discover({ allows: ['domain-data:r'], limit: 1 });
-    check(discovered.domains[0]?.id === DOMAIN_ID && discovered.next_cursor === null,
-      'direct DDS discovery lost its Domain or cursor');
     const portalsPage = await domains(importedSession).portalsPage(DOMAIN_ID, 1);
     check(portalsPage.items.length === 1 && portalsPage.paginated === false,
       'portal page lost its bounded legacy acknowledgement');
-    stats = await domainFixture('/__stats');
-    check(stats.exchanges === 0 && stats.requests['GET /api/v1/domain-discovery/zitadel'] === 1,
-      'imported discovery/data consulted API instead of DDS');
 
     const page = await domains(importedSession).list({ limit: 1, offset: 1 });
     check(page.total === 2 && page.limit === 1 && page.offset === 1

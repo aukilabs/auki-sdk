@@ -1,66 +1,66 @@
-# Fleet pagination validation — 2026-09-18
+# Fleet and portal pagination validation — 2026-09-18
 
-> Historical first-slice evidence. The expanded DDS/SDK changes and current
-> passing Python suite are recorded in [DDS discovery validation](dds-discovery-validation.md).
+Consumer validation for [#385](https://github.com/aukilabs/auki-sdk/issues/385),
+based on SDK `8403091a` (including the merged Python/CI fix in #406). Provider:
+[DDS #569](https://github.com/aukilabs/domain-service/pull/569), `a0276f4`, based
+on `1ce8d30b`. See the [Fleet contract](../docs/reference/fleet.md) and
+[portal page contract](../docs/how-to/domain-data.md#read-portal-pages).
 
-First slice of [#385](https://github.com/aukilabs/auki-sdk/issues/385): DDS
-compute-node and Domain-robot inventory. This consumer branch is based on SDK
-`140b7fd9`, including merged #400/#401. The provider adds opt-in UUID keyset pages
-and an explicit versioned acknowledgement in
-[DDS #569](https://github.com/aukilabs/domain-service/pull/569)
-(`878dc943`, based on `1ce8d30b` after DDS #568 merged). See the
-[Fleet contract](../docs/reference/fleet.md).
+This PR collects paged node/Domain-robot inventories and exposes explicit portal
+pages. It uses the existing authentication contracts. The proposed human token,
+direct ZITADEL routes, permission discovery and DMS grant changes were removed.
+[#384](https://github.com/aukilabs/auki-sdk/issues/384) remains open; neither this
+report nor these fixture tests establish a working restricted-viewer rollout.
 
 All runtime checks used local fixtures. No deployed provider was exercised and
 no shared data, discovery records, relay bookings or jobs were created.
 
-## Passed
+## Passed after removing the human-auth migration
 
 Commands run from the repository root unless a directory is specified:
 
 | Check | Result |
 | --- | --- |
-| `cargo test --locked -p auki-auth -p auki-fleet -p auki-sdk -p auki-sdk-swift` | 96 Auth, 26 Fleet, 131 SDK unit, 19 Swift adapter, 2 facade and 1 documentation tests passed. Includes the legacy-provider source-code assertion. |
+| `cargo test --locked -p auki-auth -p auki-domain-client -p auki-sdk -p auki-fleet -p auki-tasks -p auki-dms -p auki-sdk-swift` | All passed: 97 Auth, 29 Domain client, 133 SDK, 26 Fleet, 27 Tasks, 36 DMS, 19 Swift adapter and 1 documentation test. |
 | `cargo build --locked -p auki-sdk` | Passed. |
-| `cargo clippy --locked -p auki-auth -p auki-fleet -p auki-sdk --all-targets -- -D warnings` | Passed. |
-| `cargo check --locked --target wasm32-unknown-unknown -p auki-auth -p auki-fleet -p auki-sdk` | Passed. |
-| `cargo clippy --locked --target wasm32-unknown-unknown -p auki-auth -p auki-fleet -p auki-sdk --lib -- -D warnings` | Passed. |
+| `cargo clippy --locked -p auki-auth -p auki-domain-client -p auki-sdk -p auki-fleet -p auki-dms -p auki-sdk-py -p auki-sdk-swift --all-targets -- -D warnings` | Passed. |
+| `cargo clippy --locked --target wasm32-unknown-unknown -p auki-auth -p auki-domain-client -p auki-sdk -p auki-sdk-web --features auki-sdk-web/finite-protocols,auki-sdk-web/message,auki-sdk-web/stream --lib -- -D warnings` | Passed. |
 | `cargo fmt --all -- --check` and `git diff --check` | Passed. |
-| `bash test-support/run-domain-data-browser-tests.sh` | 15 tests passed in Chromium through WASM/Fetch, including four Fleet tests. Used `wasm-bindgen-test-runner` 0.2.121 to match Cargo.lock. |
-| `npm ci` then `npm run check` in `core/bindings/web/auki-sdk-web` | WASM compilation and TypeScript checks passed. |
-| `maturin develop --locked --manifest-path core/bindings/python/auki-sdk-py/Cargo.toml`, in a virtual environment | Default-feature extension built successfully. |
-| `.venv/bin/python -m pytest core/bindings/python/auki-sdk-py/python_tests/test_fleet.py -q` | All 3 tests passed against the native extension and loopback HTTP fixture. |
-| `bash core/bindings/swift/auki-sdk-swift/build-xcframework.sh` | Device ARM64 and simulator ARM64/x86_64 builds, generated UniFFI Swift/header typecheck and XCFramework validation passed with Xcode 27. |
-| `bash core/bindings/swift/auki-sdk-swift/run-fleet-bindings-test.sh` | Generated Swift client and typed Fleet models collected both robot and node pages against loopback HTTP. |
-| `npm ci --ignore-scripts`, `npm run test:fleet`, `npm run build` in `core/bindings/expo` | Fleet bridge/Web adapter tests, WASM build and TypeScript package build passed. |
+| `bash test-support/run-domain-data-browser-tests.sh` | 15 tests passed in Chromium through WASM/Fetch, including Fleet continuation and portal page acknowledgement. Used `wasm-bindgen-test-runner` 0.2.121 to match Cargo.lock. |
+| `npm run check` in `core/examples/portable-echo/web` | WASM compilation and TypeScript checks passed. |
+| `maturin develop --locked --manifest-path core/bindings/python/auki-sdk-py/Cargo.toml`, in a virtual environment | Default-feature native extension built successfully. |
+| `.venv/bin/python -m pytest core/bindings/python/auki-sdk-py/python_tests -q` | Full suite passed: 107 tests, including Fleet pagination and both portal page bindings. |
+| `bash core/bindings/swift/auki-sdk-swift/build-xcframework.sh` | Device ARM64 and simulator ARM64/x86_64 builds, generated UniFFI Swift/header typecheck and XCFramework validation passed. |
+| `bash core/bindings/swift/auki-sdk-swift/run-domain-data-bindings-test.sh` | Generated Swift client exercised both portal page methods, legacy acknowledgement, renewal, imported-session persistence and cleanup against loopback HTTP. |
+| `npm run build`, `npm test`, `npm run test:domain-data`, `npm run test:fleet` in `core/bindings/expo` | Package/WASM build and bridge tests passed. |
+| `bash core/bindings/expo/scripts/run-domain-data-expo-web.sh` | All 8 Expo Web case groups passed, including imported-session portal pages. |
 
 Regression coverage includes later-page activity joins, preserved query filters,
 legacy complete responses, empty final pages, later denial with retained rows,
 the 20-page bound, duplicate/unordered IDs, repeated cursors, malformed/missing
 acknowledgements, mixed-provider responses and cancellation/awaited close during
 continuation. Existing imported-session validation, refresh/persistence and
-permission tests remain passing.
+permission tests remain passing. Core authentication/session and DMS job code
+match the base branch; portal requests still use the existing API exchange and
+DDS Domain grant.
 
-## Full Python suite failure
+The earlier Python runner expectation failure was fixed separately in merged
+#406. The full Python suite above now passes without changing task semantics in
+this PR.
 
-`.venv/bin/python -m pytest core/bindings/python/auki-sdk-py/python_tests -q`
-reported **106 passed, 1 failed** after rebasing onto `140b7fd9`. The failing test is
-`test_managed_events_drain_in_order_and_failure_preserves_artifact_metadata[run]`
-in `test_tasks.py`, timing out while expecting continuous `run()` to raise after
-a handler failure. Isolating both parameter cases reproduced the failure for
-`run`; `run_once` passed.
+## Limits
 
-The base commit [#403](https://github.com/aukilabs/auki-sdk/pull/403) changes the
-continuous Rust runner to keep claiming work after `TaskError::Handler`. The
-Python test still expects the previous behavior. Neither that runtime nor the
-failing test is modified in this pagination change. The full Python suite is
-therefore not green; its expectation needs a separate follow-up.
+No live SDK-to-DDS acceptance or shared-environment test was run. Deploy pagination
+consistently across DDS replicas before relying on continuation. Legacy complete
+responses remain supported within the SDK's existing byte/deadline bounds.
+Domain Server pose/data-metadata pagination remains separate work in #385.
 
-## Not exercised
+Swift iOS and Expo iOS simulator runtime checks were not completed: this host's
+CoreSimulator service is incompatible with the installed Xcode. The XCFramework
+and native Swift host checks above passed; the Expo iOS app build was not rerun
+after this cleanup. Android remains the documented unsupported-platform stub.
 
-No live SDK-to-DDS rollout test, Swift iOS simulator app or Expo Web/iOS app was
-run for this change. The generated Swift/native host, XCFramework builds and
-Expo bridge/build checks above are the platform evidence; they do not establish
-deployed provider support. Deploy the provider consistently across DDS replicas
-before relying on paged inventory. Portal/pose/data metadata and remaining
-management lists are still tracked by #385.
+The previous PR head's CI hit an unchanged P2P single-flight relay test failure
+(`concurrent_exact_route_opens_single_flight_one_circuit`, `WriteZero`). The local
+suites above do not rerun that P2P suite; consult the new head's CI result before
+merging.

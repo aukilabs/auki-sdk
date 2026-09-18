@@ -52,7 +52,7 @@ Domain listing is server-paged; totals may change between pages. Visibility in
 the list does not imply read, write, or delete permission. Portal and pose reads
 have their own permission checks. Imported ZITADEL sessions support the default
 own-Domain listing for a picker and can use a known Domain ID for data access.
-For legacy `list` compatibility, the SDK validates the ordinary service-token profile: human `user-access`
+The SDK strictly validates the ordinary service-token profile: human `user-access`
 uses the deployed User Domain route, while App-shaped viewer grants are never
 sent to that broader route and require the permission-scoped `purpose=p2p`
 exchange. Organization and Domain Server filters, and portal-to-Domain
@@ -257,11 +257,3 @@ Rebuild/sync the XCFramework with its generated Swift wrappers for iOS. Android
 remains unsupported. Run `npm run test:fleet` for the bridge fixture and see the
 [fleet reference](../../../docs/reference/fleet.md) for permissions, status and
 provider limits. Closing a fleet client leaves the session usable.
-
-## Permission-aware DDS discovery
-
-Use `domains(session).discover({ allows: ["domain-data:r"] })` for a picker.
-Continue with `cursor: page.next_cursor`, even after an empty filtered page.
-`forPortalPage` and `portalsPage` expose acknowledged portal cursor pages.
-See [discovery and rollout](../../../docs/how-to/discover-domains.md) before
-updating imported-session clients; their data grants now require direct DDS auth.

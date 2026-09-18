@@ -7,12 +7,6 @@ use serde::{Deserialize, Serialize};
 mod portals;
 pub use portals::{Portal, PortalDomain, PortalId};
 
-#[path = "domain_discovery.rs"]
-mod discovery;
-pub use discovery::{
-    DiscoveredDomain, DomainDiscoveryPage, DomainDiscoveryQuery, DomainPermission,
-};
-
 const DDS_DOMAINS: &str = "DDS /api/v1/domains";
 const DDS_DOMAIN_AUTH: &str = "DDS selected-Domain data auth";
 const MAX_CACHED_DOMAINS: usize = 64;
@@ -85,7 +79,7 @@ impl DomainAccess {
             },
             access_token: token.expose().to_owned(),
         }
-        .into_access(domain_id, None)?;
+        .into_access(domain_id)?;
         if expires_at <= Utc::now() {
             return Err(Error::StaleAuthority);
         }
@@ -399,7 +393,7 @@ impl AuthSession {
         unreachable!("second attempt always returns")
     }
 
-    /// Legacy service grants stay request-local and cannot overwrite the bearer
+    /// Data service tokens stay request-local and cannot overwrite the bearer
     /// used for direct ZITADEL P2P proof.
     async fn imported_dds_json<T: DeserializeOwned>(
         &self,
@@ -485,43 +479,9 @@ impl DomainAccessProvider for AuthSession {
         rejected: Option<&DomainAccess>,
         cancellation: &CancellationToken,
     ) -> Result<Arc<DomainAccess>> {
-        self.domain_access_for_purpose(domain_id, rejected, cancellation, false)
-            .await
-    }
-}
-
-impl AuthSession {
-    /// Obtain the existing DMS job authority separately from human data grants.
-    /// Imported sessions require the legacy API/DDS User contract; restricted
-    /// viewer data scopes do not authorize jobs. DMS still verifies permission.
-    pub async fn domain_job_access(
-        &self,
-        domain_id: Uuid,
-        rejected: Option<&DomainAccess>,
-        cancellation: &CancellationToken,
-    ) -> Result<Arc<DomainAccess>> {
-        self.domain_access_for_purpose(domain_id, rejected, cancellation, true)
-            .await
-    }
-
-    async fn domain_access_for_purpose(
-        &self,
-        domain_id: Uuid,
-        rejected: Option<&DomainAccess>,
-        cancellation: &CancellationToken,
-        jobs: bool,
-    ) -> Result<Arc<DomainAccess>> {
         let operation = async {
             let mut state = self.lock_state(cancellation, DDS_DOMAIN_AUTH).await?;
-            // Existing local User/App grants keep their current cache contract.
-            // Imported human data grants never satisfy the DMS jobs contract.
-            let jobs = jobs && matches!(state.principal, PrincipalState::Zitadel(_));
-            let cache = if jobs {
-                &state.job_access
-            } else {
-                &state.domain_access
-            };
-            if let Some(access) = cache.get(&domain_id)
+            if let Some(access) = state.domain_access.get(&domain_id)
                 && access.expires_at > Utc::now() + ChronoDuration::seconds(30)
                 && !rejected.is_some_and(|old| old.token == access.token)
             {
@@ -532,57 +492,23 @@ impl AuthSession {
                 }
                 return Ok(access.clone());
             }
-            if jobs {
-                state.job_access.remove(&domain_id);
-            } else {
-                state.domain_access.remove(&domain_id);
-            }
-            let response: AccessResponse =
-                if let PrincipalState::Zitadel(session) = &state.principal {
-                    if jobs {
-                        let url = self
-                            .inner
-                            .client
-                            .dds_url(&format!("api/v1/domains/{domain_id}/auth"));
-                        self.imported_dds_json(session, url, true, DDS_DOMAIN_AUTH, cancellation)
-                            .await?
-                    } else {
-                        let url = self
-                            .inner
-                            .client
-                            .dds_url(&format!("api/v1/domains/{domain_id}/auth/zitadel"));
-                        self.human_dds_json(session, url, true, DDS_DOMAIN_AUTH, cancellation)
-                            .await?
-                    }
-                } else {
-                    let url = self
-                        .inner
-                        .client
-                        .dds_url(&format!("api/v1/domains/{domain_id}/auth"));
-                    self.data_dds_json(&mut state, url, true, DDS_DOMAIN_AUTH, cancellation)
-                        .await?
-                };
-            let identity_issuer = match &state.principal {
-                PrincipalState::Zitadel(session) if !jobs => Some(session.issuer()),
-                _ => None,
-            };
-            let access = Arc::new(response.into_access(domain_id, identity_issuer)?);
-            if jobs && access.user_organization().is_none() {
-                return Err(Error::InvalidConfiguration(
-                    "DMS jobs require a DDS User grant; human data permission is not task authority",
-                ));
-            }
-            let cache = if jobs {
-                &mut state.job_access
-            } else {
-                &mut state.domain_access
-            };
+            state.domain_access.remove(&domain_id);
+            let url = self
+                .inner
+                .client
+                .dds_url(&format!("api/v1/domains/{domain_id}/auth"));
+            let response: AccessResponse = self
+                .data_dds_json(&mut state, url, true, DDS_DOMAIN_AUTH, cancellation)
+                .await?;
+            let access = Arc::new(response.into_access(domain_id)?);
             // Bound cache retention. Outstanding clients hold their own immutable grants.
-            cache.retain(|_, grant| grant.expires_at > Utc::now());
-            if cache.len() >= MAX_CACHED_DOMAINS {
-                cache.clear();
+            state
+                .domain_access
+                .retain(|_, grant| grant.expires_at > Utc::now());
+            if state.domain_access.len() >= MAX_CACHED_DOMAINS {
+                state.domain_access.clear();
             }
-            cache.insert(domain_id, access.clone());
+            state.domain_access.insert(domain_id, access.clone());
             Ok(access)
         };
         tokio::select! {
@@ -605,14 +531,6 @@ struct ServerResponse {
 }
 #[derive(Deserialize)]
 struct DataClaims {
-    #[serde(default)]
-    login_provider: Option<String>,
-    #[serde(default)]
-    identity_issuer: Option<String>,
-    #[serde(default)]
-    sub: Option<String>,
-    #[serde(default)]
-    scopes: Vec<String>,
     iss: String,
     domain_id: Uuid,
     exp: i64,
@@ -624,7 +542,7 @@ struct DataClaims {
 }
 
 impl AccessResponse {
-    fn into_access(self, domain_id: Uuid, identity_issuer: Option<&Url>) -> Result<DomainAccess> {
+    fn into_access(self, domain_id: Uuid) -> Result<DomainAccess> {
         let invalid = || Error::invalid_response(DDS_DOMAIN_AUTH, "invalid Domain data grant");
         if self.id != domain_id {
             return Err(invalid());
@@ -649,36 +567,6 @@ impl AccessResponse {
                 .aud
                 .iter()
                 .any(|aud| parse_base_url(aud).is_ok_and(|url| url == server_url))
-        {
-            return Err(invalid());
-        }
-        if let Some(expected) = identity_issuer
-            && (claims.token_type.as_deref() != Some("zitadel-user-access")
-                || claims.login_provider.as_deref() != Some("zitadel")
-                || claims
-                    .identity_issuer
-                    .as_deref()
-                    .and_then(|s| Url::parse(s).ok())
-                    .as_ref()
-                    != Some(expected)
-                || claims
-                    .sub
-                    .as_deref()
-                    .is_none_or(|s| s.is_empty() || s.len() > 255)
-                || claims.org.is_none_or(|id| id.is_nil())
-                || !claims.scopes.iter().any(|s| s == "domain-metadata:r")
-                || claims.scopes.iter().any(|s| {
-                    !matches!(
-                        s.as_str(),
-                        "domain-metadata:r"
-                            | "domain-data:r"
-                            | "domain-data:w"
-                            | "domain-data:d"
-                            | "pose:r"
-                            | "pose:w"
-                            | "pose:d"
-                    )
-                }))
         {
             return Err(invalid());
         }

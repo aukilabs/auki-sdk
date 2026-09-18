@@ -2,7 +2,7 @@
 use crate::AukiUserSession;
 use auki_sdk::{
     AukiDomainData as DataFactory, AukiDomains as Domains, DataError, DataListQuery, DataWrite,
-    DomainDataClient, DomainDiscoveryQuery, DomainListQuery, PortalId, TransferOptions,
+    DomainDataClient, DomainListQuery, PortalId, TransferOptions,
 };
 use js_sys::{Function, Promise, Uint8Array};
 use serde::{Deserialize, Serialize};
@@ -13,9 +13,6 @@ use wasm_bindgen_futures::JsFuture;
 
 #[wasm_bindgen(typescript_custom_section)]
 const TYPES: &str = r#"
-export type DomainPermission = "domain-data:r" | "domain-data:w" | "domain-data:d" | "pose:r" | "pose:w" | "pose:d";
-export interface DomainDiscoveryQuery { organization?: string; limit?: number; cursor?: string | null; allows?: DomainPermission[] }
-export interface DomainDiscoveryPage { domains: (DomainSummary & { permissions: DomainPermission[] })[]; next_cursor: string | null }
 export interface PortalPage { items: Portal[]; next_cursor: string | null; paginated: boolean }
 export interface PortalDomainPage { items: PortalDomain[]; next_cursor: string | null; paginated: boolean }
 export interface DomainQuery { organization?: string; domainServerId?: string; limit?: number; offset?: number }
@@ -214,22 +211,6 @@ pub struct AukiDomains {
 }
 #[wasm_bindgen]
 impl AukiDomains {
-    #[wasm_bindgen(unchecked_return_type = "DomainDiscoveryPage")]
-    pub async fn discover(
-        &self,
-        #[wasm_bindgen(unchecked_param_type = "DomainDiscoveryQuery | undefined")] query: JsValue,
-        signal: Option<web_sys::AbortSignal>,
-    ) -> Result<JsValue, JsValue> {
-        let query: DomainDiscoveryQuery = parse(query)?;
-        let cancel = Cancellation::new(signal)?;
-        encode(
-            &self
-                .inner
-                .discover(&query, &cancel.token)
-                .await
-                .map_err(error)?,
-        )
-    }
     #[wasm_bindgen(js_name = forPortalPage, unchecked_return_type = "PortalDomainPage")]
     pub async fn for_portal_page(
         &self,
@@ -591,6 +572,10 @@ mod tests {
                     const token='e30.'+btoa(JSON.stringify(claims)).replaceAll('=','').replaceAll('+','-').replaceAll('/','_')+'.sig';
                     return json({id:domain,domain_server:{url:'https://server.example'},access_token:token});
                 }
+                if(url.pathname.endsWith('/lighthouses')) {
+                    if(url.searchParams.get('limit') !== '1') throw Error('missing portal page limit');
+                    return json({lighthouses:[{id:data,short_id:'ABC12345678',name:'Portal',size:10,created_at:meta.created_at,updated_at:meta.updated_at}],pagination:{version:1,limit:1,next_cursor:''}});
+                }
                 if(request.redirect !== 'error' || request.credentials !== 'omit') throw Error('unsafe data request');
                 if(url.pathname === '/api/v1/info') return json({upload:{domain_data_max_bytes:10000,request_max_bytes:4096,multipart:{enabled:true,part_size_bytes:4}}});
                 if(url.pathname.endsWith('/multipart')) {
@@ -633,6 +618,19 @@ mod tests {
             Some(1.0)
         );
         let data = session.data(DOMAIN.into()).unwrap();
+        let portals = session
+            .domains()
+            .portals_page(DOMAIN.into(), 1, None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            js_sys::Reflect::get(&portals, &"paginated".into()).unwrap(),
+            true
+        );
+        assert_eq!(
+            js_sys::Array::from(&js_sys::Reflect::get(&portals, &"items".into()).unwrap()).length(),
+            1
+        );
         let sink = Function::new_with_args(
             "bytes",
             "globalThis.__downloaded = (globalThis.__downloaded || 0) + bytes.length",
@@ -818,22 +816,8 @@ mod tests {
                         {id:'dddddddd-dddd-4ddd-8ddd-dddddddddddd',name:'Other',description:'second',organization_id:'11111111-1111-4111-8111-111111111111'}];
                     return json({domains:all.slice(offset,offset+limit),total:all.length,limit,offset});
                 }
-                if (url.pathname.endsWith('/auth/zitadel')) {
-                    if (request.headers.get('authorization') !== 'Bearer rotated-access' || !__importedSaved)
-                        throw Error('grant before persisted rotation');
-                    const now=Math.floor(Date.now()/1000);
-                    const claims={iss:'dds',type:'zitadel-user-access',sub:'fixture-user',org:'11111111-1111-4111-8111-111111111111',
-                        login_provider:'zitadel',identity_issuer:'https://issuer.example',domain_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-                        aud:['dds','https://data.example'],iat:now,exp:now+300,scopes:['domain-metadata:r','domain-data:r','pose:r']};
-                    return json({id:claims.domain_id,domain_server:{url:'https://data.example'},
-                        access_token:'e30.'+btoa(JSON.stringify(claims)).replaceAll('=','').replaceAll('+','-').replaceAll('/','_')+'.sig'});
-                }
-                if (url.pathname === '/api/v1/domain-discovery/zitadel') {
-                    if (request.headers.get('authorization') !== 'Bearer rotated-access' || !__importedSaved)
-                        throw Error('discovery before persisted rotation');
-                    return json({domains:[{id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',name:'DDS only',organization_id:'11111111-1111-4111-8111-111111111111',permissions:['domain-data:r']}],
-                        pagination:{version:1,limit:Number(url.searchParams.get('limit')),next_cursor:''}});
-                }
+                if (url.pathname.endsWith('/auth') && request.headers.get('authorization') !== 'Bearer '+__importedOrdinaryToken)
+                    throw Error('wrong data service bearer');
                 if (url.searchParams.get('raw') === 'true' && !request.headers.get('authorization').endsWith('.sig'))
                     throw Error('wrong Domain grant');
                 return dataFetch(request);
@@ -875,29 +859,13 @@ mod tests {
         );
         assert_eq!(data.read(DATA.into(), None).await.unwrap().length(), 7);
         assert_eq!(js_sys::eval("__importedRefreshes === 1 && __importedSaves === 2 && JSON.stringify(__importedSnapshots[0]) === JSON.stringify(__importedSnapshots[1])").unwrap().as_bool(), Some(true));
-        let discovered = session
-            .domains()
-            .discover(js_sys::eval("({allows:['domain-data:r']})").unwrap(), None)
-            .await
-            .unwrap();
-        assert_eq!(
-            js_sys::Array::from(&js_sys::Reflect::get(&discovered, &"domains".into()).unwrap())
-                .length(),
-            1
-        );
-        assert_eq!(
-            js_sys::eval("__importedOrdinaryExchanges === 0 && __importedP2pExchanges === 0")
-                .unwrap()
-                .as_bool(),
-            Some(true)
-        );
         let page = session
             .domains()
             .list(js_sys::eval("({limit:1,offset:1})").unwrap(), None)
             .await
             .unwrap();
         assert_eq!(
-            js_sys::eval("__importedOrdinaryExchanges === 1 && __importedP2pExchanges === 0 && __importedDomainCalls === 1 && __importedAccessibleCalls === 0")
+            js_sys::eval("__importedOrdinaryExchanges === 2 && __importedP2pExchanges === 0 && __importedDomainCalls === 1 && __importedAccessibleCalls === 0")
                 .unwrap()
                 .as_bool(),
             Some(true)

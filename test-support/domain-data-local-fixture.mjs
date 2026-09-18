@@ -355,26 +355,6 @@ async function primaryHandler(request, response) {
         domains: all.slice(offset, offset + limit), total: all.length, limit, offset,
       });
     }
-    if (url.pathname === '/api/v1/domain-discovery/zitadel' && request.method === 'GET') {
-      if (!bearerIs(request, `imported-access-${state.importedGeneration}`)) return json(response, 401);
-      const limit = Number(url.searchParams.get('limit') ?? 50);
-      const all = [{ id: DOMAIN_ID, name: 'Fixture Domain', organization_id: ORGANIZATION_ID, permissions: ['domain-data:r', 'pose:r'] }];
-      return json(response, 200, { domains: all, pagination: { version: 1, limit, next_cursor: '' } });
-    }
-    const humanAuth = /^\/api\/v1\/domains\/([^/]+)\/auth\/zitadel$/.exec(url.pathname);
-    if (humanAuth && request.method === 'POST') {
-      await readBody(request);
-      state.domainAuths++;
-      if (!bearerIs(request, `imported-access-${state.importedGeneration}`)) return json(response, 401);
-      if (humanAuth[1] !== DOMAIN_ID) return json(response, 403);
-      const now = Math.floor(Date.now() / 1000);
-      const claims = { iss: 'dds', type: 'zitadel-user-access', sub: 'fixture-user',
-        org: ORGANIZATION_ID, login_provider: 'zitadel', identity_issuer: primaryBase,
-        domain_id: DOMAIN_ID, aud: ['dds', dataBase], iat: now, exp: now + 300,
-        scopes: ['domain-metadata:r', 'domain-data:r', 'pose:r'] };
-      return json(response, 200, { id: DOMAIN_ID, domain_server: { url: dataBase },
-        access_token: `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.fixture` });
-    }
     const auth = /^\/api\/v1\/domains\/([^/]+)\/auth$/.exec(url.pathname);
     if (auth && request.method === 'POST') {
       await readBody(request);

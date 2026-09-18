@@ -64,9 +64,8 @@ pub use auki_dms::jobs::{
 };
 pub use auki_domain_client::{
     AukiDomainData, AukiDomains, DataError, DataLimits, DataListQuery, DataMetadata, DataWrite,
-    DiscoveredDomain, DomainDataClient, DomainDiscoveryPage, DomainDiscoveryQuery, DomainListQuery,
-    DomainPage, DomainPermission, DomainSummary, Portal, PortalDomain, PortalId, PortalPose,
-    TransferOptions,
+    DomainDataClient, DomainListQuery, DomainPage, DomainSummary, Portal, PortalDomain, PortalId,
+    PortalPose, TransferOptions,
 };
 pub use auki_fleet::{
     AukiFleet, ComputePoolQuery, DomainFleetClient, FleetActivity, FleetAssociation, FleetError,

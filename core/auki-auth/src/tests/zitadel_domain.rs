@@ -38,8 +38,6 @@ fn grant(base: &str, domain: Uuid) -> MockResponse {
         domain,
         json!({
             "iss": "dds", "domain_id": domain, "aud": [base],
-            "type": "zitadel-user-access", "login_provider": "zitadel", "identity_issuer": base,
-            "sub": "fixture-user", "org": Uuid::from_u128(0xaaaa), "scopes": ["domain-metadata:r", "domain-data:r"],
             "exp": Utc::now().timestamp() + 3600,
         }),
     )
@@ -492,7 +490,11 @@ async fn concurrent_imported_lists_share_one_api_refresh_and_save() {
 #[tokio::test]
 async fn imported_known_domain_data_and_peer_keep_their_credentials_separate() {
     let server = MockServer::start_with(|base| {
-        let mut responses = vec![grant(base, DOMAIN), MockResponse::json(json!({"data": []}))];
+        let mut responses = vec![
+            service_response("data-service"),
+            grant(base, DOMAIN),
+            MockResponse::json(json!({"data": []})),
+        ];
         responses.extend(admitted());
         responses.push(MockResponse::json(json!({"data": []})));
         responses
@@ -515,27 +517,20 @@ async fn imported_known_domain_data_and_peer_keep_their_credentials_separate() {
     other.close().await;
     session.close().await;
     let requests = server.finish().await;
+    assert_eq!(requests[0].target, "/service/domains-access-token");
+    assert_eq!(requests[1].headers["authorization"], "Bearer data-service");
     assert_eq!(
-        requests[0].target,
-        format!("/api/v1/domains/{DOMAIN}/auth/zitadel")
-    );
-    assert_eq!(
-        requests[0].headers["authorization"],
-        "Bearer opaque.access+/="
-    );
-    assert_eq!(
-        requests[2].headers["authorization"],
+        requests[3].headers["authorization"],
         requests[0].headers["authorization"]
     );
-    assert!(requests[1].headers["authorization"].ends_with(".fixture"));
-    assert_eq!(
-        requests[5].headers["authorization"],
+    assert_ne!(
+        requests[2].headers["authorization"],
         requests[1].headers["authorization"]
     );
-    assert!(
-        requests
-            .iter()
-            .all(|r| !r.target.starts_with("/service/domains-access-token"))
+    assert!(requests[2].headers["authorization"].ends_with(".fixture"));
+    assert_eq!(
+        requests[6].headers["authorization"],
+        requests[2].headers["authorization"]
     );
 }
 
@@ -546,20 +541,17 @@ async fn imported_data_rejects_wrong_domain_audience_issuer_and_expired_grants()
         ("aud", json!(["https://other.example/"])),
         ("iss", json!("api")),
         ("exp", json!(1)),
-        ("type", json!("app-access")),
-        ("login_provider", json!("local")),
-        ("identity_issuer", json!("https://wrong.example")),
-        ("scopes", json!(["domain:rw"])),
     ] {
         let server = MockServer::start_with(|base| {
             let mut claims = json!({
                 "iss": "dds", "domain_id": DOMAIN, "aud": [base],
-                "type": "zitadel-user-access", "login_provider": "zitadel", "identity_issuer": base,
-                "sub": "fixture-user", "org": Uuid::from_u128(0xaaaa), "scopes": ["domain-metadata:r", "domain-data:r"],
                 "exp": Utc::now().timestamp() + 3600,
             });
             claims[field] = value;
-            vec![grant_with_claims(base, DOMAIN, claims)]
+            vec![
+                service_response("data-service"),
+                grant_with_claims(base, DOMAIN, claims),
+            ]
         })
         .await;
         let session = import(&server, Store::new(false, 0), false);
@@ -570,7 +562,7 @@ async fn imported_data_rejects_wrong_domain_audience_issuer_and_expired_grants()
             Err(Error::InvalidResponse { .. })
         ));
         session.close().await;
-        assert_eq!(server.finish().await.len(), 1);
+        assert_eq!(server.finish().await.len(), 2);
     }
 }
 
@@ -578,10 +570,12 @@ async fn imported_data_rejects_wrong_domain_audience_issuer_and_expired_grants()
 async fn imported_viewer_reads_do_not_authorize_writes_deletes_or_another_domain() {
     let server = MockServer::start_with(|base| {
         vec![
+            service_response("viewer-service"),
             grant(base, DOMAIN),
             MockResponse::json(json!({"data": []})),
             MockResponse::status(403),
             MockResponse::status(403),
+            service_response("viewer-service"),
             MockResponse::status(403),
         ]
     })
@@ -617,7 +611,7 @@ async fn imported_viewer_reads_do_not_authorize_writes_deletes_or_another_domain
     data.close().await;
     other.close().await;
     session.close().await;
-    assert_eq!(server.finish().await.len(), 5);
+    assert_eq!(server.finish().await.len(), 7);
 }
 
 #[tokio::test]
@@ -626,6 +620,7 @@ async fn imported_data_persistence_failure_retains_rotated_credentials_for_retry
         vec![
             MockResponse::json(discovery(base)),
             MockResponse::json(token()),
+            service_response("data-service"),
             grant(base, DOMAIN),
         ]
     })
@@ -654,34 +649,40 @@ async fn imported_data_persistence_failure_retains_rotated_credentials_for_retry
 }
 
 #[tokio::test]
-async fn imported_policy_failures_never_exchange_or_rotate_credentials() {
-    for status in [403, 503] {
-        let server = MockServer::start(vec![MockResponse::status(status)]).await;
-        let store = Store::new(false, 0);
-        let session = import(&server, store.clone(), false);
-        let error = session
-            .domain_access(DOMAIN, None, &CancellationToken::new())
-            .await
-            .unwrap_err();
-        assert!(matches!(error, Error::HttpStatus { status: actual, .. } if actual == status));
-        session.close().await;
-        let requests = server.finish().await;
-        assert_eq!(requests.len(), 1);
-        assert_eq!(
-            requests[0].target,
-            format!("/api/v1/domains/{DOMAIN}/auth/zitadel")
-        );
-        assert!(store.attempts.lock().unwrap().is_empty());
-    }
+async fn imported_dds_unauthorized_reexchanges_without_rotating_the_login() {
+    let server = MockServer::start_with(|base| {
+        vec![
+            service_response("service-1"),
+            MockResponse::status(401),
+            service_response("service-2"),
+            grant(base, DOMAIN),
+        ]
+    })
+    .await;
+    let store = Store::new(false, 0);
+    let session = import(&server, store.clone(), false);
+    session
+        .domain_access(DOMAIN, None, &CancellationToken::new())
+        .await
+        .unwrap();
+    session.close().await;
+    let requests = server.finish().await;
+    assert_eq!(
+        requests[0].headers["authorization"],
+        requests[2].headers["authorization"]
+    );
+    assert_eq!(requests[3].headers["authorization"], "Bearer service-2");
+    assert!(store.attempts.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn imported_data_dds_unauthorized_refreshes_once_and_awaits_persistence() {
+async fn imported_data_api_unauthorized_refreshes_once_and_awaits_persistence() {
     let server = MockServer::start_with(|base| {
         vec![
             MockResponse::status(401),
             MockResponse::json(discovery(base)),
             MockResponse::json(token()),
+            service_response("data-service"),
             grant(base, DOMAIN),
         ]
     })
@@ -755,6 +756,7 @@ async fn imported_data_and_peer_concurrent_start_share_one_refresh_and_save() {
         let mut responses = vec![
             MockResponse::json(discovery(base)),
             MockResponse::json(token()),
+            service_response("data-service"),
             grant(base, DOMAIN),
         ];
         responses.extend(admitted());
@@ -780,7 +782,7 @@ async fn imported_data_and_peer_concurrent_start_share_one_refresh_and_save() {
     );
     assert_eq!(store.attempts.lock().unwrap().len(), 1);
     assert_eq!(
-        requests[3].headers["authorization"],
+        requests[4].headers["authorization"],
         "Bearer replacement-opaque"
     );
 }
@@ -789,6 +791,7 @@ async fn imported_data_and_peer_concurrent_start_share_one_refresh_and_save() {
 async fn imported_cached_grant_settles_a_pending_save_from_another_domain() {
     let server = MockServer::start_with(|base| {
         vec![
+            service_response("data-service"),
             grant(base, DOMAIN),
             MockResponse::status(401),
             MockResponse::json(discovery(base)),
@@ -818,11 +821,11 @@ async fn imported_cached_grant_settles_a_pending_save_from_another_domain() {
     assert_eq!(attempts.len(), 2);
     assert_eq!(attempts[0], attempts[1]);
     session.close().await;
-    assert_eq!(server.finish().await.len(), 4);
+    assert_eq!(server.finish().await.len(), 5);
 }
 
 #[tokio::test]
-async fn imported_data_repeated_identity_rejection_requires_login_without_retrying_peers() {
+async fn imported_data_repeated_api_rejection_requires_login_without_retrying_peers() {
     let server = MockServer::start_with(|base| {
         vec![
             MockResponse::status(401),
@@ -850,155 +853,37 @@ async fn imported_data_repeated_identity_rejection_requires_login_without_retryi
 }
 
 #[tokio::test]
-async fn imported_data_cancels_dds_without_retry() {
-    let server = MockServer::start_with(|base| {
-        vec![grant(base, DOMAIN).delayed(Duration::from_millis(100))]
-    })
-    .await;
-    let session = import(&server, Store::new(false, 0), false);
-    let operation_session = session.clone();
-    let cancellation = CancellationToken::new();
-    let operation_cancel = cancellation.clone();
-    let operation = tokio::spawn(async move {
-        operation_session
-            .domain_access(DOMAIN, None, &operation_cancel)
-            .await
-    });
-    wait_requests(&server, 1).await;
-    cancellation.cancel();
-    assert!(matches!(
-        operation.await.unwrap(),
-        Err(Error::Cancelled { .. })
-    ));
-    session.close().await;
-    assert_eq!(server.finish().await.len(), 1);
-}
-
-#[tokio::test]
-async fn imported_permission_discovery_preserves_sparse_cursor_pages_without_api_or_tokens() {
-    let server = MockServer::start(vec![
-        MockResponse::json(json!({"domains":[], "pagination":{"version":1,"limit":1,"next_cursor":"opaque+cursor"}})),
-        MockResponse::json(json!({"domains":[{"id":DOMAIN,"name":"DDS only","organization_id":Uuid::from_u128(0xaaaa),"permissions":["domain-data:r"]}], "pagination":{"version":1,"limit":1,"next_cursor":""}})),
-    ]).await;
-    let store = Store::new(false, 0);
-    let session = import(&server, store.clone(), false);
-    let mut query = crate::DomainDiscoveryQuery {
-        limit: 1,
-        allows: vec![crate::DomainPermission::DataRead],
-        ..Default::default()
-    };
-    let first = session
-        .discover_domains(&query, &CancellationToken::new())
-        .await
-        .unwrap();
-    assert!(first.domains.is_empty());
-    query.cursor = first.next_cursor;
-    let second = session
-        .discover_domains(&query, &CancellationToken::new())
-        .await
-        .unwrap();
-    assert_eq!(second.domains[0].domain.id, DOMAIN);
-    assert!(second.next_cursor.is_none());
-    session.close().await;
-    let requests = server.finish().await;
-    assert_eq!(requests.len(), 2);
-    assert!(requests.iter().all(
-        |r| r.target.starts_with("/api/v1/domain-discovery/zitadel?")
-            && r.headers["authorization"] == "Bearer opaque.access+/="
-    ));
-    assert!(requests[1].target.contains("cursor=opaque%2Bcursor"));
-    assert!(requests[1].target.contains("allows=domain-data%3Ar"));
-    assert!(store.attempts.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn permission_discovery_rejects_unsupported_or_inconsistent_responses() {
-    for response in [
-        json!({"domains":[]}),
-        json!({"domains":[],"pagination":{"version":2,"limit":50,"next_cursor":""}}),
-        json!({"domains":[],"pagination":{"version":1,"limit":51,"next_cursor":""}}),
-        json!({"domains":[{"id":DOMAIN,"name":"Denied write","organization_id":Uuid::from_u128(0xaaaa),"permissions":["domain-data:r"]}],"pagination":{"version":1,"limit":50,"next_cursor":""}}),
-    ] {
-        let server = MockServer::start(vec![MockResponse::json(response)]).await;
+async fn imported_data_cancels_api_and_dds_requests_without_retry() {
+    for cancel_at_dds in [false, true] {
+        let server = MockServer::start_with(|base| {
+            if cancel_at_dds {
+                vec![
+                    service_response("data-service"),
+                    grant(base, DOMAIN).delayed(Duration::from_millis(100)),
+                ]
+            } else {
+                vec![service_response("data-service").delayed(Duration::from_millis(100))]
+            }
+        })
+        .await;
         let session = import(&server, Store::new(false, 0), false);
-        let query = crate::DomainDiscoveryQuery {
-            allows: vec![crate::DomainPermission::DataWrite],
-            ..Default::default()
-        };
-        assert!(matches!(
-            session
-                .discover_domains(&query, &CancellationToken::new())
-                .await,
-            Err(Error::InvalidResponse { .. })
-        ));
-        session.close().await;
-        assert_eq!(server.finish().await.len(), 1);
-    }
-}
-
-#[tokio::test]
-async fn human_identity_profile_never_falls_back_to_app_or_peer_listing() {
-    let server = MockServer::start(vec![listing_service_response_with_claims(json!({
-        "type":"zitadel-identity", "login_provider":"zitadel", "identity_issuer":"https://identity.example",
-        "iss":"api", "aud":["domain-service"], "sub":"human", "org":Uuid::from_u128(0xaaaa),
-        "iat":Utc::now().timestamp(), "exp":Utc::now().timestamp()+300,
-    }))]).await;
-    let session = import(&server, Store::new(false, 0), false);
-    assert!(matches!(
-        session.list_domains(&DomainListQuery::default()).await,
-        Err(Error::InvalidConfiguration(_))
-    ));
-    session.close().await;
-    assert_eq!(server.finish().await.len(), 1);
-}
-
-#[tokio::test]
-async fn human_data_and_operator_job_grants_have_separate_caches_and_denials() {
-    for operator in [true, false] {
-        let server = MockServer::start_with(|base| vec![
-            grant(base, DOMAIN),
-            ordinary_user_listing_response(&[]),
-            if operator { grant_with_claims(base, DOMAIN, json!({
-                "iss":"dds", "domain_id":DOMAIN, "aud":["dds",base], "exp":Utc::now().timestamp()+300,
-                "type":"user-access", "sub":"fixture-user", "org":Uuid::from_u128(0xaaaa), "scopes":["domain-data:rw"]
-            })) } else { grant(base, DOMAIN) },
-        ]).await;
-        let store = Store::new(false, 0);
-        let session = import(&server, store, false);
+        let operation_session = session.clone();
         let cancellation = CancellationToken::new();
-        let data = session
-            .domain_access(DOMAIN, None, &cancellation)
-            .await
-            .unwrap();
-        assert!(data.user_organization().is_none());
-        let jobs = session.domain_job_access(DOMAIN, None, &cancellation).await;
-        if operator {
-            let jobs = jobs.unwrap();
-            assert!(jobs.user_organization().is_some());
-            assert_ne!(jobs.bearer().expose_secret(), data.bearer().expose_secret());
-            assert!(Arc::ptr_eq(
-                &jobs,
-                &session
-                    .domain_job_access(DOMAIN, None, &cancellation)
-                    .await
-                    .unwrap()
-            ));
-        } else {
-            assert!(matches!(jobs, Err(Error::InvalidConfiguration(_))));
-        }
-        assert!(Arc::ptr_eq(
-            &data,
-            &session
-                .domain_access(DOMAIN, None, &cancellation)
+        let operation_cancel = cancellation.clone();
+        let operation = tokio::spawn(async move {
+            operation_session
+                .domain_access(DOMAIN, None, &operation_cancel)
                 .await
-                .unwrap()
+        });
+        let expected = if cancel_at_dds { 2 } else { 1 };
+        wait_requests(&server, expected).await;
+        cancellation.cancel();
+        assert!(matches!(
+            operation.await.unwrap(),
+            Err(Error::Cancelled { .. })
         ));
         session.close().await;
-        let requests = server.finish().await;
-        assert_eq!(requests.len(), 3);
-        assert!(requests[0].target.ends_with("/auth/zitadel"));
-        assert_eq!(requests[1].target, "/service/domains-access-token");
-        assert!(requests[2].target.ends_with("/auth"));
+        assert_eq!(server.finish().await.len(), expected);
     }
 }
 
@@ -1009,10 +894,11 @@ async fn portal_cursor_pages_acknowledge_boundaries_and_reject_legacy_continuati
         "created_at":"2026-09-01T00:00:00Z", "updated_at":"2026-09-01T00:00:00Z"})
     };
     let server = MockServer::start_with(|base| vec![
+        ordinary_user_listing_response(&[]),
         grant_with_claims(base, DOMAIN, json!({
             "iss":"dds", "domain_id":DOMAIN, "aud":[base,"dds"], "exp":Utc::now().timestamp()+300,
-            "type":"zitadel-user-access", "sub":"fixture-user", "org":Uuid::from_u128(0xaaaa),
-            "login_provider":"zitadel", "identity_issuer":base, "scopes":["domain-metadata:r","pose:r"]
+            "type":"user-access", "sub":"fixture-user", "org":Uuid::from_u128(0xaaaa),
+            "scopes":["pose:r"]
         })),
         MockResponse::json(json!({"lighthouses":[portal(1)], "pagination":{"version":1,"limit":1,"next_cursor":"next+page"}})),
         MockResponse::json(json!({"lighthouses":[portal(2)]})),
@@ -1041,7 +927,8 @@ async fn portal_cursor_pages_acknowledge_boundaries_and_reject_legacy_continuati
     );
     session.close().await;
     let requests = server.finish().await;
-    assert_eq!(requests.len(), 4);
-    assert!(requests[2].target.contains("cursor=next%2Bpage"));
-    assert!(requests.iter().all(|r| !r.target.contains("/service/")));
+    assert_eq!(requests.len(), 5);
+    assert!(requests[3].target.contains("cursor=next%2Bpage"));
+    assert_eq!(requests[0].target, "/service/domains-access-token");
+    assert!(requests[1].target.ends_with("/auth"));
 }

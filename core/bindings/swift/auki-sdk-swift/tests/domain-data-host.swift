@@ -90,6 +90,10 @@ struct DomainDataHost {
             try require(portalDomains.first?.id == domainID, "portal Domain association was not preserved")
             let portals = try await domains.portals(domainId: domainID)
             try require(portals.first?.id == portalID, "Domain portals were not preserved")
+            let associationPage = try await domains.forPortalPage(portal: portalShortID, limit: 1)
+            try require(associationPage.items.first?.id == domainID && !associationPage.paginated && associationPage.nextCursor == nil, "legacy portal associations were misreported as paginated")
+            let portalPage = try await domains.portalsPage(domainId: domainID, limit: 1)
+            try require(portalPage.items.first?.id == portalID && !portalPage.paginated && portalPage.nextCursor == nil, "legacy portals were misreported as paginated")
             let portal = try await domains.portal(domainId: domainID, portal: portalShortID)
             try require(portal.shortId == portalShortID, "short portal ID lookup failed")
 
@@ -214,8 +218,6 @@ struct DomainDataHost {
                 "imported save failure lost its structured persistence code"
             )
         }
-        let discovered = try await imported.domains().discover(query: AukiDomainDiscoveryQuery(limit: 1, allows: ["domain-data:r"]))
-        try require(discovered.domains.first?.domain.id == domainID && discovered.nextCursor == nil, "permission discovery must use DDS catalog")
         let importedBytes = try await importedData.read(dataId: initialDataID)
         try require(importedBytes == Data("fixture".utf8), "imported session could not read known-Domain data")
 

@@ -9,8 +9,6 @@ import type {
   AukiServiceEnvironment,
   DataMetadata,
   DomainPage,
-  DomainDiscoveryPage,
-  DomainDiscoveryQuery,
   PortalPage,
   PortalDomainPage,
   ComputePoolQuery,
@@ -266,13 +264,6 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     }));
   }
 
-  async domainsDiscover(sessionId: string, queryJson: string, operationId: string): Promise<DomainDiscoveryPage> {
-    return this.withDataOperation(operationId, async signal => {
-      const domains = this.session(sessionId).domains();
-      try { return await domains.discover(JSON.parse(queryJson) as DomainDiscoveryQuery, signal); }
-      finally { domains.free(); }
-    });
-  }
   async domainsForPortalPage(sessionId: string, portal: string, organization: string, limit: number, cursor: string | null, operationId: string): Promise<PortalDomainPage> {
     return this.withDataOperation(operationId, async signal => {
       const domains = this.session(sessionId).domains();

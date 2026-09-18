@@ -180,10 +180,3 @@ Existing endpoint, JSON and token formats are unchanged. See the
 this opt-in API and the original
 [validation record](../../test-support/jobs-validation.md) for checks and live
 validation boundaries.
-
-Imported job submission remains a separate legacy operator contract. The SDK
-uses `domain_job_access` and a separate grant cache, preserving the API/DDS User
-grant required by DMS. Restricted human data grants cannot satisfy that contract,
-even if they permit a data write. DMS still verifies its required job scopes;
-this does not introduce policy-derived task authority. The shared session remains
-the only refresh/persistence owner. Neither path enumerates API's Domain table.

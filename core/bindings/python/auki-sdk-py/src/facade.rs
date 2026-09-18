@@ -6,7 +6,8 @@ use auki_sdk_rs::{
     AukiPeerBootstrap, AukiPeerConfig, AukiPeerExit, AukiPeerLifecycle, AukiPeerProtocols,
     AukiPeerRoutes, AuthClient, AuthEnvironment, Credentials, DdsTrackerConfig, DdsTrackerMode,
     DdsVerificationKeys, DomainDescriptor, DomainSelection, ExternalAuthorityControl,
-    ExternalAuthorityUpdate, Identity, Multiaddr, SignedP2pCredential,
+    ExternalAuthorityRefreshRequest, ExternalAuthorityUpdate, Identity, Multiaddr,
+    SignedP2pCredential,
 };
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -377,6 +378,24 @@ impl PyExternalAuthorityUpdate {
     }
 }
 
+#[pyclass(name = "ExternalAuthorityRefreshRequest", frozen)]
+struct PyExternalAuthorityRefreshRequest {
+    inner: ExternalAuthorityRefreshRequest,
+}
+
+#[pymethods]
+impl PyExternalAuthorityRefreshRequest {
+    #[getter]
+    fn request_id(&self) -> u64 {
+        self.inner.request_id()
+    }
+
+    #[getter]
+    fn rejected_credential_revision(&self) -> u64 {
+        self.inner.rejected_credential_revision()
+    }
+}
+
 #[pyclass(name = "ExternalAuthorityControl")]
 struct PyExternalAuthorityControl {
     inner: Arc<ExternalAuthorityControl>,
@@ -398,6 +417,20 @@ impl PyExternalAuthorityControl {
                 .await
                 .map_err(|error| runtime_error("ExternalAuthorityControl.replace", error))?;
             Ok(outcome.credential_revision())
+        })
+    }
+
+    /// Wait for the next coalesced relay-authorization refresh request.
+    ///
+    /// Returns ``None`` after the associated runtime's authority supervisor has
+    /// stopped.
+    fn next_refresh_request<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let control = Arc::clone(&self.inner);
+        crate::async_completion::future_into_py(py, async move {
+            Ok(control
+                .next_refresh_request()
+                .await
+                .map(|inner| PyExternalAuthorityRefreshRequest { inner }))
         })
     }
 }
@@ -1020,6 +1053,7 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyDdsVerificationKeys>()?;
     module.add_class::<PySignedP2pCredential>()?;
     module.add_class::<PyExternalAuthorityUpdate>()?;
+    module.add_class::<PyExternalAuthorityRefreshRequest>()?;
     module.add_class::<PyExternalAuthorityControl>()?;
     module.add_class::<PyAukiPeerConfig>()?;
     module.add_class::<PyAukiSession>()?;
@@ -1055,6 +1089,8 @@ mod tests {
             assert!(module.getattr("Identity").is_ok());
             assert!(module.getattr("AukiPeerConfig").is_ok());
             assert!(module.getattr("ExternalAuthorityUpdate").is_ok());
+            assert!(module.getattr("ExternalAuthorityRefreshRequest").is_ok());
+            assert!(module.getattr("ExternalAuthorityControl").is_ok());
         });
     }
 

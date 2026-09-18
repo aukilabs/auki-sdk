@@ -30,6 +30,12 @@ Watch `peer.wait_stopped()` alongside your app's event loop so it can react
 when the peer stops permanently. The [Echo handler](protocols.md#start-with-echo)
 shows this with `tokio::select!`. Web exposes `peer.waitStopped()`.
 
+## Keep the peer across host credential replace
+
+`ExternalAuthorityControl.replace` keeps the same peer and the same relay
+reservation. `reservation_epoch` does not change. Applications still reopen
+*application* streams if a hop dies. There is no public reconnect API.
+
 ## Close your handlers, then stop the peer
 
 Stop sending new requests, close your handlers, and await peer shutdown.

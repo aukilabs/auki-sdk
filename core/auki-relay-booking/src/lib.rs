@@ -215,7 +215,7 @@ impl RelayBookingClient {
                     })?;
             require_exact_response_url(operation, &url, response.url())?;
             let raw = RawResponse::read(operation, response).await?;
-            if raw.status == StatusCode::UNAUTHORIZED && attempt == 0 {
+            if attempt == 0 && refreshable_rejection(&raw) {
                 self.auth
                     .refresh_after_unauthorized(rejected_revision)
                     .await
@@ -226,6 +226,16 @@ impl RelayBookingClient {
         }
         unreachable!("the bounded authentication retry loop always returns")
     }
+}
+
+fn refreshable_rejection(raw: &RawResponse) -> bool {
+    if raw.status == StatusCode::UNAUTHORIZED {
+        return true;
+    }
+    let Ok(body) = serde_json::from_slice::<RelayErrorResponse>(&raw.body) else {
+        return false;
+    };
+    body.code.is_stale_requester_principal() || body.code.is_invalid_requester_principal()
 }
 
 fn require_exact_response_url(
@@ -1692,6 +1702,82 @@ mod tests {
             assert!(!rendered.contains(secret), "client error leaked {secret}");
         }
         conflict.assert_calls(1);
+    }
+
+    #[tokio::test]
+    async fn refreshes_once_on_stale_requester_principal_and_retries_renew() {
+        let server = MockServer::start();
+        let booking_id = Uuid::new_v4();
+        let stale = server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("/relay-bookings/{booking_id}/renew"))
+                .header("authorization", "Bearer requester-token-a");
+            relay_json(
+                then,
+                409,
+                json!({
+                    "code": "stale_requester_principal",
+                    "error": "principal is stale"
+                }),
+            );
+        });
+        let success = server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("/relay-bookings/{booking_id}/renew"))
+                .header("authorization", "Bearer requester-token-b");
+            relay_json(
+                then,
+                200,
+                booking_snapshot(booking_id, RelayBookingState::Active),
+            );
+        });
+        let provider = RotatingProvider::new(vec!["requester-token-a", "requester-token-b"]);
+        let client = make_client(&server, Arc::new(provider.clone()));
+        assert_eq!(
+            client.renew(booking_id).await.unwrap().booking_id,
+            booking_id
+        );
+        assert_eq!(provider.index.load(Ordering::SeqCst), 1);
+        stale.assert_calls(1);
+        success.assert_calls(1);
+    }
+
+    #[tokio::test]
+    async fn refreshes_once_on_invalid_requester_principal_and_retries_active() {
+        let server = MockServer::start();
+        let booking_id = Uuid::new_v4();
+        let forbidden = server.mock(|when, then| {
+            when.method(GET)
+                .path("/relay-bookings/active")
+                .header("authorization", "Bearer requester-token-a");
+            relay_json(
+                then,
+                403,
+                json!({
+                    "code": "invalid_requester_principal",
+                    "error": "principal is invalid"
+                }),
+            );
+        });
+        let success = server.mock(|when, then| {
+            when.method(GET)
+                .path("/relay-bookings/active")
+                .header("authorization", "Bearer requester-token-b");
+            relay_json(
+                then,
+                200,
+                booking_snapshot(booking_id, RelayBookingState::Active),
+            );
+        });
+        let provider = RotatingProvider::new(vec!["requester-token-a", "requester-token-b"]);
+        let client = make_client(&server, Arc::new(provider.clone()));
+        assert_eq!(
+            client.active().await.unwrap().unwrap().booking_id,
+            booking_id
+        );
+        assert_eq!(provider.index.load(Ordering::SeqCst), 1);
+        forbidden.assert_calls(1);
+        success.assert_calls(1);
     }
 
     #[tokio::test]

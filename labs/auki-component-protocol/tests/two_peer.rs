@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use auki_component_protocol::{
     CatalogResponse, ComponentProtocolClient, ComponentProtocolEndpoint, ComponentProtocolError,
-    RemoteMirrorStart,
+    ObservationStart, RemoteMirrorStart, RemoteObservationEvent, RemoteProductSubscription,
 };
 use auki_components::{
     BufferLimits, ComponentRuntime, ComponentSpec, ConfiguredObservableSpec, CursorStart, Exposure,
@@ -489,11 +489,493 @@ impl TwoPeerFixture {
             .unwrap()
     }
 
+    async fn subscribe(&self, start: ObservationStart) -> RemoteProductSubscription<f64> {
+        self.client
+            .subscribe_product_exact(
+                self.server.peer_id(),
+                self.route.clone(),
+                self.capture.product().reference(),
+                start,
+                BufferLimits::entries(16),
+                |_| 8,
+            )
+            .await
+            .unwrap()
+    }
+
     async fn shutdown(self) {
         self.endpoint.close().await.unwrap();
         self.client_peer.shutdown().await.unwrap();
         self.server.shutdown().await.unwrap();
     }
+}
+
+async fn subscription_event(
+    subscription: &mut RemoteProductSubscription<f64>,
+) -> RemoteObservationEvent<f64> {
+    tokio::time::timeout(Duration::from_secs(3), subscription.next())
+        .await
+        .expect("subscription event timed out")
+        .unwrap()
+        .expect("subscription already ended")
+}
+
+async fn wait_for_subscriptions(endpoint: &ComponentProtocolEndpoint, count: usize) {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while endpoint.active_subscriptions() != count {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("subscription handler cleanup timed out");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn subscription_pushes_new_data_after_cancelled_wait_and_ends_without_migration() {
+    let fixture = TwoPeerFixture::new().await;
+    let mut subscription = fixture.subscribe(ObservationStart::NewOnly).await;
+    let product_reference = subscription.product().reference();
+    let runtime = ComponentRuntime::new(fixture.client_peer.peer_id().to_string());
+    let consumer = runtime
+        .component(
+            ComponentSpec::new("derived").product_input(ProductInputContract {
+                name: "level".into(),
+                form: ProductForm::Buffer,
+                datatype: "float64".into(),
+                schema: "test.level/v1".into(),
+                exposure: Exposure::Cluster,
+            }),
+        )
+        .unwrap();
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let delivered = Arc::clone(&received);
+    let input = InputPort::<Observation<f64>>::new("derived.level", move |envelope| {
+        delivered.lock().unwrap().push(envelope.payload.sequence);
+    });
+    let _binding = consumer
+        .configured_buffer_input(
+            "level",
+            subscription.product(),
+            CursorStart::FromSequence(subscription.next_sequence()),
+            &input,
+        )
+        .unwrap();
+    let mut cursor = subscription
+        .product()
+        .buffer()
+        .subscribe(CursorStart::FromSequence(subscription.next_sequence()));
+    // Cancelling next() must not discard partially read framing or cancel the relationship.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), subscription.next())
+            .await
+            .is_err()
+    );
+    assert!(!subscription.is_closed());
+    fixture.output.publish(20, Arc::new(18.0)).unwrap();
+    let RemoteObservationEvent::Observation(observation) =
+        subscription_event(&mut subscription).await
+    else {
+        panic!("missing observation");
+    };
+    assert_eq!(observation.sequence, 1);
+    assert_eq!(observation.timestamp_ns, 20);
+    assert_eq!(*observation.payload, 18.0);
+    assert_eq!(observation.output, *fixture.output.reference());
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while received.lock().unwrap().as_slice() != [1] {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("ordinary Component input did not receive pushed data");
+    assert!(matches!(
+        cursor.next_timeout(Duration::ZERO),
+        auki_components::CursorRead::Item(_)
+    ));
+
+    let transition = fixture
+        .sensor
+        .replace_configured_observable(
+            &fixture.output,
+            ConfiguredObservableSpec::new("level", "level-2", "fixture.clock", gauge_payload()),
+            30,
+        )
+        .unwrap();
+    transition.replacement.publish(40, Arc::new(99.0)).unwrap();
+    let RemoteObservationEvent::Closed(Some(end)) = subscription_event(&mut subscription).await
+    else {
+        panic!("missing source end");
+    };
+    assert_eq!(end, transition.previous_end);
+    assert_eq!(subscription.end_notice(), Some(end));
+    assert_eq!(subscription.product().reference(), product_reference);
+    assert_eq!(subscription.product().buffer().range().entries, 1);
+    assert!(matches!(
+        cursor.next_timeout(Duration::ZERO),
+        auki_components::CursorRead::Closed
+    ));
+    assert!(subscription.next().await.unwrap().is_none());
+    wait_for_subscriptions(&fixture.endpoint, 0).await;
+    fixture.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn subscription_replays_retained_tail_with_gap_and_closes_after_the_final_observation() {
+    let fixture = TwoPeerFixture::new().await;
+    for sequence in 1..=12 {
+        fixture
+            .output
+            .publish(10 + sequence, Arc::new(sequence as f64))
+            .unwrap();
+    }
+    let end = fixture
+        .output
+        .end(
+            30,
+            auki_components::ObservationEndReason::Failed {
+                reason: "stopped".into(),
+            },
+        )
+        .unwrap();
+    let mut subscription = fixture
+        .subscribe(ObservationStart::FromSequence { sequence: 0 })
+        .await;
+    assert!(matches!(
+        subscription_event(&mut subscription).await,
+        RemoteObservationEvent::Gap(auki_component_protocol::SourceGap {
+            requested_sequence: 0,
+            available_from: 5
+        })
+    ));
+    for sequence in 5..=12 {
+        let RemoteObservationEvent::Observation(observation) =
+            subscription_event(&mut subscription).await
+        else {
+            panic!("missing retained observation");
+        };
+        assert_eq!(observation.sequence, sequence);
+    }
+    assert!(
+        matches!(subscription_event(&mut subscription).await, RemoteObservationEvent::Closed(Some(received)) if received == end)
+    );
+    assert_eq!(subscription.product().buffer().range().entries, 8);
+    assert_eq!(subscription.next_sequence(), 13);
+    let mut latest = fixture.subscribe(ObservationStart::LatestExisting).await;
+    assert!(
+        matches!(subscription_event(&mut latest).await, RemoteObservationEvent::Observation(observation) if observation.sequence == 12)
+    );
+    assert!(
+        matches!(subscription_event(&mut latest).await, RemoteObservationEvent::Closed(Some(received)) if received == end)
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn subscription_retention_failure_retries_the_same_payload_before_reading_its_end() {
+    let fixture = TwoPeerFixture::new().await;
+    let mut subscription = fixture.subscribe(ObservationStart::NewOnly).await;
+    subscription
+        .product()
+        .buffer()
+        .set_limits(BufferLimits {
+            max_entries: Some(8),
+            max_bytes: Some(4),
+            target_duration: None,
+        })
+        .unwrap();
+    fixture.output.publish(20, Arc::new(18.0)).unwrap();
+    let end = fixture
+        .output
+        .end(
+            30,
+            auki_components::ObservationEndReason::Failed {
+                reason: "stopped".into(),
+            },
+        )
+        .unwrap();
+    for _ in 0..2 {
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(3), subscription.next())
+                .await
+                .unwrap(),
+            Err(ComponentProtocolError::Import(_))
+        ));
+        assert_eq!(subscription.next_sequence(), 1);
+        assert_eq!(subscription.end_notice(), None);
+        assert!(!subscription.is_closed());
+    }
+    subscription
+        .product()
+        .buffer()
+        .set_limits(BufferLimits::entries(8))
+        .unwrap();
+    assert!(
+        matches!(subscription_event(&mut subscription).await, RemoteObservationEvent::Observation(observation) if observation.sequence == 1)
+    );
+    assert!(
+        matches!(subscription_event(&mut subscription).await, RemoteObservationEvent::Closed(Some(received)) if received == end)
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dropping_or_closing_idle_subscription_releases_only_its_handler_and_readers() {
+    let fixture = TwoPeerFixture::new().await;
+    let first = fixture.subscribe(ObservationStart::NewOnly).await;
+    let first_product = first.product().clone();
+    let mut second = fixture.subscribe(ObservationStart::NewOnly).await;
+    wait_for_subscriptions(&fixture.endpoint, 2).await;
+    drop(first);
+    wait_for_subscriptions(&fixture.endpoint, 1).await;
+    assert!(matches!(
+        first_product
+            .buffer()
+            .subscribe(CursorStart::Latest)
+            .next_timeout(Duration::ZERO),
+        auki_components::CursorRead::Closed
+    ));
+    assert_eq!(
+        first_product.end_notice(),
+        None,
+        "cancellation is not a producer failure"
+    );
+    fixture.output.publish(20, Arc::new(18.0)).unwrap();
+    assert!(matches!(
+        subscription_event(&mut second).await,
+        RemoteObservationEvent::Observation(_)
+    ));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), second.next())
+            .await
+            .is_err()
+    );
+    second.close().await.unwrap();
+    second.close().await.unwrap();
+    wait_for_subscriptions(&fixture.endpoint, 0).await;
+    assert!(second.next().await.unwrap().is_none());
+    assert!(fixture.capture.end_notice().is_none());
+    fixture.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unexport_interrupts_idle_subscription_without_ending_the_source_or_auto_reconnecting() {
+    let fixture = TwoPeerFixture::new().await;
+    let mut subscription = fixture.subscribe(ObservationStart::NewOnly).await;
+    assert!(
+        fixture
+            .endpoint
+            .unexport_product(&fixture.capture.product().manifest.product_id)
+    );
+    let result = tokio::time::timeout(Duration::from_secs(3), subscription.next())
+        .await
+        .unwrap();
+    assert!(result.is_err());
+    assert!(subscription.is_closed());
+    assert!(subscription.end_notice().is_none());
+    wait_for_subscriptions(&fixture.endpoint, 0).await;
+    fixture
+        .endpoint
+        .export_product(&fixture.capture.product())
+        .unwrap();
+    fixture.output.publish(20, Arc::new(18.0)).unwrap();
+    assert!(subscription.next().await.unwrap().is_none());
+    assert_eq!(subscription.product().buffer().range().entries, 0);
+    fixture.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn endpoint_shutdown_interrupts_idle_subscription_and_closes_local_readers() {
+    let fixture = TwoPeerFixture::new().await;
+    let mut subscription = fixture.subscribe(ObservationStart::NewOnly).await;
+    let mut cursor = subscription
+        .product()
+        .buffer()
+        .subscribe(CursorStart::Latest);
+    tokio::time::timeout(Duration::from_secs(3), fixture.endpoint.close())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(3), subscription.next())
+            .await
+            .unwrap()
+            .is_err()
+    );
+    assert!(matches!(
+        cursor.next_timeout(Duration::ZERO),
+        auki_components::CursorRead::Closed
+    ));
+    fixture.client_peer.shutdown().await.unwrap();
+    fixture.server.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn empty_capture_closure_is_distinct_from_source_failure() {
+    let fixture = TwoPeerFixture::with_initial_observation(false).await;
+    let mut subscription = fixture.subscribe(ObservationStart::NewOnly).await;
+    fixture.capture.cancel();
+    assert!(matches!(
+        subscription_event(&mut subscription).await,
+        RemoteObservationEvent::Closed(None)
+    ));
+    assert!(subscription.is_closed());
+    assert!(subscription.end_notice().is_none());
+    assert_eq!(subscription.product().buffer().range().entries, 0);
+    fixture.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn subscription_rejects_unexported_stale_or_wrong_peer_products() {
+    let fixture = TwoPeerFixture::new().await;
+    let product = fixture.capture.product().reference();
+    let mut stale = product.clone();
+    stale.manifest_hash = "not-the-product-hash".into();
+    let result = fixture
+        .client
+        .subscribe_product_exact::<f64>(
+            fixture.server.peer_id(),
+            fixture.route.clone(),
+            stale,
+            ObservationStart::NewOnly,
+            BufferLimits::entries(8),
+            |_| 8,
+        )
+        .await;
+    assert!(
+        matches!(result, Err(ComponentProtocolError::RemoteRejected { code, .. }) if code == "product_not_current")
+    );
+    let wrong_peer = Identity::generate().peer_id();
+    let mut claimed = product.clone();
+    claimed.peer_id = wrong_peer.to_string();
+    let result = fixture
+        .client
+        .subscribe_product_exact::<f64>(
+            wrong_peer,
+            fixture.route.clone(),
+            claimed,
+            ObservationStart::NewOnly,
+            BufferLimits::entries(8),
+            |_| 8,
+        )
+        .await;
+    assert!(matches!(result, Err(ComponentProtocolError::Sdk(_))));
+    fixture.endpoint.unexport_product(&product.product_id);
+    let result = fixture
+        .client
+        .subscribe_product_exact::<f64>(
+            fixture.server.peer_id(),
+            fixture.route.clone(),
+            product,
+            ObservationStart::NewOnly,
+            BufferLimits::entries(8),
+            |_| 8,
+        )
+        .await;
+    assert!(
+        matches!(result, Err(ComponentProtocolError::RemoteRejected { code, .. }) if code == "unknown_product")
+    );
+    wait_for_subscriptions(&fixture.endpoint, 0).await;
+    fixture.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelling_a_subscription_wait_mid_frame_preserves_framing_for_the_next_wait() {
+    use futures::{AsyncReadExt, AsyncWriteExt};
+    let fixture = TwoPeerFixture::new().await;
+    let product = fixture.capture.product();
+    fixture.endpoint.close().await.unwrap();
+    let (partial_tx, partial_rx) = async_channel::bounded::<()>(1);
+    let (resume_tx, resume_rx) = async_channel::bounded::<()>(1);
+    let header = serde_json::json!({
+        "status": "accepted", "product": product.manifest,
+        "product_manifest_hash": product.manifest_hash, "producer": product.producer,
+        "next_sequence": 1,
+    });
+    let event = serde_json::json!({
+        "event": "observation", "record": {
+            "output": product.manifest.producer, "sequence": 1, "timestamp_ns": 20,
+            "payload_encoding": "application/json", "payload_bytes": 4,
+        },
+    });
+    let registration = fixture
+        .server
+        .protocols()
+        .register(
+            auki_sdk::AukiProtocolSpec::new(
+                auki_component_protocol::OBSERVATION_STREAM_PROTOCOL_ID,
+                1,
+                1024,
+            )
+            .unwrap(),
+            move |mut stream| {
+                let header = header.clone();
+                let event = event.clone();
+                let partial_tx = partial_tx.clone();
+                let resume_rx = resume_rx.clone();
+                async move {
+                    let mut len = [0; 4];
+                    stream.read_exact(&mut len).await.unwrap();
+                    let mut request = vec![0; u32::from_be_bytes(len) as usize];
+                    stream.read_exact(&mut request).await.unwrap();
+                    let header = serde_json::to_vec(&header).unwrap();
+                    stream
+                        .write_all(&(header.len() as u32).to_be_bytes())
+                        .await
+                        .unwrap();
+                    stream.write_all(&header).await.unwrap();
+                    let event = serde_json::to_vec(&event).unwrap();
+                    let len = (event.len() as u32).to_be_bytes();
+                    stream.write_all(&len[..2]).await.unwrap();
+                    stream.flush().await.unwrap();
+                    partial_tx.send(()).await.unwrap();
+                    resume_rx.recv().await.unwrap();
+                    stream.write_all(&len[2..]).await.unwrap();
+                    stream.write_all(&event).await.unwrap();
+                    stream.write_all(&4_u32.to_be_bytes()).await.unwrap();
+                    stream.write_all(b"18.0").await.unwrap();
+                    let end = br#"{"event":"closed","end":null}"#;
+                    stream
+                        .write_all(&(end.len() as u32).to_be_bytes())
+                        .await
+                        .unwrap();
+                    stream.write_all(end).await.unwrap();
+                    stream.close().await.unwrap();
+                }
+            },
+        )
+        .unwrap();
+    let mut subscription = fixture
+        .client
+        .subscribe_product_exact::<f64>(
+            fixture.server.peer_id(),
+            fixture.route,
+            product.reference(),
+            ObservationStart::NewOnly,
+            BufferLimits::entries(8),
+            |_| 8,
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), partial_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), subscription.next())
+            .await
+            .is_err()
+    );
+    resume_tx.send(()).await.unwrap();
+    assert!(
+        matches!(subscription_event(&mut subscription).await, RemoteObservationEvent::Observation(observation) if observation.sequence == 1 && *observation.payload == 18.0)
+    );
+    assert!(matches!(
+        subscription_event(&mut subscription).await,
+        RemoteObservationEvent::Closed(None)
+    ));
+    registration.close().await.unwrap();
+    fixture.client_peer.shutdown().await.unwrap();
+    fixture.server.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 
 pub const CATALOG_PROTOCOL_ID: &str = "/aukilabs/components/catalog/1.0.0";
 pub const OBSERVATIONS_PROTOCOL_ID: &str = "/aukilabs/components/observations/2.0.0";
+/// Additive continuing-observation protocol; finite observations v2 is unchanged.
+pub const OBSERVATION_STREAM_PROTOCOL_ID: &str = "/aukilabs/components/observation-stream/1.0.0";
 pub const OPERATIONS_PROTOCOL_ID: &str = "/aukilabs/components/operations/1.0.0";
 
 pub const MAX_CONTROL_FRAME_BYTES: usize = 1024 * 1024;
@@ -47,6 +49,58 @@ pub enum ObservationSelection {
 pub struct ObservationRequest {
     pub product: ProductReference,
     pub selection: ObservationSelection,
+}
+
+/// Initial selection only. Subsequent observations follow source sequence order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ObservationStart {
+    FromSequence {
+        sequence: u64,
+    },
+    LatestExisting,
+    /// Start after the source high-water mark when the provider accepts the request.
+    NewOnly,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ObservationSubscriptionRequest {
+    pub product: ProductReference,
+    pub start: ObservationStart,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub(crate) enum SubscriptionHeader {
+    Accepted {
+        product: Box<ProductManifest>,
+        product_manifest_hash: String,
+        producer: Box<OutputManifest>,
+        next_sequence: u64,
+    },
+    Rejected {
+        code: String,
+        message: String,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub(crate) enum SubscriptionEventHeader {
+    Observation {
+        record: ObservationRecordHeader,
+    },
+    Gap {
+        gap: SourceGap,
+    },
+    /// None means the capture closed without declaring that its producer ended.
+    Closed {
+        end: Option<Box<ObservationEnd>>,
+    },
+    Unavailable {
+        code: String,
+        message: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -156,6 +210,31 @@ where
     serde_json::from_slice(&payload).map_err(WireError::Json)
 }
 
+/// Continue a control frame after its first byte arrived. A subscription can
+/// wait indefinitely for that first byte, then deadline the rest of the frame.
+pub(crate) async fn read_json_after_first<S, T>(stream: &mut S, first: u8) -> Result<T, WireError>
+where
+    S: AsyncRead + Unpin,
+    T: DeserializeOwned,
+{
+    let mut length = [first, 0, 0, 0];
+    stream
+        .read_exact(&mut length[1..])
+        .await
+        .map_err(WireError::Io)?;
+    let length = u32::from_be_bytes(length);
+    validate_len(u64::from(length), MAX_CONTROL_FRAME_BYTES, "control")?;
+    if length == 0 {
+        return Err(WireError::EmptyControlFrame);
+    }
+    let mut payload = vec![0; length as usize];
+    stream
+        .read_exact(&mut payload)
+        .await
+        .map_err(WireError::Io)?;
+    serde_json::from_slice(&payload).map_err(WireError::Json)
+}
+
 pub(crate) async fn write_payload<S>(stream: &mut S, payload: &[u8]) -> Result<(), WireError>
 where
     S: AsyncWrite + Unpin,
@@ -243,6 +322,10 @@ mod tests {
         assert_eq!(
             OBSERVATIONS_PROTOCOL_ID,
             "/aukilabs/components/observations/2.0.0"
+        );
+        assert_eq!(
+            OBSERVATION_STREAM_PROTOCOL_ID,
+            "/aukilabs/components/observation-stream/1.0.0"
         );
         assert_eq!(
             OPERATIONS_PROTOCOL_ID,

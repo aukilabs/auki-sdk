@@ -1,7 +1,10 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+use std::task::{Context, Poll, Waker};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -165,6 +168,8 @@ struct BufferState<T> {
     high_water: Option<u64>,
     last_source_timestamp_ns: Option<u64>,
     closed: bool,
+    next_waiter: u64,
+    waiters: BTreeMap<u64, Waker>,
 }
 
 struct BufferInner<T> {
@@ -235,6 +240,8 @@ impl<T> Buffer<T> {
                     high_water: None,
                     last_source_timestamp_ns: None,
                     closed: false,
+                    next_waiter: 0,
+                    waiters: BTreeMap::new(),
                 }),
                 changed: Condvar::new(),
             }),
@@ -266,9 +273,11 @@ impl<T> Buffer<T> {
         }
         *current_limits = limits;
         evict_to_limits(&mut state, limits, self.inner.time_policy);
+        let waiters = std::mem::take(&mut state.waiters);
         drop(state);
         drop(current_limits);
         self.inner.changed.notify_all();
+        wake_waiters(waiters);
         Ok(())
     }
 
@@ -335,9 +344,11 @@ impl<T> Buffer<T> {
             arrival,
         });
         evict_to_limits(&mut state, *limits, self.inner.time_policy);
+        let waiters = std::mem::take(&mut state.waiters);
         drop(state);
         drop(limits);
         self.inner.changed.notify_all();
+        wake_waiters(waiters);
         Ok(())
     }
 
@@ -408,8 +419,19 @@ impl<T> Buffer<T> {
     }
 
     pub fn close(&self) {
-        self.inner.state.lock().unwrap().closed = true;
+        let mut state = self.inner.state.lock().unwrap();
+        state.closed = true;
+        let waiters = std::mem::take(&mut state.waiters);
+        drop(state);
         self.inner.changed.notify_all();
+        wake_waiters(waiters);
+    }
+}
+
+fn wake_waiters(waiters: BTreeMap<u64, Waker>) {
+    // Never invoke an executor while holding the Buffer's locks.
+    for waker in waiters.into_values() {
+        waker.wake();
     }
 }
 
@@ -487,43 +509,23 @@ impl<T> BufferCursor<T> {
         self.next_sequence
     }
 
+    /// Await an observation, retention gap, or closure without a timer or thread.
+    /// Cancelling the pending future unregisters its waker without advancing
+    /// the cursor. Each reader still leases only the envelope it consumes.
+    pub fn next_async(&mut self) -> BufferNext<'_, T> {
+        BufferNext {
+            cursor: self,
+            waiter: None,
+        }
+    }
+
     pub fn next_timeout(&mut self, timeout: Duration) -> CursorRead<T> {
         let deadline = Instant::now() + timeout;
         let mut state = self.buffer.inner.state.lock().unwrap();
 
         loop {
-            if let Some(first) = state.entries.front()
-                && self.next_sequence < first.envelope.sequence
-            {
-                let gap = Gap {
-                    requested_sequence: self.next_sequence,
-                    available_from: first.envelope.sequence,
-                };
-                self.next_sequence = first.envelope.sequence;
-                return CursorRead::Gap(gap);
-            }
-
-            if let Some(next) = state
-                .entries
-                .iter()
-                .find(|entry| entry.envelope.sequence >= self.next_sequence)
-            {
-                if next.envelope.sequence > self.next_sequence {
-                    let gap = Gap {
-                        requested_sequence: self.next_sequence,
-                        available_from: next.envelope.sequence,
-                    };
-                    self.next_sequence = next.envelope.sequence;
-                    return CursorRead::Gap(gap);
-                }
-
-                let envelope = Arc::clone(&next.envelope);
-                self.next_sequence = envelope.sequence.saturating_add(1);
-                return CursorRead::Item(envelope);
-            }
-
-            if state.closed {
-                return CursorRead::Closed;
+            if let Some(ready) = cursor_ready(&state, &mut self.next_sequence) {
+                return ready;
             }
 
             let now = Instant::now();
@@ -541,6 +543,73 @@ impl<T> BufferCursor<T> {
             if wait.timed_out() {
                 return CursorRead::Timeout;
             }
+        }
+    }
+}
+
+fn cursor_ready<T>(state: &BufferState<T>, sequence: &mut u64) -> Option<CursorRead<T>> {
+    if let Some(next) = state
+        .entries
+        .iter()
+        .find(|entry| entry.envelope.sequence >= *sequence)
+    {
+        if next.envelope.sequence > *sequence {
+            let gap = Gap {
+                requested_sequence: *sequence,
+                available_from: next.envelope.sequence,
+            };
+            *sequence = next.envelope.sequence;
+            return Some(CursorRead::Gap(gap));
+        }
+        let envelope = Arc::clone(&next.envelope);
+        *sequence = envelope.sequence.saturating_add(1);
+        return Some(CursorRead::Item(envelope));
+    }
+    state.closed.then_some(CursorRead::Closed)
+}
+
+/// Cancellation-safe asynchronous Buffer read. No retained history is copied.
+pub struct BufferNext<'a, T> {
+    cursor: &'a mut BufferCursor<T>,
+    waiter: Option<u64>,
+}
+
+impl<T> Future for BufferNext<'_, T> {
+    type Output = CursorRead<T>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let mut state = this.cursor.buffer.inner.state.lock().unwrap();
+        if let Some(ready) = cursor_ready(&state, &mut this.cursor.next_sequence) {
+            if let Some(id) = this.waiter.take() {
+                state.waiters.remove(&id);
+            }
+            return Poll::Ready(ready);
+        }
+        let id = *this.waiter.get_or_insert_with(|| {
+            let id = state.next_waiter;
+            state.next_waiter = state
+                .next_waiter
+                .checked_add(1)
+                .expect("Buffer waiter IDs exhausted");
+            id
+        });
+        state.waiters.insert(id, cx.waker().clone());
+        Poll::Pending
+    }
+}
+
+impl<T> Drop for BufferNext<'_, T> {
+    fn drop(&mut self) {
+        if let Some(id) = self.waiter {
+            self.cursor
+                .buffer
+                .inner
+                .state
+                .lock()
+                .unwrap()
+                .waiters
+                .remove(&id);
         }
     }
 }
@@ -716,4 +785,123 @@ pub fn connect_buffer<T: Send + Sync + 'static>(
         closed: AtomicBool::new(false),
         failure: Mutex::new(None),
     }))
+}
+
+#[cfg(test)]
+mod async_tests {
+    use super::*;
+    use std::task::Wake;
+
+    #[derive(Default)]
+    struct WakeCount(AtomicU64);
+    impl Wake for WakeCount {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn async_readers_wake_and_share_the_same_envelope() {
+        let buffer = Buffer::new("shared", 2).unwrap();
+        let mut a = buffer.subscribe(CursorStart::Latest);
+        let mut b = buffer.subscribe(CursorStart::Latest);
+        let wakes = Arc::new(WakeCount::default());
+        let waker = Waker::from(wakes.clone());
+        let mut cx = Context::from_waker(&waker);
+        let mut first = Box::pin(a.next_async());
+        let mut second = Box::pin(b.next_async());
+        assert!(first.as_mut().poll(&mut cx).is_pending());
+        assert!(second.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(buffer.inner.state.lock().unwrap().waiters.len(), 2);
+        let envelope = Arc::new(Envelope::new(0, 10, 42));
+        buffer.append_shared(envelope.clone()).unwrap();
+        assert_eq!(wakes.0.load(Ordering::Relaxed), 2);
+        for read in [&mut first, &mut second] {
+            let Poll::Ready(CursorRead::Item(item)) = read.as_mut().poll(&mut cx) else {
+                panic!("not woken");
+            };
+            assert!(Arc::ptr_eq(&item, &envelope));
+        }
+        assert!(buffer.inner.state.lock().unwrap().waiters.is_empty());
+    }
+
+    #[test]
+    fn cancelling_a_pending_async_read_removes_its_waker_without_advancing() {
+        let buffer = Buffer::<u64>::new("cancel", 2).unwrap();
+        let mut cursor = buffer.subscribe(CursorStart::Latest);
+        let wakes = Arc::new(WakeCount::default());
+        let waker = Waker::from(wakes.clone());
+        let mut cx = Context::from_waker(&waker);
+        for _ in 0..100 {
+            let mut pending = Box::pin(cursor.next_async());
+            assert!(pending.as_mut().poll(&mut cx).is_pending());
+            assert!(pending.as_mut().poll(&mut cx).is_pending());
+            assert_eq!(buffer.inner.state.lock().unwrap().waiters.len(), 1);
+        }
+        assert!(buffer.inner.state.lock().unwrap().waiters.is_empty());
+        assert_eq!(cursor.next_sequence(), 0);
+        buffer
+            .append_shared(Arc::new(Envelope::new(0, 1, 10)))
+            .unwrap();
+        assert_eq!(wakes.0.load(Ordering::Relaxed), 0);
+        assert!(matches!(
+            Pin::new(&mut cursor.next_async()).poll(&mut cx),
+            Poll::Ready(CursorRead::Item(_))
+        ));
+    }
+
+    #[test]
+    fn async_cursor_reports_eviction_and_internal_gaps_then_drains_before_closing() {
+        let buffer = Buffer::new("gaps", 2).unwrap();
+        let mut cursor = buffer.subscribe(CursorStart::FromSequence(0));
+        let wakes = Arc::new(WakeCount::default());
+        let waker = Waker::from(wakes.clone());
+        let mut cx = Context::from_waker(&waker);
+        let mut read = Box::pin(cursor.next_async());
+        assert!(read.as_mut().poll(&mut cx).is_pending());
+        for sequence in [0, 2, 4] {
+            buffer
+                .append_shared(Arc::new(Envelope::new(sequence, sequence, 1)))
+                .unwrap();
+        }
+        buffer.close();
+        assert!(matches!(
+            read.as_mut().poll(&mut cx),
+            Poll::Ready(CursorRead::Gap(Gap {
+                requested_sequence: 0,
+                available_from: 2
+            }))
+        ));
+        drop(read);
+        assert!(matches!(
+            Pin::new(&mut cursor.next_async()).poll(&mut cx),
+            Poll::Ready(CursorRead::Item(_))
+        ));
+        assert!(matches!(
+            Pin::new(&mut cursor.next_async()).poll(&mut cx),
+            Poll::Ready(CursorRead::Gap(Gap {
+                requested_sequence: 3,
+                available_from: 4
+            }))
+        ));
+        assert!(matches!(
+            Pin::new(&mut cursor.next_async()).poll(&mut cx),
+            Poll::Ready(CursorRead::Item(_))
+        ));
+        assert!(matches!(
+            Pin::new(&mut cursor.next_async()).poll(&mut cx),
+            Poll::Ready(CursorRead::Closed)
+        ));
+        let empty = Buffer::<u64>::new("empty", 1).unwrap();
+        let mut empty_cursor = empty.subscribe(CursorStart::Latest);
+        let mut pending = Box::pin(empty_cursor.next_async());
+        assert!(pending.as_mut().poll(&mut cx).is_pending());
+        let before = wakes.0.load(Ordering::Relaxed);
+        empty.close();
+        assert_eq!(wakes.0.load(Ordering::Relaxed), before + 1);
+        assert!(matches!(
+            pending.as_mut().poll(&mut cx),
+            Poll::Ready(CursorRead::Closed)
+        ));
+    }
 }

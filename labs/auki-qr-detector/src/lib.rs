@@ -1372,6 +1372,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_stream_writes_remote_provenance_and_applies_cadence() {
+        use futures::SinkExt;
         let tmp = tempfile::tempdir().unwrap();
         let peer = Peer::new("park", "mapping").with_storage_root(tmp.path().to_path_buf());
         let session = peer.start_session().unwrap();
@@ -1385,15 +1386,14 @@ mod tests {
             body: SensorBody::Camera(camera),
         };
         let sensor_hash = sensor.hash();
-        let frames = futures::stream::iter([0, 500_000_000, 1_000_000_000].map(|timestamp_ns| {
-            Ok(CameraFrameSample {
-                timestamp_ns,
-                frame: std::sync::Arc::new(CameraFrame {
-                    dynamic_intrinsics: None,
-                    frame: vec![0; 32 * 32],
-                }),
-            })
-        }));
+        let sample = |timestamp_ns| CameraFrameSample {
+            timestamp_ns,
+            frame: std::sync::Arc::new(CameraFrame {
+                dynamic_intrinsics: None,
+                frame: vec![0; 32 * 32],
+            }),
+        };
+        let (mut frames_tx, frames) = futures::channel::mpsc::channel(1);
         let task = detector
             .start_stream(
                 &session,
@@ -1422,6 +1422,26 @@ mod tests {
             .unwrap();
 
         let log = task.detection_log();
+        // The input is latest-wins, not lossless. Establish the first cadence
+        // anchor before sending the burst; otherwise sequence zero may be
+        // legitimately overwritten depending on worker scheduling.
+        frames_tx.send(Ok(sample(0))).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let entries = auki_logs::Log::<DetectionFrame>::read(log.root())
+                    .and_then(|reader| reader.entries())
+                    .unwrap_or_default();
+                if entries.len() == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("first streamed frame was not processed");
+        frames_tx.send(Ok(sample(500_000_000))).await.unwrap();
+        frames_tx.send(Ok(sample(1_000_000_000))).await.unwrap();
+        drop(frames_tx);
         let mut entries = Vec::new();
         for _ in 0..100 {
             entries = auki_logs::Log::<DetectionFrame>::read(log.root())

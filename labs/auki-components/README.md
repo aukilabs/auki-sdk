@@ -18,4 +18,9 @@ Construct Products through the runtime's capture APIs or this import API, not
 public struct literals.
 
 See [networked Components](../../docs/reference/component-protocols.md) for the
-optional authenticated protocol adapter and its retained-Product polling limits.
+optional authenticated protocol adapter and its fetch/subscription limits.
+
+`BufferCursor::next_async()` is a cancellation-safe, wake-driven read of the
+same retained history as `next_timeout`. It reports items, gaps, and closure
+without a timer or worker thread. Dropping a pending read unregisters its waker;
+it does not advance the cursor or create a second history queue.

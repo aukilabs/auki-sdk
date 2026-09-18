@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 #[cfg(target_arch = "wasm32")]
@@ -25,6 +25,8 @@ use futures_timer::Delay;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+use crate::subscription::{SubscriptionSource, serve_subscription};
+
 use crate::wire::{
     CATALOG_PROTOCOL_ID, CatalogRequest, CatalogResponse, MAX_BATCH_OBSERVATIONS,
     MAX_CONTROL_FRAME_BYTES, MAX_OPERATION_DEADLINE_MS, MAX_PAYLOAD_FRAME_BYTES,
@@ -34,20 +36,20 @@ use crate::wire::{
     write_json, write_payload,
 };
 
-const MAX_CONCURRENCY: usize = 32;
-const NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const MAX_CONCURRENCY: usize = 32;
+pub(super) const NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
 // Observation payloads can be substantially larger than Catalog control
 // frames, especially while binary media is represented by a JSON payload.
 // Relayed routes must have enough time to make forward progress without
 // relaxing the fail-fast deadline used to open and close protocol streams.
-const OBSERVATION_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(60);
+pub(super) const OBSERVATION_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(not(target_arch = "wasm32"))]
 const OPERATION_WORKERS: usize = 4;
 
 #[derive(Clone)]
-struct EncodedObservation {
-    header: ObservationRecordHeader,
-    payload: Vec<u8>,
+pub(super) struct EncodedObservation {
+    pub header: ObservationRecordHeader,
+    pub payload: Vec<u8>,
 }
 
 struct EncodedObservationBatch {
@@ -75,10 +77,16 @@ type OperationHandler = dyn Fn(
     + Send
     + Sync;
 
-struct ServiceState {
-    runtime: ComponentRuntime,
+pub(super) struct ProductExport {
+    query: Arc<ProductHandler>,
+    pub source: SubscriptionSource,
+}
+
+pub(super) struct ServiceState {
+    pub runtime: ComponentRuntime,
     catalog_gate: RwLock<()>,
-    products: RwLock<BTreeMap<String, Arc<ProductHandler>>>,
+    pub products: RwLock<BTreeMap<String, Arc<ProductExport>>>,
+    pub active_subscriptions: AtomicUsize,
     operations: RwLock<BTreeMap<(String, String), Arc<OperationHandler>>>,
     export_revision: AtomicU64,
     catalog_projection: Mutex<CatalogProjection>,
@@ -100,11 +108,12 @@ pub struct ComponentProtocolEndpoint {
     state: Arc<ServiceState>,
     catalog_registration: AukiProtocolRegistration,
     observation_registration: AukiProtocolRegistration,
+    subscription_registration: AukiProtocolRegistration,
     operation_registration: AukiProtocolRegistration,
 }
 
 impl ComponentProtocolEndpoint {
-    /// Mount all three exact Component protocols on one running Auki peer.
+    /// Mount finite queries, continuing observations, Catalog, and operations.
     pub fn mount(
         protocols: AukiPeerProtocols,
         runtime: ComponentRuntime,
@@ -126,6 +135,7 @@ impl ComponentProtocolEndpoint {
             runtime,
             catalog_gate: RwLock::new(()),
             products: RwLock::new(BTreeMap::new()),
+            active_subscriptions: AtomicUsize::new(0),
             operations: RwLock::new(BTreeMap::new()),
             export_revision: AtomicU64::new(0),
             catalog_projection: Mutex::new(CatalogProjection::default()),
@@ -169,6 +179,27 @@ impl ComponentProtocolEndpoint {
                 }
             })?;
 
+        let subscription_state = Arc::clone(&state);
+        let subscription_registration = protocols.register(
+            AukiProtocolSpec::new(
+                crate::OBSERVATION_STREAM_PROTOCOL_ID,
+                MAX_CONCURRENCY,
+                MAX_PAYLOAD_FRAME_BYTES as u32,
+            )?,
+            move |mut stream| {
+                let state = Arc::clone(&subscription_state);
+                async move {
+                    let _ = serve_subscription(&mut stream, &state).await;
+                    let _ = deadline(
+                        ComponentProtocolOperation::Close,
+                        stream.close(),
+                        NETWORK_TIMEOUT,
+                    )
+                    .await;
+                }
+            },
+        )?;
+
         let operation_state = Arc::clone(&state);
         let operation_registration =
             protocols.register(operations_spec()?, move |mut stream| {
@@ -194,6 +225,7 @@ impl ComponentProtocolEndpoint {
             state,
             catalog_registration,
             observation_registration,
+            subscription_registration,
             operation_registration,
         })
     }
@@ -253,24 +285,30 @@ impl ComponentProtocolEndpoint {
                 reference.product_id
             )));
         }
-        products.insert(reference.product_id, handler);
+        products.insert(
+            reference.product_id,
+            Arc::new(ProductExport {
+                query: handler,
+                source: SubscriptionSource::new(product),
+            }),
+        );
         self.state.export_revision.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 
     pub fn unexport_product(&self, product_id: &str) -> bool {
         let _catalog_guard = self.state.catalog_gate.write().unwrap();
-        let removed = self
-            .state
-            .products
-            .write()
-            .unwrap()
-            .remove(product_id)
-            .is_some();
-        if removed {
+        let removed = self.state.products.write().unwrap().remove(product_id);
+        if let Some(exported) = &removed {
+            exported.source.revoke();
             self.state.export_revision.fetch_add(1, Ordering::AcqRel);
         }
-        removed
+        removed.is_some()
+    }
+
+    /// Admitted continuing-observation handlers, including idle subscribers.
+    pub fn active_subscriptions(&self) -> usize {
+        self.state.active_subscriptions.load(Ordering::Acquire)
     }
 
     /// Make one typed Operable available through authenticated invocation.
@@ -377,6 +415,7 @@ impl ComponentProtocolEndpoint {
     pub async fn close(self) -> Result<(), ComponentProtocolError> {
         self.catalog_registration.close().await?;
         self.observation_registration.close().await?;
+        self.subscription_registration.close().await?;
         self.operation_registration.close().await?;
         Ok(())
     }
@@ -455,7 +494,7 @@ impl ComponentProtocolEndpoint {
 /// Cloneable outbound client for the Component protocol family.
 #[derive(Clone)]
 pub struct ComponentProtocolClient {
-    protocols: AukiPeerProtocols,
+    pub(super) protocols: AukiPeerProtocols,
 }
 
 impl ComponentProtocolClient {
@@ -1200,7 +1239,7 @@ where
         )
         .await;
     }
-    let batch = match handler(request.selection) {
+    let batch = match (handler.query)(request.selection) {
         Ok(batch) => batch,
         Err(error) => {
             return write_observation_rejection(stream, &error.code, &error.message).await;
@@ -1424,7 +1463,7 @@ where
     }
 }
 
-fn encode_observation<T: Serialize>(
+pub(super) fn encode_observation<T: Serialize>(
     observation: Observation<T>,
 ) -> Result<EncodedObservation, ServiceError> {
     let payload = serde_json::to_vec(&*observation.payload)
@@ -1750,7 +1789,9 @@ fn operations_spec() -> Result<AukiProtocolSpec, AukiProtocolError> {
     )
 }
 
-async fn close_stream(stream: &mut AuthenticatedRouteStream) -> Result<(), ComponentProtocolError> {
+pub(super) async fn close_stream(
+    stream: &mut AuthenticatedRouteStream,
+) -> Result<(), ComponentProtocolError> {
     deadline(
         ComponentProtocolOperation::Close,
         AsyncWriteExt::close(stream),
@@ -1760,7 +1801,7 @@ async fn close_stream(stream: &mut AuthenticatedRouteStream) -> Result<(), Compo
     .map_err(|error| ComponentProtocolError::Close(error.to_string()))
 }
 
-async fn deadline<T>(
+pub(super) async fn deadline<T>(
     operation: ComponentProtocolOperation,
     future: impl Future<Output = T>,
     duration: Duration,
@@ -1851,13 +1892,13 @@ impl From<WireError> for ComponentProtocolError {
 }
 
 #[derive(Debug)]
-struct ServiceError {
-    code: String,
-    message: String,
+pub(super) struct ServiceError {
+    pub code: String,
+    pub message: String,
 }
 
 impl ServiceError {
-    fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(super) fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             message: message.into(),

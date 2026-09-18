@@ -1,7 +1,7 @@
 # Fleet and portal pagination validation — 2026-09-18
 
 Consumer validation for [#385](https://github.com/aukilabs/auki-sdk/issues/385),
-based on SDK `8403091a` (including the merged Python/CI fix in #406). Provider:
+rebased onto SDK `84e10ad7` (including merged #406, #407 and #408). Provider:
 [DDS #569](https://github.com/aukilabs/domain-service/pull/569), `a0276f4`, based
 on `1ce8d30b`. See the [Fleet contract](../docs/reference/fleet.md) and
 [portal page contract](../docs/how-to/domain-data.md#read-portal-pages).
@@ -15,13 +15,17 @@ report nor these fixture tests establish a working restricted-viewer rollout.
 All runtime checks used local fixtures. No deployed provider was exercised and
 no shared data, discovery records, relay bookings or jobs were created.
 
-## Passed after removing the human-auth migration
+## Pagination validation before the latest rebase
 
-Commands run from the repository root unless a directory is specified:
+Commands run from the repository root unless a directory is specified.
+Multiplatform checks ran at `cb04a513`; after incorporating #408, the affected
+native suites and Fleet/SDK Clippy were rerun. The only merge conflict was in
+the Fleet reference; both DDS pagination and #408's DMS compatibility guidance
+are preserved. No binding or authentication code changed during that merge:
 
 | Check | Result |
 | --- | --- |
-| `cargo test --locked -p auki-auth -p auki-domain-client -p auki-sdk -p auki-fleet -p auki-tasks -p auki-dms -p auki-sdk-swift` | All passed: 97 Auth, 29 Domain client, 133 SDK, 26 Fleet, 27 Tasks, 36 DMS, 19 Swift adapter and 1 documentation test. |
+| `cargo test --locked -p auki-auth -p auki-domain-client -p auki-sdk -p auki-fleet -p auki-tasks -p auki-dms -p auki-sdk-swift` | All passed: 97 Auth, 29 Domain client, 133 SDK, 30 Fleet, 27 Tasks, 36 DMS, 19 Swift adapter and 1 documentation test. |
 | `cargo build --locked -p auki-sdk` | Passed. |
 | `cargo clippy --locked -p auki-auth -p auki-domain-client -p auki-sdk -p auki-fleet -p auki-dms -p auki-sdk-py -p auki-sdk-swift --all-targets -- -D warnings` | Passed. |
 | `cargo clippy --locked --target wasm32-unknown-unknown -p auki-auth -p auki-domain-client -p auki-sdk -p auki-sdk-web --features auki-sdk-web/finite-protocols,auki-sdk-web/message,auki-sdk-web/stream --lib -- -D warnings` | Passed. |
@@ -60,7 +64,29 @@ CoreSimulator service is incompatible with the installed Xcode. The XCFramework
 and native Swift host checks above passed; the Expo iOS app build was not rerun
 after this cleanup. Android remains the documented unsupported-platform stub.
 
-The previous PR head's CI hit an unchanged P2P single-flight relay test failure
-(`concurrent_exact_route_opens_single_flight_one_circuit`, `WriteZero`). The local
-suites above do not rerun that P2P suite; consult the new head's CI result before
-merging.
+## Relay CI regression and rebase
+
+The relay test failure also reproduced on the latest `develop`: the unchanged
+case failed on its fourth local repeat. The libp2p incoming queue drops excess
+simultaneous arrivals for the same protocol, and this test also released each
+stream immediately after its own round trip instead of ensuring overlapping
+route ownership.
+
+The test now opens two distinct application protocols concurrently over the same
+exact route, retains both streams through the one-circuit assertion, and proves
+that the second stream still carries data after the first closes. Both closes
+must succeed, and both application-server tasks are awaited. Runtime transport,
+authentication, retry rules and CI jobs are unchanged.
+
+`cargo test --locked -p auki-p2p --test relay_transport concurrent_exact_route_opens_single_flight_one_circuit -- --exact`
+passed once after compilation and then **100 consecutive runs**.
+
+The following checks also passed on the rebased branch:
+
+- `cargo test --locked -p auki-auth -p auki-domain-client -p auki-dms -p auki-fleet -p auki-p2p -p auki-relay-booking -p auki-tasks -p auki-sdk`: **514 tests passed**, including all 13 relay integration tests.
+- `cargo clippy --locked -p auki-p2p -p auki-sdk --all-targets -- -D warnings`.
+- `cargo build --locked -p auki-sdk`.
+- `cargo fmt --all -- --check`, `git diff --check` and changed Markdown link checks.
+
+GitHub's Rust native, Python and Web/Expo jobs validate the final published head.
+Swift/iOS runtime checks were not rerun for this test-fixture change.

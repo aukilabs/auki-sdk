@@ -116,7 +116,7 @@ failure also retains earlier records as partial. Duplicate/nonascending machine
 IDs, repeated cursors, malformed acknowledgement or a provider that stops
 acknowledging pagination fail with `invalid_response`. Empty final pages work.
 
-The paged provider contract is [DDS machine inventory pagination](https://github.com/aukilabs/domain-service/blob/878dc9430de0f6bb27334cb8bef3e4a6f09a69d2/docs/machine-inventory-pagination.md),
+The paged provider contract is [DDS machine inventory pagination](https://github.com/aukilabs/domain-service/blob/a0276f4654d913708cb38c0e826624b4a7dd5703/docs/machine-inventory-pagination.md),
 implemented in [DDS #569](https://github.com/aukilabs/domain-service/pull/569).
 Deploy it to every DDS replica before relying on pagination. A first response
 without acknowledgement is treated as an existing bounded complete response,
@@ -126,7 +126,7 @@ also avoids declaring a mixed-version traversal complete. Source support does
 not establish deployed support; no new shared-environment validation accompanies
 this change. Remaining lists are tracked in [#385](https://github.com/aukilabs/auki-sdk/issues/385).
 See [pagination validation](../../test-support/fleet-pagination-validation.md)
-for local regression and binding results, including the full Python suite failure.
+for local regression and binding results; the full Python suite passes after #406.
 
 DMS busy feeds remain unpaginated. Complete job
 traversal requires a DMS deployment containing the cursor-boundary fix from

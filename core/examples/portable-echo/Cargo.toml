@@ -10,7 +10,14 @@ publish = false
 description = "Portable echo protocol and cross-platform AukiPeer endpoint."
 readme = "README.md"
 
+[features]
+default = []
+chat = ["dep:serde", "dep:serde_json", "dep:uuid"]
+
 [dependencies]
+serde = { workspace = true, optional = true, features = ["derive"] }
+serde_json = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
 async-channel = { workspace = true }
 auki-sdk = { path = "../../auki-sdk" }
 futures = { workspace = true }

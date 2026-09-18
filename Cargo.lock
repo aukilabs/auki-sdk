@@ -669,7 +669,10 @@ dependencies = [
  "auki-sdk",
  "futures",
  "futures-timer",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
@@ -717,6 +720,7 @@ dependencies = [
  "auki-portable-echo",
  "auki-sdk",
  "auki-sdk-web",
+ "futures",
  "js-sys",
  "wasm-bindgen",
  "wasm-bindgen-futures",

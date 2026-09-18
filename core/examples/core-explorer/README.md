@@ -43,7 +43,7 @@ Non-loopback bases require HTTPS; embedded credentials,
 query strings and fragments are rejected. Data reads do not use DMS. Optional outbound-only networking starts no browser relay booking;
 the remote robot owns its relay booking. Provider deployments
 must support the existing SDK contracts; synthetic tests do not establish live
-compatibility. No wire formats, Rust SDK code or backend contracts were changed.
+compatibility. Core SDK and backend contracts are unchanged; the optional example-owned Chat protocol is additive and leaves Echo wire behavior unchanged.
 
 Passwords are cleared immediately after submission. Only the installation client
 ID is stored in localStorage. Tokens remain owned by the in-memory SDK session.
@@ -414,3 +414,30 @@ It also verifies Fleet-owned reads abort on Domain change/logout, no stale Domai
 machines return, and uncertain Jobs survive Fleet visits without resubmission.
 The resource-capped full suite and independent review passed; the current gallery
 includes Fleet screenshots. These fixture results do not prove live availability.
+
+## Network Chat and local operator bridge
+
+Network → Chat opens a separate outbound-only peer to an exact host Peer ID and
+WSS relay route. The pending screen shows the actual local Chat Peer ID and
+session UUID; give both to the operator for explicit approval. Disconnect, Domain
+switch and logout drain Chat and clear that pair and conversation. Chat is an
+optional Core Explorer example protocol (`/example/core-explorer-chat/1.0.0`),
+not a stable SDK protocol. Rebuild the same combined Portable Echo Web/Python
+modules to obtain its typed exports; independently compiled peer handles cannot
+be mixed.
+
+The [private operator CLI](chat-host/README.md) lists, reads, approves and replies
+through a local private spool. This is a manual bridge: incoming text never
+activates an assistant, shell, job or worker. An acknowledgement means receipt by
+the peer, not human reading or AI execution. Text is at most 2048 UTF-8 bytes;
+each session permits 128 total messages across both directions. At most four
+live plus retained sessions are stored; closed history is evicted for admission.
+Pending approval expires after five minutes; paired sessions last at most one
+hour. Commands expire after five minutes and are purged during normal shutdown.
+
+Parent acceptance after combined-module regeneration: `node tests/chat-browser.mjs`.
+It uses the real WASM/native stream, production Inbox/Spool and operator CLI for
+exact-pair approval, reads and stdin replies, checks more than four reconnects,
+Domain/logout cleanup and subsequent Chat/Echo availability, and captures pending
+and conversation screenshots at desktop/mobile sizes. It uses loopback fixtures
+only; this harness is not evidence of deployed service support until run.

@@ -19,7 +19,7 @@ default = []
 extension-module = ["pyo3/extension-module"]
 
 [dependencies]
-auki-echo-protocol = { package = "auki-portable-echo", path = ".." }
+auki-echo-protocol = { package = "auki-portable-echo", path = "..", features = ["chat"] }
 auki-sdk-binding = { package = "auki-sdk-py", path = "../../../bindings/python/auki-sdk-py", default-features = false }
 auki-sdk-rs = { package = "auki-sdk", path = "../../../auki-sdk" }
 parking_lot.workspace = true

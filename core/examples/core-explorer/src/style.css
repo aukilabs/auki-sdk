@@ -143,3 +143,8 @@ h1{font-size:26px}
 }
 
 @media(max-width:760px){.sidebar button{min-width:0;font-size:12px}.sidebar{padding-inline:4px}}
+
+.chat-panel pre, .chat-message { white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-panel textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+#chat-messages { max-height: 40vh; overflow-y: auto; }
+.chat-panel input { min-width: 0; width: 100%; box-sizing: border-box; }

@@ -17,3 +17,6 @@ pub use wire::{
     EchoProtocolError, EchoRequest, EchoResponse, MAX_FRAME_BYTES, PROTOCOL_ID, run_client,
     run_server,
 };
+
+#[cfg(feature = "chat")]
+pub mod chat;

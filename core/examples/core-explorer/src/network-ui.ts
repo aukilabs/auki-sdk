@@ -1,3 +1,4 @@
+import { chatUI } from './chat-ui';
 import { AukiDiscoveryMode, AukiPeerReachabilityMode, AukiEchoClient, type AukiPeer, type Connection } from './sdk';
 import { facts, shortPeerId } from './presentation';
 import { Networking, diagnosticBytes } from './networking.ts';
@@ -198,6 +199,7 @@ export function networkingUI(connection: Connection, selectedDomain: () => strin
     }, () => { if (current()) get('net-status').textContent = safeError(undefined); }, receipt => receipt.free());
     sending = false; render();
   };
+  const chat = chatUI(connection, selectedDomain, section);
   render();
-  return { refresh: render };
+  return { refresh: () => { render(); chat.refresh(); } };
 }

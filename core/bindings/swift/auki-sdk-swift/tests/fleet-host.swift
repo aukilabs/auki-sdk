@@ -17,12 +17,12 @@ private struct FleetHost {
         let fleet = try session.fleet(domainId: domain)
         let inventory = try await fleet.list(.init(capabilities: ["vendor.example/inspect/v7"], matchAllCapabilities: true))
         try require(inventory.complete && inventory.domainId == domain, "incomplete or wrong-Domain inventory")
-        try require(inventory.machines.count == 1, "pool candidate included in Domain inventory")
+        try require(inventory.machines.count == 2, "robot pagination did not collect both pages")
         try require(inventory.machines[0].kind == .robot && inventory.machines[0].association == .assigned,
                     "robot assignment not preserved")
         try require(inventory.machines[0].workState == .idle, "covered idle state not decoded")
         let pool = try await fleet.computePool(.init(mode: .dedicated))
-        try require(pool.view == .computePool && pool.machines.count == 1, "compute pool not decoded")
+        try require(pool.view == .computePool && pool.machines.count == 2, "compute pagination did not collect both pages")
         try require(pool.machines[0].association == .candidate && pool.machines[0].lastSeenAt == nil,
                     "candidate association or unknown last-seen changed")
         let cancellation = AukiCancellation()

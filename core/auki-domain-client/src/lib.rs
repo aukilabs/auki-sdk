@@ -39,6 +39,33 @@ impl AukiDomains {
             .await?)
     }
 
+    pub async fn for_portal_page(
+        &self,
+        portal: &PortalId,
+        organization: &str,
+        limit: usize,
+        cursor: Option<&str>,
+        cancellation: &CancellationToken,
+    ) -> Result<auki_auth::InventoryPage<PortalDomain>, DataError> {
+        Ok(self
+            .0
+            .domains_for_portal_page(portal, organization, limit, cursor, cancellation)
+            .await?)
+    }
+
+    pub async fn portals_page(
+        &self,
+        domain: uuid::Uuid,
+        limit: usize,
+        cursor: Option<&str>,
+        cancellation: &CancellationToken,
+    ) -> Result<auki_auth::InventoryPage<Portal>, DataError> {
+        Ok(self
+            .0
+            .list_portals_page(domain, limit, cursor, cancellation)
+            .await?)
+    }
+
     pub async fn portals(
         &self,
         domain: uuid::Uuid,

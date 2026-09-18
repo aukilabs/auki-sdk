@@ -335,3 +335,6 @@ export interface FleetSnapshot {
   machines: FleetMachine[]; unresolved_activity: FleetActivity[];
   sources: FleetSourceReport[]; complete: boolean;
 }
+
+export type PortalPage = { items: Portal[]; next_cursor: string | null; paginated: boolean };
+export type PortalDomainPage = { items: PortalDomain[]; next_cursor: string | null; paginated: boolean };

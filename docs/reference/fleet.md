@@ -108,8 +108,27 @@ session's `AuthLimits` (15 seconds and 512 KiB by default); DMS reads use the
 jobs defaults (30 seconds and 4 MiB per response). Responses are bounded before
 JSON decoding. Inventory and busy responses are never silently truncated.
 
-DDS inventory and DMS busy feeds are currently unpaginated. DDS pagination is
-tracked in [#385](https://github.com/aukilabs/auki-sdk/issues/385). Complete job
+Fleet requests DDS inventory in pages of 100 and follows at most 20 pages per
+source under the existing overall deadline. Each page retains authorization and
+byte limits. If another cursor remains, the source is `partial` with
+`inventory_page_limit`; already-read machines remain available. A later optional
+failure also retains earlier records as partial. Duplicate/nonascending machine
+IDs, repeated cursors, malformed acknowledgement or a provider that stops
+acknowledging pagination fail with `invalid_response`. Empty final pages work.
+
+The paged provider contract is [DDS machine inventory pagination](https://github.com/aukilabs/domain-service/blob/a0276f4654d913708cb38c0e826624b4a7dd5703/docs/machine-inventory-pagination.md),
+implemented in [DDS #569](https://github.com/aukilabs/domain-service/pull/569).
+Deploy it to every DDS replica before relying on pagination. A first response
+without acknowledgement is treated as an existing bounded complete response,
+with source code `legacy_inventory_unpaginated`; no client-side slicing occurs.
+This preserves old-provider compatibility while making its limit visible. It
+also avoids declaring a mixed-version traversal complete. Source support does
+not establish deployed support; no new shared-environment validation accompanies
+this change. Remaining lists are tracked in [#385](https://github.com/aukilabs/auki-sdk/issues/385).
+See [pagination validation](../../test-support/fleet-pagination-validation.md)
+for local regression and binding results; the full Python suite passes after #406.
+
+DMS busy feeds remain unpaginated. Complete job
 traversal requires a DMS deployment containing the cursor-boundary fix from
 [DMS #42](https://github.com/aukilabs/domain-manager-service/pull/42), tracked in
 [SDK #396](https://github.com/aukilabs/auki-sdk/issues/396). Older DMS deployments
@@ -139,6 +158,8 @@ The APIs are additive in Rust, Python and JavaScript. Swift adds an
 `AukiSdkError.Fleet(kind:status:code:message:)` case; consumers with exhaustive
 error switches must handle it. Regenerate UniFFI output and ship the matching
 Swift/Expo XCFramework with its wrappers. Never mix the previous generated FFI
-with the new native library. This change adds no wire format, endpoint, protocol
-ID or backend mutation contract. Expo supports Web and iOS; Android remains
-unimplemented.
+with the new native library. Fleet pagination adds optional DDS query parameters
+and response metadata;
+existing binding signatures and snapshot schemas remain unchanged. It adds no
+backend mutation or transport protocol contract. Expo supports Web and iOS;
+Android remains unimplemented.

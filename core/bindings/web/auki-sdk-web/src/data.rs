@@ -13,6 +13,8 @@ use wasm_bindgen_futures::JsFuture;
 
 #[wasm_bindgen(typescript_custom_section)]
 const TYPES: &str = r#"
+export interface PortalPage { items: Portal[]; next_cursor: string | null; paginated: boolean }
+export interface PortalDomainPage { items: PortalDomain[]; next_cursor: string | null; paginated: boolean }
 export interface DomainQuery { organization?: string; domainServerId?: string; limit?: number; offset?: number }
 export interface DomainSummary { id: string; name: string; organization_id: string | null }
 export interface DomainPage { domains: DomainSummary[]; total: number; limit: number; offset: number }
@@ -209,6 +211,53 @@ pub struct AukiDomains {
 }
 #[wasm_bindgen]
 impl AukiDomains {
+    #[wasm_bindgen(js_name = forPortalPage, unchecked_return_type = "PortalDomainPage")]
+    pub async fn for_portal_page(
+        &self,
+        portal: String,
+        organization: Option<String>,
+        limit: u32,
+        cursor: Option<String>,
+        signal: Option<web_sys::AbortSignal>,
+    ) -> Result<JsValue, JsValue> {
+        let cancel = Cancellation::new(signal)?;
+        encode(
+            &self
+                .inner
+                .for_portal_page(
+                    &PortalId::parse(&portal).map_err(|e| error(e.into()))?,
+                    organization.as_deref().unwrap_or("own"),
+                    limit as usize,
+                    cursor.as_deref(),
+                    &cancel.token,
+                )
+                .await
+                .map_err(error)?,
+        )
+    }
+    #[wasm_bindgen(js_name = portalsPage, unchecked_return_type = "PortalPage")]
+    pub async fn portals_page(
+        &self,
+        domain: String,
+        limit: u32,
+        cursor: Option<String>,
+        signal: Option<web_sys::AbortSignal>,
+    ) -> Result<JsValue, JsValue> {
+        let cancel = Cancellation::new(signal)?;
+        encode(
+            &self
+                .inner
+                .portals_page(
+                    id(&domain)?,
+                    limit as usize,
+                    cursor.as_deref(),
+                    &cancel.token,
+                )
+                .await
+                .map_err(error)?,
+        )
+    }
+
     #[wasm_bindgen(unchecked_return_type = "DomainPage")]
     pub async fn list(
         &self,
@@ -523,6 +572,10 @@ mod tests {
                     const token='e30.'+btoa(JSON.stringify(claims)).replaceAll('=','').replaceAll('+','-').replaceAll('/','_')+'.sig';
                     return json({id:domain,domain_server:{url:'https://server.example'},access_token:token});
                 }
+                if(url.pathname.endsWith('/lighthouses')) {
+                    if(url.searchParams.get('limit') !== '1') throw Error('missing portal page limit');
+                    return json({lighthouses:[{id:data,short_id:'ABC12345678',name:'Portal',size:10,created_at:meta.created_at,updated_at:meta.updated_at}],pagination:{version:1,limit:1,next_cursor:''}});
+                }
                 if(request.redirect !== 'error' || request.credentials !== 'omit') throw Error('unsafe data request');
                 if(url.pathname === '/api/v1/info') return json({upload:{domain_data_max_bytes:10000,request_max_bytes:4096,multipart:{enabled:true,part_size_bytes:4}}});
                 if(url.pathname.endsWith('/multipart')) {
@@ -565,6 +618,19 @@ mod tests {
             Some(1.0)
         );
         let data = session.data(DOMAIN.into()).unwrap();
+        let portals = session
+            .domains()
+            .portals_page(DOMAIN.into(), 1, None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            js_sys::Reflect::get(&portals, &"paginated".into()).unwrap(),
+            true
+        );
+        assert_eq!(
+            js_sys::Array::from(&js_sys::Reflect::get(&portals, &"items".into()).unwrap()).length(),
+            1
+        );
         let sink = Function::new_with_args(
             "bytes",
             "globalThis.__downloaded = (globalThis.__downloaded || 0) + bytes.length",

@@ -88,6 +88,47 @@ pub(crate) struct PyDomains {
 }
 #[pymethods]
 impl PyDomains {
+    #[pyo3(signature = (portal_id, *, organization="own", limit=50, cursor=None))]
+    fn for_portal_page<'py>(
+        &self,
+        py: Python<'py>,
+        portal_id: &str,
+        organization: &str,
+        limit: usize,
+        cursor: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let portal = PortalId::parse(portal_id).map_err(|e| error(e.into()))?;
+        let organization = organization.to_owned();
+        let inner = self.inner.clone();
+        run(py, |cancel| async move {
+            json(
+                &inner
+                    .for_portal_page(&portal, &organization, limit, cursor.as_deref(), &cancel)
+                    .await
+                    .map_err(error)?,
+            )
+        })
+    }
+    #[pyo3(signature = (domain_id, *, limit=50, cursor=None))]
+    fn portals_page<'py>(
+        &self,
+        py: Python<'py>,
+        domain_id: &str,
+        limit: usize,
+        cursor: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let domain = id(domain_id)?;
+        let inner = self.inner.clone();
+        run(py, |cancel| async move {
+            json(
+                &inner
+                    .portals_page(domain, limit, cursor.as_deref(), &cancel)
+                    .await
+                    .map_err(error)?,
+            )
+        })
+    }
+
     #[pyo3(signature = (*, organization="own", limit=50, offset=0, domain_server_id=None))]
     fn list<'py>(
         &self,

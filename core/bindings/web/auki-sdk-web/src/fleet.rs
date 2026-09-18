@@ -152,6 +152,8 @@ mod tests {
           globalThis.__fleetFetch=globalThis.fetch;
           globalThis.__fleetDeny=false; globalThis.__fleetBlock=false;
           globalThis.__fleetStarted=false; globalThis.__fleetAborted=false;
+          globalThis.__fleetPaged=false; globalThis.__fleetMixed=false; globalThis.__fleetBlockPage=false;
+          globalThis.__fleetContinuations=0;
           globalThis.fetch=async (input,init) => {
             const request=input instanceof Request ? input : new Request(input,init);
             const url=new URL(request.url);
@@ -171,8 +173,28 @@ mod tests {
             if(request.method!=='GET') throw Error('mutating fleet request');
             if(url.pathname.startsWith('/v1/') && (request.credentials!=='omit' || request.redirect!=='error')) throw Error('unsafe DMS request');
             if(!request.headers.get('authorization')?.startsWith('Bearer ')) throw Error('missing authorization');
-            if(url.pathname.endsWith('/robots')) return json({robots:[{id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',organization_id:org,assigned_domain_id:domain,name:'inspector',capabilities:['vendor/v7'],status:'online',last_seen_at:null,active_lease_expires_at:null}]});
-            if(url.pathname==='/api/v1/nodes') return json({nodes:[{id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',organization_id:org,name:'compute',capabilities:['vendor/v7'],status:'online',mode:'dedicated'}]});
+            const inventory=async (key,record) => {
+              if(!__fleetPaged) return json({[key]:[record]});
+              if(url.searchParams.get('limit')!=='100') throw Error('missing inventory page limit');
+              const cursor=url.searchParams.get('cursor');
+              if(cursor!==null) {
+                if(cursor!=='second') throw Error('wrong cursor');
+                globalThis.__fleetContinuations++;
+                if(__fleetBlockPage) {
+                  globalThis.__fleetStarted=true;
+                  return new Promise((_,reject)=>request.signal.addEventListener('abort',()=>{globalThis.__fleetAborted=true;reject(new DOMException('aborted','AbortError'));}));
+                }
+                if(__fleetMixed) return json({[key]:[record]});
+                return json({[key]:[record],pagination:{version:1,limit:100,next_cursor:''}});
+              }
+              record={...record,id:record.id.slice(0,-1)+(key==='robots'?'a':'b')};
+              return json({[key]:[record],pagination:{version:1,limit:100,next_cursor:'second'}});
+            };
+            if(url.pathname.endsWith('/robots')) return inventory('robots',{id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',organization_id:org,assigned_domain_id:domain,name:'inspector',capabilities:['vendor/v7'],status:'online',last_seen_at:null,active_lease_expires_at:null});
+            if(url.pathname==='/api/v1/nodes') {
+              if(url.searchParams.get('org')!=='all' || url.searchParams.get('staking_status')!=='all') throw Error('inventory filters changed');
+              return inventory('nodes',{id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',organization_id:org,name:'compute',capabilities:['vendor/v7'],status:'online',mode:'dedicated'});
+            }
             if(url.pathname==='/v1/jobs') {
               if(__fleetBlock) {
                 globalThis.__fleetStarted=true;
@@ -282,6 +304,63 @@ mod tests {
             .list(JsValue::UNDEFINED, Some(controller.signal()))
             .await;
         let error = result.unwrap_err();
+        assert_eq!(
+            js_sys::Reflect::get(&error, &"code".into()).unwrap(),
+            "cancelled"
+        );
+        fleet.close().await;
+        assert_eq!(js_sys::eval("__fleetAborted").unwrap(), true);
+        JsFuture::from(session.close()).await.unwrap();
+    }
+    #[wasm_bindgen_test]
+    async fn fleet_collects_inventory_pages_and_rejects_mixed_provider_responses() {
+        let _restore = fixture();
+        js_sys::eval("globalThis.__fleetPaged=true").unwrap();
+        let session = login().await;
+        let fleet = session.fleet(DOMAIN.into()).unwrap();
+        let inventory = object(fleet.list(JsValue::UNDEFINED, None).await.unwrap());
+        assert!(inventory.complete);
+        assert_eq!(inventory.machines.len(), 2);
+        let pool = object(
+            fleet
+                .compute_pool(js_sys::eval("({mode:'dedicated'})").unwrap(), None)
+                .await
+                .unwrap(),
+        );
+        assert!(pool.complete);
+        assert_eq!(pool.machines.len(), 2);
+        assert_eq!(
+            js_sys::eval("__fleetContinuations").unwrap().as_f64(),
+            Some(3.0)
+        );
+        js_sys::eval("globalThis.__fleetMixed=true").unwrap();
+        let error = fleet.list(JsValue::UNDEFINED, None).await.unwrap_err();
+        assert_eq!(
+            js_sys::Reflect::get(&error, &"code".into()).unwrap(),
+            "invalid_response"
+        );
+        fleet.close().await;
+        JsFuture::from(session.close()).await.unwrap();
+    }
+
+    #[wasm_bindgen_test]
+    async fn fleet_abort_cancels_a_later_inventory_page() {
+        let _restore = fixture();
+        js_sys::eval("globalThis.__fleetPaged=true; globalThis.__fleetBlockPage=true").unwrap();
+        let session = login().await;
+        let fleet = session.fleet(DOMAIN.into()).unwrap();
+        let controller = web_sys::AbortController::new().unwrap();
+        js_sys::Reflect::set(
+            &js_sys::global(),
+            &"__fleetAbort".into(),
+            controller.as_ref(),
+        )
+        .unwrap();
+        js_sys::eval("{let ticks=0;const timer=setInterval(()=>{if(__fleetStarted || ++ticks>1000){clearInterval(timer);globalThis.__fleetAbort.abort();}},1);}").unwrap();
+        let error = fleet
+            .list(JsValue::UNDEFINED, Some(controller.signal()))
+            .await
+            .unwrap_err();
         assert_eq!(
             js_sys::Reflect::get(&error, &"code".into()).unwrap(),
             "cancelled"

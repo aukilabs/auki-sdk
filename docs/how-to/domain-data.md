@@ -93,6 +93,25 @@ and `data.poses(&cancellation)`. Portal metadata and pose reads require pose
 read permission. These APIs return the service's fields without converting
 coordinates or changing the spatial format.
 
+## Read portal pages
+
+`AukiDomains::for_portal_page` and `portals_page` request DDS cursor pages of
+1–100 records. Python uses the same names; Web, Swift and Expo use
+`forPortalPage` and `portalsPage`. Pass a nonempty `next_cursor` unchanged with
+the same filters until it is absent. Bound the number of pages your app follows.
+
+Each page contains `items`, `next_cursor`, and `paginated`. A first response from
+an older DDS may contain a bounded complete list with `paginated=false`;
+continuation requires versioned pagination acknowledgement. Existing complete
+list methods retain their behavior. Selected-Domain portal reads use the existing
+Domain grant and pose-read permission. Imported portal-to-Domain association
+lookup remains unsupported.
+
+Provider: [DDS #569](https://github.com/aukilabs/domain-service/pull/569).
+Deploy pagination support across DDS replicas before relying on continuation.
+No authentication migration is required. Domain Server pose/data lists remain
+bounded complete responses.
+
 ## Stream larger files
 
 Use `read_to` with an async callback that writes each chunk to your destination.

@@ -90,6 +90,10 @@ struct DomainDataHost {
             try require(portalDomains.first?.id == domainID, "portal Domain association was not preserved")
             let portals = try await domains.portals(domainId: domainID)
             try require(portals.first?.id == portalID, "Domain portals were not preserved")
+            let associationPage = try await domains.forPortalPage(portal: portalShortID, limit: 1)
+            try require(associationPage.items.first?.id == domainID && !associationPage.paginated && associationPage.nextCursor == nil, "legacy portal associations were misreported as paginated")
+            let portalPage = try await domains.portalsPage(domainId: domainID, limit: 1)
+            try require(portalPage.items.first?.id == portalID && !portalPage.paginated && portalPage.nextCursor == nil, "legacy portals were misreported as paginated")
             let portal = try await domains.portal(domainId: domainID, portal: portalShortID)
             try require(portal.shortId == portalShortID, "short portal ID lookup failed")
 

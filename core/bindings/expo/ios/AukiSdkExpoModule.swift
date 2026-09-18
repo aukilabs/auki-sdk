@@ -118,6 +118,29 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
+    AsyncFunction("domainsForPortalPage") {
+      (sessionId: String, portal: String, organization: String, limit: UInt32, cursor: String?, operationId: String) -> [String: Any] in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.domainData.beginOperation(operationId)
+      defer { self.domainData.finishOperation(operationId) }
+      let page = try await withDataErrors { try await self.sessions.session(sessionId).domains().forPortalPage(portal: portal, limit: limit, cursor: cursor, organization: organization, cancellation: cancellation) }
+      return ["items": page.items.map(Self.mapPortalDomain), "next_cursor": Self.nullable(page.nextCursor), "paginated": page.paginated]
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+    AsyncFunction("domainsPortalsPage") {
+      (sessionId: String, domainId: String, limit: UInt32, cursor: String?, operationId: String) -> [String: Any] in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.domainData.beginOperation(operationId)
+      defer { self.domainData.finishOperation(operationId) }
+      let page = try await withDataErrors { try await self.sessions.session(sessionId).domains().portalsPage(domainId: domainId, limit: limit, cursor: cursor, cancellation: cancellation) }
+      return ["items": page.items.map(Self.mapPortal), "next_cursor": Self.nullable(page.nextCursor), "paginated": page.paginated]
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
     AsyncFunction("domainsList") {
       (sessionId: String, queryJson: String, operationId: String) -> [String: Any] in
       #if canImport(auki_sdk_swiftFFI)

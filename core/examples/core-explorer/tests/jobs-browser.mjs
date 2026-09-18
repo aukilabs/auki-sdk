@@ -130,6 +130,24 @@ try {
     await page.waitForFunction(() => document.querySelector('#jobs-selected-name')?.textContent.startsWith('sdk-'));
     await page.waitForFunction(() => { const text = document.querySelector('#jobs-input-preview')?.textContent; return text && !/Loading|Select a record/.test(text); });
   }
+  // A new session has no UI summary cache. Both actions must be named before
+  // any row is opened, without reading inputs or exposing unverified outputs.
+  await page.locator('#logout').click();
+  await page.waitForFunction(() => document.querySelector('#session-status')?.textContent === 'Signed out');
+  await login();
+  const beforeHistoryData = dataReads();
+  await open(); await step('dashboard');
+  await page.waitForFunction(() => document.querySelector('#jobs-new')?.disabled === false);
+  assert.equal(await page.locator('[data-job-id]').count(), 2);
+  for (const submitted of state.submissions) {
+    const action = submitted.body.tasks[0].capability === capability('compute') ? 'Uppercase text' : 'Inspect file';
+    assert.ok((await page.locator(`[data-job-id="${submitted.id}"]`).innerText()).startsWith(action));
+  }
+  assert.equal(dataReads(), beforeHistoryData, 'history action names do not read input or output records');
+  assert.equal(await page.locator('[data-job-output]').count(), 0);
+  assert.doesNotMatch(await page.locator('#jobs-history-items').innerText(), /Demo job|Verified output available/);
+  const historyArtifacts = new URL('../test-artifacts/', import.meta.url); await mkdir(historyArtifacts, { recursive: true });
+  await page.screenshot({ path: new URL('jobs-history-desktop.png', historyArtifacts).pathname });
   // Edit invalidates the previous review and requires a new exact estimate.
   await prepare(); const count = state.estimates.length; await page.locator('#jobs-edit').click(); await step('choose');
   assert.equal(await page.locator('#jobs-confirm').count(), 0);

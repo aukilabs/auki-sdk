@@ -54,7 +54,7 @@ is an explicit original-byte `.bin` attachment; downloaded bytes are not redacte
 ## Focused screens
 
 The viewport-oriented application shows one current task, rather than appending
-details below a long page. **Data**, **Jobs**, **Fleet**, **Poses/Portals** and **Network** are the five primary workspaces. Fleet has All, Dedicated and Public views; Poses/Portals contains Domain information, Portals and Poses. Domain selection opens Data. One compact header carries environment and selected Domain; lists and details replace one another in the dark workspace. Long content scrolls internally and short windows retain reachable controls. Shared rows, forms, metadata and status treatments use restrained orange actions.
+details below a long page. **Data**, **Jobs**, **Fleet**, **Poses/Portals** and **Network** are the five primary workspaces. Fleet has All, Dedicated and Public views; Poses/Portals contains Domain information, Portals and Poses. Domain selection opens Data. One compact header carries environment and selected Domain. Fleet keeps its cards beside a machine inspector on desktop and uses a focused detail screen on narrower displays; other lists and details replace one another. Long content scrolls internally and short windows retain reachable controls. Shared rows, forms, metadata and status treatments use restrained orange actions.
 
 Buttons open the Domain picker, connection settings, advanced filters, record,
 preview and technical screens. Domain paging and known-UUID selection remain
@@ -115,7 +115,7 @@ valid UTF-8. The existing worker also caps output at 64 KiB: Unicode uppercase e
 names are `/examples/compute-robot/{installationId}/{role}/v1`; this is capability
 routing, not an arbitrary worker-ID selector.
 
-The detail screen leads with status, input and verified output, including a bounded preview and **Open in Data**. Technical details contain worker progress/events and raw receipts. Recent jobs are the dashboard, with no separate history destination. Action/input/result names observed in this session enrich rows; provider history does not contain those fields, so unseen jobs show “Demo job” and “Inspect details”. Cached enrichment is discarded when the job or executor configuration changes. Human-readable times use provider timestamps. No per-row metadata requests are made. Executor checks use returned task/receipt information and
+The detail screen leads with status, input and verified output, including a bounded preview and **Open in Data**. Technical details contain worker progress/events and raw receipts. Recent jobs are the dashboard, with no separate history destination. Each history page resolves **Uppercase text** and **Inspect file** from the returned task capabilities before rows are opened. Since the list contract omits capabilities, this uses at most 25 detail reads, four at a time, with a five-second enrichment deadline. Missing, denied or unrecognized details retain a row labeled by its short job ID. These display-only reads neither fetch data records nor authorize outputs or reconcile uncertain submissions. Input/result names already observed in this session enrich rows; that cache is discarded when the job or executor configuration changes. Human-readable times use provider timestamps. Executor checks use returned task/receipt information and
 the configured expected ID; configuration alone never proves execution. Accepted
 result references open through the existing selected-Domain Data client. To chain
 operations, open the compute result and explicitly start a robot inspection of it.
@@ -364,31 +364,51 @@ byte-count/SHA-256 report, never simulated line counts. Estimate review shows th
 input preview, destination, environment and decimal-string credits before submission.
 
 The focused rewrite and Fleet addition passed the production build, unit/type/config
-checks and real-WASM loopback browser acceptance. The current control-panel gallery
-above records the verified layout; screenshots outside that gallery are historical.
+checks and real-WASM loopback browser acceptance. The control-panel gallery
+above records that layout. The [Fleet cards gallery](screenshots/fleet-cards/README.md)
+supersedes its Fleet captures; other screenshots outside those galleries are historical.
 
 ## Fleet screen
 
 Primary navigation is Data · Jobs · Fleet · Poses/Portals · Network. Fleet is a
-read-only view of Domain robots and visible compute candidates. Choose **Refresh**
-to make one bounded Domain inventory read and dedicated/public compute-pool reads.
-All is the default; Dedicated and Public filter the provider mode. Unknown modes
+read-only view of Domain robots and visible compute candidates. First entry automatically
+loads one bounded Domain inventory read and dedicated/public compute-pool reads.
+Return visits reuse the snapshot; **Refresh** reads a new snapshot. An interrupted
+initial read retries on return. All is the default provider mode; Dedicated and
+Public filter the provider mode. Machine cards show only online presence by default;
+**Show offline machines** also includes offline and unknown presence. The checkbox
+and mode filters work locally, persist through machine details and reset on Domain change.
+Unknown modes
 appear only in All. Unknown-mode compute candidates excluded by the SDK's required
 pool-mode filter cannot be discovered through that API; unknown modes returned by
 Domain inventory remain visible. This view does not imply candidate assignment,
 capacity, eligibility or permission to dispatch work.
 
 UUID joins preserve Domain task observations; conflicting presence, mode or work
-observations become Unknown. Machine details show capabilities and authorized work;
-Details retains original observations, timestamps, source diagnostics and unresolved
-activity. Partial/denied reads remain distinguishable from a successful empty view.
-Back restores the filter, list scroll and selected machine focus. View in Fleet
-from Jobs retains the current job flow, with a return link.
+observations become Unknown. The overview counts Domain robots, visible compute
+nodes, online observations and busy observations across the entire snapshot,
+independently of the selected mode and presence filters. Presence and work counts are separate;
+unknown observations remain explicit, and partial-source counts are labeled.
+The observation timestamp uses the oldest snapshot read, not a machine heartbeat.
+
+Machine cards show type, presence, work state, Domain association and a capability.
+Only the exact demo capabilities receive readable labels; arbitrary capabilities
+retain their original names. The robot inspection label is explained as simulated
+in its details. Locally served [Lucide icons](public/icons/lucide/README.md) add
+no runtime service dependency. At 1100px and wider, a selected machine opens beside
+the overview and cards. Narrower displays show its details as a focused screen.
+The inspector shows capabilities, authorized active work and observation times;
+Details retains original observations, source diagnostics and unresolved activity.
+Partial/denied reads remain distinguishable from a successful empty view.
+Back/Escape restores the filter, list scroll and selected machine focus. Refresh
+retains focus and the selection if the machine remains visible in the new snapshot.
+View in Fleet from Jobs retains the current job flow, with a return link.
 
 Fleet owns an independent client per refresh, a 15-second abort deadline, generation
 fences and awaited close/free. Refresh replacement, hidden navigation, Domain
-changes and logout abort/drain pending reads. There is no polling or automatic read
-on entry. The real-WASM loopback browser suite passed all filters, details, source
+changes and logout abort/drain pending reads. There is no polling. The real-WASM
+loopback browser suite checks automatic first entry, interrupted-entry recovery,
+online/offline filters, details, source
 failures, recovery and five-item navigation, including 320×568 and 640×360 viewports.
 It also verifies Fleet-owned reads abort on Domain change/logout, no stale Domain
 machines return, and uncertain Jobs survive Fleet visits without resubmission.

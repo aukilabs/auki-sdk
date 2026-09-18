@@ -142,9 +142,4 @@ h1{font-size:26px}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}
 }
 
-/* Fleet shares the focused workspace and local typography. */
-.fleet-controls{display:flex;gap:4px;margin:16px 0;flex-wrap:wrap}
-.fleet-controls [aria-pressed=true]{border-color:var(--accent);color:var(--text)}
-#view-fleet .jobs-list button{text-align:left;overflow-wrap:anywhere;white-space:normal}
-#view-fleet pre{overflow-wrap:anywhere;white-space:pre-wrap}
 @media(max-width:760px){.sidebar button{min-width:0;font-size:12px}.sidebar{padding-inline:4px}}

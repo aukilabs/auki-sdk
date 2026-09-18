@@ -1,5 +1,8 @@
 # Core Explorer — complete screen gallery
 
+The [Fleet cards gallery](../fleet-cards/README.md) supersedes the Fleet captures
+below. This gallery retains the previous Fleet layout alongside the other screens.
+
 148 real browser captures: **Dev defaults before sign-in**, and **local synthetic fixtures** for signed-in flows. No live worker jobs, live uploads or spending.
 
 Coverage verified programmatically against all 15 main routes, Fleet modes/detail, 6 Jobs views, 6 Network views and 4 Upload steps, for both desktop and mobile. Additional narrow/short captures exercise the nonconnected-network flow. These counts overlap: flow steps live inside their parent route.

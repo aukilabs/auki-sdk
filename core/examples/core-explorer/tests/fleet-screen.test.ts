@@ -62,3 +62,33 @@ test('disagreeing busy/idle observations become Unknown and preserve authorized 
   const result = aggregateFleet('domain', [snapshot('domain', [machine('node', 'dedicated', { association: 'active_task', work_state: 'busy', activity: [work] })]), snapshot('compute_pool', [machine('node')])]);
   assert.equal(result.machines[0].work_state, 'unknown'); assert.deepEqual(result.machines[0].activity, [work]);
 });
+
+test('Fleet entry loads once, reuses its snapshot and loads again after a Domain reset', async () => {
+  let created = 0; const session = {};
+  const controller = new FleetScreenController(() => ({ domainId: 'domain', session, environment: 'local', createFleet: () => {
+    created++;
+    return { list: async () => snapshot('domain', [machine('node')]), computePool: async () => snapshot('compute_pool', []), close: async () => {}, free: () => {} };
+  } }));
+  const first = controller.enter(); assert.equal(controller.state.loading, true);
+  assert.equal(first, controller.enter()); await first;
+  assert.equal(created, 1); assert.equal(controller.state.snapshots[0].machines.length, 1);
+  await controller.close(false); await controller.enter(); assert.equal(created, 1);
+  await controller.close(); await controller.enter(); assert.equal(created, 2);
+  await controller.close();
+});
+
+test('returning after an interrupted first Fleet read retries after cleanup', async () => {
+  let created = 0; const session = {}, events: string[] = [];
+  const controller = new FleetScreenController(() => ({ domainId: 'domain', session, environment: 'local', createFleet: () => {
+    const attempt = ++created;
+    return { list: async (_query: unknown, signal?: AbortSignal | null) => {
+      if (attempt === 1) await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve(), { once: true }));
+      return snapshot('domain', [machine(String(attempt))]);
+    }, computePool: async () => snapshot('compute_pool', []), close: async () => { events.push(`close${attempt}`); }, free: () => { events.push(`free${attempt}`); } };
+  } }));
+  const first = controller.enter(); await new Promise(r => setImmediate(r));
+  const leaving = controller.close(false), returning = controller.enter();
+  await Promise.all([first, leaving, returning]);
+  assert.equal(created, 2); assert.deepEqual(events, ['close1', 'free1', 'close2', 'free2']);
+  assert.equal(controller.state.snapshots[0].machines[0].id, '2'); await controller.close();
+});

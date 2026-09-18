@@ -12,7 +12,19 @@ fn check_headers(
     content_type: Option<&str>,
     length: Option<u64>,
     maximum: usize,
+    retry_after: Option<&str>,
 ) -> Result<(), JobsError> {
+    // Only keyed submissions supply this header. A plain 409 (or a malformed
+    // hint) remains a conflict; never infer retryability from response bodies.
+    if status == 409
+        && let Some(seconds) = retry_after
+            .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        && let Ok(retry_after_seconds) = seconds.parse::<u32>()
+    {
+        return Err(JobsError::SubmissionInProgress {
+            retry_after_seconds,
+        });
+    }
     if !(200..300).contains(&status) {
         return Err(JobsError::HttpStatus { status });
     }
@@ -41,6 +53,7 @@ fn map_error(error: reqwest::Error) -> JobsError {
 pub(super) async fn send(
     request: reqwest::RequestBuilder,
     maximum: usize,
+    keyed_submission: bool,
 ) -> Result<Vec<u8>, JobsError> {
     let mut response = request.send().await.map_err(map_error)?;
     check_headers(
@@ -51,6 +64,14 @@ pub(super) async fn send(
             .and_then(|value| value.to_str().ok()),
         response.content_length(),
         maximum,
+        if keyed_submission {
+            response
+                .headers()
+                .get("retry-after")
+                .and_then(|value| value.to_str().ok())
+        } else {
+            None
+        },
     )?;
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(map_error)? {
@@ -82,6 +103,7 @@ impl Drop for FetchGuard {
 pub(super) async fn send(
     request: reqwest::RequestBuilder,
     maximum: usize,
+    keyed_submission: bool,
 ) -> Result<Vec<u8>, JobsError> {
     use wasm_bindgen::{JsCast, JsValue};
     use wasm_bindgen_futures::JsFuture;
@@ -149,6 +171,15 @@ pub(super) async fn send(
             .map_err(|_| JobsError::Transport)?
             .and_then(|value| value.parse().ok()),
         maximum,
+        if keyed_submission {
+            response
+                .headers()
+                .get("retry-after")
+                .map_err(|_| JobsError::Transport)?
+        } else {
+            None
+        }
+        .as_deref(),
     )?;
     guard.reader = response
         .body()

@@ -4,6 +4,8 @@ private enum HostFailure: Error { case assertion(String) }
 
 private final class MockJobs: AukiDomainJobs, @unchecked Sendable {
     var specification = ""
+    var idempotencyKey = ""
+    var cancellation: AukiCancellation?
     var query = ""
     var closeCount = 0
 
@@ -17,6 +19,14 @@ private final class MockJobs: AukiDomainJobs, @unchecked Sendable {
 
     override func submitJson(specJson: String, cancellation: AukiCancellation?) async throws -> String {
         specification = specJson
+        return "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    }
+
+    override func submitWithKeyJson(specJson: String, idempotencyKey: String,
+                                    cancellation: AukiCancellation?) async throws -> String {
+        specification = specJson
+        self.idempotencyKey = idempotencyKey
+        self.cancellation = cancellation
         return "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
     }
 
@@ -59,6 +69,12 @@ private struct JobsHost {
 
         let jobID = try await jobs.submit(spec)
         try require(jobID == "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "submission ID changed")
+        let cancellation = AukiCancellation()
+        let keyedID = try await jobs.submitWithKey(spec, idempotencyKey: "persisted-key", cancellation: cancellation)
+        try require(keyedID == jobID && jobs.idempotencyKey == "persisted-key", "keyed submission changed key or ID")
+        try require(jobs.cancellation === cancellation, "keyed submission lost cancellation")
+        let keyedBody = try object(jobs.specification)
+        try require(keyedBody["idempotency_key"] == nil, "key belongs in header, not specification")
         let page = try await jobs.list(.init(limit: 10, capabilities: ["vendor.example/private-model/v7"],
                                              matchAllCapabilities: true))
         try require(page.nextCursor == "opaque", "opaque cursor was not decoded")

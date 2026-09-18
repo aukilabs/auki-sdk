@@ -231,6 +231,45 @@ impl DomainJobsClient {
         spec: &JobSpec,
         cancellation: &CancellationToken,
     ) -> Result<Uuid, JobsError> {
+        self.submit_inner(spec, None, cancellation).await
+    }
+
+    /// Submit with a caller-persisted operation key (1–128 visible ASCII bytes).
+    /// Reuse the same key and specification to recover the original job on a
+    /// verified idempotency-capable DMS deployment. Older servers ignore keys.
+    /// This method does not automatically retry ambiguous or in-progress work.
+    pub async fn submit_with_key(
+        &self,
+        spec: &JobSpec,
+        idempotency_key: &str,
+    ) -> Result<Uuid, JobsError> {
+        self.submit_with_key_and_cancellation(spec, idempotency_key, &CancellationToken::new())
+            .await
+    }
+
+    pub async fn submit_with_key_and_cancellation(
+        &self,
+        spec: &JobSpec,
+        idempotency_key: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<Uuid, JobsError> {
+        if !(1..=128).contains(&idempotency_key.len())
+            || !idempotency_key.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(JobsError::InvalidInput(
+                "idempotency key must contain 1–128 visible ASCII characters without spaces",
+            ));
+        }
+        self.submit_inner(spec, Some(idempotency_key), cancellation)
+            .await
+    }
+
+    async fn submit_inner(
+        &self,
+        spec: &JobSpec,
+        idempotency_key: Option<&str>,
+        cancellation: &CancellationToken,
+    ) -> Result<Uuid, JobsError> {
         let body = self.body(spec)?;
         let sent = AtomicBool::new(false);
         self.run(cancellation, async {
@@ -240,7 +279,10 @@ impl DomainJobsClient {
                     self.url(None, None),
                     Some(&body),
                     cancellation,
-                    Some(&sent),
+                    Some(Submission {
+                        sent: &sent,
+                        idempotency_key,
+                    }),
                 )
                 .await?;
             #[derive(Deserialize)]
@@ -438,10 +480,10 @@ impl DomainJobsClient {
         url: Url,
         body: Option<&[u8]>,
         cancellation: &CancellationToken,
-        sent: Option<&AtomicBool>,
+        submission: Option<Submission<'_>>,
     ) -> Result<Vec<u8>, JobsError> {
         Ok(self
-            .request_with_grant(method, url, body, cancellation, sent, false)
+            .request_with_grant(method, url, body, cancellation, submission, false)
             .await?
             .expect("unrestricted profile request")
             .0)
@@ -453,7 +495,7 @@ impl DomainJobsClient {
         url: Url,
         body: Option<&[u8]>,
         cancellation: &CancellationToken,
-        sent: Option<&AtomicBool>,
+        submission: Option<Submission<'_>>,
         user_only: bool,
     ) -> Result<Option<(Vec<u8>, Arc<DomainAccess>)>, JobsError> {
         let mut access = self
@@ -489,15 +531,25 @@ impl DomainJobsClient {
                     .header("Content-Type", "application/json")
                     .body(body.to_vec());
             }
-            if let Some(sent) = sent {
-                sent.store(true, Ordering::Relaxed);
+            let idempotency_key = submission.and_then(|value| value.idempotency_key);
+            if let Some(key) = idempotency_key {
+                request = request.header("Idempotency-Key", key);
             }
-            match http::send(request, self.client.limits.max_response_bytes).await {
+            if let Some(submission) = submission {
+                submission.sent.store(true, Ordering::Relaxed);
+            }
+            match http::send(
+                request,
+                self.client.limits.max_response_bytes,
+                idempotency_key.is_some(),
+            )
+            .await
+            {
                 Err(JobsError::HttpStatus { status: 401 }) if attempt == 0 => {
                     // A 401 explicitly rejects creation, so a failed renewal is
                     // not an ambiguous submission and must keep its auth code.
-                    if let Some(sent) = sent {
-                        sent.store(false, Ordering::Relaxed);
+                    if let Some(submission) = submission {
+                        submission.sent.store(false, Ordering::Relaxed);
                     }
                     access = self
                         .client
@@ -526,6 +578,12 @@ impl DomainJobsClient {
             result = operation => result,
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct Submission<'a> {
+    sent: &'a AtomicBool,
+    idempotency_key: Option<&'a str>,
 }
 
 fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, JobsError> {

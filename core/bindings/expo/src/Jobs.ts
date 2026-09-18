@@ -12,7 +12,7 @@ import type {
 
 const failureKinds = new Set<JobsFailureKind>([
   "auth", "invalid_input", "invalid_response", "http_status", "transport",
-  "timed_out", "cancelled", "closed", "too_large", "submission_uncertain",
+  "timed_out", "cancelled", "closed", "too_large", "submission_uncertain", "submission_in_progress",
 ]);
 const webFailureKinds: Record<string, JobsFailureKind> = {
   input: "invalid_input",
@@ -38,7 +38,7 @@ function normalizeError(value: unknown): JobsError {
   if (value instanceof Error) {
     const candidate = value as Error & { code?: unknown; kind?: unknown };
     if (typeof candidate.code === "string" && candidate.code.startsWith("jobs:")) {
-      const [, kind, status, authCode, source] = candidate.code.split(":");
+      const [, kind, status, authCode, source, retryAfter] = candidate.code.split(":");
       if (failureKinds.has(kind as JobsFailureKind)) {
         const converted = jobsError(kind as JobsFailureKind, candidate.message, candidate);
         if (status && Number.isInteger(Number(status))) {
@@ -46,6 +46,9 @@ function normalizeError(value: unknown): JobsError {
         }
         if (authCode) Object.defineProperty(converted, "code", { value: authCode, enumerable: true });
         if (source) Object.defineProperty(converted, "source", { value: source, enumerable: true });
+        if (retryAfter && /^\d+$/.test(retryAfter) && Number(retryAfter) <= 0xffffffff) {
+          Object.defineProperty(converted, "retryAfterSeconds", { value: Number(retryAfter), enumerable: true });
+        }
         return converted;
       }
     }
@@ -134,6 +137,12 @@ export class AukiJobs {
   submit(spec: JobSpec, signal?: AbortSignal): Promise<string> {
     return this.operation(signal, operationId =>
       module.jobsSubmit(this.clientId, JSON.stringify(wireSpec(spec)), operationId));
+  }
+
+  /** Reuse this persisted key and spec on a verified idempotency-capable DMS. */
+  submitWithKey(spec: JobSpec, idempotencyKey: string, signal?: AbortSignal): Promise<string> {
+    return this.operation(signal, operationId =>
+      module.jobsSubmitWithKey(this.clientId, JSON.stringify(wireSpec(spec)), idempotencyKey, operationId));
   }
 
   list(query: JobListQuery = {}, signal?: AbortSignal): Promise<JobPage> {

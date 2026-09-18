@@ -269,6 +269,7 @@ async fn user_app_and_imported_sessions_submit_the_exact_domain_graph() {
                     .path(f.path(""))
                     .header("authorization", format!("Bearer {token}"))
                     .header("posemesh-client-id", "jobs-contract")
+                    .header_missing("Idempotency-Key")
                     .json_body(json!({
                         "label":"scan pipeline", "domain_id":f.domain, "priority":7,
                         "meta":{"request":{"keep":[1,true,null]}},
@@ -818,7 +819,7 @@ async fn explicit_or_malformed_ambiguous_submit_responses_are_never_replayed() {
 
 #[tokio::test]
 async fn timeout_and_cancellation_make_submit_uncertain_without_replay() {
-    for cancel in [false, true] {
+    for (cancel, keyed) in [(false, false), (true, false), (false, true), (true, true)] {
         let f = Fixture::new(Principal::User).await;
         f.valid_auth("ambiguous-submit-grant").await;
         let submit = f
@@ -845,9 +846,19 @@ async fn timeout_and_cancellation_make_submit_uncertain_without_replay() {
             let client = client.clone();
             let cancellation = cancellation.clone();
             async move {
-                client
-                    .submit_with_cancellation(&graph_spec(), &cancellation)
-                    .await
+                if keyed {
+                    client
+                        .submit_with_key_and_cancellation(
+                            &graph_spec(),
+                            "cancel-fixture",
+                            &cancellation,
+                        )
+                        .await
+                } else {
+                    client
+                        .submit_with_cancellation(&graph_spec(), &cancellation)
+                        .await
+                }
             }
         });
         tokio::time::timeout(Duration::from_secs(1), async {
@@ -1044,4 +1055,189 @@ async fn close_cancels_inflight_work_but_keeps_sibling_clients_and_session_alive
         sibling.cancel(f.job).await,
         Err(JobsError::Auth(AuthError::SessionClosed))
     ));
+}
+
+#[tokio::test]
+async fn keyed_submit_preserves_key_and_body_through_one_grant_renewal() {
+    for principal in [Principal::User, Principal::App, Principal::ImportedZitadel] {
+        let f = Fixture::new(principal).await;
+        let (old_token, old_auth) = f.valid_auth("keyed-old").await;
+        f.session
+            .domain_access(f.domain, None, &CancellationToken::new())
+            .await
+            .unwrap();
+        old_auth.delete_async().await;
+        let (new_token, renewed) = f.valid_auth("keyed-new").await;
+        let spec = graph_spec();
+        let mut body = serde_json::to_value(&spec).unwrap();
+        body["domain_id"] = json!(f.domain);
+        let key = "k".repeat(128);
+        let rejected = f
+            .server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path(f.path(""))
+                    .header("authorization", format!("Bearer {old_token}"))
+                    .header("Idempotency-Key", &key)
+                    .json_body(body.clone());
+                then.status(401);
+            })
+            .await;
+        let accepted = f
+            .server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path(f.path(""))
+                    .header("authorization", format!("Bearer {new_token}"))
+                    .header("Idempotency-Key", &key)
+                    .json_body(body.clone());
+                then.header("content-type", "application/json")
+                    .json_body(json!({"job_id": f.job}));
+            })
+            .await;
+        assert_eq!(
+            f.client().submit_with_key(&spec, &key).await.unwrap(),
+            f.job
+        );
+        renewed.assert_calls_async(1).await;
+        rejected.assert_calls_async(1).await;
+        accepted.assert_calls_async(1).await;
+    }
+}
+
+#[tokio::test]
+async fn uncertain_keyed_submit_requires_explicit_same_key_recovery() {
+    let f = Fixture::new(Principal::User).await;
+    f.valid_auth("keyed-recovery").await;
+    let client = f.client();
+    let spec = graph_spec();
+    let mut body = serde_json::to_value(&spec).unwrap();
+    body["domain_id"] = json!(f.domain);
+    let failed = f
+        .server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path(f.path(""))
+                .header("Idempotency-Key", "persisted-operation")
+                .json_body(body.clone());
+            then.status(503)
+                .header("Retry-After", "1")
+                .body("private backend detail");
+        })
+        .await;
+    let error = client
+        .submit_with_key(&spec, "persisted-operation")
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), "submission_uncertain");
+    assert_eq!(error.http_status(), Some(503));
+    assert!(!format!("{error:?}").contains("private backend detail"));
+    failed.assert_calls_async(1).await;
+    failed.delete_async().await;
+    let recovered = f
+        .server
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path(f.path(""))
+                .header("Idempotency-Key", "persisted-operation")
+                .json_body(body.clone());
+            then.header("content-type", "application/json")
+                .json_body(json!({"job_id": f.job}));
+        })
+        .await;
+    for _ in 0..2 {
+        assert_eq!(
+            client
+                .submit_with_key(&spec, "persisted-operation")
+                .await
+                .unwrap(),
+            f.job
+        );
+    }
+    recovered.assert_calls_async(2).await;
+}
+
+#[tokio::test]
+async fn only_keyed_conflicts_with_valid_retry_hints_are_in_progress() {
+    for (keyed, hint, expected) in [
+        (true, Some("1"), Some(1)),
+        (true, Some("0"), Some(0)),
+        (false, Some("1"), None),
+        (true, None, None),
+        (true, Some("+1"), None),
+        (true, Some("1, 2"), None),
+        (true, Some("4294967296"), None),
+        (true, Some("Thu, 17 Sep 2026 09:00:00 GMT"), None),
+    ] {
+        let f = Fixture::new(Principal::User).await;
+        f.valid_auth("conflict-grant").await;
+        let conflict = f
+            .server
+            .mock_async(|when, then| {
+                when.method(POST).path(f.path(""));
+                let then = then.status(409).body("private conflict detail");
+                if let Some(hint) = hint {
+                    then.header("Retry-After", hint);
+                }
+            })
+            .await;
+        let client = f.client();
+        let error = if keyed {
+            client
+                .submit_with_key(&graph_spec(), "busy-operation")
+                .await
+        } else {
+            client.submit(&graph_spec()).await
+        }
+        .unwrap_err();
+        assert_eq!(error.http_status(), Some(409));
+        assert_eq!(error.retry_after_seconds(), expected);
+        assert_eq!(
+            error.code(),
+            if expected.is_some() {
+                "submission_in_progress"
+            } else {
+                "http_status"
+            }
+        );
+        assert!(!format!("{error:?}").contains("private conflict detail"));
+        conflict.assert_calls_async(1).await;
+    }
+}
+
+#[tokio::test]
+async fn invalid_keys_and_pre_cancelled_keyed_requests_never_authenticate() {
+    let f = Fixture::new(Principal::User).await;
+    let (_, auth) = f.valid_auth("unused-key-grant").await;
+    let client = f.client();
+    for key in [
+        "".into(),
+        "x".repeat(129),
+        "private key".into(),
+        "private\nkey".into(),
+        "private\tkey".into(),
+        "private\u{7f}key".into(),
+        "privaté".into(),
+    ] {
+        let error = client
+            .submit_with_key(&graph_spec(), &key)
+            .await
+            .unwrap_err();
+        assert!(matches!(error, JobsError::InvalidInput(_)));
+        assert!(!format!("{error:?}").contains("private"));
+    }
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    assert!(matches!(
+        client
+            .submit_with_key_and_cancellation(&graph_spec(), "valid-key", &cancel)
+            .await,
+        Err(JobsError::Cancelled)
+    ));
+    client.close().await;
+    assert!(matches!(
+        client.submit_with_key(&graph_spec(), "valid-key").await,
+        Err(JobsError::Closed)
+    ));
+    auth.assert_calls_async(0).await;
 }

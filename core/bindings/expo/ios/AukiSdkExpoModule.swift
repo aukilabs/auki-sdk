@@ -589,6 +589,20 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
+    AsyncFunction("jobsSubmitWithKey") {
+      (clientId: String, specJson: String, idempotencyKey: String, operationId: String) -> String in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.jobs.beginOperation(operationId)
+      defer { self.jobs.finishOperation(operationId) }
+      return try await withJobsErrors {
+        try await self.jobs.client(clientId).submitWithKeyJson(specJson: specJson,
+          idempotencyKey: idempotencyKey, cancellation: cancellation)
+      }
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
     AsyncFunction("jobsList") {
       (clientId: String, queryJson: String, operationId: String) -> String in
       #if canImport(auki_sdk_swiftFFI)

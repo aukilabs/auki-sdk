@@ -110,6 +110,7 @@ const jobSpec: JobSpec = {
 const jobs: AukiDmsJobs = imported.jobs("00000000-0000-0000-0000-000000000001");
 const estimate: Promise<JobEstimate> = jobs.estimate(jobSpec);
 const submitted: Promise<string> = jobs.submit(jobSpec);
+const keyed: Promise<string> = jobs.submitWithKey(jobSpec, "persisted-key", new AbortController().signal);
 const jobPage: Promise<JobPage> = jobs.list({
   status: "running",
   capabilities: ["com.example.convert.v1"],
@@ -123,8 +124,12 @@ if (jobsError.kind === "submission_uncertain") {
   const source: string | undefined = jobsError.source;
   void source;
 }
+if (jobsError.kind === "submission_in_progress") {
+  const delay: number | undefined = jobsError.retryAfterSeconds;
+  void delay;
+}
 if (jobsError.code === "persistence") void jobPage;
-void [estimate, submitted, details, canceled, jobsClosed];
+void [estimate, submitted, keyed, details, canceled, jobsClosed];
 
 declare const peer: AukiPeer;
 declare const session: AukiUserSession;

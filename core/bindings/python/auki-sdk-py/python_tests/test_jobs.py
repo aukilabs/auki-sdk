@@ -21,18 +21,20 @@ CAPABILITY = "com.example.third-party.convert.v1"
 
 @pytest.fixture
 def services():
-    state = {"requests": [], "block_list": False, "deny_jobs": False}
+    state = {"requests": [], "block_list": False, "deny_jobs": False, "submission_status": 200, "keys": []}
 
     def handler(role):
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *_):
                 pass
 
-            def reply(self, value=None, status=200):
+            def reply(self, value=None, status=200, retry_after=None):
                 body = json.dumps(value or {}).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
+                if retry_after is not None:
+                    self.send_header("Retry-After", str(retry_after))
                 self.end_headers()
                 try:
                     self.wfile.write(body)
@@ -85,7 +87,9 @@ def services():
                         }],
                     })
                 if url.path == "/jobs" and self.command == "POST":
-                    return self.reply({"job_id": JOB})
+                    state["keys"].append(self.headers.get("Idempotency-Key"))
+                    status = state["submission_status"]
+                    return self.reply({"job_id": JOB}, status, 1 if status == 409 else None)
                 if url.path == "/jobs" and self.command == "GET":
                     if state["block_list"]:
                         time.sleep(1)
@@ -214,4 +218,36 @@ def test_asyncio_cancellation_reaches_native_request(services):
         await jobs.close()
         await session.close()
 
+    asyncio.run(scenario())
+
+
+def test_keyed_submission_preserves_key_and_retry_hint_without_automatic_retries(services):
+    async def scenario():
+        session = await login(services)
+        jobs = session.jobs(DOMAIN)
+        spec = {"label": "keyed", "tasks": [{"label": "convert", "stage": "convert", "capability": CAPABILITY}]}
+        try:
+            with pytest.raises(auki_sdk.AukiJobsError) as invalid:
+                await jobs.submit_with_key(spec, "invalid key")
+            assert invalid.value.code == "invalid_input"
+            assert services["keys"] == []
+            services["submission_status"] = 409
+            with pytest.raises(auki_sdk.AukiJobsError) as busy:
+                await jobs.submit_with_key(spec, "persisted-key")
+            assert busy.value.kind == busy.value.code == "submission_in_progress"
+            assert busy.value.status == 409
+            assert busy.value.retry_after_seconds == 1
+            assert services["keys"] == ["persisted-key"]
+            services["submission_status"] = 503
+            with pytest.raises(auki_sdk.AukiJobsError) as uncertain:
+                await jobs.submit_with_key(spec, "persisted-key")
+            assert uncertain.value.kind == "submission_uncertain"
+            assert uncertain.value.status == 503
+            services["submission_status"] = 200
+            assert await jobs.submit_with_key(spec, "persisted-key") == JOB
+            assert await jobs.submit(spec) == JOB
+            assert services["keys"] == ["persisted-key"] * 3 + [None]
+        finally:
+            await jobs.close()
+            await session.close()
     asyncio.run(scenario())

@@ -28,8 +28,8 @@ export interface JobTask { id: string; job_id: string; label: string; stage: str
 export interface JobReceipt { id: string; job_id: string; task_id: string; node_id: string | null; outputs: string[]; meta: Record<string, unknown>; created_at: string }
 export interface JobDetails { job: JobRecord; tasks_summary: JobTaskSummary; tasks: JobTask[]; receipts: JobReceipt[] }
 export interface JobCancellation { id: string; status: JobStatus; updated_at: string }
-/** Submission failures with kind `submission_uncertain` must be reconciled before retrying. */
-export interface AukiJobsError extends Error { kind: string; code: string; status?: number; source?: string }
+/** Uncertain unkeyed submissions require reconciliation; keyed recovery requires a capable deployment. */
+export interface AukiJobsError extends Error { kind: string; code: string; status?: number; source?: string; retryAfterSeconds?: number }
 "#;
 
 fn error(error: JobsError) -> JsValue {
@@ -39,6 +39,7 @@ fn error(error: JobsError) -> JsValue {
         JobsError::InvalidInput(_) => "input",
         JobsError::InvalidResponse(_) => "response",
         JobsError::HttpStatus { .. } => "http",
+        JobsError::SubmissionInProgress { .. } => "submission_in_progress",
         JobsError::Transport => "transport",
         JobsError::TimedOut => "timeout",
         JobsError::Cancelled => "cancelled",
@@ -50,6 +51,9 @@ fn error(error: JobsError) -> JsValue {
     let _ = js_sys::Reflect::set(&result, &"code".into(), &error.code().into());
     if let Some(status) = error.http_status() {
         let _ = js_sys::Reflect::set(&result, &"status".into(), &status.into());
+    }
+    if let Some(seconds) = error.retry_after_seconds() {
+        let _ = js_sys::Reflect::set(&result, &"retryAfterSeconds".into(), &seconds.into());
     }
     if let JobsError::SubmissionUncertain { source } = &error {
         let _ = js_sys::Reflect::set(&result, &"source".into(), &source.code().into());
@@ -280,6 +284,26 @@ impl AukiDmsJobs {
             .to_string())
     }
 
+    /// Reuse this persisted key and spec on a verified idempotency-capable DMS.
+    #[wasm_bindgen(js_name = submitWithKey, unchecked_return_type = "string")]
+    pub async fn submit_with_key(
+        &self,
+        #[wasm_bindgen(unchecked_param_type = "JobSpec")] spec: JsValue,
+        idempotency_key: String,
+        signal: Option<web_sys::AbortSignal>,
+    ) -> Result<String, JsValue> {
+        let spec = serde_wasm_bindgen::from_value::<SpecInput>(spec)
+            .map_err(|_| error(JobsError::InvalidInput("invalid job specification")))?;
+        let spec = spec.into_spec()?;
+        let cancel = Cancellation::new(signal)?;
+        Ok(self
+            .inner
+            .submit_with_key_and_cancellation(&spec, &idempotency_key, &cancel.token)
+            .await
+            .map_err(error)?
+            .to_string())
+    }
+
     #[wasm_bindgen(unchecked_return_type = "JobPage")]
     pub async fn list(
         &self,
@@ -364,6 +388,8 @@ mod tests {
             r#"
             globalThis.__originalJobsFetch = globalThis.fetch;
             globalThis.__jobsRequests = [];
+            globalThis.__jobsKeys = [];
+            globalThis.__jobsSubmitStatus = 200;
             globalThis.__blockJobsList = false;
             globalThis.__denyJobs = false;
             globalThis.fetch = async (input, init) => {
@@ -394,7 +420,11 @@ mod tests {
                     return json({total:'2.50',tasks:[{label:task.label,stage:task.stage,capability:task.capability,mode:task.mode,billing_units:'1.0',estimated_credit_cost:'2.50'}]});
                 }
                 if (url.pathname === '/jobs' && request.method === 'POST') {
-                    const body=await request.json(); __jobsRequests.push(body); return json({job_id:jobId});
+                    const body=await request.json(); __jobsRequests.push(body);
+                    __jobsKeys.push(request.headers.get('Idempotency-Key'));
+                    const response = json({job_id:jobId}, __jobsSubmitStatus);
+                    if (__jobsSubmitStatus === 409) response.headers.set('Retry-After', '1');
+                    return response;
                 }
                 const job={id:jobId,label:'prepare-assets',domain_id:domain,status:'running',priority:0,created_at:date,updated_at:date,organization_id:null,meta:{},credit_lock_id:null,credit_lock_amount:'2.50',credit_locked_at:date,credit_released_at:null};
                 const summary={queued:0,leased:0,running:1,completed:0,failed:0,canceled:0};
@@ -434,6 +464,86 @@ mod tests {
             outputsPrefix:'converted/'}]})"#,
         )
         .unwrap()
+    }
+
+    #[wasm_bindgen_test]
+    async fn keyed_submission_preserves_key_retry_hint_and_cancellation() {
+        let _restore = fixture();
+        let session = login().await;
+        let jobs = session.jobs(DOMAIN.into()).unwrap();
+        let invalid = jobs
+            .submit_with_key(spec(), "invalid key".into(), None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            js_sys::Reflect::get(&invalid, &"code".into()).unwrap(),
+            "invalid_input"
+        );
+        let controller = web_sys::AbortController::new().unwrap();
+        controller.abort();
+        let cancelled = jobs
+            .submit_with_key(spec(), "persisted-key".into(), Some(controller.signal()))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            js_sys::Reflect::get(&cancelled, &"code".into()).unwrap(),
+            "cancelled"
+        );
+        assert_eq!(
+            js_sys::eval("__jobsKeys.length").unwrap().as_f64(),
+            Some(0.0)
+        );
+        js_sys::eval("__jobsSubmitStatus = 409").unwrap();
+        let busy = jobs
+            .submit_with_key(spec(), "persisted-key".into(), None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            js_sys::Reflect::get(&busy, &"code".into()).unwrap(),
+            "submission_in_progress"
+        );
+        assert_eq!(
+            js_sys::Reflect::get(&busy, &"status".into())
+                .unwrap()
+                .as_f64(),
+            Some(409.0)
+        );
+        assert_eq!(
+            js_sys::Reflect::get(&busy, &"retryAfterSeconds".into())
+                .unwrap()
+                .as_f64(),
+            Some(1.0)
+        );
+        assert_eq!(
+            js_sys::eval("__jobsKeys.length").unwrap().as_f64(),
+            Some(1.0)
+        );
+        js_sys::eval("__jobsSubmitStatus = 503").unwrap();
+        let uncertain = jobs
+            .submit_with_key(spec(), "persisted-key".into(), None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            js_sys::Reflect::get(&uncertain, &"code".into()).unwrap(),
+            "submission_uncertain"
+        );
+        js_sys::eval("__jobsSubmitStatus = 200").unwrap();
+        assert_eq!(
+            jobs.submit_with_key(spec(), "persisted-key".into(), None)
+                .await
+                .unwrap(),
+            JOB
+        );
+        assert_eq!(jobs.submit(spec(), None).await.unwrap(), JOB);
+        assert_eq!(
+            js_sys::eval("JSON.stringify(__jobsKeys)")
+                .unwrap()
+                .as_string()
+                .unwrap(),
+            r#"["persisted-key","persisted-key","persisted-key",null]"#
+        );
+        jobs.close().await;
+        session.close().await.unwrap();
     }
 
     #[wasm_bindgen_test]

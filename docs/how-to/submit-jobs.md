@@ -94,9 +94,25 @@ not a guarantee that a physical robot has stopped.
 
 Only an explicit HTTP 401 gets one grant renewal and retry. Other HTTP responses,
 timeouts, and transport failures are returned to the host. If submission fails with
-`submission_uncertain`, DMS may already have created and charged the job. **Do not
-automatically resubmit.** Inspect jobs using a unique application label or metadata
-and reconcile the outcome first. DMS does not enforce uniqueness for those values.
+`submission_uncertain`, DMS may already have created and charged the job. For the
+unkeyed `submit` call, inspect jobs using an application label or metadata and
+reconcile the outcome first. DMS does not enforce uniqueness for those values.
+
+After operators verify the [keyed-submission rollout](../reference/jobs.md#recover-a-keyed-submission),
+persist an opaque random key and the complete specification before sending:
+
+```rust,ignore
+// Load the same persisted operation on recovery; never generate a new key per retry.
+let (key, spec) = operation_store.load_pending().await?;
+let job_id = jobs.submit_with_key(&spec, &key).await?;
+operation_store.save_job_id(&key, job_id).await?;
+```
+
+On `SubmissionInProgress`, wait at least `retry_after_seconds` before another
+attempt. On an uncertain outcome, retain the same key/spec for explicit recovery.
+Use bounded attempts and cancellation; the SDK starts no retry loop. A plain 409
+means conflict and must not trigger a replacement operation. Older DMS ignores
+keys, so the rollout gate must be checked before relying on this behavior.
 
 `*_with_cancellation` methods accept a `CancellationToken`. Canceling an HTTP request
 does not cancel a backend job. `jobs.close().await` aborts and drains this client's

@@ -24,6 +24,9 @@ pub(crate) fn error(error: JobsError) -> PyErr {
         let _ = result
             .value_bound(py)
             .setattr("status", error.http_status());
+        let _ = result
+            .value_bound(py)
+            .setattr("retry_after_seconds", error.retry_after_seconds());
         if let JobsError::SubmissionUncertain { source } = &error {
             let _ = result.value_bound(py).setattr("source", source.code());
         }
@@ -37,6 +40,7 @@ fn kind(error: &JobsError) -> &'static str {
         JobsError::InvalidInput(_) => "input",
         JobsError::InvalidResponse(_) => "response",
         JobsError::HttpStatus { .. } => "http",
+        JobsError::SubmissionInProgress { .. } => "submission_in_progress",
         JobsError::Transport => "transport",
         JobsError::TimedOut => "timeout",
         JobsError::Cancelled => "cancelled",
@@ -140,6 +144,24 @@ impl PyJobs {
         run(py, |cancel| async move {
             let id = inner
                 .submit_with_cancellation(&spec, &cancel)
+                .await
+                .map_err(error)?;
+            Python::with_gil(|py| Ok(id.to_string().into_py(py)))
+        })
+    }
+
+    /// Reuse this persisted key and spec on a verified idempotency-capable DMS.
+    fn submit_with_key<'py>(
+        &self,
+        py: Python<'py>,
+        spec: &Bound<'_, PyAny>,
+        idempotency_key: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let spec = parse_spec(spec)?;
+        let inner = self.inner.clone();
+        run(py, |cancel| async move {
+            let id = inner
+                .submit_with_key_and_cancellation(&spec, &idempotency_key, &cancel)
                 .await
                 .map_err(error)?;
             Python::with_gil(|py| Ok(id.to_string().into_py(py)))

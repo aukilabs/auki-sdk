@@ -88,6 +88,7 @@ declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents
   jobsOpen(sessionId: string, domainId: string): Promise<string>;
   jobsEstimate(clientId: string, specJson: string, operationId: string): Promise<string>;
   jobsSubmit(clientId: string, specJson: string, operationId: string): Promise<string>;
+  jobsSubmitWithKey(clientId: string, specJson: string, idempotencyKey: string, operationId: string): Promise<string>;
   jobsList(clientId: string, queryJson: string, operationId: string): Promise<string>;
   jobsGet(clientId: string, jobId: string, operationId: string): Promise<string>;
   jobsCancel(clientId: string, jobId: string, operationId: string): Promise<string>;

@@ -22,6 +22,7 @@ Echo example. For Python, Web, Swift, or Expo, see
 | Submit and monitor Domain jobs | [Submit jobs](docs/how-to/submit-jobs.md) |
 | Run compute or robot handlers | [Run tasks](docs/how-to/run-compute-tasks.md) |
 | Use discovery or connect to a known address | [Connect to a peer](docs/how-to/connect.md) |
+| Compose typed Components and share retained Products | [Experimental Component protocols](docs/reference/component-protocols.md) |
 | Exchange my own messages | [Use a custom protocol](docs/how-to/protocols.md) |
 | Keep a Peer ID and stop cleanly | [Manage a peer](docs/how-to/lifecycle.md) |
 | Understand peers, Domains, and task handling | [How networking works](docs/explanation/networking.md) |

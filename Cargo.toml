@@ -22,6 +22,8 @@ members = [
     "core/examples/portable-echo/web",
 
     # Experimental crates; application protocols remain optional.
+    "labs/auki-components",
+    "labs/auki-component-protocol",
     "labs/auki-datatypes",
     "labs/auki-geometry",
     "labs/auki-hash",

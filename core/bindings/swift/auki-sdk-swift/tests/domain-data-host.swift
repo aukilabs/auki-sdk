@@ -214,6 +214,8 @@ struct DomainDataHost {
                 "imported save failure lost its structured persistence code"
             )
         }
+        let discovered = try await imported.domains().discover(query: AukiDomainDiscoveryQuery(limit: 1, allows: ["domain-data:r"]))
+        try require(discovered.domains.first?.domain.id == domainID && discovered.nextCursor == nil, "permission discovery must use DDS catalog")
         let importedBytes = try await importedData.read(dataId: initialDataID)
         try require(importedBytes == Data("fixture".utf8), "imported session could not read known-Domain data")
 

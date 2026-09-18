@@ -28,3 +28,10 @@ Unsupported App profiles return `None`. Entries cover public tasks and the User
 organization's dedicated tasks; they do not establish a selected-Domain
 association. The [fleet client](../auki-fleet/README.md) joins only authorized
 Domain job references and keeps global unknown status explicit.
+
+Imported job submission remains a separate legacy operator contract. The SDK
+uses `domain_job_access` and a separate grant cache, preserving the API/DDS User
+grant required by DMS. Restricted human data grants cannot satisfy that contract,
+even if they permit a data write. DMS still verifies its required job scopes;
+this does not introduce policy-derived task authority. The shared session remains
+the only refresh/persistence owner. Neither path enumerates API's Domain table.

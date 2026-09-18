@@ -118,6 +118,50 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
+    AsyncFunction("domainsDiscover") {
+      (sessionId: String, queryJson: String, operationId: String) -> [String: Any] in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.domainData.beginOperation(operationId)
+      defer { self.domainData.finishOperation(operationId) }
+      let value: ExpoDomainDiscoveryQueryPayload = try Self.decodeDataJson(queryJson)
+      let object = try JSONSerialization.jsonObject(with: Data(queryJson.utf8)) as? [String: Any]
+      guard let object, Set(object.keys).isSubset(of: ["organization", "limit", "cursor", "allows"]) else {
+        throw ExpoDataFailure(kind: "input", status: nil, message: "invalid Domain discovery options")
+      }
+      let query = AukiDomainDiscoveryQuery(organization: value.organization, limit: value.limit, cursor: value.cursor, allows: value.allows)
+      let page = try await withDataErrors { try await self.sessions.session(sessionId).domains().discover(query: query, cancellation: cancellation) }
+      return ["domains": page.domains.map { entry -> [String: Any] in
+        var result = Self.mapDomainSummary(entry.domain)
+        result["permissions"] = entry.permissions
+        return result
+      }, "next_cursor": Self.nullable(page.nextCursor)]
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+    AsyncFunction("domainsForPortalPage") {
+      (sessionId: String, portal: String, organization: String, limit: UInt32, cursor: String?, operationId: String) -> [String: Any] in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.domainData.beginOperation(operationId)
+      defer { self.domainData.finishOperation(operationId) }
+      let page = try await withDataErrors { try await self.sessions.session(sessionId).domains().forPortalPage(portal: portal, limit: limit, cursor: cursor, organization: organization, cancellation: cancellation) }
+      return ["items": page.items.map(Self.mapPortalDomain), "next_cursor": Self.nullable(page.nextCursor), "paginated": page.paginated]
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+    AsyncFunction("domainsPortalsPage") {
+      (sessionId: String, domainId: String, limit: UInt32, cursor: String?, operationId: String) -> [String: Any] in
+      #if canImport(auki_sdk_swiftFFI)
+      let cancellation = self.domainData.beginOperation(operationId)
+      defer { self.domainData.finishOperation(operationId) }
+      let page = try await withDataErrors { try await self.sessions.session(sessionId).domains().portalsPage(domainId: domainId, limit: limit, cursor: cursor, cancellation: cancellation) }
+      return ["items": page.items.map(Self.mapPortal), "next_cursor": Self.nullable(page.nextCursor), "paginated": page.paginated]
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
     AsyncFunction("domainsList") {
       (sessionId: String, queryJson: String, operationId: String) -> [String: Any] in
       #if canImport(auki_sdk_swiftFFI)
@@ -1365,4 +1409,11 @@ private struct ExpoTransferOptionsPayload: Decodable {
 
 private func unsupported(_ message: String) -> Exception {
   Exception(name: "AukiSdkExpoUnsupported", description: message)
+}
+
+private struct ExpoDomainDiscoveryQueryPayload: Decodable {
+  let organization: String?
+  let limit: UInt32?
+  let cursor: String?
+  let allows: [String]?
 }

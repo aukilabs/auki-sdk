@@ -18,29 +18,18 @@ App secrets belong on trusted backends. Machine credentials get their Domain
 from a lease or robot assignment; they do not provide a user Domain picker.
 Android is not implemented by the Expo binding.
 
-Imported-session data uses the existing ordinary API service exchange, then
-DDS selected-Domain authentication. The deployment must accept imported
-ZITADEL bearers on that API route.
+¹ Imported-session `discover` and data authorization use the original ZITADEL
+bearer directly with DDS. DDS is the catalog authority and checks metadata,
+data and pose permissions per Domain. Human grants preserve issuer + subject,
+organization and atomic scopes, with a maximum five-minute lifetime. The
+[provider rollout](../how-to/discover-domains.md#provider-rollout) is required;
+no API Domain-store or broad-grant fallback is used for these operations.
 
-¹ Imported owner and scoped User grants use the ordinary service exchange and
-the same DDS listing route as User login. The API-issued `user-access` grant
-limits the request to its organization and any explicit Domain restrictions;
-a null or empty restriction list allows owned Domains.
-
-The older `accessible_domains` picker follows DDS User access-control rules
-and can also include public Domains or Domains explicitly shared with the
-token's organization. Any explicit token Domain restrictions still apply;
-its total can differ from the owned-only `domains().list()` query.
-
-Imported viewer grants are App-shaped and cannot safely use legacy listing.
-They require `POST /service/domains-access-token?purpose=p2p` to issue a
-`user-p2p-access` token with an explicit, nonempty human Domain allowlist,
-followed by DDS `/api/v1/accessible-domains`. Older providers that ignore this
-purpose fail closed. The SDK checks each page against its grant and preserves
-permission errors. The viewer bridge's API Domain registry can differ from
-DDS, so known-Domain data can work while that listing is denied. Portal-to-Domain
-association queries remain unsupported for imported sessions. See
-[provider compatibility](../../test-support/domain-data-validation.md#provider-compatibility).
+Legacy `list` and `accessible_domains` remain compatibility methods for existing
+API User grants and the old explicit viewer allowlist bridge. They provide no
+permission preview. The corrected `zitadel-identity` viewer profile is rejected
+by these methods with a configuration error directing callers to `discover`.
+Imported portal-to-Domain association lookup remains unsupported.
 
 `AukiCredential` is an alias for `AuthSession`. A User, App, or imported session can be
 shared by data clients and `AukiPeerBootstrap`; data access does not require
@@ -87,12 +76,18 @@ User/App Domain and portal association listings send `issue_token=false` and SDK
 identification. Imported User grants use the same Domain route; imported viewer
 grants use the allowlist metadata route. Neither
 obtains potentially billed Domain tokens for every entry. Listing establishes
-visibility; it does not report effective read/write
-permission. Permission filters are not available.
+visibility; it does not report effective read/write permission.
+Use `discover(DomainDiscoveryQuery)` to filter by the intersection of data/pose
+permissions and receive a real cursor page without tokens or a total count.
 
-Data lists filter by `ids`, `name`, and `data_type`. They return metadata without
-server pagination. Portal and pose lists also return complete, bounded
-responses; oversized responses fail rather than being truncated.
+`for_portal_page` and `portals_page` return `InventoryPage` (`items`,
+`next_cursor`, `paginated`). The first page can acknowledge a bounded complete
+response from an older provider with `paginated=false`; continuations must have
+matching version/limit metadata. Existing complete-list methods remain.
+
+Data lists filter by `ids`, `name`, and `data_type`. Domain Server data metadata
+and pose lists still return complete bounded responses; their pagination is the
+remaining Domain Server portion of #385. Oversized responses fail without truncation.
 
 Portal metadata comes from DDS and poses come from the Domain Server. Both
 read routes require pose read permission. The underlying routes are named
@@ -186,11 +181,11 @@ and permissions. P2P admission and discovery do not grant data write access.
 Keep service endpoints aligned to one environment; browser CORS rules apply.
 
 Imported listing, data clients, and peers use one refresh owner and await complete
-replacement-credential persistence. Listing and data service tokens remain
-separate from the imported bearer used by direct DDS P2P authentication. Even a cached Domain
+replacement-credential persistence. Legacy listing service tokens remain separate from direct DDS human discovery,
+data authorization, and P2P requests; each has its own permission contract. Even a cached Domain
 grant cannot bypass a pending credential save or a terminal login failure.
-The existing API role projection is coarse: successful exchange, visibility,
-or read access does not establish write/delete permission.
+Successful exchange, metadata visibility or read permission does not establish
+write/delete permission. Discovery permissions are previews, not durable grants.
 
 Rust buffered operations have `_with_cancellation` variants; portal and streaming
 methods take a `CancellationToken` directly. Dropping a future stops its request

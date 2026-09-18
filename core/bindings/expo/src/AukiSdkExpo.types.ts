@@ -335,3 +335,9 @@ export interface FleetSnapshot {
   machines: FleetMachine[]; unresolved_activity: FleetActivity[];
   sources: FleetSourceReport[]; complete: boolean;
 }
+
+export type DomainPermission = "domain-data:r" | "domain-data:w" | "domain-data:d" | "pose:r" | "pose:w" | "pose:d";
+export type DomainDiscoveryQuery = { organization?: string; limit?: number; cursor?: string | null; allows?: DomainPermission[] };
+export type DomainDiscoveryPage = { domains: (DomainSummary & { permissions: DomainPermission[] })[]; next_cursor: string | null };
+export type PortalPage = { items: Portal[]; next_cursor: string | null; paginated: boolean };
+export type PortalDomainPage = { items: PortalDomain[]; next_cursor: string | null; paginated: boolean };

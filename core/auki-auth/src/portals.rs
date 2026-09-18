@@ -1,4 +1,7 @@
 //! DDS portal metadata. The service still calls portals `lighthouses` on the wire.
+use super::super::inventory::{
+    InventoryPage, InventoryPagination, inventory_page, inventory_page_query,
+};
 use super::*;
 
 const DDS_PORTALS: &str = "DDS portal metadata";
@@ -60,6 +63,34 @@ impl AuthSession {
         organization: &str,
         cancellation: &CancellationToken,
     ) -> Result<Vec<PortalDomain>> {
+        Ok(self
+            .domains_for_portal_request(portal, organization, None, None, cancellation)
+            .await?
+            .items)
+    }
+
+    /// Server cursor page of portal associations. `paginated == false` reports
+    /// an older provider returning a bounded complete response on the first call.
+    pub async fn domains_for_portal_page(
+        &self,
+        portal: &PortalId,
+        organization: &str,
+        limit: usize,
+        cursor: Option<&str>,
+        cancellation: &CancellationToken,
+    ) -> Result<InventoryPage<PortalDomain>> {
+        self.domains_for_portal_request(portal, organization, Some(limit), cursor, cancellation)
+            .await
+    }
+
+    async fn domains_for_portal_request(
+        &self,
+        portal: &PortalId,
+        organization: &str,
+        limit: Option<usize>,
+        cursor: Option<&str>,
+        cancellation: &CancellationToken,
+    ) -> Result<InventoryPage<PortalDomain>> {
         if !(matches!(organization, "own" | "all") || Uuid::parse_str(organization).is_ok()) {
             return Err(Error::InvalidInput {
                 field: "organization",
@@ -76,14 +107,27 @@ impl AuthSession {
             url.query_pairs_mut()
                 .append_pair("org", organization)
                 .append_pair("issue_token", "false");
+            inventory_page_query(&mut url, limit, cursor)?;
             #[derive(Deserialize)]
             struct Response {
                 domains: Vec<PortalDomain>,
+                pagination: Option<InventoryPagination>,
             }
             let response: Response = self
                 .data_dds_json(&mut state, url, false, DDS_PORTALS, cancellation)
                 .await?;
-            Ok(response.domains)
+            let mut ids = HashSet::new();
+            if response
+                .domains
+                .iter()
+                .any(|d| d.domain.id.is_nil() || !ids.insert(d.domain.id))
+            {
+                return Err(Error::invalid_response(
+                    DDS_PORTALS,
+                    "invalid or duplicate Domain identity",
+                ));
+            }
+            inventory_page(response.domains, response.pagination, limit, cursor)
         };
         tokio::select! {
             biased;
@@ -102,8 +146,44 @@ impl AuthSession {
         struct Response {
             lighthouses: Vec<Portal>,
         }
-        let response: Response = self.portal_request(domain, None, cancellation).await?;
+        let response: Response = self
+            .portal_request(domain, None, None, cancellation)
+            .await?;
         Ok(response.lighthouses)
+    }
+
+    pub async fn list_portals_page(
+        &self,
+        domain: Uuid,
+        limit: usize,
+        cursor: Option<&str>,
+        cancellation: &CancellationToken,
+    ) -> Result<InventoryPage<Portal>> {
+        #[derive(Deserialize)]
+        struct Response {
+            lighthouses: Vec<Portal>,
+            pagination: Option<InventoryPagination>,
+        }
+        let response: Response = self
+            .portal_request(domain, None, Some((limit, cursor)), cancellation)
+            .await?;
+        let mut ids = HashSet::new();
+        if response
+            .lighthouses
+            .iter()
+            .any(|p| p.id.is_nil() || !ids.insert(p.id))
+        {
+            return Err(Error::invalid_response(
+                DDS_PORTALS,
+                "invalid or duplicate portal identity",
+            ));
+        }
+        inventory_page(
+            response.lighthouses,
+            response.pagination,
+            Some(limit),
+            cursor,
+        )
     }
 
     pub async fn get_portal(
@@ -119,7 +199,7 @@ impl AuthSession {
             portal: Portal,
         }
         let response: Response = self
-            .portal_request(domain, Some(portal), cancellation)
+            .portal_request(domain, Some(portal), None, cancellation)
             .await?;
         if response.domain_id != domain
             || !portal.matches(response.portal.id, &response.portal.short_id)
@@ -136,17 +216,21 @@ impl AuthSession {
         &self,
         domain: Uuid,
         portal: Option<&PortalId>,
+        page: Option<(usize, Option<&str>)>,
         cancellation: &CancellationToken,
     ) -> Result<T> {
         let operation = async {
-            let mut access = self.domain_access(domain, None, cancellation).await?;
             let suffix = portal
                 .map(|id| format!("/{}", id.as_str()))
                 .unwrap_or_default();
-            let url = self
+            let mut url = self
                 .inner
                 .client
                 .dds_url(&format!("api/v1/domains/{domain}/lighthouses{suffix}"));
+            if let Some((limit, cursor)) = page {
+                inventory_page_query(&mut url, Some(limit), cursor)?;
+            }
+            let mut access = self.domain_access(domain, None, cancellation).await?;
             for attempt in 0..2 {
                 if !access.dds_audience {
                     return Err(Error::invalid_response(

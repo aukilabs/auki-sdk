@@ -118,9 +118,9 @@ async def save_replacement(replacement):
 session = auki_sdk.AukiSession.import_zitadel_dev(
     credentials, save_replacement
 )
-page = await session.domains().list(limit=50)
-# Present page["domains"] to the user. The host must explicitly select an ID;
-# continue with offset += len(page["domains"]) to show another server page.
+page = await session.domains().discover(limit=50, allows=["domain-data:r"])
+# Present page["domains"] to the user. Continue with cursor=page["next_cursor"]
+# until it is None, including when a filtered page is empty.
 selected_domain_id = await choose_domain_id(page["domains"])
 data = session.data(selected_domain_id)
 items = await data.list()
@@ -211,3 +211,10 @@ can inspect permitted inventory and jobs, but global work state remains unknown.
 See the [fleet reference](../../../../docs/reference/fleet.md).
 Local tests: `python -m pytest core/bindings/python/auki-sdk-py/python_tests/test_fleet.py -q`
 after building the extension in your virtual environment.
+
+## Permission-aware DDS discovery
+
+Use `domains().discover` for a picker with effective data/pose permissions.
+Imported human discovery and data grants use DDS directly and require the
+[coordinated provider rollout](../../../../docs/how-to/discover-domains.md).
+The same guide covers cursor continuation, portal pages and all bindings.

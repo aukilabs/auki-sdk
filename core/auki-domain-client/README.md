@@ -1,10 +1,11 @@
 # auki-domain-client
 
 Find Domains and read or write Domain data using the SDK's shared credentials.
-User, App, and imported sessions work without starting a peer. Imported
-listing uses the API-issued User grant for owners and scoped Users; viewer
-listing requires the human Domain-allowlist exchange. A known Domain can use
-the separate data exchange. Native task leases and
+User, App, and imported sessions work without starting a peer. Permission-aware
+`discover` reads DDS's authoritative catalog. Imported human discovery and data
+grants go directly to DDS using the original ZITADEL access token and per-Domain
+policy checks. These routes require the coordinated provider rollout described
+in [permission discovery](../../docs/how-to/discover-domains.md). Native task leases and
 robot credentials use the same data client through `auki-tasks`.
 
 The `auki-sdk` facade reexports these APIs for Rust, with bindings for Web,

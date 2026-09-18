@@ -498,11 +498,14 @@ impl DomainJobsClient {
         submission: Option<Submission<'_>>,
         user_only: bool,
     ) -> Result<Option<(Vec<u8>, Arc<DomainAccess>)>, JobsError> {
-        let mut access = self
-            .client
-            .session
-            .domain_access(self.domain_id, None, cancellation)
-            .await?;
+        // Keep nested authentication futures boxed, as the previous async-trait
+        // method did. Fleet joins several requests on the bounded WASM stack.
+        let mut access = Box::pin(self.client.session.domain_job_access(
+            self.domain_id,
+            None,
+            cancellation,
+        ))
+        .await?;
         for attempt in 0..2 {
             if access.domain_id() != self.domain_id
                 || !access.has_dds_audience()
@@ -551,11 +554,12 @@ impl DomainJobsClient {
                     if let Some(submission) = submission {
                         submission.sent.store(false, Ordering::Relaxed);
                     }
-                    access = self
-                        .client
-                        .session
-                        .domain_access(self.domain_id, Some(&access), cancellation)
-                        .await?;
+                    access = Box::pin(self.client.session.domain_job_access(
+                        self.domain_id,
+                        Some(&access),
+                        cancellation,
+                    ))
+                    .await?;
                 }
                 result => return result.map(|bytes| Some((bytes, access))),
             }

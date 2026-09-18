@@ -8,6 +8,9 @@ import type {
   AukiSdkExpoModuleEvents,
   DataMetadata,
   DomainPage,
+  DomainDiscoveryPage,
+  PortalPage,
+  PortalDomainPage,
   Portal,
   PortalDomain,
   PortalPose,
@@ -29,6 +32,9 @@ declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents
     clientId?: string | null,
   ): Promise<string>;
   accessibleDomains(sessionId: string): Promise<AukiDomainInfo[]>;
+  domainsDiscover(sessionId: string, queryJson: string, operationId: string): Promise<DomainDiscoveryPage>;
+  domainsForPortalPage(sessionId: string, portal: string, organization: string, limit: number, cursor: string | null, operationId: string): Promise<PortalDomainPage>;
+  domainsPortalsPage(sessionId: string, domainId: string, limit: number, cursor: string | null, operationId: string): Promise<PortalPage>;
   domainsList(sessionId: string, queryJson: string, operationId: string): Promise<DomainPage>;
   domainsForPortal(
     sessionId: string,

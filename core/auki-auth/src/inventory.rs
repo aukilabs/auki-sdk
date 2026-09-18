@@ -30,7 +30,7 @@ pub struct InventoryRobot {
 
 /// One bounded provider page, or a bounded legacy complete response.
 /// `paginated` distinguishes DDS acknowledgement from ignored query parameters.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct InventoryPage<T> {
     pub items: Vec<T>,
     pub next_cursor: Option<String>,
@@ -38,13 +38,13 @@ pub struct InventoryPage<T> {
 }
 
 #[derive(Deserialize)]
-struct InventoryPagination {
+pub(super) struct InventoryPagination {
     version: u32,
     limit: usize,
     next_cursor: String,
 }
 
-fn inventory_page<T>(
+pub(super) fn inventory_page<T>(
     items: Vec<T>,
     pagination: Option<InventoryPagination>,
     limit: Option<usize>,
@@ -82,7 +82,11 @@ fn inventory_page<T>(
     })
 }
 
-fn inventory_page_query(url: &mut Url, limit: Option<usize>, cursor: Option<&str>) -> Result<()> {
+pub(super) fn inventory_page_query(
+    url: &mut Url,
+    limit: Option<usize>,
+    cursor: Option<&str>,
+) -> Result<()> {
     if let Some(limit) = limit {
         if !(1..=100).contains(&limit) {
             return Err(Error::InvalidInput {

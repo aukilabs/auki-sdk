@@ -78,7 +78,7 @@ authority, worker availability and provider limitations.
 
 Imported ZITADEL sessions support the default `session.domains().list()` query
 for a server-paged picker, plus `session.data(knownDomainId)` and selected-Domain
-portal/pose reads. The SDK strictly validates the ordinary service-token profile:
+portal/pose reads. For legacy `list` compatibility, the SDK validates the ordinary service-token profile:
 human `user-access` uses the deployed User Domain route, while App-shaped viewer
 grants are never sent to that broader route and require the permission-scoped
 `purpose=p2p` exchange. Organization and Domain Server filters remain unsupported.
@@ -132,3 +132,10 @@ unknown. See the [fleet reference](../../../../docs/reference/fleet.md).
 The repository's `test-support/run-domain-data-browser-tests.sh` includes four
 fleet tests through WASM/Fetch in Chromium, covering pagination and cancellation
 during continuation.
+
+## Permission-aware DDS discovery
+
+Use `domains().discover` for a picker with effective data/pose permissions.
+Imported human discovery and data grants use DDS directly and require the
+[coordinated provider rollout](../../../../docs/how-to/discover-domains.md).
+The same guide covers cursor continuation, portal pages and all bindings.

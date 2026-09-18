@@ -9,6 +9,10 @@ import type {
   AukiServiceEnvironment,
   DataMetadata,
   DomainPage,
+  DomainDiscoveryPage,
+  DomainDiscoveryQuery,
+  PortalPage,
+  PortalDomainPage,
   ComputePoolQuery,
   FleetQuery,
   JobListQuery,
@@ -260,6 +264,28 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
       description: domain.description ?? null,
       organizationId: domain.organizationId ?? null,
     }));
+  }
+
+  async domainsDiscover(sessionId: string, queryJson: string, operationId: string): Promise<DomainDiscoveryPage> {
+    return this.withDataOperation(operationId, async signal => {
+      const domains = this.session(sessionId).domains();
+      try { return await domains.discover(JSON.parse(queryJson) as DomainDiscoveryQuery, signal); }
+      finally { domains.free(); }
+    });
+  }
+  async domainsForPortalPage(sessionId: string, portal: string, organization: string, limit: number, cursor: string | null, operationId: string): Promise<PortalDomainPage> {
+    return this.withDataOperation(operationId, async signal => {
+      const domains = this.session(sessionId).domains();
+      try { return await domains.forPortalPage(portal, organization, limit, cursor, signal); }
+      finally { domains.free(); }
+    });
+  }
+  async domainsPortalsPage(sessionId: string, domain: string, limit: number, cursor: string | null, operationId: string): Promise<PortalPage> {
+    return this.withDataOperation(operationId, async signal => {
+      const domains = this.session(sessionId).domains();
+      try { return await domains.portalsPage(domain, limit, cursor, signal); }
+      finally { domains.free(); }
+    });
   }
 
   async domainsList(

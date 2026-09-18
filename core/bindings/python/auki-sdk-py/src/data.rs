@@ -1,8 +1,8 @@
 //! Domain data bindings. Owned tasks survive Python future cancellation long
 //! enough to observe the cancellation token and abort multipart sessions.
 use auki_sdk_rs::{
-    AukiDomains, DataError, DataListQuery, DataWrite, DomainDataClient, DomainListQuery, PortalId,
-    TransferOptions,
+    AukiDomains, DataError, DataListQuery, DataWrite, DomainDataClient, DomainDiscoveryQuery,
+    DomainListQuery, PortalId, TransferOptions,
 };
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
@@ -88,6 +88,63 @@ pub(crate) struct PyDomains {
 }
 #[pymethods]
 impl PyDomains {
+    #[pyo3(signature = (*, organization="own", limit=50, cursor=None, allows=None))]
+    fn discover<'py>(
+        &self,
+        py: Python<'py>,
+        organization: &str,
+        limit: usize,
+        cursor: Option<String>,
+        allows: Option<Vec<String>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let query: DomainDiscoveryQuery = serde_json::from_value(serde_json::json!({"organization":organization,"limit":limit,"cursor":cursor,"allows":allows.unwrap_or_default()}))
+            .map_err(|_| PyValueError::new_err("invalid Domain discovery query"))?;
+        let inner = self.inner.clone();
+        run(py, |cancel| async move {
+            json(&inner.discover(&query, &cancel).await.map_err(error)?)
+        })
+    }
+    #[pyo3(signature = (portal_id, *, organization="own", limit=50, cursor=None))]
+    fn for_portal_page<'py>(
+        &self,
+        py: Python<'py>,
+        portal_id: &str,
+        organization: &str,
+        limit: usize,
+        cursor: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let portal = PortalId::parse(portal_id).map_err(|e| error(e.into()))?;
+        let organization = organization.to_owned();
+        let inner = self.inner.clone();
+        run(py, |cancel| async move {
+            json(
+                &inner
+                    .for_portal_page(&portal, &organization, limit, cursor.as_deref(), &cancel)
+                    .await
+                    .map_err(error)?,
+            )
+        })
+    }
+    #[pyo3(signature = (domain_id, *, limit=50, cursor=None))]
+    fn portals_page<'py>(
+        &self,
+        py: Python<'py>,
+        domain_id: &str,
+        limit: usize,
+        cursor: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let domain = id(domain_id)?;
+        let inner = self.inner.clone();
+        run(py, |cancel| async move {
+            json(
+                &inner
+                    .portals_page(domain, limit, cursor.as_deref(), &cancel)
+                    .await
+                    .map_err(error)?,
+            )
+        })
+    }
+
     #[pyo3(signature = (*, organization="own", limit=50, offset=0, domain_server_id=None))]
     fn list<'py>(
         &self,

@@ -80,7 +80,7 @@ return DDS metadata, while `poses`/`pose` return the Domain Server's unchanged
 pose fields.
 
 An imported ZITADEL session uses the same awaited credential store for Domain
-listing, data access, and peer authentication. Its default `domains().list`
+listing, data access, and peer authentication. Its legacy `domains().list`
 query uses the API's ordinary User access profile for owners and other User
 roles, then validates the DDS page against the token's organization and any
 Domain allowlist. Viewer profiles use the API's narrower P2P listing grant.
@@ -227,3 +227,10 @@ exhaustive error switches and regenerate the matching UniFFI/XCFramework output.
 See the [fleet reference](../../../../docs/reference/fleet.md).
 After `build-xcframework.sh`, run `bash core/bindings/swift/auki-sdk-swift/run-fleet-bindings-test.sh`
 from the repository root for a generated Swift/native loopback HTTP exercise.
+
+## Permission-aware DDS discovery
+
+Use `domains().discover` for a picker with effective data/pose permissions.
+Imported human discovery and data grants use DDS directly and require the
+[coordinated provider rollout](../../../../docs/how-to/discover-domains.md).
+The same guide covers cursor continuation, portal pages and all bindings.

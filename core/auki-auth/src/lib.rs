@@ -65,7 +65,8 @@ mod zitadel_session;
 /// Shared User/App credential used by Domain clients and peer bootstrap.
 pub use client::AuthSession as AukiCredential;
 pub use client::domain::{
-    DomainAccess, DomainAccessProvider, DomainListQuery, DomainPage, DomainSummary, Portal,
+    DiscoveredDomain, DomainAccess, DomainAccessProvider, DomainDiscoveryPage,
+    DomainDiscoveryQuery, DomainListQuery, DomainPage, DomainPermission, DomainSummary, Portal,
     PortalDomain, PortalId,
 };
 pub use client::inventory::{InventoryNode, InventoryPage, InventoryRobot};

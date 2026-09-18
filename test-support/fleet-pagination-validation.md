@@ -1,5 +1,8 @@
 # Fleet pagination validation — 2026-09-18
 
+> Historical first-slice evidence. The expanded DDS/SDK changes and current
+> passing Python suite are recorded in [DDS discovery validation](dds-discovery-validation.md).
+
 First slice of [#385](https://github.com/aukilabs/auki-sdk/issues/385): DDS
 compute-node and Domain-robot inventory. This consumer branch is based on SDK
 `140b7fd9`, including merged #400/#401. The provider adds opt-in UUID keyset pages

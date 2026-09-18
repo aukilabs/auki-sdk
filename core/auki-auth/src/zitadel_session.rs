@@ -36,6 +36,7 @@ struct State {
 }
 
 pub(crate) struct ZitadelSession {
+    issuer: reqwest::Url,
     client: ZitadelTokenClient,
     store: Arc<dyn ZitadelSessionStore>,
     state: Mutex<State>,
@@ -55,6 +56,7 @@ impl ZitadelSession {
         wait_timeout: Duration,
     ) -> Arc<Self> {
         Arc::new(Self {
+            issuer: credentials.issuer().clone(),
             client,
             store,
             state: Mutex::new(State {
@@ -66,6 +68,10 @@ impl ZitadelSession {
             closed,
             wait_timeout,
         })
+    }
+
+    pub fn issuer(&self) -> &reqwest::Url {
+        &self.issuer
     }
 
     pub async fn ready(

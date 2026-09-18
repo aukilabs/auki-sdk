@@ -8,6 +8,10 @@ import type {
   DomainDataError,
   DomainDataFailureKind,
   DomainPage,
+  DomainDiscoveryPage,
+  DomainDiscoveryQuery,
+  PortalPage,
+  PortalDomainPage,
   DomainQuery,
   Portal,
   PortalDomain,
@@ -158,6 +162,18 @@ async function cancellable<T>(
 export class AukiDomains {
   /** @internal Use domains(sessionId). */
   constructor(private readonly sessionId: string) {}
+
+  discover(query: DomainDiscoveryQuery = {}, signal?: AbortSignal): Promise<DomainDiscoveryPage> {
+    return cancellable(signal, operationId => module.domainsDiscover(this.sessionId, JSON.stringify(query), operationId));
+  }
+
+  forPortalPage(portal: string, limit = 50, cursor?: string | null, organization = "own", signal?: AbortSignal): Promise<PortalDomainPage> {
+    return cancellable(signal, operationId => module.domainsForPortalPage(this.sessionId, portal, organization, limit, cursor ?? null, operationId));
+  }
+
+  portalsPage(domainId: string, limit = 50, cursor?: string | null, signal?: AbortSignal): Promise<PortalPage> {
+    return cancellable(signal, operationId => module.domainsPortalsPage(this.sessionId, domainId, limit, cursor ?? null, operationId));
+  }
 
   list(query: DomainQuery = {}, signal?: AbortSignal): Promise<DomainPage> {
     return cancellable(signal, operationId =>

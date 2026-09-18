@@ -195,6 +195,7 @@ struct SessionState {
     principal: PrincipalState,
     dds_bearer: Option<SecretString>,
     domain_access: std::collections::HashMap<Uuid, Arc<domain::DomainAccess>>,
+    job_access: std::collections::HashMap<Uuid, Arc<domain::DomainAccess>>,
 }
 
 struct ImportedListingGrant {
@@ -211,6 +212,7 @@ enum ImportedListingGrantKind {
 enum ImportedOrdinaryProfile {
     User(ImportedListingGrant),
     Viewer,
+    Identity,
 }
 
 #[derive(Deserialize)]
@@ -279,6 +281,7 @@ impl AuthClient {
                     principal: PrincipalState::Zitadel(zitadel),
                     dds_bearer: None,
                     domain_access: Default::default(),
+                    job_access: Default::default(),
                 }),
                 closed,
             }),
@@ -327,6 +330,7 @@ impl AuthClient {
                     principal: PrincipalState::User { refresh_token },
                     dds_bearer: Some(dds_bearer),
                     domain_access: Default::default(),
+                    job_access: Default::default(),
                 }
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -339,6 +343,7 @@ impl AuthClient {
                     principal: PrincipalState::App(credentials),
                     dds_bearer: Some(dds_bearer),
                     domain_access: Default::default(),
+                    job_access: Default::default(),
                 }
             }
         };
@@ -602,6 +607,7 @@ impl AuthSession {
         }
         state.dds_bearer = None;
         state.domain_access.clear();
+        state.job_access.clear();
         state.principal = PrincipalState::Closed;
     }
 
@@ -725,6 +731,11 @@ impl AuthSession {
                 Ok(response) => {
                     match validate_imported_ordinary_listing_profile(response.access_token)? {
                         ImportedOrdinaryProfile::User(grant) => return Ok(grant),
+                        ImportedOrdinaryProfile::Identity => {
+                            return Err(Error::InvalidConfiguration(
+                                "use discover_domains for imported human cursor pages; API identity tokens carry no Domain authority",
+                            ));
+                        }
                         ImportedOrdinaryProfile::Viewer => {
                             let mut url = self.inner.client.api_url("service/domains-access-token");
                             url.query_pairs_mut().append_pair("purpose", "p2p");
@@ -1464,6 +1475,9 @@ fn validate_imported_ordinary_listing_profile(value: String) -> Result<ImportedO
                 domains,
                 kind: ImportedListingGrantKind::User { organization },
             }))
+        }
+        "zitadel-identity" if claims.domains.as_ref().is_none_or(Vec::is_empty) => {
+            Ok(ImportedOrdinaryProfile::Identity)
         }
         "app-access" if claims.domains.as_ref().is_none_or(Vec::is_empty) => {
             Ok(ImportedOrdinaryProfile::Viewer)

@@ -10,7 +10,10 @@ mod portals;
 mod transfer;
 mod types;
 
-pub use auki_auth::{DomainListQuery, DomainPage, DomainSummary, Portal, PortalDomain, PortalId};
+pub use auki_auth::{
+    DiscoveredDomain, DomainDiscoveryPage, DomainDiscoveryQuery, DomainListQuery, DomainPage,
+    DomainPermission, DomainSummary, Portal, PortalDomain, PortalId,
+};
 pub use data::{AukiDomainData, DomainDataClient};
 pub use error::DataError;
 pub use types::{DataLimits, DataListQuery, DataMetadata, DataWrite, PortalPose, TransferOptions};
@@ -27,6 +30,15 @@ impl AukiDomains {
         Self(credential)
     }
 
+    /// Discover effective permissions without issuing or billing Domain tokens.
+    pub async fn discover(
+        &self,
+        query: &DomainDiscoveryQuery,
+        cancellation: &CancellationToken,
+    ) -> Result<DomainDiscoveryPage, DataError> {
+        Ok(self.0.discover_domains(query, cancellation).await?)
+    }
+
     pub async fn for_portal(
         &self,
         portal: &PortalId,
@@ -36,6 +48,33 @@ impl AukiDomains {
         Ok(self
             .0
             .domains_for_portal(portal, organization, cancellation)
+            .await?)
+    }
+
+    pub async fn for_portal_page(
+        &self,
+        portal: &PortalId,
+        organization: &str,
+        limit: usize,
+        cursor: Option<&str>,
+        cancellation: &CancellationToken,
+    ) -> Result<auki_auth::InventoryPage<PortalDomain>, DataError> {
+        Ok(self
+            .0
+            .domains_for_portal_page(portal, organization, limit, cursor, cancellation)
+            .await?)
+    }
+
+    pub async fn portals_page(
+        &self,
+        domain: uuid::Uuid,
+        limit: usize,
+        cursor: Option<&str>,
+        cancellation: &CancellationToken,
+    ) -> Result<auki_auth::InventoryPage<Portal>, DataError> {
+        Ok(self
+            .0
+            .list_portals_page(domain, limit, cursor, cancellation)
             .await?)
     }
 

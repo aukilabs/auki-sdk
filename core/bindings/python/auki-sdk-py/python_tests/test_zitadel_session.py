@@ -113,6 +113,10 @@ def zitadel_services():
                 token = "e30." + payload + ".sig"
                 state["ordinary_token"] = token
                 return self.reply({"access_token": token})
+            if path == "/api/v1/domain-discovery/zitadel":
+                assert self.headers["Authorization"] == "Bearer access-replacement"
+                assert query.get("allows") == ["domain-data:r"]
+                return self.reply({"domains": [{"id": DOMAIN, "name": "DDS only", "organization_id": "11111111-1111-4111-8111-111111111111", "permissions": ["domain-data:r"]}], "pagination": {"version": 1, "limit": int(query["limit"][0]), "next_cursor": ""}})
             if path == "/api/v1/domains":
                 assert self.headers["Authorization"] == "Bearer " + state["ordinary_token"]
                 assert query["org"] == ["own"]
@@ -151,12 +155,19 @@ def zitadel_services():
                     "limit": limit,
                     "offset": offset,
                 })
-            if path.endswith("/auth"):
+            if path.endswith("/auth/zitadel"):
+                assert self.headers["Authorization"] == "Bearer access-replacement"
                 if state["deny"] or OTHER_DOMAIN in path:
                     return self.reply(status=403)
                 claim_domain = OTHER_DOMAIN if state["wrong_claim"] else DOMAIN
                 claims = {
                     "iss": "dds",
+                    "type": "zitadel-user-access",
+                    "sub": "fixture-user",
+                    "org": "11111111-1111-4111-8111-111111111111",
+                    "login_provider": "zitadel",
+                    "identity_issuer": state["base"],
+                    "scopes": ["domain-metadata:r", "domain-data:r", "pose:r"],
                     "domain_id": claim_domain,
                     "aud": [state["base"]],
                     "exp": int(time.time()) + 3600,
@@ -353,7 +364,7 @@ def test_imported_listing_paginates_and_keeps_data_authority_separate(zitadel_se
         assert await data.list() == []
         await data.close()
         assert len(saved) == 1
-        assert zitadel_services["ordinary_exchanges"] == 4
+        assert zitadel_services["ordinary_exchanges"] == 3
         assert zitadel_services["p2p_exchanges"] == 0
 
         before = len(zitadel_services["calls"])
@@ -383,7 +394,7 @@ def test_imported_listing_paginates_and_keeps_data_authority_separate(zitadel_se
         assert denied_viewer.value.kind == "auth"
         assert denied_viewer.value.status == 403
         assert denied_viewer.value.code == "authorization_denied"
-        assert zitadel_services["ordinary_exchanges"] == 5
+        assert zitadel_services["ordinary_exchanges"] == 4
         assert zitadel_services["p2p_exchanges"] == 1
         await viewer.close()
 
@@ -429,5 +440,27 @@ def test_invalid_credentials_denial_wrong_domain_and_listing_are_bounded(zitadel
         assert wrong.value.kind == "auth"
         assert wrong.value.code == "transient"
         await session.close()
+
+    asyncio.run(scenario())
+
+
+def test_permission_discovery_uses_dds_without_api_exchange(zitadel_services):
+    async def scenario():
+        saved = []
+
+        async def store(snapshot):
+            saved.append(snapshot.expose_access_token())
+
+        session = import_session(zitadel_services, store)
+        try:
+            page = await session.domains().discover(allows=["domain-data:r"], limit=1)
+            assert page["domains"][0]["id"] == DOMAIN
+            assert page["domains"][0]["permissions"] == ["domain-data:r"]
+            assert page["next_cursor"] is None
+            assert saved == ["access-replacement"]
+            assert zitadel_services["ordinary_exchanges"] == 0
+            assert zitadel_services["p2p_exchanges"] == 0
+        finally:
+            await session.close()
 
     asyncio.run(scenario())

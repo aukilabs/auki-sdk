@@ -58,8 +58,8 @@ test('Jobs polling stops outside visible detail and when all tasks are terminal'
 });
 
 import { primaryScreen, primaryScreens } from '../src/screens.ts';
-test('four primary workspaces group Space and preserve its Back path', () => {
-  assert.deepEqual(primaryScreens, ['data', 'jobs', 'overview', 'networking']);
+test('five primary workspaces group Space and preserve its Back path', () => {
+  assert.deepEqual(primaryScreens, ['data', 'jobs', 'fleet', 'overview', 'networking']);
   const navigation = new ScreenHistory();
   navigation.reset('overview'); navigation.go('portals'); navigation.go('technical');
   assert.equal(primaryScreen(navigation.current), undefined);

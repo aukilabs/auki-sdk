@@ -54,7 +54,7 @@ is an explicit original-byte `.bin` attachment; downloaded bytes are not redacte
 ## Focused screens
 
 The viewport-oriented application shows one current task, rather than appending
-details below a long page. **Data**, **Jobs**, **Poses/Portals** and **Network** are the four primary workspaces. Poses/Portals contains Domain information, Portals and Poses. Domain selection opens Data. One compact header carries environment and selected Domain; lists and details replace one another in the dark workspace. Long content scrolls internally and short windows retain reachable controls. Shared rows, forms, metadata and status treatments use restrained orange actions.
+details below a long page. **Data**, **Jobs**, **Fleet**, **Poses/Portals** and **Network** are the five primary workspaces. Fleet has All, Dedicated and Public views; Poses/Portals contains Domain information, Portals and Poses. Domain selection opens Data. One compact header carries environment and selected Domain; lists and details replace one another in the dark workspace. Long content scrolls internally and short windows retain reachable controls. Shared rows, forms, metadata and status treatments use restrained orange actions.
 
 Buttons open the Domain picker, connection settings, advanced filters, record,
 preview and technical screens. Domain paging and known-UUID selection remain
@@ -164,7 +164,7 @@ upload. Cancellation does not promise rollback. Domain changes/logout abort and
 invalidate old work, suppressing late results. Within the same session an uncertain target remains available after changing Domains. Logout completely clears file, type, destination, target and returned metadata before another account signs in. Review starts at the top with destination and file visible; returned metadata opens a separate redacted technical screen with Back.
 
 The UI uses `/brand/tokens.css`, the official `/brand/auki-logo.svg`, and local
-OFL fonts; it does not load fonts from a CDN. Local checks include 160 TypeScript
+OFL fonts; it does not load fonts from a CDN. Local checks include 166 TypeScript
 unit tests, 17 fixture/config tests, 25 Jobs worker tests and 6 idle-Echo robot tests.
 Real generated SDK/WASM browsing, binary upload/download and Jobs use synthetic
 loopback services; the separate Echo suite uses a real local Python robot. Jobs
@@ -183,7 +183,7 @@ jobs, estimates, uploads or task outputs were created. This proves live discover
 not leased-job execution or billing behavior.
 
 [Complete control-panel screenshot gallery](screenshots/control-panel/README.md):
-112 real-app captures covering all 14 routes and every Jobs, Upload and Network
+148 real-app captures covering all 15 routes, Fleet filters/details, and every Jobs, Upload and Network
 step on desktop and mobile, plus narrow/short viewport captures. Includes sign-in,
 settings, Domain selection, Data/details/preview/filter, Poses/Portals overview, portals and poses,
 upload confirmation/progress/result, workers, input selection, cost confirmation,
@@ -363,6 +363,34 @@ history activation until Jobs is visible. Inspect file produces the real JSON
 byte-count/SHA-256 report, never simulated line counts. Estimate review shows the
 input preview, destination, environment and decimal-string credits before submission.
 
-The rewrite has lightweight unit/type/config validation; fresh production builds,
-browser screenshots and viewport acceptance are delegated to the parent. Existing
-screenshots above predate this rewrite and are not evidence of its visual acceptance.
+The focused rewrite and Fleet addition passed the production build, unit/type/config
+checks and real-WASM loopback browser acceptance. The current control-panel gallery
+above records the verified layout; screenshots outside that gallery are historical.
+
+## Fleet screen
+
+Primary navigation is Data · Jobs · Fleet · Poses/Portals · Network. Fleet is a
+read-only view of Domain robots and visible compute candidates. Choose **Refresh**
+to make one bounded Domain inventory read and dedicated/public compute-pool reads.
+All is the default; Dedicated and Public filter the provider mode. Unknown modes
+appear only in All. Unknown-mode compute candidates excluded by the SDK's required
+pool-mode filter cannot be discovered through that API; unknown modes returned by
+Domain inventory remain visible. This view does not imply candidate assignment,
+capacity, eligibility or permission to dispatch work.
+
+UUID joins preserve Domain task observations; conflicting presence, mode or work
+observations become Unknown. Machine details show capabilities and authorized work;
+Details retains original observations, timestamps, source diagnostics and unresolved
+activity. Partial/denied reads remain distinguishable from a successful empty view.
+Back restores the filter, list scroll and selected machine focus. View in Fleet
+from Jobs retains the current job flow, with a return link.
+
+Fleet owns an independent client per refresh, a 15-second abort deadline, generation
+fences and awaited close/free. Refresh replacement, hidden navigation, Domain
+changes and logout abort/drain pending reads. There is no polling or automatic read
+on entry. The real-WASM loopback browser suite passed all filters, details, source
+failures, recovery and five-item navigation, including 320×568 and 640×360 viewports.
+It also verifies Fleet-owned reads abort on Domain change/logout, no stale Domain
+machines return, and uncertain Jobs survive Fleet visits without resubmission.
+The resource-capped full suite and independent review passed; the current gallery
+includes Fleet screenshots. These fixture results do not prove live availability.

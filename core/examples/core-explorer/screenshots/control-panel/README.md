@@ -1,8 +1,8 @@
 # Core Explorer — complete screen gallery
 
-112 real browser captures: **Dev defaults before sign-in**, and **local synthetic fixtures** for signed-in flows. No live worker jobs, live uploads or spending.
+148 real browser captures: **Dev defaults before sign-in**, and **local synthetic fixtures** for signed-in flows. No live worker jobs, live uploads or spending.
 
-Coverage verified programmatically against all 14 main routes, 6 Jobs views, 6 Network views and 4 Upload steps, for both desktop and mobile. Additional narrow/short captures exercise the nonconnected-network flow. These counts overlap: flow steps live inside their parent route.
+Coverage verified programmatically against all 15 main routes, Fleet modes/detail, 6 Jobs views, 6 Network views and 4 Upload steps, for both desktop and mobile. Additional narrow/short captures exercise the nonconnected-network flow. These counts overlap: flow steps live inside their parent route.
 
 Each screenshot is an actual viewport; long technical content scrolls inside the application. No claim to every possible error permutation or expanded disclosure.
 
@@ -26,6 +26,15 @@ Each screenshot is an actual viewport; long technical content scrolls inside the
 - [Confirm upload](upload-review-desktop.png)
 - [Upload in progress](upload-sending-desktop.png)
 - [Upload result](upload-result-desktop.png)
+- [Fleet — refresh to inspect](fleet-initial-desktop.png)
+- [Fleet — all machines](fleet-all-desktop.png)
+- [Fleet — dedicated](fleet-dedicated-desktop.png)
+- [Fleet — public](fleet-public-desktop.png)
+- [Fleet — machine detail](fleet-machine-desktop.png)
+- [Fleet — source details](fleet-details-desktop.png)
+- [Fleet — unknown activity](fleet-unknown-desktop.png)
+- [Fleet — partial observations](fleet-partial-desktop.png)
+- [Fleet — empty inventory](fleet-empty-desktop.png)
 - [Network start](network-desktop.png)
 - [Recent jobs](jobs-desktop.png)
 - [Choose workers](workers-desktop.png)
@@ -60,6 +69,15 @@ Each screenshot is an actual viewport; long technical content scrolls inside the
 - [Confirm upload](upload-review-mobile.png)
 - [Upload in progress](upload-sending-mobile.png)
 - [Upload result](upload-result-mobile.png)
+- [Fleet — refresh to inspect](fleet-initial-mobile.png)
+- [Fleet — all machines](fleet-all-mobile.png)
+- [Fleet — dedicated](fleet-dedicated-mobile.png)
+- [Fleet — public](fleet-public-mobile.png)
+- [Fleet — machine detail](fleet-machine-mobile.png)
+- [Fleet — source details](fleet-details-mobile.png)
+- [Fleet — unknown activity](fleet-unknown-mobile.png)
+- [Fleet — partial observations](fleet-partial-mobile.png)
+- [Fleet — empty inventory](fleet-empty-mobile.png)
 - [Network start](network-mobile.png)
 - [Recent jobs](jobs-mobile.png)
 - [Choose workers](workers-mobile.png)
@@ -94,6 +112,15 @@ Each screenshot is an actual viewport; long technical content scrolls inside the
 - [Confirm upload](upload-review-narrow.png)
 - [Upload in progress](upload-sending-narrow.png)
 - [Upload result](upload-result-narrow.png)
+- [Fleet — refresh to inspect](fleet-initial-narrow.png)
+- [Fleet — all machines](fleet-all-narrow.png)
+- [Fleet — dedicated](fleet-dedicated-narrow.png)
+- [Fleet — public](fleet-public-narrow.png)
+- [Fleet — machine detail](fleet-machine-narrow.png)
+- [Fleet — source details](fleet-details-narrow.png)
+- [Fleet — unknown activity](fleet-unknown-narrow.png)
+- [Fleet — partial observations](fleet-partial-narrow.png)
+- [Fleet — empty inventory](fleet-empty-narrow.png)
 - [Network start](network-narrow.png)
 - [Recent jobs](jobs-narrow.png)
 - [Choose workers](workers-narrow.png)
@@ -122,6 +149,15 @@ Each screenshot is an actual viewport; long technical content scrolls inside the
 - [Confirm upload](upload-review-short.png)
 - [Upload in progress](upload-sending-short.png)
 - [Upload result](upload-result-short.png)
+- [Fleet — refresh to inspect](fleet-initial-short.png)
+- [Fleet — all machines](fleet-all-short.png)
+- [Fleet — dedicated](fleet-dedicated-short.png)
+- [Fleet — public](fleet-public-short.png)
+- [Fleet — machine detail](fleet-machine-short.png)
+- [Fleet — source details](fleet-details-short.png)
+- [Fleet — unknown activity](fleet-unknown-short.png)
+- [Fleet — partial observations](fleet-partial-short.png)
+- [Fleet — empty inventory](fleet-empty-short.png)
 - [Network start](network-short.png)
 - [Recent jobs](jobs-short.png)
 - [Choose workers](workers-short.png)

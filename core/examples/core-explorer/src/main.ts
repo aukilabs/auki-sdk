@@ -1,6 +1,7 @@
 import './style.css';
 import { facts, technical, recordRow, environmentLabel } from './presentation';
 import { networkingUI } from './network-ui';
+import { fleetScreenUI } from './fleet-screen-ui';
 import { jobsUI } from './jobs-ui';
 import { uploadUI } from './upload-ui';
 import { ScreenHistory, isScreen, primaryScreen, focusScreenTarget, type Screen } from './screens';
@@ -22,6 +23,8 @@ function renderView(restore = false) {
   $('domain-switch').hidden = !connection.session || view === 'access';
   $('logout').hidden = !connection.session && !$<HTMLButtonElement>('signin').disabled;
   $(`view-jobs`).dataset.auxiliary = String(['settings', 'technical'].includes(view));
+  $('view-jobs').dataset.fleetVisit = String(view === 'fleet');
+  fleetScreen.visibility(view === 'fleet');
   $('space-navigation').hidden = !['overview', 'portals', 'poses'].includes(view);
   document.querySelectorAll<HTMLElement>('[data-space]').forEach(button => button.setAttribute('aria-current', button.dataset.go === view ? 'page' : 'false'));
   $('workspace').hidden = !connection.session || view === 'settings' || view === 'access';
@@ -48,9 +51,9 @@ document.addEventListener('click', event => {
 function showTechnical(value: unknown) { text('technical-content', inspect(value)); showView('technical'); }
 document.addEventListener('keydown', event => {
   if (event.key !== 'Escape' || event.defaultPrevented) return;
-  const localBack = document.querySelector<HTMLButtonElement>('#view-upload:not([hidden]) #upload-back, #view-networking:not([hidden]) #net-back:not([hidden]), #view-networking:not([hidden]) #net-result-back, #view-jobs:not([hidden]) #jobs-back:not([hidden])');
+  const localBack = document.querySelector<HTMLButtonElement>('#view-fleet:not([hidden]) #fleet-screen-back, #view-upload:not([hidden]) #upload-back, #view-networking:not([hidden]) #net-back:not([hidden]), #view-networking:not([hidden]) #net-result-back, #view-jobs:not([hidden]) #jobs-back:not([hidden])');
   if (localBack && !localBack.closest('[hidden]') && !localBack.disabled) { localBack.click(); return; }
-  if (!['access', 'data', 'jobs', 'overview', 'networking'].includes(navigation.current)) backView();
+  if (!['access', 'data', 'jobs', 'fleet', 'overview', 'networking'].includes(navigation.current)) backView();
 });
 document.addEventListener('explorer:technical', event => showTechnical((event as CustomEvent).detail));
 const connection = new Connection();
@@ -64,6 +67,10 @@ const networking = networkingUI(connection, () => domainId);
 const uploader = uploadUI(connection, () => domainId && connection.data ? { domainId, domainName, environment: connectedEnvironment } : undefined, {
   navigate: showView, onUploaded: () => loadRecords(),
 });
+const fleetScreen = fleetScreenUI(() => {
+  const session = connection.session, id = domainId;
+  return session && id ? { domainId: id, session, environment: connectedEnvironment, createFleet: () => session.fleet(id) } : undefined;
+}, showView);
 const jobsOutput = new ReadLane();
 const jobs = jobsUI(connection, () => {
   const session = connection.session, data = connection.data, id = domainId;
@@ -78,11 +85,12 @@ const jobs = jobsUI(connection, () => {
   }, () => { failed = true; });
   if (failed) throw new Error('Output read failed.');
 } });
+$('jobs-view-fleet').onclick = () => fleetScreen.openFromJobs();
 $('open-jobs').onclick = () => jobs.open();
 $('open-record-jobs').onclick = () => { if (recordId) jobs.open(recordId); };
 const closeNetworking = connection.beforeClose;
 connection.beforeClose = () => drainCleanup(
-  () => jobs.close(connection.session), () => uploader.cancel(), () => closeNetworking(),
+  () => fleetScreen.close(), () => jobs.close(connection.session), () => uploader.cancel(), () => closeNetworking(),
 );
 $('open-upload').onclick = () => uploader.open();
 function settingsState() {
@@ -106,7 +114,7 @@ function clearSelection() {
   selection++; jobsOutput.cancel(); uploader.clear(); positions.clear();
   disabled('open-upload', true);
   for (const key of ['portals', 'poses', 'records', 'record', 'bytes'] as const) lanes[key].cancel();
-  domainId = ''; domainName = ''; jobs.refreshContext(); clearRecord();
+  domainId = ''; domainName = ''; fleetScreen.reset(); jobs.refreshContext(); clearRecord();
   text('technical-content', '');
   for (const id of ['metadata', 'portals', 'poses', 'records', 'data-status']) text(id, '');
   text('selected', 'Choose a Domain'); text('domain-name', 'Choose a Domain'); $('domain-facts').replaceChildren();
@@ -183,7 +191,7 @@ async function selectDomain(id: string) {
     const data = await connection.select(id);
     if (version !== selection || session !== connection.session) return; // Connection owns stale-client cleanup.
     connection.data = data;
-    jobs.refreshContext();
+    jobs.refreshContext(); fleetScreen.render();
     if (data) refreshSelected();
     disabled('open-upload', !data);
     networking.refresh();

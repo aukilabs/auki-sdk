@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 
 export async function assertChapter(page, selected) {
-  for (const view of ['overview', 'data', 'portals', 'poses', 'networking', 'jobs']) {
+  for (const view of ['overview', 'data', 'portals', 'poses', 'networking', 'jobs', 'fleet']) {
     assert.equal(await page.locator(`#view-${view}`).isVisible(), view === selected, `${view} visibility`);
   }
   const group = ['portals', 'poses'].includes(selected) ? 'overview' : selected;
-  for (const view of ['data', 'jobs', 'overview', 'networking']) {
+  for (const view of ['data', 'jobs', 'fleet', 'overview', 'networking']) {
     const current = await page.locator(`[data-view="${view}"]`).getAttribute('aria-current');
     assert.equal(current === 'page', view === group, `${view} accessible selection`);
   }

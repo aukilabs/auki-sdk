@@ -1,4 +1,4 @@
-export const primaryScreens = ['data', 'jobs', 'overview', 'networking'] as const;
+export const primaryScreens = ['data', 'jobs', 'fleet', 'overview', 'networking'] as const;
 export const screens = [...primaryScreens, 'portals', 'poses', 'domains', 'settings', 'filters', 'record', 'preview', 'technical', 'upload', 'access'] as const;
 export type Screen = typeof screens[number];
 export function isScreen(value: string): value is Screen { return (screens as readonly string[]).includes(value); }
@@ -32,6 +32,6 @@ export function jobsShouldPoll(visible: boolean, screen: string, tasks: readonly
 export function primaryScreen(screen: Screen): typeof primaryScreens[number] | undefined {
   if (['overview', 'portals', 'poses'].includes(screen)) return 'overview';
   if (['data', 'filters', 'record', 'preview', 'upload'].includes(screen)) return 'data';
-  if (screen === 'jobs' || screen === 'networking') return screen;
+  if (screen === 'jobs' || screen === 'fleet' || screen === 'networking') return screen;
   return undefined;
 }

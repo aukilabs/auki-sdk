@@ -27,6 +27,7 @@
 <aside class="sidebar"><nav aria-label="Primary sections">
 <button data-view="data" aria-controls="view-data" aria-current="false">Data</button>
 <button id="open-jobs" data-view="jobs" aria-controls="view-jobs" aria-current="false">Jobs</button>
+<button data-view="fleet" aria-controls="view-fleet" aria-current="false">Fleet</button>
 <button data-view="overview" aria-controls="view-overview" aria-current="false">Poses/<wbr>Portals</button>
 <button data-view="networking" aria-controls="view-networking" aria-current="false">Network</button>
 </nav></aside>
@@ -41,6 +42,7 @@
 <section id="view-data" class="view" hidden><div class="view-head"><h1 tabindex="-1">Data</h1></div><div class="row"><button data-go="filters">Filters</button><button id="refresh-records">Refresh</button><button id="open-upload" class="primary" disabled>Upload</button><button id="record-jump" hidden>Selected record →</button></div><p id="data-status" role="status">Choose a Domain to read records.</p><div id="records" aria-label="Stored records"></div></section>
 <section id="view-filters" class="view" hidden><div class="view-head"><button data-back>← Back</button><h1 tabindex="-1">Filter records</h1></div><form id="filters" class="surface"><label>Exact name<input id="name" placeholder="Exact record name"></label><details id="advanced-filters"><summary>Advanced</summary><label>Type<input id="type"></label><label>IDs (comma separated)<input id="ids"></label></details><button class="primary">Apply filters</button></form></section>
 <section id="view-record" class="view" hidden><div class="view-head"><button data-back>← Back to records</button><h1 id="record-name" tabindex="-1">Choose a record</h1></div><section id="record-detail" tabindex="-1" class="surface" aria-label="Selected record"><pre id="record" hidden></pre><div class="row"><button id="record-technical">Details</button><button id="preview" class="primary" disabled>Preview</button><button id="download" disabled>Download</button><button id="open-record-jobs" disabled>Use in Jobs →</button></div><details id="record-more"><summary>Metadata and limits</summary><div id="record-facts"></div><button id="copy-record" disabled>Copy record ID</button><p class="footnote">Buffered reads up to 8 MiB. Downloads preserve original bytes.</p></details><p id="download-status" role="status"></p></section></section>
+<section id="view-fleet" class="view" hidden aria-label="Fleet"></section>
 <section id="view-jobs" class="view" hidden aria-label="Jobs playground"></section>
 <section id="view-preview" class="view" hidden><div class="view-head"><button data-back>← Back to record</button><h1 tabindex="-1">Preview</h1></div><pre id="content" role="status">Select a record.</pre><button id="retry-preview">Retry preview</button></section>
 <section id="view-technical" class="view" hidden><div class="view-head"><button data-back>← Back</button><h1 tabindex="-1">Details</h1></div><pre id="technical-content"></pre></section>

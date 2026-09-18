@@ -1,9 +1,10 @@
 # Fleet pagination validation — 2026-09-18
 
 First slice of [#385](https://github.com/aukilabs/auki-sdk/issues/385): DDS
-compute-node and Domain-robot inventory. This consumer branch starts at SDK
-`f9d1c283`; the provider adds opt-in UUID keyset pages and an explicit versioned
-acknowledgement in [DDS #569](https://github.com/aukilabs/domain-service/pull/569)
+compute-node and Domain-robot inventory. This consumer branch is based on SDK
+`140b7fd9`, including merged #400/#401. The provider adds opt-in UUID keyset pages
+and an explicit versioned acknowledgement in
+[DDS #569](https://github.com/aukilabs/domain-service/pull/569)
 (`878dc943`, based on `1ce8d30b` after DDS #568 merged). See the
 [Fleet contract](../docs/reference/fleet.md).
 
@@ -16,14 +17,13 @@ Commands run from the repository root unless a directory is specified:
 
 | Check | Result |
 | --- | --- |
-| `cargo test --locked -p auki-auth -p auki-fleet -p auki-sdk` | 96 Auth, 26 Fleet, 123 SDK unit, 2 facade and 1 documentation tests passed. |
-| `cargo test --locked -p auki-fleet -p auki-sdk-swift` | 26 Fleet and 19 Swift adapter tests passed. Includes the final legacy-provider source-code assertion. |
+| `cargo test --locked -p auki-auth -p auki-fleet -p auki-sdk -p auki-sdk-swift` | 96 Auth, 26 Fleet, 131 SDK unit, 19 Swift adapter, 2 facade and 1 documentation tests passed. Includes the legacy-provider source-code assertion. |
 | `cargo build --locked -p auki-sdk` | Passed. |
 | `cargo clippy --locked -p auki-auth -p auki-fleet -p auki-sdk --all-targets -- -D warnings` | Passed. |
 | `cargo check --locked --target wasm32-unknown-unknown -p auki-auth -p auki-fleet -p auki-sdk` | Passed. |
 | `cargo clippy --locked --target wasm32-unknown-unknown -p auki-auth -p auki-fleet -p auki-sdk --lib -- -D warnings` | Passed. |
 | `cargo fmt --all -- --check` and `git diff --check` | Passed. |
-| `bash test-support/run-domain-data-browser-tests.sh` | 14 tests passed in Chromium through WASM/Fetch, including four Fleet tests. Used `wasm-bindgen-test-runner` 0.2.121 to match Cargo.lock. |
+| `bash test-support/run-domain-data-browser-tests.sh` | 15 tests passed in Chromium through WASM/Fetch, including four Fleet tests. Used `wasm-bindgen-test-runner` 0.2.121 to match Cargo.lock. |
 | `npm ci` then `npm run check` in `core/bindings/web/auki-sdk-web` | WASM compilation and TypeScript checks passed. |
 | `maturin develop --locked --manifest-path core/bindings/python/auki-sdk-py/Cargo.toml`, in a virtual environment | Default-feature extension built successfully. |
 | `.venv/bin/python -m pytest core/bindings/python/auki-sdk-py/python_tests/test_fleet.py -q` | All 3 tests passed against the native extension and loopback HTTP fixture. |
@@ -41,7 +41,7 @@ permission tests remain passing.
 ## Full Python suite failure
 
 `.venv/bin/python -m pytest core/bindings/python/auki-sdk-py/python_tests -q`
-reported **105 passed, 1 failed**. The failing test is
+reported **106 passed, 1 failed** after rebasing onto `140b7fd9`. The failing test is
 `test_managed_events_drain_in_order_and_failure_preserves_artifact_metadata[run]`
 in `test_tasks.py`, timing out while expecting continuous `run()` to raise after
 a handler failure. Isolating both parameter cases reproduced the failure for

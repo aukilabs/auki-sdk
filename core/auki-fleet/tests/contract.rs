@@ -455,8 +455,115 @@ async fn node_filters_preserve_custom_capabilities_and_exclude_infrastructure() 
     );
 }
 
+async fn job_page<'a>(
+    f: &'a Fixture,
+    cursor: Option<&str>,
+    items: Value,
+    next_cursor: Option<&str>,
+) -> Mock<'a> {
+    f.server
+        .mock_async(|when, then| {
+            let when = when.method(GET).path("/v1/jobs").query_param("limit", "50");
+            if let Some(cursor) = cursor {
+                when.query_param("cursor", cursor);
+            } else {
+                when.query_param_missing("cursor");
+            }
+            then.header("content-type", "application/json")
+                .json_body(json!({"items": items, "next_cursor": next_cursor}));
+        })
+        .await
+}
+
 #[tokio::test]
-async fn bounded_job_pagination_remains_explicitly_partial() {
+async fn complete_job_pagination_preserves_activity_on_both_sides_of_boundary() {
+    let f = Fixture::new(false).await;
+    f.inventory().await;
+    let next_job = Uuid::new_v4();
+    let next_task = Uuid::new_v4();
+    let mut node_job = f.job_json();
+    node_job["id"] = json!(next_job);
+    let mut node_task = f.task_json(f.node, 120);
+    node_task["id"] = json!(next_task);
+    node_task["job_id"] = json!(next_job);
+    node_task["capability"] = json!("com.example.convert.v1");
+    let mut items: Vec<Value> = (0..49)
+        .map(|_| {
+            let mut job = f.job_json();
+            job["id"] = json!(Uuid::new_v4());
+            job["status"] = json!("completed");
+            json!({"job":job,"tasks_summary":f.summary(0)})
+        })
+        .collect();
+    items.push(json!({"job":f.job_json(),"tasks_summary":f.summary(1)}));
+    // Exact opaque cursor matching also checks that the SDK does not synthesize it.
+    let cursor = "boundary/+== opaque";
+    let first = job_page(&f, None, json!(items), Some(cursor)).await;
+    let second = job_page(
+        &f,
+        Some(cursor),
+        json!([{"job":node_job,"tasks_summary":f.summary(1)}]),
+        None,
+    )
+    .await;
+    let robot_details = f
+        .get(
+            format!("/v1/jobs/{}", f.job),
+            json!({"job":f.job_json(),"tasks_summary":f.summary(1),
+            "tasks":[f.task_json(f.robot,120)],"receipts":[]}),
+        )
+        .await;
+    let node_details = f
+        .get(
+            format!("/v1/jobs/{next_job}"),
+            json!({"job":node_job,"tasks_summary":f.summary(1),
+            "tasks":[node_task],"receipts":[]}),
+        )
+        .await;
+    f.get(
+        "/v1/nodes/busy",
+        json!({"nodes":[
+            {"node_id":f.robot,"task_id":f.task,"job_id":f.job,
+             "task_status":"running","job_status":"canceled","task_mode":"dedicated"},
+            {"node_id":f.node,"task_id":next_task,"job_id":next_job,
+             "task_status":"running","job_status":"canceled","task_mode":"dedicated"}
+        ]}),
+    )
+    .await;
+    let fleet = f.client();
+    let domain = fleet.list(&FleetQuery::default()).await.unwrap();
+    let pool = fleet
+        .compute_pool(&ComputePoolQuery {
+            mode: JobMode::Dedicated,
+            capabilities: vec![],
+            match_all_capabilities: false,
+        })
+        .await
+        .unwrap();
+    for snapshot in [&domain, &pool] {
+        assert!(snapshot.complete);
+        let jobs = source(snapshot, FleetSource::Jobs);
+        assert_eq!(jobs.state, FleetSourceState::Complete);
+        assert!(jobs.codes.is_empty());
+        let node = snapshot.machines.iter().find(|m| m.id == f.node).unwrap();
+        assert_eq!(node.activity.len(), 1);
+        assert_eq!(node.activity[0].task_id, next_task);
+        assert_eq!(node.work_state, FleetWorkState::Busy);
+    }
+    let robot = domain.machines.iter().find(|m| m.id == f.robot).unwrap();
+    assert_eq!(robot.activity.len(), 1);
+    assert_eq!(robot.activity[0].task_id, f.task);
+    assert_eq!(robot.work_state, FleetWorkState::Busy);
+    assert_eq!(domain.machines.len(), 2);
+    assert_eq!(pool.machines.len(), 1);
+    first.assert_calls_async(2).await;
+    second.assert_calls_async(2).await;
+    robot_details.assert_calls_async(2).await;
+    node_details.assert_calls_async(2).await;
+}
+
+#[tokio::test]
+async fn repeated_job_cursor_remains_explicitly_partial() {
     let f = Fixture::new(false).await;
     f.inventory().await;
     f.busy(None).await;
@@ -468,11 +575,92 @@ async fn bounded_job_pagination_remains_explicitly_partial() {
     let snapshot = f.client().list(&FleetQuery::default()).await.unwrap();
     assert!(!snapshot.complete);
     let jobs = source(&snapshot, FleetSource::Jobs);
-    assert!(
-        jobs.codes
-            .contains(&"provider_pagination_unreliable".into())
-    );
-    assert!(jobs.codes.contains(&"repeated_job_cursor".into()));
+    assert_eq!(jobs.codes, vec!["repeated_job_cursor"]);
+}
+
+#[tokio::test]
+async fn job_page_limit_remains_explicitly_partial() {
+    let f = Fixture::new(false).await;
+    f.inventory().await;
+    f.busy(None).await;
+    let first = job_page(&f, None, json!([]), Some("next-page")).await;
+    let unvisited = job_page(&f, Some("next-page"), json!([]), None).await;
+    let fleet = AukiFleet::with_limits(
+        f.session.clone(),
+        &format!("{}/v1/", f.server.base_url()),
+        FleetLimits {
+            max_job_pages: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap()
+    .in_domain(f.domain);
+    let snapshot = fleet.list(&FleetQuery::default()).await.unwrap();
+    assert!(!snapshot.complete);
+    let jobs = source(&snapshot, FleetSource::Jobs);
+    assert_eq!(jobs.state, FleetSourceState::Partial);
+    assert_eq!(jobs.codes, vec!["job_page_limit"]);
+    first.assert_calls_async(1).await;
+    unvisited.assert_calls_async(0).await;
+}
+
+#[tokio::test]
+async fn duplicate_jobs_across_pages_remain_explicitly_partial() {
+    let f = Fixture::new(false).await;
+    f.inventory().await;
+    f.busy(None).await;
+    let items = json!([{"job":f.job_json(),"tasks_summary":f.summary(0)}]);
+    let first = job_page(&f, None, items.clone(), Some("next-page")).await;
+    let second = job_page(&f, Some("next-page"), items, None).await;
+    let snapshot = f.client().list(&FleetQuery::default()).await.unwrap();
+    assert!(!snapshot.complete);
+    let jobs = source(&snapshot, FleetSource::Jobs);
+    assert_eq!(jobs.state, FleetSourceState::Partial);
+    assert_eq!(jobs.codes, vec!["changing_job_pages"]);
+    first.assert_calls_async(1).await;
+    second.assert_calls_async(1).await;
+}
+
+#[tokio::test]
+async fn later_job_page_failure_preserves_earlier_activity_as_partial() {
+    let f = Fixture::new(false).await;
+    f.inventory().await;
+    f.busy(Some(f.robot)).await;
+    let first = job_page(
+        &f,
+        None,
+        json!([{"job":f.job_json(),"tasks_summary":f.summary(1)}]),
+        Some("next-page"),
+    )
+    .await;
+    let failed = f
+        .server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/v1/jobs")
+                .query_param("cursor", "next-page");
+            then.status(503);
+        })
+        .await;
+    let details = f
+        .get(
+            format!("/v1/jobs/{}", f.job),
+            json!({"job":f.job_json(),"tasks_summary":f.summary(1),
+            "tasks":[f.task_json(f.robot,120)],"receipts":[]}),
+        )
+        .await;
+    let snapshot = f.client().list(&FleetQuery::default()).await.unwrap();
+    assert!(!snapshot.complete);
+    let jobs = source(&snapshot, FleetSource::Jobs);
+    assert_eq!(jobs.state, FleetSourceState::Partial);
+    assert_eq!(jobs.http_status, Some(503));
+    assert!(!jobs.codes.is_empty());
+    let robot = snapshot.machines.iter().find(|m| m.id == f.robot).unwrap();
+    assert_eq!(robot.activity.len(), 1);
+    assert_eq!(robot.activity[0].task_id, f.task);
+    first.assert_calls_async(1).await;
+    failed.assert_calls_async(1).await;
+    details.assert_calls_async(1).await;
 }
 
 #[tokio::test]

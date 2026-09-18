@@ -140,10 +140,11 @@ organization; see the
   after cancellation; this requires a backend correction, not an SDK retry loop.
 - The audited baseline predates keyed submission. Follow the deployment gate above;
   application labels are not uniqueness keys.
-- Current DMS pagination encodes the discarded overflow row as its next cursor and
-  then excludes that row. This can skip one job between pages. The SDK exposes the
-  provider's cursor unchanged; a complete listing requires the backend fix tracked
-  in [#396](https://github.com/aukilabs/auki-sdk/issues/396).
+- Older DMS pagination encoded the discarded overflow row as its next cursor and
+  then excluded that row, skipping one job between pages. A complete listing
+  requires [DMS #42](https://github.com/aukilabs/domain-manager-service/pull/42)
+  (tracked in [SDK #396](https://github.com/aukilabs/auki-sdk/issues/396)). The SDK
+  passes opaque cursors unchanged and does not detect whether that fix is deployed.
 - Current DMS persists a task's stage as its label. Both returned fields are exposed
   as supplied by DMS; the SDK does not pretend to repair persisted labels.
 

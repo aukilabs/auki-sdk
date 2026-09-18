@@ -109,12 +109,16 @@ jobs defaults (30 seconds and 4 MiB per response). Responses are bounded before
 JSON decoding. Inventory and busy responses are never silently truncated.
 
 DDS inventory and DMS busy feeds are currently unpaginated. DDS pagination is
-tracked in [#385](https://github.com/aukilabs/auki-sdk/issues/385). The DMS job
-cursor can skip a row ([#396](https://github.com/aukilabs/auki-sdk/issues/396));
-any multi-page traversal is marked `provider_pagination_unreliable`. Cursors
-pass through unchanged. Repeated cursors, changing pages, detail/activity limits
-and failed optional reads are explicit source codes. Do not treat partial jobs
-as proof of no work; only the separately complete busy feed can support idle.
+tracked in [#385](https://github.com/aukilabs/auki-sdk/issues/385). Complete job
+traversal requires a DMS deployment containing the cursor-boundary fix from
+[DMS #42](https://github.com/aukilabs/domain-manager-service/pull/42), tracked in
+[SDK #396](https://github.com/aukilabs/auki-sdk/issues/396). Older DMS deployments
+can silently skip a job; the SDK neither detects their version nor repairs cursors.
+On a compatible provider, a successful traversal ending without a next cursor
+can report complete coverage. Cursors pass through unchanged. Repeated cursors,
+changing pages, page/detail/activity limits and failed optional reads still
+produce explicit source codes. Do not treat partial jobs as proof of no work;
+only the separately complete busy feed can support idle.
 
 Optional source denials, timeouts, transport errors and oversized responses
 retain other usable results. Invalid responses, authentication configuration or

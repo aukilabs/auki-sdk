@@ -1,0 +1,410 @@
+// Optional automatic Chat acceptance; SYNTHETIC subprocess responder, never live AI.
+import assert from 'node:assert/strict';
+import { assertNetworkStep, assertChapter, chapter, back, openDetails, reveal, selectDomain, assertLocalFonts, assertUsable, unexpectedConsoleError } from './guided-ui.mjs';
+import { spawn, execFileSync } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const example = fileURLToPath(new URL('../', import.meta.url));
+import { lookup } from 'node:dns/promises';
+import https from 'node:https';
+import net from 'node:net';
+import { WebSocketServer, createWebSocketStream } from 'ws';
+import { chromium } from 'playwright';
+import { DOMAIN, OTHER } from './fixture.mjs';
+import { HOST, startNetworkFixture } from './network-fixture.mjs';
+import { observeExit, stopRobot, traceShutdown } from './network-shutdown.mjs';
+import { networkConfig } from './network-config.mjs';
+const config = networkConfig();
+await mkdir(new URL('../test-artifacts/',import.meta.url),{recursive:true});
+const temporary = await mkdtemp(resolve(tmpdir(), 'core-explorer-network-'));
+const spool = resolve(temporary, 'chat-spool');
+await mkdir(spool, {mode:0o700});
+const operator = (action, session, peer, body) => JSON.parse(execFileSync(config.python,
+  ['chat-host/inbox.py','--root',spool,action,...(session ? ['--session',session,'--peer',peer] : [])],
+  {cwd:example,input:body,encoding:'utf8',timeout:5000,maxBuffer:7_000_000}));
+const operatorUntil = async (predicate) => {
+  for(let i=0;i<100;i++){const result=predicate();if(result)return result;await new Promise(r=>setTimeout(r,50));}
+  throw new Error('operator observation timeout');
+};
+const children = [], sockets = new Set();
+let fixture, browser, bridge, wss;
+const browserLogs=[],consoleErrors=[];let outputOverflow=false;let bridgeConnections=0;let expectingTransportFailure=false;
+const launch = (command,args,options={}) => { const child=spawn(command,args,{cwd:example,stdio:['ignore','pipe','pipe'],...options}); child.on('error',()=>{}); children.push(child); let bytes=0; for(const pipe of [child.stdout,child.stderr])pipe.on('data',chunk=>{bytes+=chunk.length;if(bytes>65536)child.kill('SIGTERM');}); return child; };
+const line = child => new Promise((resolveLine,reject) => {
+  let buffer='';
+  const timer=setTimeout(()=>finish(new Error('subprocess readiness timeout')),40000);
+  const data=chunk=>{buffer+=chunk; if(buffer.length>65536)return finish(new Error('output limit')); const end=buffer.indexOf('\n'); if(end>=0){try{finish(null,JSON.parse(buffer.slice(0,end)));}catch{finish(new Error('invalid readiness'));}}};
+  const exited=()=>finish(new Error('subprocess exited before readiness'));
+  const finish=(error,value)=>{clearTimeout(timer);child.stdout.off('data',data);child.off('exit',exited);error?reject(error):resolveLine(value);};
+  child.stdout.on('data',data);child.once('exit',exited);
+});
+const contains=(page,selector,value)=>page.waitForFunction(({selector,value})=>document.querySelector(selector)?.textContent.includes(value),{selector,value});
+const delay=ms=>new Promise(r=>setTimeout(r,ms));
+try {
+  const addresses=await lookup(HOST,{all:true});
+  assert.ok(addresses.length&&addresses.every(e=>e.address==='127.0.0.1'),'DNS must resolve exclusively to loopback');
+  const relayProcess=launch(config.relay,[]);
+  const relay=await line(relayProcess); relay.port=Number(relay.address.split('/').at(-1));
+  execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',resolve(temporary,'key.pem'),'-out',resolve(temporary,'cert.pem'),'-days','1','-subj',`/CN=${HOST}`,'-addext',`subjectAltName=DNS:${HOST}`],{stdio:'ignore'});
+  bridge=https.createServer({key:await readFile(resolve(temporary,'key.pem')),cert:await readFile(resolve(temporary,'cert.pem'))});
+  wss=new WebSocketServer({server:bridge,maxPayload:1024*1024});
+  wss.on('connection',ws=>{
+    bridgeConnections++;
+    const stream=createWebSocketStream(ws),tcp=net.connect(relay.port,'127.0.0.1'); sockets.add(tcp);tcp.setTimeout(30000,()=>tcp.destroy());
+    const close=()=>{sockets.delete(tcp);tcp.destroy();stream.destroy();ws.terminate();};
+    tcp.on('error',close);stream.on('error',close);tcp.on('close',close);stream.on('close',close);stream.pipe(tcp).pipe(stream);
+  });
+  await new Promise(r=>bridge.listen(0,'127.0.0.1',r));
+  fixture=await startNetworkFixture(relay,bridge.address().port);
+  const startRobot=()=>{const robot=launch(config.python,['tests/chat-native.py'],{env:{...process.env,AUKI_SHUTDOWN_TRACE:'1',AUKI_CHAT_SPOOL:spool,AUKI_DDS_URL:fixture.base,AUKI_DMS_URL:fixture.base,AUKI_ROBOT_AUDIENCE:fixture.base+'/robots',AUKI_ROBOT_REGISTRATION:fixture.registration,AUKI_IDENTITY_FILE:resolve(temporary,'identity')}});traceShutdown(robot);return robot;};
+  let robot=startRobot();
+  const ready=await line(robot);
+  if(ready.state!=='ready')throw new Error('robot startup failed ('+(['authority','authentication','service','configuration','http','peer_startup','signed_peer_credential','robot_token_profile','p2p_lifetime','machine_claims','cleanup','timeout'].includes(ready.category)?ready.category:'unclassified')+'); fixture requests: '+fixture.state.requests.length);
+  assert.ok(ready.wss?.includes(`/wss/p2p/${relay.peer}/p2p-circuit/p2p/${ready.peer}`));
+  console.log('PASS real Python idle peer reserved relay');
+  // Synthetic status mirrors the private production runner contract. No SDK mock.
+  await writeFile(resolve(spool,'status.json'),JSON.stringify({state:'ready',domain:DOMAIN,peer_id:ready.peer}),{mode:0o600});
+  const adapterPython=execFileSync(config.python,['-c','import sys; print(sys.executable)'],{encoding:'utf8'}).trim();
+  const botConfig=resolve(temporary,'autobot.json');
+  await writeFile(botConfig,JSON.stringify({domain:DOMAIN,command:[adapterPython,resolve(example,'tests/autochat-responder.py')]}),{mode:0o600});
+  const autoBot=launch(config.python,['chat-host/autobot.py','--enable','--root',spool,'--config',botConfig]);
+  await delay(300);assert.equal(autoBot.exitCode,null,'sidecar started');
+  launch(process.execPath,['node_modules/vite/bin/vite.js','preview','--host','127.0.0.1','--port','18116','--strictPort']);
+  for(let i=0;i<50;i++){try{if((await fetch('http://127.0.0.1:18116')).ok)break;}catch{}await delay(100);}
+  browser=await chromium.launch({headless:true,args:['--no-sandbox','--disable-dev-shm-usage',`--host-resolver-rules=MAP ${HOST} 127.0.0.1`,'--no-proxy-server']});
+  const context=await browser.newContext({ignoreHTTPSErrors:true,serviceWorkers:'block'}),forbidden=[];
+  await context.route('**/*',route=>{const url=new URL(route.request().url());if(url.hostname!=='127.0.0.1'){forbidden.push(url.origin);return route.abort();}return route.continue();});
+  const page=await context.newPage();
+  page.on('console',message=>{if(unexpectedConsoleError(message) && !(expectingTransportFailure && message.text().startsWith(`WebSocket connection to 'wss://${HOST}:`) && message.text().includes('failed:')))consoleErrors.push(message.text());if(browserLogs.join('').length<65536)browserLogs.push(message.text());else outputOverflow=true;});
+  page.on('pageerror',()=>{browserLogs.push('browser page error');});
+  page.setDefaultTimeout(15000);await page.goto('http://127.0.0.1:18116');
+  await assertLocalFonts(page);
+  await openDetails(page,'#connection-settings');
+  for(const id of ['api','dds','dms'])await page.locator('#'+id).fill(fixture.base);
+  await back(page);
+  await page.locator('#email').fill('fixture@example.test');await page.locator('#password').fill('synthetic-password');await page.locator('#signin').click();await contains(page,'#domains','Synthetic lab');
+  await reveal(page,'#domains');
+  await page.getByRole('button',{name:/Synthetic lab/}).click();
+  await chapter(page,'networking',true);
+  const beforeChat = fixture.state.requests.filter(value=>value.includes('/p2p/')).length;
+  await page.getByRole('button',{name:'Chat',exact:true}).click();
+  await delay(100);
+  assert.equal(fixture.state.requests.filter(value=>value.includes('/p2p/')).length,beforeChat,'opening Chat performs no networking');
+  const capture = async (name, controls = []) => {
+    for(const [suffix,width,height] of [['desktop',1280,900],['mobile',390,844]]){
+      await page.setViewportSize({width,height});
+      await assertUsable(page,controls);
+      await page.screenshot({path:new URL(`../test-artifacts/autochat-${name}-${suffix}.png`,import.meta.url).pathname,fullPage:true});
+    }
+  };
+  // Hold the actual HTTP response until the UI proves cleanup is still pending.
+  const holdDiscovery = () => {
+    let entered, release;
+    const started = new Promise(resolve => { entered = resolve; });
+    const held = new Promise(resolve => { release = resolve; });
+    fixture.state.chatDiscoveryGate = () => { entered(); return held; };
+    return { started, release: () => { fixture.state.chatDiscoveryGate = undefined; release(); } };
+  };
+  const discoveryStopped = () => page.waitForFunction(() =>
+    document.querySelector('#chat-discovery-state')?.textContent === '' &&
+    document.querySelector('#chat-state')?.textContent === 'stopped');
+  const findChat = async (captures = false) => {
+    await page.locator('#chat-find').click();
+    await contains(page,'#chat-discovery-state','Select a Chat peer.');
+    assert.equal(await page.locator('#chat-candidates button').count(),1);
+    assert.equal(await page.locator('#chat-connect-selected').isEnabled(),false);
+    const candidate = page.locator('#chat-candidates button').filter({hasText: ready.peer.slice(-8)});
+    assert.equal(await candidate.getAttribute('data-peer-id'),ready.peer);
+    assert.equal(await candidate.getAttribute('data-route'),ready.wss);
+    assert.ok(!(await candidate.innerText()).includes(ready.wss),'route stays under technical disclosure');
+    assert.equal(await page.locator('#chat-candidates pre').isVisible(),false);
+    if(captures) await capture('discovery',['#chat-find','#chat-candidates button','#chat-candidates summary']);
+    await candidate.click();
+    assert.equal(await candidate.getAttribute('aria-pressed'),'true');
+    assert.equal(await page.locator('#chat-connect-selected').isEnabled(),true);
+    if(captures) {
+      await capture('selected',['#chat-candidates button','#chat-connect-selected']);
+      await page.locator('#chat-candidates summary').click();
+      assert.equal(await page.locator('#chat-candidates pre').innerText(),`Peer ID\n${ready.peer}\n\nWSS route\n${ready.wss}`);
+      await capture('technical',['#chat-candidates summary','#chat-connect-selected']);
+      await page.locator('#chat-candidates summary').click();
+      await page.locator('#chat-advanced summary').click();
+      await page.locator('#chat-peer').fill(ready.peer);await page.locator('#chat-route').fill(ready.wss);
+      await capture('advanced',['#chat-peer','#chat-route','#chat-connect']);
+      await page.locator('#chat-advanced summary').click();
+    }
+    await page.locator('#chat-connect-selected').click();
+    await contains(page,'#chat-state','paired');
+  };
+  const chatAd=fixture.advertisements.get(ready.peer);
+  assert.ok(chatAd.protocols.includes('/example/core-explorer-chat/1.0.0'));
+  fixture.advertisements.set(relay.peer,{...chatAd,peer_id:relay.peer,protocols:['/example/echo/1.0.0'],routes:[ready.wss.replace(new RegExp(ready.peer+'$'),relay.peer)]});
+  for(const [mode,label] of [['empty','No Chat peers found.'],['denied','Discovery access denied.'],['malformed','Discovery failed.'],['offline','Discovery unavailable or offline.']]) {
+    fixture.state.chatDiscoveryMode=mode;
+    await page.locator('#chat-find').click();await contains(page,'#chat-discovery-state',label);
+    assert.equal(await page.locator('#chat-candidates button').count(),0);
+    assert.equal(await page.locator('#chat-connect-selected').isEnabled(),false);
+  }
+  fixture.state.chatDiscoveryMode='normal';
+  const domainHold = holdDiscovery();
+  await page.locator('#chat-find').click();await domainHold.started;
+  try {
+    await selectDomain(page,OTHER);
+    assert.equal(await page.locator('#chat-candidates').textContent(),'');
+    await contains(page,'#chat-discovery-state','Closing discovery…');
+    assert.equal(fixture.state.pendingDiscovery,1,'discovery remains held during Domain cleanup');
+    assert.equal(await page.locator('#open-upload').isEnabled(),false,'Domain selection cannot complete before discovery settles');
+  } finally { domainHold.release(); }
+  await discoveryStopped();
+  await page.waitForFunction(() => !document.querySelector('#open-upload')?.disabled);
+  assert.equal(fixture.state.pendingDiscovery,0,'completed Domain selection awaited nonabortable discovery');
+  assert.equal(await page.locator('#chat-candidates').textContent(),'');
+  await selectDomain(page,DOMAIN);
+  await page.waitForFunction(() => !document.querySelector('#open-upload')?.disabled);
+  await chapter(page,'networking');
+  await page.getByRole('button',{name:'Chat',exact:true}).click();
+  await findChat(true);
+  fixture.advertisements.delete(relay.peer);
+  const firstSession=await page.locator('#chat-session').innerText();
+  const firstPeer=await page.locator('#chat-local-peer').innerText();
+  assert.match(firstSession,/^[0-9a-f-]{36}$/);assert.ok(firstPeer.length>20);
+  const pending=await operatorUntil(()=>operator('list').find(value=>value.session_id===firstSession));
+  assert.equal(pending.peer_id,firstPeer,'displayed Chat identity matches authenticated native peer');
+  assert.equal(pending.state,'paired');
+  const browserText='Browser custom request',operatorText='Synthetic automatic reply: '+browserText;
+  await page.locator('#chat-text').fill(browserText);await page.locator('#chat-send').click();
+  await contains(page,'#chat-messages','Received by peer');
+  await contains(page,'#chat-messages',operatorText);
+  await operatorUntil(()=>operator('read',firstSession,firstPeer).messages.find(message=>message.direction==='out'&&message.text===operatorText&&message.status==='received by peer'));
+  assert.equal(operator('read',firstSession,firstPeer).messages.filter(message=>message.direction==='out').length,1);
+  console.log('PASS automatic pairing and real synthetic adapter subprocess reply/receipt');
+  await capture('conversation');
+  const sessions=new Set([firstSession]);
+  const connectChat=async(manual=false)=>{
+    await page.getByRole('button',{name:'Chat',exact:true}).click();
+    if(manual){
+      await page.locator('#chat-advanced summary').click();
+      await page.locator('#chat-peer').fill(ready.peer);await page.locator('#chat-route').fill(ready.wss);
+      await page.locator('#chat-connect').click();await contains(page,'#chat-state','paired');
+    }else await findChat();
+    const sid=await page.locator('#chat-session').innerText(),peer=await page.locator('#chat-local-peer').innerText();
+    assert.ok(!sessions.has(sid));sessions.add(sid);
+    await operatorUntil(()=>operator('list').find(value=>value.session_id===sid&&value.peer_id===peer));
+    return {sid,peer};
+  };
+  for(let i=0;i<5;i++){
+    await page.locator('#chat-close').click();await contains(page,'#chat-state','stopped');
+    assert.equal(await page.locator('#chat-local-peer').textContent(),'');
+    await connectChat(i===0);
+  }
+  await selectDomain(page,OTHER);await contains(page,'#chat-state','stopped');
+  assert.equal(await page.locator('#chat-messages').textContent(),'');
+  assert.equal(await page.locator('#chat-session').textContent(),'');
+  await selectDomain(page,DOMAIN);await chapter(page,'networking');
+  const afterDomain=await connectChat();
+  await contains(page,'#chat-state','paired');
+  await page.locator('#logout').click();await contains(page,'#session-status','Signed out');
+  await contains(page,'#chat-state','stopped');
+  assert.equal(await page.locator('#chat-local-peer').textContent(),'');
+  assert.equal(await page.locator('#chat-messages').textContent(),'');
+  await page.locator('#email').fill('fixture@example.test');await page.locator('#password').fill('synthetic-password');
+  await page.locator('#signin').click();await contains(page,'#domains','Synthetic lab');
+  await reveal(page,'#domains');await page.getByRole('button',{name:/Synthetic lab/}).click();await chapter(page,'networking');
+  await page.getByRole('button',{name:'Chat',exact:true}).click();
+  const logoutHold = holdDiscovery();
+  await page.locator('#chat-find').click();await logoutHold.started;
+  try {
+    await page.locator('#logout').click();
+    await contains(page,'#chat-discovery-state','Closing discovery…');
+    assert.equal(await page.locator('#session-status').textContent(),'Closing…');
+    assert.equal(await page.locator('#signin').isEnabled(),false,'logout cannot complete before discovery settles');
+    assert.equal(fixture.state.pendingDiscovery,1,'discovery remains held during logout');
+    assert.equal(await page.locator('#chat-candidates').textContent(),'');
+  } finally { logoutHold.release(); }
+  await contains(page,'#session-status','Signed out');await discoveryStopped();
+  assert.equal(fixture.state.pendingDiscovery,0,'completed logout awaited discovery');
+  assert.equal(await page.locator('#chat-candidates').textContent(),'');
+  await page.locator('#email').fill('fixture@example.test');await page.locator('#password').fill('synthetic-password');
+  await page.locator('#signin').click();await contains(page,'#domains','Synthetic lab');
+  await reveal(page,'#domains');await page.getByRole('button',{name:/Synthetic lab/}).click();await chapter(page,'networking');
+  const afterLogout=await connectChat();
+  await contains(page,'#chat-state','paired');
+  await page.locator('#chat-text').fill('After logout');await page.locator('#chat-send').click();
+  await contains(page,'#chat-messages','Synthetic automatic reply: After logout');
+  await operatorUntil(()=>operator('read',afterLogout.sid,afterLogout.peer).messages.find(message=>message.direction==='out'&&message.status==='received by peer'));
+  await page.locator('#chat-close').click();await contains(page,'#chat-state','stopped');
+  await page.getByRole('button',{name:'Echo',exact:true}).click();
+  await page.setViewportSize({width:1280,height:900});
+  console.log('PASS real WASM automatic Chat with production Inbox/Spool and synthetic subprocess, bidirectional receipts, >4 reconnects, Domain/logout cleanup and screenshots');
+  assert.equal(await page.locator('#net-state').innerText(),'stopped');
+  assert.equal(await page.locator('#net-send').isEnabled(),false);
+  await assertNetworkStep(page,'connect');
+  await page.locator('#net-start').click();
+  try{await contains(page,'#net-state','ready');}catch{throw new Error('browser startup failed; fixture requests: '+fixture.state.requests.length);}
+  await assertNetworkStep(page,'discover');
+  assert.equal(await page.locator('#net-send').isEnabled(),false,'ready alone does not authorize a diagnostic');
+  await reveal(page,'#net-local');
+  const localPeer = await page.locator('#net-local').innerText();
+  const selectedDomain = await page.locator('#selected').innerText();
+  const proofs = fixture.state.verifiedProofs;
+  for (const view of ['data','overview','networking']) await chapter(page,view,true);
+  assert.equal(await page.locator('#net-state').innerText(),'ready');
+  assert.equal(await page.locator('#net-local').innerText(),localPeer,'chapter switching preserves transport identity');
+  assert.equal(await page.locator('#selected').innerText(),selectedDomain);
+  assert.equal(fixture.state.verifiedProofs,proofs,'chapter switching does not restart peer authentication');
+  await reveal(page,'#net-discover'); await page.locator('#net-discover').click();await contains(page,'#net-candidates',`${ready.peer.slice(0,12)}…${ready.peer.slice(-8)}`);
+  await reveal(page,'#net-candidates');
+  await page.locator('#net-candidates').getByRole('button', { name: 'Candidate technical details' }).first().click();
+  const candidateMetadata = JSON.parse(await page.locator('#net-extra-json').textContent());
+  assert.equal(candidateMetadata.peerId, ready.peer);
+  const redactedRoute = ready.wss.replace('/dns4/127.0.0.1.sslip.io/', '/dns4/[redacted token].[redacted token]/');
+  assert.notEqual(redactedRoute, ready.wss, 'fixture route hostname requires redaction');
+  assert.ok(candidateMetadata.routes.includes(redactedRoute), 'redacted route retains exact port and peer identities');
+  assert.ok(!JSON.stringify(candidateMetadata).includes('127.0.0.1.sslip.io'), 'technical metadata preserves hostname redaction');
+  await page.locator('#net-back').click();
+  assert.equal(await page.locator('#net-results').innerText(),'','discovery is not verification');
+  assert.equal(await page.locator('#net-results h3').count(),0,'no success heading before a receipt');
+  assert.equal(await page.locator('#net-candidates .facts dd').first().innerText(),`${ready.peer.slice(0,12)}…${ready.peer.slice(-8)}`);
+  assert.equal(await page.locator('#net-send').isEnabled(),false,'candidate must be selected');
+  await page.locator('#net-candidates').getByRole('button',{name:'Use candidate route',exact:true}).first().click();
+  await assertNetworkStep(page,'diagnostic');
+  assert.equal(await page.locator('#net-target').innerText(),`Selected target · ${ready.peer.slice(0,12)}…${ready.peer.slice(-8)}`);
+  assert.equal(await page.locator('#net-peer-id').inputValue(),ready.peer);
+  assert.equal(await page.locator('#net-route').inputValue(),ready.wss);
+  await page.locator('#net-payload').fill('');
+  assert.equal(await page.locator('#net-send').isEnabled(),false);
+  await page.locator('#net-payload').fill('é'.repeat(513));
+  assert.equal(await page.locator('#net-send').isEnabled(),false,'payload bound is UTF-8 bytes');
+  await page.locator('#net-payload').fill('browser to Python diagnostic');await page.locator('#net-send').click();await contains(page,'#net-results','browser to Python diagnostic');
+  assert.ok((await page.locator('#net-results').innerText()).includes(`${Buffer.byteLength('browser to Python diagnostic')} bytes echoed`));
+  await assertNetworkStep(page,'result');
+  await page.locator('#net-results').getByRole('button', { name: 'Receipt technical details' }).click();
+  const receiptMetadata=JSON.parse(await page.locator('#net-extra-json').textContent());
+  await page.locator('#net-back').click();
+  assert.equal(receiptMetadata.remotePeerId,ready.peer);assert.equal(receiptMetadata.domainId,DOMAIN);
+  assert.equal(receiptMetadata.bytes,Buffer.byteLength('browser to Python diagnostic'));
+  assert.equal(fixture.state.claims,0);assert.ok(fixture.state.verifiedProofs>=2);assert.ok(bridgeConnections>0);assert.deepEqual(forbidden,[]);
+  await reveal(page,'#net-payload'); await assertUsable(page,['#net-stop','#net-payload','#net-send']);
+  await page.screenshot({path:new URL('../test-artifacts/network-verified.png',import.meta.url).pathname,fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  await reveal(page,'#net-payload'); await assertUsable(page,['#net-stop','#net-payload','#net-send']);
+  await page.screenshot({path:new URL('../test-artifacts/network-verified-mobile.png',import.meta.url).pathname,fullPage:true});
+  await page.setViewportSize({width:1280,height:720});
+  await page.locator('#net-payload').fill('edited diagnostic');
+  assert.equal(await page.locator('#net-results').innerText(),'','payload edit clears verified result');
+  await page.locator('#net-send').click();await contains(page,'#net-results','edited diagnostic');
+  await reveal(page,'#net-peer-id');
+  assert.ok((await page.locator('#net-results').innerText()).includes('edited diagnostic'),'selection navigation keeps the receipt until the target changes');
+  await page.locator('#net-peer-id').fill('');
+  assert.equal(await page.locator('#net-results').innerText(),'','target edit clears verified result');
+  assert.equal(await page.locator('#net-send').isEnabled(),false);
+  await page.locator('#net-peer-id').fill(ready.peer);
+  await assertNetworkStep(page,'manual');
+  assert.equal(await page.locator('#net-send').isEnabled(),false,'editing requires explicit target confirmation');
+  await page.locator('#net-use-manual').click();
+  await assertNetworkStep(page,'diagnostic');
+  await page.locator('#net-send').click();await contains(page,'#net-results','edited diagnostic');
+  await reveal(page,'#net-route');
+  assert.ok((await page.locator('#net-results').innerText()).includes('edited diagnostic'));
+  await page.locator('#net-route').fill('');
+  assert.equal(await page.locator('#net-results').innerText(),'','route edit clears verified result');
+  assert.equal(await page.locator('#net-send').isEnabled(),false);
+  console.log('PASS guided prerequisites, selected candidate, persistent peer across chapters, payload/target/route invalidation');
+  console.log('PASS real Chromium/WASM → WSS bridge → libp2p relay → Python Echo verified bytes; zero task claims');
+  const stopped=async()=>{await page.locator('#net-stop').click();await contains(page,'#net-state','stopped');assert.equal(await page.locator('#net-results').innerText(),'');assert.equal(await page.locator('#net-send').isEnabled(),false);};
+  const started=async()=>{await chapter(page,'networking');await page.locator('#net-start').click();await contains(page,'#net-state','ready');};
+  const send=async(text)=>{
+    await reveal(page,'#net-peer-id');
+    await page.locator('#net-peer-id').fill(ready.peer);await page.locator('#net-route').fill('/');
+    await assertNetworkStep(page,'manual');
+    assert.ok(await page.locator('#net-route').isVisible(),'first route character must not hide manual form');
+    await page.locator('#net-route').fill(ready.wss);
+    await page.locator('#net-use-manual').click();
+    await assertNetworkStep(page,'diagnostic');
+    await page.locator('#net-payload').fill(text);await page.locator('#net-send').click();
+  };
+  const failedSend=async(text)=>{
+    await send(text);
+    await page.waitForFunction(()=>document.querySelector('#net-status')?.textContent.includes('Error') || document.querySelector('#net-state')?.textContent==='failed');
+    assert.equal(await page.locator('#net-results').innerText(),'');
+  };
+  const waitUntil=async(predicate)=>{for(let i=0;i<100;i++){if(predicate())return;await delay(50);}throw new Error('fixture observation timeout');};
+  await stopped();fixture.state.denyP2p=true;
+  await page.locator('#net-start').click();await contains(page,'#net-state','failed');
+  assert.equal(await page.locator('#net-results').innerText(),'');fixture.state.denyP2p=false;
+  await started();await send('after browser restart');await contains(page,'#net-results','after browser restart');
+  console.log('PASS auth denial and browser restart with real Echo');
+  await reveal(page,'#net-discover');
+  fixture.state.discoveryDelay=1200;await page.locator('#net-discover').click();
+  await waitUntil(()=>fixture.state.pendingDiscovery>0);
+  await chapter(page,'overview'); await chapter(page,'networking');
+  assert.equal(await page.locator('#net-state').innerText(),'ready');
+  await selectDomain(page,OTHER);
+  await chapter(page,'networking');
+  await contains(page,'#net-state','stopped');assert.equal(await page.locator('#net-candidates').innerText(),'');
+  assert.equal(await page.locator('#net-results').innerText(),'');
+  assert.equal(await page.locator('#net-peer-id').inputValue(),'');
+  assert.equal(await page.locator('#net-route').inputValue(),'');
+  assert.equal(await page.locator('#net-send').isEnabled(),false);
+  fixture.state.discoveryDelay=0;
+  await selectDomain(page,DOMAIN);
+  await chapter(page,'networking');
+  await contains(page,'#records','Lab sample');
+  fixture.state.proofDelay=1200;await page.locator('#net-start').click();await waitUntil(()=>fixture.state.pendingProofs>0);
+  await page.locator('#logout').click();await contains(page,'#session-status','Signed out');
+  assert.equal(await page.locator('#workspace').isVisible(),false);
+  assert.equal(await page.locator('#net-results').textContent(),'');
+  await contains(page,'#net-state','stopped');
+  fixture.state.proofDelay=0;
+  await page.locator('#email').fill('fixture@example.test');await page.locator('#password').fill('synthetic-password');
+  await page.locator('#signin').click();await contains(page,'#domains','Synthetic lab');
+  await reveal(page,'#domains');await page.getByRole('button',{name:/Synthetic lab/}).click();await started();
+  console.log('PASS Domain switch during discovery and logout during peer startup; late results discarded');
+  expectingTransportFailure=true;
+  await stopRobot(robot,fixture);
+  assert.deepEqual(await readdir(resolve(spool,'commands')),[]);
+  assert.deepEqual(JSON.parse(await readFile(resolve(spool,'inbox.json'),'utf8')).sessions,{});
+  assert.equal(robot.exitCode,0);assert.equal(fixture.advertisements.size,0);assert.equal(fixture.bookings.size,0);assert.ok(fixture.state.withdrawn>0);assert.ok(fixture.state.released>0);assert.equal(fixture.state.claims,0);
+  console.log('PASS awaited stop withdrew advertisement and released booking');
+  await failedSend('stopped peer diagnostic');
+  if(await page.locator('#net-state').innerText()==='ready')await stopped();
+  robot=startRobot();const restarted=await line(robot);assert.equal(restarted.state,'ready');assert.equal(restarted.peer,ready.peer);
+  ready.wss=restarted.wss;await started();await send('after robot restart');await contains(page,'#net-results','after robot restart');
+  console.log('PASS unavailable peer and persistent-identity robot restart with real Echo');
+  const relayExit=observeExit(relayProcess);relayProcess.kill('SIGINT');await relayExit;
+  for(const socket of sockets)socket.destroy();
+  await failedSend('unavailable relay diagnostic');
+  if(await page.locator('#net-state').innerText()==='ready')await stopped();
+  await stopRobot(robot,fixture);
+  assert.deepEqual(await readdir(resolve(spool,'commands')),[]);
+  assert.deepEqual(JSON.parse(await readFile(resolve(spool,'inbox.json'),'utf8')).sessions,{});
+  assert.equal(robot.exitCode,0);assert.equal(fixture.advertisements.size,0);assert.equal(fixture.bookings.size,0);
+  assert.equal(fixture.state.claims,0);assert.deepEqual(forbidden,[]);
+  const rendered=await page.locator('body').innerText();
+  assert.ok(!outputOverflow);
+  for(const secret of [fixture.registration,'synthetic-password','synthetic-service',...fixture.secrets()]) {
+    assert.ok(!browserLogs.some(line=>line.includes(secret))&&!rendered.includes(secret),'secret escaped into browser output');
+  }
+  assert.ok(!browserLogs.includes('browser page error'));assert.deepEqual(consoleErrors,[]);
+  console.log('PASS bounded browser outputs contain no fixture credentials');
+  console.log('PASS unavailable relay fails without verified output; zero task claims and clean shutdown');
+} finally {
+  // A failed close must not skip the remaining owned resources.
+  const failures=[];
+  const cleanup=async(action)=>{try{await action();}catch{failures.push('cleanup failure');}};
+  await cleanup(async()=>{await browser?.close();});
+  for(const child of children.reverse())await cleanup(async()=>{
+    if(child.exitCode!==null||child.signalCode!==null)return;
+    const exit=observeExit(child);child.kill('SIGINT');await Promise.race([exit,delay(2000)]);
+    if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await exit;}
+  });
+  for(const socket of sockets)socket.destroy();
+  await cleanup(async()=>{if(wss){for(const client of wss.clients)client.terminate();await new Promise(r=>wss.close(r));}});
+  await cleanup(async()=>{if(bridge)await new Promise(r=>bridge.close(r));});
+  await cleanup(async()=>{await fixture?.close();});
+  await cleanup(async()=>{await rm(temporary,{recursive:true,force:true});});
+  if(failures.length)throw new Error('test resource cleanup failed');
+}

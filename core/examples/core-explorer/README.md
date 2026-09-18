@@ -461,3 +461,13 @@ exact-pair approval, reads and stdin replies, checks more than four reconnects,
 Domain/logout cleanup and subsequent Chat/Echo availability, and captures pending
 and conversation screenshots at desktop/mobile sizes. It uses loopback fixtures
 only; this harness is not evidence of deployed service support until run.
+
+### Opt-in automatic demo Chat
+
+The separate [automatic Chat sidecar](chat-host/README.md#optional-automatic-chat-sidecar)
+can approve any SDK-admitted peer in its exactly configured Domain and reply via
+a trusted, operator-supplied text-only model adapter. Manual Chat remains the
+default. It has bounded subprocess/rate/output limits, ignores prior messages on
+restart, and never dispatches tools or worker tasks. The real adapter and hosted
+activation are parent-owned; the repository includes only a synthetic responder
+for the separate `tests/autochat-browser.mjs` acceptance gate.

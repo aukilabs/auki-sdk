@@ -1,0 +1,10 @@
+{
+  "role": "robot",
+  "domain_id": "<approved-domain-uuid>",
+  "installation_id": "<stable-installation-uuid-shared-with-ui-and-compute>",
+  "client_id": "<stable-robot-client-uuid-distinct-from-compute>",
+  "dds_url": "https://dds.example.invalid",
+  "dms_url": "https://dms.example.invalid/v1",
+  "registration": "<provisioned-robot-registration-secret>",
+  "audience": "https://dds.example.invalid/robots"
+}

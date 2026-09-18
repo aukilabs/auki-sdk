@@ -3,6 +3,9 @@
 #![cfg(target_arch = "wasm32")]
 #![forbid(unsafe_code)]
 
+mod chat;
+pub use chat::AukiChatConnection;
+
 use std::{cell::RefCell, fmt::Display};
 
 use auki_portable_echo::{

@@ -4,6 +4,8 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::useless_conversion)]
 
+mod chat;
+
 use auki_echo_protocol::{
     EchoClient, EchoEndpoint, EchoEventReceiver, EchoServeEvent, PROTOCOL_ID,
 };
@@ -225,6 +227,7 @@ impl PyEchoReceipt {
 fn auki_portable_echo(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     auki_sdk_binding::register_facade(module)?;
     module.add_class::<PyAukiEcho>()?;
+    module.add_class::<chat::PyAukiChatHost>()?;
     module.add_class::<PyEchoReceipt>()?;
     Ok(())
 }

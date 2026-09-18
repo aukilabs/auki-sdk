@@ -1,0 +1,30 @@
+{
+  "name": "@aukilabs/core-explorer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "build:wasm": "wasm-pack build ../portable-echo/web --target web --out-dir pkg-web --dev -- --locked",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.ts",
+    "build": "npm run build:wasm && npm run typecheck && vite build",
+    "dev": "npm run build:wasm && vite --host 127.0.0.1",
+    "test:browser": "node tests/browser.mjs",
+    "test:upload": "node tests/upload-browser.mjs",
+    "test:network": "node tests/network-browser.mjs",
+    "test:jobs": "node tests/jobs-browser.mjs",
+    "test:jobs-fixture": "node --test tests/jobs-fixture.test.mjs",
+    "test:workers": "python3 -m unittest discover -s workers -p 'test_*.py'",
+    "test:robot": "python3 -m unittest discover -s robot -p 'test_*.py'",
+    "test:fleet": "node tests/fleet-browser.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "ws": "8.21.3"
+  }
+}

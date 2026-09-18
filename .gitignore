@@ -1,5 +1,6 @@
 /target
 /output/playwright/
+/output/ci/
 **/*.rs.bk
 .DS_Store
 node_modules/

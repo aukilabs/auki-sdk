@@ -90,6 +90,27 @@ Check each affected binding using its README and test harnesses:
 For documentation-only changes, check relative links, paths, and heading
 anchors, then run `git diff --check`. Runtime suites are not needed.
 
+### Continuous integration
+
+The [SDK checks workflow](.github/workflows/ci.yml) runs three parallel jobs on
+Ubuntu for pull requests and pushes to `develop`, and can be started manually:
+
+| Job | Coverage |
+| --- | --- |
+| Rust native | Formatting, SDK Clippy, and the unit, integration, and documentation tests of every stable core crate |
+| Python binding | Build the extension with its default protocol features and run the full pytest suite on Python 3.12 |
+| Web and Expo | WASM Clippy, WASM tests in headless Chrome, generated Web API TypeScript checks, the portable Web example build, and Expo bridge tests and package build |
+
+CI uses Rust 1.90 and Node 22, caches dependencies and Rust builds, and cancels
+superseded runs on the same pull request. Tests use local fixtures; no backend
+credentials or deployed services are required. Failed test logs and Python
+JUnit results are retained as artifacts when available.
+
+The Expo checks cover JavaScript bridges and the Web package. Swift/iOS and
+native Expo apps still need the local platform checks above; there is no macOS
+CI job. Android remains a stub. These jobs also do not validate Windows or
+experimental `labs/` crates independently.
+
 ## Use local fixtures first
 
 Read a test harness before running it. The first-peer tutorial and interactive

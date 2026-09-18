@@ -156,7 +156,11 @@ def worker_services():
                 state["claims"] += 1
                 if state.get("reject_claim_once") and state["claims"] == 1:
                     return self.reply({}, 401)
-                return self.reply({**grant(), "task": {"id": TASK, "capability": CAPABILITY,
+                task_ids = state.get("task_ids")
+                if task_ids is not None and state["claims"] > len(task_ids):
+                    return self.reply(b"", 204)
+                task_id = task_ids[state["claims"] - 1] if task_ids is not None else TASK
+                return self.reply({**grant(), "task": {"id": task_id, "capability": CAPABILITY,
                     "meta": {"input_id": DATA}, "inputs_cids": [DATA]}}, state["claim_status"])
             if path.path.endswith("/heartbeat"):
                 heartbeat = json.loads(body)
@@ -166,7 +170,7 @@ def worker_services():
                     assert state["heartbeat_gate"].wait(3), "test did not release heartbeat"
                 if state["rotate"]:
                     state["generation"] += 1
-                response = {**grant(), "task_id": TASK, "cancel": state["cancel"]}
+                response = {**grant(), "task_id": path.path.split("/")[-2], "cancel": state["cancel"]}
                 response.update(state.get("heartbeat_override", {}))
                 return self.reply(response, state["heartbeat_status"])
             if path.path.endswith("/complete"):
@@ -437,12 +441,21 @@ def test_managed_events_drain_in_order_and_failure_preserves_artifact_metadata(w
     async def scenario():
         gate = threading.Event()
         worker_services["heartbeat_gate"] = gate
+        second_task = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+        worker_services["task_ids"] = [TASK, second_task]
         returned = asyncio.Event()
+        continued = asyncio.Event()
+        finish_second = asyncio.Event()
         retained = []
         details = {"job": {"task_id": TASK}, "artifacts": [
             {"id": DATA, "logical_path": "partial.json", "metadata": {"partial": True}}]}
 
         async def handler(task):
+            if task.id == second_task:
+                continued.set()
+                await finish_second.wait()
+                return {"output_cids": [], "meta": {"recovered": True}}
+            assert task.id == TASK
             retained.append(task.access_token)
             await task.log_event({"sequence": 1})
             while not worker_services.get("heartbeat_waiting"):
@@ -462,18 +475,43 @@ def test_managed_events_drain_in_order_and_failure_preserves_artifact_metadata(w
             assert not operation.done()
             assert worker_services["complete"] == worker_services["fail"] == []
             gate.set()
-            with pytest.raises(ValueError, match="private exception text"):
-                await asyncio.wait_for(operation, 3)
+            if method == "run_once":
+                with pytest.raises(ValueError, match="private exception text"):
+                    await asyncio.wait_for(operation, 3)
+                assert not continued.is_set()
+                assert worker_services["claims"] == 1
+            else:
+                await asyncio.wait_for(continued.wait(), 3)
+                assert not operation.done()
             events = [event for hb in worker_services["heartbeats"] for event in hb["events"]]
             assert events == [{"sequence": 1}, {"sequence": 2}, {"sequence": 3}]
-            assert worker_services["heartbeats"][-1]["progress"] == {"phase": "failed"}
+            first_heartbeats = [hb for hb in worker_services["heartbeats"] if hb.get("progress")]
+            assert first_heartbeats[-1]["progress"] == {"phase": "failed"}
             assert worker_services["fail"] == [{"reason": "reconstruction failed", "details": details}]
+            assert ("POST", f"/tasks/{TASK}/fail") in worker_services["calls"]
             assert worker_services["complete"] == []
             with pytest.raises(auki_sdk.TaskRuntimeError):
                 retained[0].get()
+            if method == "run":
+                finish_second.set()
+
+                async def wait_for_completion():
+                    while not worker_services["complete"]:
+                        await asyncio.sleep(0.005)
+
+                await asyncio.wait_for(wait_for_completion(), 3)
+                assert worker_services["complete"] == [{"output_cids": [], "meta": {"recovered": True}}]
+                assert ("POST", f"/tasks/{second_task}/complete") in worker_services["calls"]
+                assert len(worker_services["fail"]) == 1
+                assert not operation.done()
+                await asyncio.wait_for(tasks.close(), 3)
+                assert await asyncio.wait_for(operation, 3) is None
         finally:
             gate.set()
+            finish_second.set()
             await tasks.close()
+            if not operation.done():
+                await asyncio.wait_for(operation, 3)
             await credential.close()
     asyncio.run(scenario())
 

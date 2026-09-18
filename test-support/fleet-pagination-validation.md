@@ -3,7 +3,9 @@
 First slice of [#385](https://github.com/aukilabs/auki-sdk/issues/385): DDS
 compute-node and Domain-robot inventory. This consumer branch starts at SDK
 `f9d1c283`; the provider adds opt-in UUID keyset pages and an explicit versioned
-acknowledgement. See the [Fleet contract](../docs/reference/fleet.md).
+acknowledgement in [DDS #569](https://github.com/aukilabs/domain-service/pull/569)
+(`878dc943`, based on `1ce8d30b` after DDS #568 merged). See the
+[Fleet contract](../docs/reference/fleet.md).
 
 All runtime checks used local fixtures. No deployed provider was exercised and
 no shared data, discovery records, relay bookings or jobs were created.
@@ -23,7 +25,7 @@ Commands run from the repository root unless a directory is specified:
 | `cargo fmt --all -- --check` and `git diff --check` | Passed. |
 | `bash test-support/run-domain-data-browser-tests.sh` | 14 tests passed in Chromium through WASM/Fetch, including four Fleet tests. Used `wasm-bindgen-test-runner` 0.2.121 to match Cargo.lock. |
 | `npm ci` then `npm run check` in `core/bindings/web/auki-sdk-web` | WASM compilation and TypeScript checks passed. |
-| `maturin develop --locked` with the Python binding manifest, in a virtual environment | Default-feature extension built successfully. |
+| `maturin develop --locked --manifest-path core/bindings/python/auki-sdk-py/Cargo.toml`, in a virtual environment | Default-feature extension built successfully. |
 | `.venv/bin/python -m pytest core/bindings/python/auki-sdk-py/python_tests/test_fleet.py -q` | All 3 tests passed against the native extension and loopback HTTP fixture. |
 | `bash core/bindings/swift/auki-sdk-swift/build-xcframework.sh` | Device ARM64 and simulator ARM64/x86_64 builds, generated UniFFI Swift/header typecheck and XCFramework validation passed with Xcode 27. |
 | `bash core/bindings/swift/auki-sdk-swift/run-fleet-bindings-test.sh` | Generated Swift client and typed Fleet models collected both robot and node pages against loopback HTTP. |

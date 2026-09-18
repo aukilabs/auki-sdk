@@ -116,7 +116,8 @@ failure also retains earlier records as partial. Duplicate/nonascending machine
 IDs, repeated cursors, malformed acknowledgement or a provider that stops
 acknowledging pagination fail with `invalid_response`. Empty final pages work.
 
-The paged provider contract is [DDS machine inventory pagination](https://github.com/aukilabs/domain-service/blob/feature/385-machine-pagination/docs/machine-inventory-pagination.md).
+The paged provider contract is [DDS machine inventory pagination](https://github.com/aukilabs/domain-service/blob/878dc9430de0f6bb27334cb8bef3e4a6f09a69d2/docs/machine-inventory-pagination.md),
+implemented in [DDS #569](https://github.com/aukilabs/domain-service/pull/569).
 Deploy it to every DDS replica before relying on pagination. A first response
 without acknowledgement is treated as an existing bounded complete response,
 with source code `legacy_inventory_unpaginated`; no client-side slicing occurs.

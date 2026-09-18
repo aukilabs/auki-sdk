@@ -140,6 +140,90 @@ test('history is one bounded filtered page with unchanged cursor and incomplete-
   assert.match(h.controller.state.message, /#396/); await h.controller.close();
 });
 
+test('cold history reads action names with bounded concurrency and never exposes detail outputs', async () => {
+  const gate = deferred<void>(), entered = deferred<void>();
+  const jobs = Array.from({ length: 12 }, (_, index) => {
+    const d = details(index % 2 ? 'robot' : 'compute');
+    d.job.id = `cccccccc-cccc-4ccc-8ccc-${String(index).padStart(12, '0')}`;
+    d.tasks[0].job_id = d.job.id;
+    return d;
+  });
+  let active = 0, peak = 0, reads = 0;
+  const h = harness({
+    list: async () => ({ items: jobs.map(({ job, tasks_summary }) => ({ job, tasks_summary })), next_cursor: 'opaque-next' }),
+    get: async id => {
+      reads++; active++; peak = Math.max(peak, active);
+      if (active === 4) entered.resolve();
+      await gate.promise; active--;
+      return jobs.find(d => d.job.id === id)!;
+    },
+  });
+  await h.controller.configure(config);
+  const loading = h.controller.list(); await entered.promise;
+  assert.equal(reads, 4); gate.resolve(); await loading;
+  assert.equal(peak, 4); assert.equal(reads, 12);
+  assert.deepEqual(h.controller.state.items?.map(item => item.role), jobs.map((_, index) => index % 2 ? 'robot' : 'compute'));
+  assert.equal(h.controller.state.phase, 'history'); assert.equal(h.controller.state.nextCursor, 'opaque-next');
+  assert.equal(h.controller.state.details, undefined); assert.equal(h.controller.state.outputs, undefined);
+  assert.equal(h.calls.includes('read'), false); await h.controller.close();
+});
+
+test('unavailable or contradictory history details leave rows available without guessing actions', async () => {
+  for (const change of ['denied', 'job', 'domain', 'task', 'capability', 'multiple']) {
+    const d = details();
+    const h = harness({
+      list: async () => ({ items: [{ job: structuredClone(d.job), tasks_summary: d.tasks_summary }], next_cursor: null }),
+      get: async () => {
+        if (change === 'denied') throw { status: 403 };
+        if (change === 'job') d.job.id = input;
+        if (change === 'domain') d.job.domain_id = input;
+        if (change === 'task') d.tasks[0].job_id = input;
+        if (change === 'capability') d.tasks[0].capability = 'unrecognized/capability';
+        if (change === 'multiple') d.tasks.push({ ...d.tasks[0] });
+        return d;
+      },
+    });
+    await h.controller.configure(config); await h.controller.list();
+    assert.equal(h.controller.state.items?.length, 1, change);
+    assert.equal(h.controller.state.items?.[0].role, undefined, change);
+    assert.equal(h.controller.state.outputs, undefined); await h.controller.close();
+  }
+});
+
+test('history enrichment aborts and drains on context cleanup without late rows or queued reads', async () => {
+  const entered = deferred<void>(), delayed = deferred<JobDetails>();
+  const signals: AbortSignal[] = [];
+  const d = details();
+  const h = harness({
+    list: async () => ({ items: Array.from({ length: 10 }, () => ({ job: d.job, tasks_summary: d.tasks_summary })), next_cursor: null }),
+    get: async (_id, signal) => { signals.push(signal!); if (signals.length === 4) entered.resolve(); return delayed.promise; },
+  });
+  await h.controller.configure(config);
+  const loading = h.controller.list(); await entered.promise;
+  const closing = h.controller.close(); assert.ok(signals.every(signal => signal.aborted));
+  delayed.resolve(d); await Promise.all([loading, closing]);
+  assert.equal(signals.length, 4); assert.equal(h.controller.state.items, undefined);
+});
+
+test('slow action details time out without blocking history or starting the remaining reads', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const entered = deferred<void>(), d = details(); let reads = 0;
+  const h = harness({
+    list: async () => ({ items: Array.from({ length: 6 }, () => ({ job: d.job, tasks_summary: d.tasks_summary })), next_cursor: 'next' }),
+    get: async (_id, signal) => {
+      if (++reads === 4) entered.resolve();
+      return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(Error('aborted')), { once: true }));
+    },
+  });
+  await h.controller.configure(config);
+  const loading = h.controller.list(); await entered.promise;
+  t.mock.timers.tick(5000); await loading;
+  assert.equal(reads, 4); assert.equal(h.controller.busy, false);
+  assert.equal(h.controller.state.items?.length, 6);
+  assert.ok(h.controller.state.items?.every(item => item.role === undefined));
+  assert.equal(h.controller.state.nextCursor, 'next'); await h.controller.close();
+});
+
 test('cancel is deduplicated and refresh preserves running tasks and unreleased credits', async () => {
   const d = details(); d.job.status = 'canceled'; d.tasks[0].status = 'running';
   const h = harness({ get: async () => d }); await h.controller.configure(config); await h.controller.inspect(job);

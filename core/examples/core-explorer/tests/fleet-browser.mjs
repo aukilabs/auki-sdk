@@ -2,11 +2,14 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { mkdir } from 'node:fs/promises';
 import { chromium } from 'playwright';
 import { startJobsFixture, CONFIG, INPUT } from './jobs-fixture.mjs';
 import { DOMAIN, OTHER } from './fixture.mjs';
 import { go, back, selectDomain } from './guided-ui.mjs';
 const fixture = await startJobsFixture(), state = fixture.model.state;
+const artifacts = new URL('../test-artifacts/fleet-redesign/', import.meta.url);
+await mkdir(artifacts, { recursive: true });
 const vite = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--config', 'tests/fleet-vite.config.mjs', '--host', '127.0.0.1', '--port', '18117', '--strictPort'], { stdio: 'pipe' });
 let browser;
 try {
@@ -80,16 +83,30 @@ try {
   }
   // Dedicated Fleet screen uses the same actual WASM and local providers.
   state.fleetBroad = true;
+  const inventoryExchanges = () => fixture.state.exchanges.filter(e => e.path.endsWith('/robots') || e.path === '/api/v1/nodes');
   await page.locator('#jobs-back').click();
   await page.locator('[data-jobs-screen="dashboard"]:visible').waitFor();
   assert.ok(await page.locator('#jobs-view-fleet').isVisible());
+  const initialInventory = inventoryExchanges().length;
   await page.locator('#jobs-view-fleet').click();
+  const fleetLoaded = () => page.waitForFunction(() => document.querySelector('#fleet-screen-refresh')?.disabled === false);
   const refreshFleet = async () => {
     await page.locator('#fleet-screen-refresh').click();
-    await page.waitForFunction(() => document.querySelector('#fleet-screen-refresh')?.disabled === false);
+    await fleetLoaded();
   };
-  await refreshFleet();
+  await fleetLoaded();
+  assert.equal(inventoryExchanges().length - initialInventory, 4, 'first Fleet entry reads Domain robot/node inventory and both compute pools once without Refresh');
   assert.equal(await page.locator('[data-machine]').count(), 3);
+  assert.equal(await page.locator('#fleet-show-offline').isChecked(), false);
+  assert.equal(await page.locator('[data-fleet-stat="robots"] strong').innerText(), '1');
+  assert.equal(await page.locator('[data-fleet-stat="compute"] strong').innerText(), '2');
+  assert.equal(await page.locator('[data-fleet-stat="online"] strong').innerText(), '3');
+  assert.match(await page.locator(`[data-machine="${CONFIG.robotId}"]`).innerText(), /Inspect file/);
+  assert.match(await page.locator(`[data-machine="${CONFIG.computeId}"]`).innerText(), /Uppercase text/);
+  const cachedInventory = inventoryExchanges().length;
+  await page.locator('[data-view="jobs"]').click();
+  await page.locator('[data-view="fleet"]').click(); await fleetLoaded();
+  assert.equal(inventoryExchanges().length, cachedInventory, 'returning to Fleet reuses the loaded snapshot');
   for (const [width, height] of [[320, 568], [640, 360], [320, 844], [390, 844], [1280, 844]]) {
     await page.setViewportSize({ width, height });
     assert.equal(await page.locator('[data-view]').count(), 5);
@@ -99,8 +116,37 @@ try {
       assert.ok(box && box.width >= 24 && box.height >= 24 && box.x >= 0 && box.x + box.width <= width + 1 && box.y >= 0 && box.y + box.height <= height + 1, `${view} fully visible at ${width}x${height}: ${JSON.stringify(box)}`);
     }
   }
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.evaluate(() => document.fonts.ready);
+  await page.screenshot({ path: new URL('overview-desktop.png', artifacts).pathname });
+  await page.locator(`[data-machine="${CONFIG.robotId}"]`).click();
+  assert.ok(await page.locator('.fleet-inventory').isVisible(), 'desktop keeps inventory beside the inspector');
+  const gridBox = await page.locator('.fleet-inventory').boundingBox();
+  const panelBox = await page.locator('#fleet-inspector').boundingBox();
+  assert.ok(gridBox && panelBox && panelBox.x >= gridBox.x + gridBox.width, 'desktop inspector is to the right of inventory');
+  assert.match(await page.locator('#fleet-inspector').innerText(), /Simulated inspection/);
+  assert.equal(await page.locator('#fleet-inspector-title').evaluate(el => el === document.activeElement), true);
+  await page.screenshot({ path: new URL('inspector-desktop.png', artifacts).pathname });
+  await refreshFleet();
+  assert.ok(await page.locator('#fleet-inspector').isVisible(), 'refresh retains the selected machine when still observed');
+  assert.equal(await page.locator('#fleet-screen-refresh').evaluate(el => el === document.activeElement), true);
+  for (const [width, height] of [[320, 568], [640, 360], [390, 844]]) {
+    await page.setViewportSize({ width, height });
+    assert.equal(await page.locator('.fleet-inventory').isVisible(), false, 'narrow view focuses the selected machine');
+    assert.ok(await page.locator('#fleet-inspector').isVisible());
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    const back = await page.locator('#fleet-screen-back').boundingBox();
+    assert.ok(back && back.x >= 0 && back.x + back.width <= width && back.y >= 0 && back.y + back.height <= height);
+  }
+  await page.screenshot({ path: new URL('inspector-mobile.png', artifacts).pathname });
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator(`[data-machine="${CONFIG.robotId}"]`).evaluate(el => el === document.activeElement), true, 'Escape restores the machine card focus');
+  assert.ok(await page.locator('.fleet-inventory').isVisible());
+  await page.screenshot({ path: new URL('overview-mobile.png', artifacts).pathname });
+  await page.setViewportSize({ width: 1280, height: 844 });
   await page.locator('[data-fleet-mode="public"]').click();
   assert.equal(await page.locator('[data-machine]').count(), 1);
+  assert.equal(await page.locator('[data-fleet-stat="robots"] strong').innerText(), '1', 'overview stays scoped to the full observed fleet');
   await page.locator('[data-machine]').click();
   assert.match(await page.locator('#view-fleet').innerText(), /Visible compute candidate/);
   assert.match(await page.locator('#view-fleet').innerText(), /vendor\/arbitrary\/v9/);
@@ -111,6 +157,35 @@ try {
   await page.locator('[data-fleet-mode="dedicated"]').click();
   assert.equal(await page.locator('[data-machine]').count(), 2);
   await page.locator('[data-fleet-mode="all"]').click();
+  state.fleetPresence = { [CONFIG.robotId]: 'offline', [CONFIG.computeId]: 'new-provider-status' };
+  await refreshFleet();
+  assert.equal(await page.locator('[data-machine]').count(), 1, 'default cards include only online presence');
+  assert.equal(await page.locator('[data-fleet-stat="online"] strong').innerText(), '1');
+  assert.match(await page.locator('[data-fleet-stat="online"]').innerText(), /1 offline · 1 unknown/);
+  const beforeFilters = inventoryExchanges().length;
+  await page.locator('#fleet-show-offline').check();
+  assert.equal(await page.locator('[data-machine]').count(), 3);
+  assert.equal(await page.locator('#fleet-show-offline').evaluate(el => el === document.activeElement), true, 'checkbox keeps keyboard focus');
+  assert.match(await page.locator(`[data-machine="${CONFIG.robotId}"]`).innerText(), /Offline/);
+  assert.match(await page.locator(`[data-machine="${CONFIG.computeId}"]`).innerText(), /Presence unknown/);
+  await page.locator(`[data-machine="${CONFIG.robotId}"]`).click();
+  await page.locator('#fleet-screen-back').click();
+  assert.equal(await page.locator('#fleet-show-offline').isChecked(), true, 'details preserve the offline choice');
+  await page.locator('[data-fleet-mode="dedicated"]').click();
+  assert.equal(await page.locator('[data-machine]').count(), 2);
+  await page.locator('#fleet-show-offline').uncheck();
+  assert.equal(await page.locator('[data-machine]').count(), 0);
+  assert.match(await page.locator('#view-fleet').innerText(), /No online machines/);
+  assert.match(await page.locator('#view-fleet').innerText(), /2 machines have offline or unknown presence/);
+  assert.equal(inventoryExchanges().length, beforeFilters, 'presence and mode filters make no provider requests');
+  state.fleetPresence = undefined;
+  await page.locator('[data-fleet-mode="all"]').click();
+  state.fleetBusyDenied = true; await refreshFleet();
+  assert.match(await page.locator('#fleet-screen-status').innerText(), /work status/);
+  assert.match(await page.locator('[data-fleet-stat="busy"]').innerText(), /0 idle · 3 unknown/);
+  assert.equal(await page.locator('.fleet-card-footer .fleet-badge-unknown').count(), 3);
+  await page.screenshot({ path: new URL('partial-desktop.png', artifacts).pathname });
+  state.fleetBusyDenied = false;
   state.fleetDenied = 'robots'; await refreshFleet();
   assert.match(await page.locator('#fleet-screen-status').innerText(), /Partial/);
   state.fleetDenied = undefined; state.fleetEmpty = true; await refreshFleet();
@@ -156,8 +231,7 @@ try {
   assert.equal(state.requests.filter(r => r.method === 'POST' && r.path === '/v1/jobs').length, 1, 'one submission request across Fleet navigation and cleanup');
 
   // Fleet-owned held inventory must drain on Domain change and logout. Record
-  // provider exchanges so new-Domain entry cannot silently read or reuse results.
-  const inventoryExchanges = () => fixture.state.exchanges.filter(e => e.path.endsWith('/robots') || e.path === '/api/v1/nodes');
+  // provider exchanges so new-Domain entry cannot reuse stale results.
   for (const action of ['domain', 'logout']) {
     await page.locator('[data-view="fleet"]').click();
     await refreshFleet();
@@ -175,14 +249,19 @@ try {
     fixture.release();
     if (action === 'domain') {
       const beforeEntry = inventoryExchanges().length;
+      state.fleetHold = true;
       await page.locator('[data-view="fleet"]').click();
+      await fixture.waitFor(() => inventoryExchanges().slice(beforeEntry).some(e => e.held && !e.finished && !e.aborted));
       assert.equal(await page.locator('[data-machine]').count(), 0, 'new Domain has no stale Fleet machines');
-      assert.equal(inventoryExchanges().length, beforeEntry, 'Fleet entry does not request inventory');
-      await refreshFleet();
+      await page.locator('[data-view="data"]').click();
+      await fixture.waitFor(() => inventoryExchanges().slice(beforeEntry).every(e => e.aborted || e.finished));
+      fixture.release();
+      await page.locator('[data-view="fleet"]').click(); await fleetLoaded();
+      assert.equal(await page.locator('#fleet-show-offline').isChecked(), false, 'Domain change resets presence filter');
       const fresh = inventoryExchanges().slice(beforeEntry);
       assert.ok(fresh.some(e => e.path === `/api/v1/domains/${OTHER}/robots`));
       assert.ok(!fresh.some(e => e.path === `/api/v1/domains/${DOMAIN}/robots`), 'no stale Domain request');
-      assert.equal(await page.locator(`[data-machine="${CONFIG.robotId}"]`).count(), 0, 'old Domain robot stays absent after refresh');
+      assert.equal(await page.locator(`[data-machine="${CONFIG.robotId}"]`).count(), 0, 'return retries initial load without reviving the old Domain robot');
       await selectDomain(page, DOMAIN);
     } else {
       await page.waitForFunction(() => document.querySelector('#session-status')?.textContent === 'Signed out');

@@ -39,6 +39,10 @@ export class FleetScreenController {
   private context: () => FleetContext | undefined;
   private changed: () => void;
   constructor(context: () => FleetContext | undefined, changed = () => {}) { this.context = context; this.changed = changed; }
+  /** Load on entry, reuse a completed snapshot, and retry an interrupted first read. */
+  enter(): Promise<void> {
+    return this.state.loading || this.state.snapshots.length ? this.pending : this.refresh();
+  }
   refresh(): Promise<void> {
     const context = this.context();
     if (!context || this.blocked) return Promise.resolve();

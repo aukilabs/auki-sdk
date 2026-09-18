@@ -137,7 +137,7 @@ test('actual history row and Back handlers restore cached page, selected row and
   let lists = 0;
   const original = ui.context.createJobs;
   ui.context.createJobs = () => ({ ...original(), list: async () => {
-    lists++; return { items: [{ job: { id: input, status: 'completed' } }], next_cursor: 'opaque-page-two' };
+    lists++; return { items: [{ job: { id: input, domain_id: domain, status: 'completed' } }], next_cursor: 'opaque-page-two' };
   }, get: async () => { throw Error('offline detail unavailable'); } });
   await ui.controller.configure({ installationId: domain, computeId: worker });
   await ui.controller.list('opaque-current-page');

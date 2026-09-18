@@ -6,10 +6,12 @@ export type DemoConfig = { installationId: string; computeId?: string; robotId?:
 export type JobsPort = Pick<AukiDmsJobs, 'estimate' | 'submit' | 'get' | 'cancel' | 'list' | 'close'>;
 export type DataPort = Pick<AukiDomainData, 'get' | 'readTo'>;
 export type JobsContext = { domainId: string; environment: string; session: object; createJobs: () => JobsPort; data: DataPort };
+/** Display-only history enrichment; this never authorizes outputs or reconciles a submission. */
+export type JobHistoryItem = JobListItem & { role?: Role };
 export type JobsState = {
   phase: 'setup' | 'choose' | 'review' | 'submitting' | 'detail' | 'uncertain' | 'history';
   message: string; config?: DemoConfig; discoveryRequired?: boolean; role?: Role; inputId?: string;
-  estimate?: JobEstimate; spec?: JobSpec; details?: JobDetails; items?: JobListItem[];
+  estimate?: JobEstimate; spec?: JobSpec; details?: JobDetails; items?: JobHistoryItem[];
   nextCursor?: string; jobId?: string; expectedWorkerId?: string; executorMatch?: boolean;
   /** Only these references are eligible for current-Domain data navigation. */
   outputs?: string[]; domainId?: string; environment?: string; errorCode?: string;
@@ -193,8 +195,39 @@ export class JobsController {
     return this.run('list', async op => {
       const installation = this.state.config!.installationId;
       const page = await this.jobs().list({ limit: 25, cursor, capabilities: [capability(installation, 'compute'), capability(installation, 'robot')], matchAllCapabilities: false }, op.abort.signal);
-      if (this.current(op)) this.publish({ ...this.state, items: page.items, nextCursor: page.next_cursor ?? undefined });
+      if (!this.current(op)) return;
+      if (page.items.length > 25 || page.items.some(item => !sameId(item.job.domain_id, op.context.domainId))) throw new ValidationError('Job history does not match this Domain or page limit.');
+      const items = await this.historyItems(page.items, installation, op);
+      if (this.current(op)) this.publish({ ...this.state, items, nextCursor: page.next_cursor ?? undefined });
     });
+  }
+
+  private async historyItems(page: JobListItem[], installation: string, op: Operation): Promise<JobHistoryItem[]> {
+    const items: JobHistoryItem[] = page.map(({ job, tasks_summary }) => ({ job, tasks_summary }));
+    // The list contract omits task capabilities. Read this page's actions with at
+    // most four concurrent detail reads and a five-second total enrichment budget.
+    const abort = new AbortController(), cancel = () => abort.abort();
+    op.abort.signal.addEventListener('abort', cancel, { once: true });
+    const timer = setTimeout(cancel, 5000);
+    let next = 0;
+    try {
+      await Promise.all(Array.from({ length: Math.min(4, items.length) }, async () => {
+        while (this.current(op) && !abort.signal.aborted && next < items.length) {
+          const item = items[next++];
+          try {
+            const details = await this.jobs().get(uuid(item.job.id), abort.signal);
+            if (!this.current(op) || abort.signal.aborted) return;
+            const task = details.tasks.length === 1 ? details.tasks[0] : undefined;
+            if (sameId(details.job.id, item.job.id) && sameId(details.job.domain_id, op.context.domainId) && task && sameId(task.job_id, item.job.id)) {
+              item.role = (['compute', 'robot'] as const).find(role => task.capability === capability(installation, role));
+            }
+          } catch { /* A missing or denied detail must not hide the history row. */ }
+        }
+      }));
+      return items;
+    } finally {
+      clearTimeout(timer); op.abort.signal.removeEventListener('abort', cancel);
+    }
   }
 
   inspect(jobId: string): Promise<void> {

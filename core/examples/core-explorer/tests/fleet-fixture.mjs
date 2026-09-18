@@ -16,5 +16,6 @@ export function fleetResponse({ method, url, headers }, state, { domain, other, 
   if (state.fleetDuplicate && nodes) values.push({ ...value, id: other, name: 'Second compute candidate' });
   if (state.fleetMultiple && nodes) values.push({ ...value, id: other, name: 'Other installation worker', capabilities: [`/examples/compute-robot/${installation}/compute/v1`] });
   if (state.fleetBroad && nodes && !state.fleetEmpty) values.push({ ...value, id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', name: 'Public <worker>', mode: 'public', capabilities: ['vendor/arbitrary/v9'] });
+  for (const machine of values) machine.status = state.fleetPresence?.[machine.id] ?? machine.status;
   return { status: 200, body: { [robot ? 'robots' : 'nodes']: values } };
 }

@@ -261,9 +261,10 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
         for (const item of state.items ?? []) {
           const entry = document.createElement('button'); entry.type = 'button'; entry.dataset.jobId = item.job.id; entry.id = `jobs-row-${item.job.id}`;
           const cached = summaries.get(item.job.id), summary = cached?.evidence === evidence(item.job) ? cached : undefined;
+          const action = item.role === 'compute' ? 'Uppercase text' : item.role === 'robot' ? 'Inspect file' : summary?.action || `Job ${item.job.id.slice(0, 8)}`;
           const date = item.job.created_at ? new Date(item.job.created_at) : undefined;
           const time = date && Number.isFinite(date.getTime()) ? date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Time unavailable';
-          entry.textContent = String(redact(`${summary?.action || 'Demo job'} · ${item.job.status}\n${summary?.input ? summary.input + ' · ' : ''}${time}\n${summary?.result || 'Inspect details →'}`)); entry.disabled = busy;
+          entry.textContent = String(redact(`${action} · ${item.job.status}\n${summary?.input ? summary.input + ' · ' : ''}${time}\n${summary?.result || 'Inspect details →'}`)); entry.disabled = busy;
           entry.onclick = () => {
             historyPage = { items: state.items ?? [], nextCursor: state.nextCursor,
               config: JSON.stringify(state.config), scroll: section.scrollTop, selected: entry.id };

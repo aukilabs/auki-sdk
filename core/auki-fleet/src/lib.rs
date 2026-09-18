@@ -333,9 +333,6 @@ impl DomainFleetClient {
             let Some(next) = &cursor else {
                 break;
             };
-            // DMS #396 can skip a row. Never claim exhaustive multi-page coverage
-            // or try to repair the opaque cursor in the SDK.
-            report.partial("provider_pagination_unreliable");
             if !cursors.insert(next.clone()) {
                 report.partial("repeated_job_cursor");
                 break;

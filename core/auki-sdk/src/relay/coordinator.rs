@@ -34,9 +34,9 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::runtime_policy::{
-    ActiveBookingValidation, RELAY_RENEW_RETRY_FLOOR, RELAY_STARTUP_STATUS_POLL_INTERVAL,
-    RelayBookingExpectation, cap_relay_renewal_delay, cap_relay_status_poll_delay,
-    relay_authorized_until, validate_active_booking,
+    ActiveBookingValidation, RELAY_STARTUP_STATUS_POLL_INTERVAL, RelayBookingExpectation,
+    cap_relay_renewal_delay, cap_relay_status_poll_delay, relay_authorized_until,
+    validate_active_booking,
 };
 
 use super::{
@@ -44,6 +44,8 @@ use super::{
     RelayBookingSnapshot, RelayBookingState, RelayErrorCode, RelayIdempotencyKey, RelayOperation,
     RelaySlotState, ReservationFailedRequest, ReservationFailureReason,
 };
+
+const RELAY_RENEW_RETRY_FLOOR: Duration = Duration::from_secs(1);
 
 /// The complete local fence for one child reservation attempt.
 ///

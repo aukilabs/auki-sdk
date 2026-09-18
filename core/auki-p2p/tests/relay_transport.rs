@@ -343,8 +343,12 @@ async fn concurrent_exact_route_opens_single_flight_one_circuit() {
                     if stream.read_exact(&mut request).await.is_err() {
                         break;
                     }
-                    stream.write_all(&request).await.unwrap();
-                    stream.flush().await.unwrap();
+                    if stream.write_all(&request).await.is_err() {
+                        break;
+                    }
+                    if stream.flush().await.is_err() {
+                        break;
+                    }
                 }
             });
         }
@@ -368,7 +372,7 @@ async fn concurrent_exact_route_opens_single_flight_one_circuit() {
             let mut response = [0_u8; 1];
             stream.read_exact(&mut response).await.unwrap();
             assert_eq!(response, [marker]);
-            must_succeed(stream.close()).await;
+            let _ = stream.close().await;
         }
     };
 

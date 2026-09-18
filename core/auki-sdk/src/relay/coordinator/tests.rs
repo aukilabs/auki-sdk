@@ -165,7 +165,7 @@ async fn schedule_renewal_floors_retry_delay_when_the_booking_clock_stops_advanc
     actor.schedule_renewal();
     let delay = actor.next_renew.saturating_duration_since(before);
     assert!(
-        delay >= crate::runtime_policy::RELAY_RENEW_RETRY_FLOOR,
+        delay >= super::RELAY_RENEW_RETRY_FLOOR,
         "renew delay {delay:?} must not collapse into a 1ms loop"
     );
 }

@@ -34,9 +34,9 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::runtime_policy::{
-    ActiveBookingValidation, RELAY_STARTUP_STATUS_POLL_INTERVAL, RelayBookingExpectation,
-    cap_relay_renewal_delay, cap_relay_status_poll_delay, relay_authorized_until,
-    validate_active_booking,
+    ActiveBookingValidation, RELAY_RENEW_RETRY_FLOOR, RELAY_STARTUP_STATUS_POLL_INTERVAL,
+    RelayBookingExpectation, cap_relay_renewal_delay, cap_relay_status_poll_delay,
+    relay_authorized_until, validate_active_booking,
 };
 
 use super::{
@@ -944,17 +944,18 @@ impl CoordinatorActor {
             .unwrap_or_default();
         let preferred = remaining.mul_f64(rand::random::<f64>() * 0.10 + 0.25);
         let renew_after = cap_relay_renewal_delay(remaining, preferred, self.config.http_timeout)
-            .max(Duration::from_millis(1));
+            .max(RELAY_RENEW_RETRY_FLOOR);
         self.next_renew = Instant::now() + renew_after;
     }
 
     async fn poll(&mut self) -> Result<(), RelayCoordinatorError> {
-        let succeeded = match bounded_control_call(
-            self.config.http_timeout,
-            RelayOperation::Active,
-            self.api.active(),
-        )
-        .await
+        let api = Arc::clone(&self.api);
+        let succeeded = match self
+            .control_call_recovering_principal(RelayOperation::Active, || {
+                let api = Arc::clone(&api);
+                async move { api.active().await }
+            })
+            .await
         {
             Ok(Some(snapshot)) => {
                 self.apply_snapshot(snapshot).await?;
@@ -983,13 +984,32 @@ impl CoordinatorActor {
         Ok(())
     }
 
+    async fn control_call_recovering_principal<T, F, Fut>(
+        &self,
+        operation: RelayOperation,
+        call: F,
+    ) -> Result<T, RelayBookingClientError>
+    where
+        F: Fn() -> Fut,
+        Fut: Future<Output = Result<T, RelayBookingClientError>>,
+    {
+        match bounded_control_call(self.config.http_timeout, operation, call()).await {
+            Err(error) if requester_principal_is_refreshable(&error) => {
+                bounded_control_call(self.config.http_timeout, operation, call()).await
+            }
+            other => other,
+        }
+    }
+
     async fn renew(&mut self) -> Result<(), RelayCoordinatorError> {
-        match bounded_control_call(
-            self.config.http_timeout,
-            RelayOperation::Renew,
-            self.api.renew(self.snapshot.booking_id),
-        )
-        .await
+        let api = Arc::clone(&self.api);
+        let booking_id = self.snapshot.booking_id;
+        match self
+            .control_call_recovering_principal(RelayOperation::Renew, || {
+                let api = Arc::clone(&api);
+                async move { api.renew(booking_id).await }
+            })
+            .await
         {
             Ok(snapshot) => {
                 self.apply_snapshot(snapshot).await?;
@@ -1509,13 +1529,15 @@ impl CoordinatorActor {
             reservation_epoch: fence.reservation_epoch,
             reason,
         };
-        match bounded_control_call(
-            self.config.http_timeout,
-            RelayOperation::ReservationFailed,
-            self.api
-                .report_reservation_failed(self.snapshot.booking_id, &request),
-        )
-        .await
+        let api = Arc::clone(&self.api);
+        let booking_id = self.snapshot.booking_id;
+        match self
+            .control_call_recovering_principal(RelayOperation::ReservationFailed, || {
+                let api = Arc::clone(&api);
+                let request = request.clone();
+                async move { api.report_reservation_failed(booking_id, &request).await }
+            })
+            .await
         {
             Ok(snapshot) => {
                 if self.is_current(fence) {
@@ -1899,15 +1921,20 @@ impl Drop for CoordinatorActor {
     }
 }
 
-fn control_error_ends_authority(error: &RelayBookingClientError) -> bool {
+fn requester_principal_is_refreshable(error: &RelayBookingClientError) -> bool {
     error.http_code().is_some_and(|code| {
-        code.is_stale_requester_principal()
-            || code.is_invalid_requester_principal()
-            || matches!(
+        code.is_stale_requester_principal() || code.is_invalid_requester_principal()
+    })
+}
+
+fn control_error_ends_authority(error: &RelayBookingClientError) -> bool {
+    requester_principal_is_refreshable(error)
+        || error.http_code().is_some_and(|code| {
+            matches!(
                 code,
                 RelayErrorCode::AuthorityEnded | RelayErrorCode::NotFound
             )
-    })
+        })
 }
 
 async fn bounded_control_call<T, F>(

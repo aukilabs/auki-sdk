@@ -80,8 +80,11 @@ for the required DDS rollout, multiple-peer selection, and completeness limits.
 
 `start_external(identity, update, config)` returns a peer and an authentication
 control handle. Respond to `next_refresh_request` and pass complete
-`ExternalAuthorityUpdate` values to `replace`. For managed compute and robot
-peers, the [task runtime](tasks.md#authority-and-peer-lifetime) handles renewal.
+`ExternalAuthorityUpdate` values to `replace`. Python exposes the same
+`next_refresh_request` method. `replace` keeps the peer and its relay
+reservation; applications still reopen *application* streams if a hop dies.
+There is no public reconnect API. For managed compute and robot peers, the
+[task runtime](tasks.md#authority-and-peer-lifetime) handles renewal.
 
 See the [public exports](../../core/auki-sdk/src/lib.rs) for platform availability.
 

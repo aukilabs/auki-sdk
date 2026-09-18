@@ -1008,6 +1008,74 @@ async fn an_established_circuit_may_open_after_its_connect_admission_expires() {
     relay.shutdown().await;
 }
 
+/// An established circuit must keep carrying after `install_current_token`
+/// (the same TokenStore path as host `replace()`). New dials are not required
+/// for this survival check. DMS is not in this crate: the booking client still
+/// requires renew to return the same `booking_id`, takes `authority_expires_at`
+/// from the snapshot, and treats `StaleRequesterPrincipal` as a valid Renew 409.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_established_circuit_keeps_carrying_after_listener_credential_rotation() {
+    let dns = TestDns::start();
+    let mut relay = RelayHarness::start("credential-rotate").await;
+    let domain_id = Uuid::new_v4().to_string();
+    let target = node(&dns);
+    install_current_token(&target, PeerRole::Robot, vec![domain_id.clone()]).await;
+    let source = node(&dns);
+    install_current_token(&source, PeerRole::Compute, vec![domain_id.clone()]).await;
+
+    let reservation = must_succeed(target.start_relay_reservation(relay.provider())).await;
+    let snapshot = must_succeed(target.wait_relay_reservation(reservation)).await;
+    let route = snapshot.publishable_route().unwrap().clone();
+    let target_peer_id = target.peer_id();
+    let source_peer_id = source.peer_id();
+    let requirements = SessionRequirements::new(&domain_id)
+        .unwrap()
+        .with_expected_remote_peer_id(target_peer_id);
+    let protocol = ApplicationProtocol::new("/auki-p2p/credential-rotate/1").unwrap();
+    let mut incoming = target
+        .accept(
+            protocol.clone(),
+            SessionRequirements::new(&domain_id).unwrap(),
+        )
+        .unwrap();
+    let server = tokio::spawn(async move {
+        let mut stream = incoming.accept().await.unwrap().unwrap();
+        assert_eq!(stream.remote_peer().peer_id, source_peer_id);
+        for expected in [b'A', b'B'] {
+            let mut byte = [0; 1];
+            stream.read_exact(&mut byte).await.unwrap();
+            assert_eq!(byte, [expected]);
+            stream.write_all(&byte).await.unwrap();
+            stream.flush().await.unwrap();
+        }
+    });
+
+    let route_handle = must_succeed(source.connect_relayed(route, &requirements)).await;
+    let _ = timeout(relay.admissions.recv()).await.unwrap();
+    let _ = timeout(relay.circuits.recv()).await.unwrap();
+    let mut stream = must_succeed(source.open_relayed(&route_handle, protocol, requirements)).await;
+    stream.write_all(b"A").await.unwrap();
+    stream.flush().await.unwrap();
+    let mut response = [0; 1];
+    stream.read_exact(&mut response).await.unwrap();
+    assert_eq!(response, *b"A");
+
+    install_current_token(&target, PeerRole::Robot, vec![domain_id.clone()]).await;
+    install_current_token(&source, PeerRole::Compute, vec![domain_id.clone()]).await;
+
+    stream.write_all(b"B").await.unwrap();
+    stream.flush().await.unwrap();
+    stream.read_exact(&mut response).await.unwrap();
+    assert_eq!(response, *b"B");
+    must_succeed(server).await;
+
+    must_succeed(source.close_relay_route(&route_handle)).await;
+    must_succeed(target.cancel_relay_reservation(reservation)).await;
+    must_succeed(source.shutdown()).await;
+    must_succeed(target.shutdown()).await;
+    relay.shutdown().await;
+}
+
 async fn exchange_over_route(
     source: &Node,
     route: &Multiaddr,

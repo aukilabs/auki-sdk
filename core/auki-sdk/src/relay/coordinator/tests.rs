@@ -56,6 +56,120 @@ fn requester_principal_errors_have_expected_startup_and_fencing_semantics() {
     }
 }
 
+#[tokio::test]
+async fn stale_requester_principal_on_renew_recovers_after_one_retry() {
+    let booking_id = Uuid::new_v4();
+    let snapshot = queued_snapshot(booking_id);
+    let mut recovered = snapshot.clone();
+    recovered.authority_expires_at = chrono::Utc::now() + chrono::Duration::minutes(10);
+    let api = Arc::new(ScriptedApi::default());
+    api.push_renew(Err(principal_http_error(
+        reqwest::StatusCode::CONFLICT,
+        RelayErrorCode::StaleRequesterPrincipal,
+    )));
+    api.push_renew(Ok(recovered.clone()));
+    let backend = Arc::new(PendingStartBackend::new());
+    let routes = Arc::new(RecordingRoutes::default());
+    let (mut actor, _commands) = actor_harness(
+        api.clone(),
+        backend,
+        routes,
+        coordinator_config("stale-principal-recover"),
+        snapshot,
+    );
+
+    actor.renew().await.expect("stale principal retries once");
+    assert!(!actor.control_fenced);
+    assert_eq!(
+        actor.snapshot.authority_expires_at,
+        recovered.authority_expires_at
+    );
+    assert_eq!(
+        api.calls().as_slice(),
+        [ApiCall::Renew(booking_id), ApiCall::Renew(booking_id)]
+    );
+}
+
+#[tokio::test]
+async fn stale_requester_principal_on_renew_is_terminal_after_retry_fails() {
+    let booking_id = Uuid::new_v4();
+    let snapshot = queued_snapshot(booking_id);
+    let api = Arc::new(ScriptedApi::default());
+    api.push_renew(Err(principal_http_error(
+        reqwest::StatusCode::CONFLICT,
+        RelayErrorCode::StaleRequesterPrincipal,
+    )));
+    api.push_renew(Err(principal_http_error(
+        reqwest::StatusCode::CONFLICT,
+        RelayErrorCode::StaleRequesterPrincipal,
+    )));
+    let backend = Arc::new(PendingStartBackend::new());
+    let routes = Arc::new(RecordingRoutes::default());
+    let (mut actor, _commands) = actor_harness(
+        api.clone(),
+        backend,
+        routes,
+        coordinator_config("stale-principal-terminal"),
+        snapshot,
+    );
+
+    let result = actor.renew().await;
+    assert!(matches!(result, Err(RelayCoordinatorError::AuthorityEnded)));
+    assert!(actor.control_fenced);
+    assert_eq!(
+        api.calls().as_slice(),
+        [ApiCall::Renew(booking_id), ApiCall::Renew(booking_id)]
+    );
+}
+
+#[tokio::test]
+async fn invalid_requester_principal_on_poll_recovers_after_one_retry() {
+    let booking_id = Uuid::new_v4();
+    let snapshot = queued_snapshot(booking_id);
+    let api = Arc::new(ScriptedApi::default());
+    api.push_active(Err(principal_http_error(
+        reqwest::StatusCode::FORBIDDEN,
+        RelayErrorCode::InvalidRequesterPrincipal,
+    )));
+    api.push_active(Ok(Some(snapshot.clone())));
+    let backend = Arc::new(PendingStartBackend::new());
+    let routes = Arc::new(RecordingRoutes::default());
+    let (mut actor, _commands) = actor_harness(
+        api.clone(),
+        backend,
+        routes,
+        coordinator_config("invalid-principal-recover"),
+        snapshot,
+    );
+
+    actor.poll().await.expect("invalid principal retries once");
+    assert!(!actor.control_fenced);
+    assert_eq!(api.calls().as_slice(), [ApiCall::Active, ApiCall::Active]);
+}
+
+#[tokio::test]
+async fn schedule_renewal_floors_retry_delay_when_the_booking_clock_stops_advancing() {
+    let mut snapshot = queued_snapshot(Uuid::new_v4());
+    snapshot.authority_expires_at = chrono::Utc::now() + chrono::Duration::seconds(1);
+    let api = Arc::new(ScriptedApi::default());
+    let backend = Arc::new(PendingStartBackend::new());
+    let routes = Arc::new(RecordingRoutes::default());
+    let (mut actor, _commands) = actor_harness(
+        api,
+        backend,
+        routes,
+        coordinator_config("renew-floor"),
+        snapshot,
+    );
+    let before = Instant::now();
+    actor.schedule_renewal();
+    let delay = actor.next_renew.saturating_duration_since(before);
+    assert!(
+        delay >= crate::runtime_policy::RELAY_RENEW_RETRY_FLOOR,
+        "renew delay {delay:?} must not collapse into a 1ms loop"
+    );
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ApiCall {
     Active,

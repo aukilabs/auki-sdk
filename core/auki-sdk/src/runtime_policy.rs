@@ -13,6 +13,7 @@ use crate::{AukiRelayConfig, AukiRelayMode};
 
 pub(crate) const RELAY_AUTHORITY_SAFETY_MARGIN: Duration = Duration::from_secs(20);
 pub(crate) const RELAY_STARTUP_STATUS_POLL_INTERVAL: Duration = Duration::from_secs(5);
+pub(crate) const RELAY_RENEW_RETRY_FLOOR: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RejectedAuthorityRevision {

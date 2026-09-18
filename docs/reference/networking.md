@@ -63,6 +63,8 @@ Open `target/doc/auki_sdk/index.html`.
 | `AukiProtocolSpec` | Set protocol ID, concurrency, and declared frame-size limit |
 | `AukiProtocolRegistration::close()` | Stop accepting requests and wait for active handlers |
 | `discover()`, `discover_protocol()` | Look up peers and their advertised addresses |
+| `resolve(identity, protocol_id)` | Find every advertised peer for an exact Peer, Robot or Compute identity |
+| `protocols().open_resolved(&result)` | Open a selected result and verify its signed identity |
 | `protocol_context().routes()` | Read your peer's addresses and watch for changes |
 | `known_peers()` | Inspect authenticated connections (native) |
 | `status()`, `subscribe_status()` | Check native peer readiness and watch for changes |
@@ -72,7 +74,9 @@ Open `target/doc/auki_sdk/index.html`.
 
 Native `protocols().open` uses addresses configured with
 `AukiPeerConfig::with_peer_routes`. DDS lookup does not add addresses there;
-pass a discovered address to `open_exact` instead.
+pass a selected identity lookup result to `open_resolved`, or an independently
+obtained address to `open_exact`. See [identity resolution](peer-resolution.md)
+for the required DDS rollout, multiple-peer selection, and completeness limits.
 
 `start_external(identity, update, config)` returns a peer and an authentication
 control handle. Respond to `next_refresh_request` and pass complete

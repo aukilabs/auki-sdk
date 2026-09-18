@@ -50,6 +50,10 @@ impl AukiPeerProtocols {
         self.inner.domain_id
     }
 
+    pub(crate) fn cancellation_token(&self) -> CancellationToken {
+        self.inner.lifecycle.token().clone()
+    }
+
     /// Register one exact inbound application protocol and bounded local handler.
     pub fn register<H, F>(
         &self,

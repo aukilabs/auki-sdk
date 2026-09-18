@@ -10,6 +10,7 @@ mod bootstrap;
 mod config;
 mod discovery;
 mod protocol_contract;
+mod resolution;
 mod runtime_policy;
 mod served_protocols;
 mod status;
@@ -124,6 +125,7 @@ pub use protocol_contract::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use protocols::{AukiPeerProtocols, AukiProtocolRegistration};
+pub use resolution::{AukiPeerConnectError, AukiPeerIdentity, AukiResolvedPeer};
 #[cfg(not(target_arch = "wasm32"))]
 pub use status::AukiPeerStatus;
 pub use status::{AukiPeerExit, AukiPeerFailure};

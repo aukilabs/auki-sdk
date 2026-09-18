@@ -735,7 +735,7 @@ impl AukiPeer {
                     identity_peer_id,
                     authority.dds_authorization(),
                 ) {
-                    Ok(discovery) => discovery,
+                    Ok(discovery) => discovery.with_cancellation(protocols.cancellation_token()),
                     Err(error) => {
                         cleanup_relay_after_startup_failure(relay.take()).await;
                         authority.shutdown().await;
@@ -860,6 +860,20 @@ impl AukiPeer {
             .clone()
             .map(crate::AukiDiscovery::new)
             .ok_or(AukiDiscoveryError::Disabled)
+    }
+
+    /// Resolve an exact identity to every current peer advertising one protocol.
+    ///
+    /// Select a result explicitly, then use `protocols().open_resolved(&result)`
+    /// to verify signed remote identity before sending application bytes.
+    pub async fn resolve(
+        &self,
+        identity: crate::AukiPeerIdentity,
+        protocol_id: impl AsRef<str>,
+    ) -> Result<Vec<crate::AukiResolvedPeer>, AukiDiscoveryError> {
+        self.discovery_handle()?
+            .resolve(identity, protocol_id)
+            .await
     }
 
     /// Fetch fresh candidates advertising one exact inbound protocol ID.
@@ -1723,6 +1737,142 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
         drop(stream);
         registration.close().await.unwrap();
         client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn resolved_connection_verifies_signed_machine_identity_before_application_io() {
+        use crate::{AukiPeerConnectError, AukiPeerIdentity, AukiProtocolSpec};
+        use futures::{AsyncReadExt, AsyncWriteExt};
+
+        const PROTOCOL: &str = "/example/identity-connection/1.0.0";
+        for kind in ["robot", "compute"] {
+            let dds = MockServer::start();
+            let domain = Uuid::new_v4();
+            let server_identity = auki_p2p::Identity::generate();
+            let mut prepared = fixture(&server_identity, domain);
+            prepared.initial_credential =
+                signed_credential(&server_identity, domain, unix_time(), kind).0;
+            let subject = auki_p2p::DdsTokenVerifier::from_keys(verification_keys())
+                .unwrap()
+                .verify_credential(&prepared.initial_credential)
+                .unwrap()
+                .sub;
+            let subject_id = Uuid::parse_str(&subject).unwrap();
+            let server = AukiPeer::start(server_identity.clone(), prepared, direct_config())
+                .await
+                .unwrap();
+            let (reads, mut observed_reads) = tokio::sync::mpsc::unbounded_channel();
+            let registration = server
+                .protocols()
+                .register(
+                    AukiProtocolSpec::new(PROTOCOL, 4, 1).unwrap(),
+                    move |mut stream| {
+                        let reads = reads.clone();
+                        async move {
+                            let mut byte = [0];
+                            let count = stream.read(&mut byte).await.unwrap_or(0);
+                            let _ = reads.send(count);
+                            if count == 1 {
+                                stream.write_all(&byte).await.unwrap();
+                                stream.flush().await.unwrap();
+                            }
+                        }
+                    },
+                )
+                .unwrap();
+            let client_identity = auki_p2p::Identity::generate();
+            let client = AukiPeer::start(
+                client_identity.clone(),
+                fixture(&client_identity, domain),
+                direct_config().with_dds_tracker(
+                    DdsTrackerConfig::new(dds.base_url(), DdsTrackerMode::DiscoverOnly).unwrap(),
+                ),
+            )
+            .await
+            .unwrap();
+            let signed_identity = if kind == "robot" {
+                AukiPeerIdentity::Robot(subject_id)
+            } else {
+                AukiPeerIdentity::Compute(subject_id)
+            };
+            let wrong_kind = if kind == "robot" {
+                AukiPeerIdentity::Compute(subject_id)
+            } else {
+                AukiPeerIdentity::Robot(subject_id)
+            };
+            let wrong_subject = if kind == "robot" {
+                AukiPeerIdentity::Robot(Uuid::new_v4())
+            } else {
+                AukiPeerIdentity::Compute(Uuid::new_v4())
+            };
+            for (identity, succeeds) in [
+                (signed_identity, true),
+                (AukiPeerIdentity::Peer(server.peer_id()), true),
+                (wrong_subject, false),
+                (wrong_kind, false),
+            ] {
+                let (claimed_subject, claimed_kind, filters) = match identity {
+                    AukiPeerIdentity::Peer(id) => (
+                        subject.clone(),
+                        kind,
+                        json!({"protocol": PROTOCOL, "peer_id": id.to_string()}),
+                    ),
+                    AukiPeerIdentity::Robot(id) => (
+                        id.to_string(),
+                        "robot",
+                        json!({"protocol": PROTOCOL, "subject_id": id, "peer_type": "robot"}),
+                    ),
+                    AukiPeerIdentity::Compute(id) => (
+                        id.to_string(),
+                        "compute",
+                        json!({"protocol": PROTOCOL, "subject_id": id, "peer_type": "compute"}),
+                    ),
+                };
+                // The tracker can lie about the machine while giving a real
+                // route/Peer ID. Only the signed stream claims may authorize I/O.
+                let mut lookup = dds.mock(|when, then| {
+                    when.method(GET).path(format!("/api/v1/domains/{domain}/p2p/advertisements"));
+                    then.status(200).header("cache-control", "no-store").header("content-type", "application/json")
+                        .json_body(json!({"applied_filters": filters, "advertisements": [{
+                            "peer_id": server.peer_id().to_string(), "subject_id": claimed_subject,
+                            "peer_type": claimed_kind, "protocols": [PROTOCOL],
+                            "routes": server.listen_addresses().iter().map(ToString::to_string).collect::<Vec<_>>(),
+                            "expires_at": Utc::now() + chrono::Duration::minutes(1),
+                        }]}));
+                });
+                let resolved = client.resolve(identity, PROTOCOL).await.unwrap();
+                assert_eq!(resolved.len(), 1);
+                let connection = client.protocols().open_resolved(&resolved[0]).await;
+                if succeeds {
+                    let mut stream = connection.unwrap();
+                    assert_eq!(stream.remote_peer().subject, subject);
+                    stream.write_all(&[42]).await.unwrap();
+                    stream.flush().await.unwrap();
+                    let mut response = [0];
+                    stream.read_exact(&mut response).await.unwrap();
+                    assert_eq!(response, [42]);
+                    stream.close().await.unwrap();
+                } else {
+                    assert!(matches!(
+                        connection,
+                        Err(AukiPeerConnectError::IdentityMismatch {
+                            cleanup_failed: false
+                        })
+                    ));
+                }
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(2), observed_reads.recv())
+                        .await
+                        .unwrap(),
+                    Some(usize::from(succeeds))
+                );
+                lookup.assert_calls(1);
+                lookup.delete();
+            }
+            registration.close().await.unwrap();
+            client.shutdown().await.unwrap();
+            server.shutdown().await.unwrap();
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

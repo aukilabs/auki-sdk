@@ -34,6 +34,12 @@ the returned stream; see [custom protocols](protocols.md).
 
 ## Use Auki discovery
 
+For a known Peer, Robot or Compute identity, use
+[`resolve` and `open_resolved`](../reference/peer-resolution.md). They retain
+the requested identity through signed P2P verification and avoid scanning the
+Domain. This requires the exact-filter DDS rollout described in that reference.
+The protocol browsing example below also works with older discovery providers.
+
 Enable DDS discovery on your bootstrap before starting the peer:
 
 ~~~rust

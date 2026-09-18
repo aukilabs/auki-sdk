@@ -61,6 +61,10 @@ impl AukiPeerProtocols {
         self.inner.domain_id
     }
 
+    pub(crate) fn cancellation_token(&self) -> tokio_util::sync::CancellationToken {
+        self.inner.lifecycle.token().clone()
+    }
+
     /// Register one exact inbound application protocol and bounded handler.
     pub fn register<H, F>(
         &self,

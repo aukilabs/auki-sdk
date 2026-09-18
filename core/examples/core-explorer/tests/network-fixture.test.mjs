@@ -34,6 +34,13 @@ test('renewal advances leases and discovery excludes expired advertisements',asy
     assert.equal(fixture.state.renewed,1);
     await request(prefix+'/advertisements','PUT',{protocols:['/fixture/echo'],routes:[]});
     assert.equal((await request(prefix+'/advertisements')).advertisements.length,1);
+    const chatPath=prefix+'/advertisements?protocol='+encodeURIComponent('/example/core-explorer-chat/1.0.0');
+    assert.equal((await request(chatPath)).advertisements.length,0,'Echo-only advertisements excluded');
+    fixture.state.chatDiscoveryMode='empty';assert.deepEqual((await request(chatPath)).advertisements,[]);
+    fixture.state.chatDiscoveryMode='malformed';assert.equal((await request(chatPath)).advertisements,'invalid');
+    fixture.state.chatDiscoveryMode='denied';
+    assert.equal((await fetch(fixture.base+chatPath,{headers:{Authorization:'Bearer '+token}})).status,403);
+    fixture.state.chatDiscoveryMode='normal';
     fixture.advertisements.get(peer).expires_at=new Date(Date.now()-1000).toISOString();
     assert.equal((await request(prefix+'/advertisements')).advertisements.length,0);
     await request(prefix+'/advertisements','DELETE');await request(`/relay-bookings/${snapshot.booking_id}`,'DELETE');

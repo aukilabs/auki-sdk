@@ -81,9 +81,85 @@ try {
   await reveal(page,'#domains');
   await page.getByRole('button',{name:/Synthetic lab/}).click();
   await chapter(page,'networking',true);
+  const beforeChat = fixture.state.requests.filter(value=>value.includes('/p2p/')).length;
   await page.getByRole('button',{name:'Chat',exact:true}).click();
-  await page.locator('#chat-peer').fill(ready.peer);await page.locator('#chat-route').fill(ready.wss);
-  await page.locator('#chat-connect').click();await contains(page,'#chat-state','pending');
+  await delay(100);
+  assert.equal(fixture.state.requests.filter(value=>value.includes('/p2p/')).length,beforeChat,'opening Chat performs no networking');
+  const capture = async (name, controls = []) => {
+    for(const [suffix,width,height] of [['desktop',1280,900],['mobile',390,844]]){
+      await page.setViewportSize({width,height});
+      await assertUsable(page,controls);
+      await page.screenshot({path:new URL(`../test-artifacts/chat-${name}-${suffix}.png`,import.meta.url).pathname,fullPage:true});
+    }
+  };
+  // Hold the actual HTTP response until the UI proves cleanup is still pending.
+  const holdDiscovery = () => {
+    let entered, release;
+    const started = new Promise(resolve => { entered = resolve; });
+    const held = new Promise(resolve => { release = resolve; });
+    fixture.state.chatDiscoveryGate = () => { entered(); return held; };
+    return { started, release: () => { fixture.state.chatDiscoveryGate = undefined; release(); } };
+  };
+  const discoveryStopped = () => page.waitForFunction(() =>
+    document.querySelector('#chat-discovery-state')?.textContent === '' &&
+    document.querySelector('#chat-state')?.textContent === 'stopped');
+  const findChat = async (captures = false) => {
+    await page.locator('#chat-find').click();
+    await contains(page,'#chat-discovery-state','Select a Chat peer.');
+    assert.equal(await page.locator('#chat-candidates button').count(),1);
+    assert.equal(await page.locator('#chat-connect-selected').isEnabled(),false);
+    const candidate = page.locator('#chat-candidates button').filter({hasText: ready.peer.slice(-8)});
+    assert.equal(await candidate.getAttribute('data-peer-id'),ready.peer);
+    assert.equal(await candidate.getAttribute('data-route'),ready.wss);
+    assert.ok(!(await candidate.innerText()).includes(ready.wss),'route stays under technical disclosure');
+    assert.equal(await page.locator('#chat-candidates pre').isVisible(),false);
+    if(captures) await capture('discovery',['#chat-find','#chat-candidates button','#chat-candidates summary']);
+    await candidate.click();
+    assert.equal(await candidate.getAttribute('aria-pressed'),'true');
+    assert.equal(await page.locator('#chat-connect-selected').isEnabled(),true);
+    if(captures) {
+      await capture('selected',['#chat-candidates button','#chat-connect-selected']);
+      await page.locator('#chat-candidates summary').click();
+      assert.equal(await page.locator('#chat-candidates pre').innerText(),`Peer ID\n${ready.peer}\n\nWSS route\n${ready.wss}`);
+      await capture('technical',['#chat-candidates summary','#chat-connect-selected']);
+      await page.locator('#chat-candidates summary').click();
+      await page.locator('#chat-advanced summary').click();
+      await page.locator('#chat-peer').fill(ready.peer);await page.locator('#chat-route').fill(ready.wss);
+      await capture('advanced',['#chat-peer','#chat-route','#chat-connect']);
+      await page.locator('#chat-advanced summary').click();
+    }
+    await page.locator('#chat-connect-selected').click();
+    await contains(page,'#chat-state','pending');
+  };
+  const chatAd=fixture.advertisements.get(ready.peer);
+  assert.ok(chatAd.protocols.includes('/example/core-explorer-chat/1.0.0'));
+  fixture.advertisements.set(relay.peer,{...chatAd,peer_id:relay.peer,protocols:['/example/echo/1.0.0'],routes:[ready.wss.replace(new RegExp(ready.peer+'$'),relay.peer)]});
+  for(const [mode,label] of [['empty','No Chat peers found.'],['denied','Discovery access denied.'],['malformed','Discovery failed.'],['offline','Discovery unavailable or offline.']]) {
+    fixture.state.chatDiscoveryMode=mode;
+    await page.locator('#chat-find').click();await contains(page,'#chat-discovery-state',label);
+    assert.equal(await page.locator('#chat-candidates button').count(),0);
+    assert.equal(await page.locator('#chat-connect-selected').isEnabled(),false);
+  }
+  fixture.state.chatDiscoveryMode='normal';
+  const domainHold = holdDiscovery();
+  await page.locator('#chat-find').click();await domainHold.started;
+  try {
+    await selectDomain(page,OTHER);
+    assert.equal(await page.locator('#chat-candidates').textContent(),'');
+    await contains(page,'#chat-discovery-state','Closing discovery…');
+    assert.equal(fixture.state.pendingDiscovery,1,'discovery remains held during Domain cleanup');
+    assert.equal(await page.locator('#open-upload').isEnabled(),false,'Domain selection cannot complete before discovery settles');
+  } finally { domainHold.release(); }
+  await discoveryStopped();
+  await page.waitForFunction(() => !document.querySelector('#open-upload')?.disabled);
+  assert.equal(fixture.state.pendingDiscovery,0,'completed Domain selection awaited nonabortable discovery');
+  assert.equal(await page.locator('#chat-candidates').textContent(),'');
+  await selectDomain(page,DOMAIN);
+  await page.waitForFunction(() => !document.querySelector('#open-upload')?.disabled);
+  await chapter(page,'networking');
+  await page.getByRole('button',{name:'Chat',exact:true}).click();
+  await findChat(true);
+  fixture.advertisements.delete(relay.peer);
   const firstSession=await page.locator('#chat-session').innerText();
   const firstPeer=await page.locator('#chat-local-peer').innerText();
   assert.match(firstSession,/^[0-9a-f-]{36}$/);assert.ok(firstPeer.length>20);
@@ -91,13 +167,6 @@ try {
   assert.equal(pending.peer_id,firstPeer,'displayed Chat identity matches authenticated native peer');
   assert.equal(pending.state,'pending');assert.equal(await page.locator('#chat-send').isEnabled(),false);
   assert.deepEqual(operator('read',firstSession,firstPeer).messages,[]);
-  const capture = async (name) => {
-    for(const [suffix,width,height] of [['desktop',1280,900],['mobile',390,844]]){
-      await page.setViewportSize({width,height});
-      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-      await page.screenshot({path:new URL(`../test-artifacts/chat-${name}-${suffix}.png`,import.meta.url).pathname,fullPage:true});
-    }
-  };
   await capture('pending');
   assert.throws(()=>operator('approve',firstSession,'wrong-peer'));
   operator('approve',firstSession,firstPeer);
@@ -111,10 +180,13 @@ try {
   await operatorUntil(()=>operator('read',firstSession,firstPeer).messages.find(message=>message.id===reply.queued&&message.status==='received by peer'));
   await capture('conversation');
   const sessions=new Set([firstSession]);
-  const connectChat=async()=>{
+  const connectChat=async(manual=false)=>{
     await page.getByRole('button',{name:'Chat',exact:true}).click();
-    await page.locator('#chat-peer').fill(ready.peer);await page.locator('#chat-route').fill(ready.wss);
-    await page.locator('#chat-connect').click();await contains(page,'#chat-state','pending');
+    if(manual){
+      await page.locator('#chat-advanced summary').click();
+      await page.locator('#chat-peer').fill(ready.peer);await page.locator('#chat-route').fill(ready.wss);
+      await page.locator('#chat-connect').click();await contains(page,'#chat-state','pending');
+    }else await findChat();
     const sid=await page.locator('#chat-session').innerText(),peer=await page.locator('#chat-local-peer').innerText();
     assert.ok(!sessions.has(sid));sessions.add(sid);
     await operatorUntil(()=>operator('list').find(value=>value.session_id===sid&&value.peer_id===peer));
@@ -123,7 +195,7 @@ try {
   for(let i=0;i<5;i++){
     await page.locator('#chat-close').click();await contains(page,'#chat-state','stopped');
     assert.equal(await page.locator('#chat-local-peer').textContent(),'');
-    await connectChat();
+    await connectChat(i===0);
   }
   await selectDomain(page,OTHER);await contains(page,'#chat-state','stopped');
   assert.equal(await page.locator('#chat-messages').textContent(),'');
@@ -135,6 +207,23 @@ try {
   await contains(page,'#chat-state','stopped');
   assert.equal(await page.locator('#chat-local-peer').textContent(),'');
   assert.equal(await page.locator('#chat-messages').textContent(),'');
+  await page.locator('#email').fill('fixture@example.test');await page.locator('#password').fill('synthetic-password');
+  await page.locator('#signin').click();await contains(page,'#domains','Synthetic lab');
+  await reveal(page,'#domains');await page.getByRole('button',{name:/Synthetic lab/}).click();await chapter(page,'networking');
+  await page.getByRole('button',{name:'Chat',exact:true}).click();
+  const logoutHold = holdDiscovery();
+  await page.locator('#chat-find').click();await logoutHold.started;
+  try {
+    await page.locator('#logout').click();
+    await contains(page,'#chat-discovery-state','Closing discovery…');
+    assert.equal(await page.locator('#session-status').textContent(),'Closing…');
+    assert.equal(await page.locator('#signin').isEnabled(),false,'logout cannot complete before discovery settles');
+    assert.equal(fixture.state.pendingDiscovery,1,'discovery remains held during logout');
+    assert.equal(await page.locator('#chat-candidates').textContent(),'');
+  } finally { logoutHold.release(); }
+  await contains(page,'#session-status','Signed out');await discoveryStopped();
+  assert.equal(fixture.state.pendingDiscovery,0,'completed logout awaited discovery');
+  assert.equal(await page.locator('#chat-candidates').textContent(),'');
   await page.locator('#email').fill('fixture@example.test');await page.locator('#password').fill('synthetic-password');
   await page.locator('#signin').click();await contains(page,'#domains','Synthetic lab');
   await reveal(page,'#domains');await page.getByRole('button',{name:/Synthetic lab/}).click();await chapter(page,'networking');

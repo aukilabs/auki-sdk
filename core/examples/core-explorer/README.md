@@ -417,8 +417,26 @@ includes Fleet screenshots. These fixture results do not prove live availability
 
 ## Network Chat and local operator bridge
 
-Network → Chat opens a separate outbound-only peer to an exact host Peer ID and
-WSS relay route. The pending screen shows the actual local Chat Peer ID and
+Network → Chat → **Find peers** explicitly starts a separate outbound-only,
+DiscoverOnly peer in the selected Domain and calls `discoverProtocol()` for the
+exact Chat protocol. Opening the tab and rendering make no service requests.
+Select an advertised Chat peer and **Connect** to enter explicit operator pairing.
+Echo-only advertisements are excluded. Discovery does not prove availability or
+authorize a conversation. Empty, denied, unavailable/offline and failed lookups
+have distinct states; **Refresh peers** clears the previous selection.
+Candidate buttons show a shortened Peer ID and relay host/port; **Technical details**
+reveals the exact Peer ID and WSS route used for dialing.
+**Advanced · manual connection** retains exact host Peer ID/WSS route entry.
+
+Discovery copies only current, matching WSS routes, frees every candidate wrapper,
+and shuts down/frees its own peer before presenting results. Chat connects with a
+new independent peer. Startup has a 30-second application deadline and lookup a
+15-second deadline; expired results cannot revive the UI. Nonabortable calls stay
+owned through settlement, so cleanup may take longer. Disconnect, Domain change
+and logout invalidate selections immediately and await discovery before closing
+the shared session. Cleanup failures remain visible. No peer is shared with Echo.
+
+The pending screen shows the actual local Chat Peer ID and
 session UUID; give both to the operator for explicit approval. Disconnect, Domain
 switch and logout drain Chat and clear that pair and conversation. Chat is an
 optional Core Explorer example protocol (`/example/core-explorer-chat/1.0.0`),
@@ -436,7 +454,9 @@ Pending approval expires after five minutes; paired sessions last at most one
 hour. Commands expire after five minutes and are purged during normal shutdown.
 
 Parent acceptance after combined-module regeneration: `node tests/chat-browser.mjs`.
-It uses the real WASM/native stream, production Inbox/Spool and operator CLI for
+It exercises real `discoverProtocol`, exact Chat filtering, empty/denied/error/offline
+paths, delayed discovery during Domain/logout cleanup and manual fallback, then
+uses the real WASM/native stream, production Inbox/Spool and operator CLI for
 exact-pair approval, reads and stdin replies, checks more than four reconnects,
 Domain/logout cleanup and subsequent Chat/Echo availability, and captures pending
 and conversation screenshots at desktop/mobile sizes. It uses loopback fixtures

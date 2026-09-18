@@ -25,7 +25,7 @@ export async function startNetworkFixture(relay, wssPort) {
   };
   const proofs = new Map(), issued = new Map(), advertisements = new Map(), bookings = new Map();
   const registration = randomBytes(24).toString('hex');
-  const state = { claims: 0, requests: [], denyP2p: false, verifiedProofs: 0, withdrawn: 0, released: 0, renewed: 0, proofDelay: 0, discoveryDelay: 0, pendingProofs: 0, pendingDiscovery: 0 };
+  const state = { claims: 0, requests: [], denyP2p: false, verifiedProofs: 0, withdrawn: 0, released: 0, renewed: 0, proofDelay: 0, discoveryDelay: 0, chatDiscoveryMode: 'normal', chatDiscoveryGate: undefined, pendingProofs: 0, pendingDiscovery: 0 };
   let base;
   const issue = claims => { const token = jwt(claims); issued.set(token, claims); return token; };
   const machine = peer => {
@@ -99,6 +99,16 @@ export async function startNetworkFixture(relay, wssPort) {
         }
         if (req.method === 'DELETE') { advertisements.delete(principal.peer_id); state.withdrawn++; return send(204); }
         if (state.discoveryDelay) { state.pendingDiscovery++; await new Promise(r => setTimeout(r, state.discoveryDelay)); state.pendingDiscovery--; }
+        if (url.searchParams.get('protocol') === '/example/core-explorer-chat/1.0.0') {
+          if (state.chatDiscoveryGate) {
+            state.pendingDiscovery++;
+            try { await state.chatDiscoveryGate(); } finally { state.pendingDiscovery--; }
+          }
+          if (state.chatDiscoveryMode === 'denied') return send(403, {});
+          if (state.chatDiscoveryMode === 'empty') return send(200, { advertisements: [] });
+          if (state.chatDiscoveryMode === 'malformed') return send(200, { advertisements: 'invalid' });
+          if (state.chatDiscoveryMode === 'offline') return req.socket.destroy();
+        }
         return send(200, { advertisements: [...advertisements.values()].filter(ad => Date.parse(ad.expires_at) > Date.now()).filter(ad => !url.searchParams.has('protocol') || ad.protocols.includes(url.searchParams.get('protocol'))) });
       }
       if (path.startsWith('/relay-bookings')) {

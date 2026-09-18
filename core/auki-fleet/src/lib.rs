@@ -5,7 +5,7 @@ mod types;
 pub use error::FleetError;
 pub use types::*;
 
-use auki_auth::{AuthSession, DomainAccessProvider, InventoryNode, InventoryRobot};
+use auki_auth::{AuthSession, DomainAccessProvider, InventoryNode, InventoryPage, InventoryRobot};
 use auki_dms::jobs::{
     AukiDmsJobs, BusyNodeSnapshot, DomainJobsClient, JobListQuery, JobMode, JobTaskStatus,
     JobsLimits,
@@ -21,6 +21,9 @@ use std::{
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
+const INVENTORY_PAGE_SIZE: usize = 100;
+const MAX_INVENTORY_PAGES: usize = 20;
 
 #[derive(Clone, Debug)]
 pub struct FleetLimits {
@@ -195,23 +198,36 @@ impl DomainFleetClient {
         // These futures stay owned by the snapshot; cancellation drops and aborts
         // their transports without detached tasks or a second refresh owner.
         let nodes = async {
-            let result = self
-                .session
-                .inventory_nodes(cancellation)
-                .await
-                .map_err(FleetError::from);
-            source(FleetSource::Nodes, result)
+            inventory(
+                FleetSource::Nodes,
+                |cursor: Option<String>| async move {
+                    self.session
+                        .inventory_nodes_page(INVENTORY_PAGE_SIZE, cursor.as_deref(), cancellation)
+                        .await
+                },
+                |node| node.id,
+            )
+            .await
         };
         let robots = async {
             if view == FleetView::ComputePool {
                 return Ok((None, None));
             }
-            let result = self
-                .session
-                .inventory_robots(self.domain_id(), cancellation)
-                .await
-                .map_err(FleetError::from);
-            let (records, report) = source(FleetSource::Robots, result)?;
+            let (records, report) = inventory(
+                FleetSource::Robots,
+                |cursor: Option<String>| async move {
+                    self.session
+                        .inventory_robots_page(
+                            self.domain_id(),
+                            INVENTORY_PAGE_SIZE,
+                            cursor.as_deref(),
+                            cancellation,
+                        )
+                        .await
+                },
+                |robot| robot.id,
+            )
+            .await?;
             Ok::<_, FleetError>((records, Some(report)))
         };
         let busy = async {
@@ -417,6 +433,61 @@ impl FleetSourceReport {
         self.http_status = error.http_status();
         Ok(())
     }
+}
+
+async fn inventory<T, F, Fut>(
+    kind: FleetSource,
+    fetch: F,
+    identity: impl Fn(&T) -> Uuid,
+) -> Result<(Option<Vec<T>>, FleetSourceReport), FleetError>
+where
+    F: Fn(Option<String>) -> Fut,
+    Fut: Future<Output = Result<Option<InventoryPage<T>>, auki_auth::Error>>,
+{
+    let mut records = Vec::new();
+    let mut cursor = None;
+    let mut cursors = HashSet::new();
+    let mut ids = HashSet::new();
+    let mut previous = None;
+    let mut report = report(kind, FleetSourceState::Complete);
+    for _ in 0..MAX_INVENTORY_PAGES {
+        let page = match fetch(cursor.clone()).await {
+            Ok(Some(page)) => page,
+            Ok(None) if cursor.is_none() => return source(kind, Ok(None)),
+            Ok(None) => {
+                report.partial("unsupported_grant_profile");
+                return Ok((Some(records), report));
+            }
+            Err(error) if cursor.is_none() => return source(kind, Err(error.into())),
+            Err(error) => {
+                report.record_error(error.into())?;
+                return Ok((Some(records), report));
+            }
+        };
+        if !page.paginated {
+            report.codes.push("legacy_inventory_unpaginated".into());
+        }
+        for record in page.items {
+            let id = identity(&record);
+            if !ids.insert(id) || (page.paginated && previous.is_some_and(|prior| id <= prior)) {
+                return Err(FleetError::InvalidResponse(
+                    "duplicate or unordered inventory identity across pages",
+                ));
+            }
+            previous = Some(id);
+            records.push(record);
+        }
+        report.observed_at = Utc::now();
+        let Some(next) = page.next_cursor else {
+            return Ok((Some(records), report));
+        };
+        if !cursors.insert(next.clone()) {
+            return Err(FleetError::InvalidResponse("repeated inventory cursor"));
+        }
+        cursor = Some(next);
+    }
+    report.partial("inventory_page_limit");
+    Ok((Some(records), report))
 }
 
 fn source<T>(

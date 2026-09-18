@@ -18,6 +18,8 @@ CAPABILITY = "vendor.example/inspect/v7"
 class FleetFixture:
     def __init__(self):
         self.requests = []
+        self.paginated = False
+        self.inventory_requests = []
         self.deny_busy = False
         self.wrong_domain = False
         self.block_jobs = False
@@ -40,6 +42,25 @@ class FleetFixture:
                 except (BrokenPipeError, ConnectionResetError):
                     pass
 
+            def inventory_reply(self, url, field, record):
+                query = parse_qs(url.query)
+                fixture.inventory_requests.append((url.path, query))
+                if not fixture.paginated:
+                    return self.reply({field: [record]})
+                if query.get("limit") != ["100"]:
+                    return self.reply({}, 400)
+                cursor = query.get("cursor")
+                if cursor is None:
+                    record = dict(record)
+                    record["id"] = record["id"][:-1] + ("a" if field == "robots" else "b")
+                    next_cursor = "second"
+                elif cursor == ["second"]:
+                    next_cursor = ""
+                else:
+                    return self.reply({}, 400)
+                return self.reply({field: [record], "pagination": {
+                    "version": 1, "limit": 100, "next_cursor": next_cursor}})
+
             def handle_request(self):
                 url = urlparse(self.path)
                 self.rfile.read(int(self.headers.get("Content-Length", "0")))
@@ -58,15 +79,18 @@ class FleetFixture:
                 if self.command != "GET" or not self.headers.get("Authorization", "").startswith("Bearer "):
                     return self.reply({}, 400)
                 if url.path == f"/api/v1/domains/{DOMAIN}/robots":
-                    return self.reply({"robots": [{"id": ROBOT, "organization_id": ORG,
+                    return self.inventory_reply(url, "robots", {"id": ROBOT, "organization_id": ORG,
                         "assigned_domain_id": ORG if fixture.wrong_domain else DOMAIN,
                         "name": "inspector", "capabilities": [CAPABILITY], "status": "online",
-                        "last_seen_at": "2026-09-17T00:00:00Z", "active_lease_expires_at": None}]})
+                        "last_seen_at": "2026-09-17T00:00:00Z", "active_lease_expires_at": None})
                 if url.path == "/api/v1/nodes":
-                    if parse_qs(url.query) != {"org": ["all"], "staking_status": ["all"]}:
+                    query = parse_qs(url.query)
+                    query.pop("limit", None)
+                    query.pop("cursor", None)
+                    if query != {"org": ["all"], "staking_status": ["all"]}:
                         return self.reply({}, 400)
-                    return self.reply({"nodes": [{"id": NODE, "organization_id": ORG,
-                        "name": "compute", "capabilities": [CAPABILITY], "status": "online", "mode": "dedicated"}]})
+                    return self.inventory_reply(url, "nodes", {"id": NODE, "organization_id": ORG,
+                        "name": "compute", "capabilities": [CAPABILITY], "status": "online", "mode": "dedicated"})
                 if url.path == "/v1/jobs":
                     fixture.jobs_started.set()
                     if fixture.block_jobs:
@@ -96,4 +120,5 @@ class FleetFixture:
 
 if __name__ == "__main__":
     with FleetFixture() as services:
+        services.paginated = True
         subprocess.run([*sys.argv[1:], services.endpoint], check=True, timeout=60)

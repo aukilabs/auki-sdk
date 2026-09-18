@@ -181,6 +181,13 @@ async fn domain_inventory_and_candidate_pool_keep_different_associations() {
     let fleet = f.client();
     let domain = fleet.list(&FleetQuery::default()).await.unwrap();
     assert!(domain.complete);
+    for kind in [FleetSource::Nodes, FleetSource::Robots] {
+        assert_eq!(source(&domain, kind).state, FleetSourceState::Complete);
+        assert_eq!(
+            source(&domain, kind).codes,
+            ["legacy_inventory_unpaginated"]
+        );
+    }
     assert_eq!(domain.machines.len(), 1);
     assert_eq!(domain.machines[0].kind, FleetMachineKind::Robot);
     assert_eq!(domain.machines[0].association, FleetAssociation::Assigned);
@@ -1047,4 +1054,323 @@ async fn snapshot_deadline_cancels_slow_sources_and_allows_awaited_close() {
     tokio::time::timeout(Duration::from_secs(1), fleet.close())
         .await
         .unwrap();
+}
+
+impl Fixture {
+    async fn inventory_page(
+        &self,
+        robots: bool,
+        cursor: Option<&str>,
+        value: Value,
+        status: u16,
+    ) -> Mock<'_> {
+        self.server
+            .mock_async(|when, then| {
+                let path = if robots {
+                    format!("/api/v1/domains/{}/robots", self.domain)
+                } else {
+                    "/api/v1/nodes".into()
+                };
+                let mut when = when.method(GET).path(path).query_param("limit", "100");
+                if !robots {
+                    when = when
+                        .query_param("org", "all")
+                        .query_param("staking_status", "all");
+                }
+                if let Some(cursor) = cursor {
+                    when.query_param("cursor", cursor);
+                } else {
+                    when.query_param_missing("cursor");
+                }
+                then.status(status)
+                    .header("content-type", "application/json")
+                    .json_body(value);
+            })
+            .await
+    }
+}
+
+fn page(records: Value, robots: bool, next: &str) -> Value {
+    let mut body = json!({"pagination":{"version":1,"limit":100,"next_cursor":next}});
+    body[if robots { "robots" } else { "nodes" }] = records;
+    body
+}
+
+#[tokio::test]
+async fn paged_inventory_joins_activity_on_later_pages_and_preserves_filters() {
+    let mut f = Fixture::new(false).await;
+    f.node = Uuid::from_u128(2);
+    f.robot = Uuid::from_u128(3);
+    let mut first_node = f.node_json();
+    first_node["id"] = json!(Uuid::from_u128(1));
+    let mut second_robot = f.robot_json();
+    second_robot["id"] = json!(Uuid::from_u128(4));
+    let first = f
+        .inventory_page(
+            false,
+            None,
+            page(json!([first_node]), false, "node-next"),
+            200,
+        )
+        .await;
+    let second = f
+        .inventory_page(
+            false,
+            Some("node-next"),
+            page(json!([f.node_json()]), false, ""),
+            200,
+        )
+        .await;
+    f.inventory_page(
+        true,
+        None,
+        page(json!([f.robot_json()]), true, "robot-next"),
+        200,
+    )
+    .await;
+    f.inventory_page(
+        true,
+        Some("robot-next"),
+        page(json!([second_robot]), true, ""),
+        200,
+    )
+    .await;
+    f.activity(Some(f.node), 60).await;
+    f.busy(Some(f.node)).await;
+    let client = f.client();
+    let snapshot = client.list(&FleetQuery::default()).await.unwrap();
+    assert!(snapshot.complete);
+    assert_eq!(snapshot.machines.len(), 3);
+    assert!(snapshot.unresolved_activity.is_empty());
+    assert_eq!(
+        snapshot
+            .machines
+            .iter()
+            .find(|m| m.id == f.node)
+            .unwrap()
+            .work_state,
+        FleetWorkState::Busy
+    );
+    first.assert_calls_async(1).await;
+    second.assert_calls_async(1).await;
+    client.close().await;
+}
+
+#[tokio::test]
+async fn later_inventory_denial_retains_prior_records_and_reports_partial() {
+    let f = Fixture::new(false).await;
+    f.inventory_page(
+        false,
+        None,
+        page(json!([f.node_json()]), false, "next"),
+        200,
+    )
+    .await;
+    f.inventory_page(false, Some("next"), json!({}), 403).await;
+    f.activity(None, 0).await;
+    f.busy(None).await;
+    let client = f.client();
+    let snapshot = client
+        .compute_pool(&ComputePoolQuery {
+            mode: JobMode::Dedicated,
+            capabilities: Vec::new(),
+            match_all_capabilities: false,
+        })
+        .await
+        .unwrap();
+    assert!(!snapshot.complete);
+    assert_eq!(snapshot.machines.len(), 1);
+    let nodes = source(&snapshot, FleetSource::Nodes);
+    assert_eq!(nodes.state, FleetSourceState::Partial);
+    assert_eq!(nodes.http_status, Some(403));
+    assert!(
+        nodes
+            .codes
+            .iter()
+            .any(|code| code == "authorization_denied")
+    );
+    client.close().await;
+}
+
+#[tokio::test]
+async fn inventory_page_budget_is_partial_and_never_silently_truncated() {
+    let f = Fixture::new(false).await;
+    let mut mocks = Vec::new();
+    for index in 0..20 {
+        let mut node = f.node_json();
+        node["id"] = json!(Uuid::from_u128(index + 1));
+        let cursor = (index > 0).then(|| format!("page-{index}"));
+        mocks.push(
+            f.inventory_page(
+                false,
+                cursor.as_deref(),
+                page(json!([node]), false, &format!("page-{}", index + 1)),
+                200,
+            )
+            .await,
+        );
+    }
+    f.activity(None, 0).await;
+    f.busy(None).await;
+    let client = f.client();
+    let snapshot = client
+        .compute_pool(&ComputePoolQuery {
+            mode: JobMode::Dedicated,
+            capabilities: Vec::new(),
+            match_all_capabilities: false,
+        })
+        .await
+        .unwrap();
+    assert!(!snapshot.complete);
+    assert_eq!(snapshot.machines.len(), 20);
+    assert_eq!(
+        source(&snapshot, FleetSource::Nodes).state,
+        FleetSourceState::Partial
+    );
+    assert!(
+        source(&snapshot, FleetSource::Nodes)
+            .codes
+            .iter()
+            .any(|code| code == "inventory_page_limit")
+    );
+    for mock in mocks {
+        mock.assert_calls_async(1).await;
+    }
+    client.close().await;
+}
+
+#[tokio::test]
+async fn invalid_or_mixed_provider_inventory_pages_fail_closed() {
+    for case in [
+        "duplicate",
+        "unordered",
+        "repeated_cursor",
+        "missing_ack",
+        "wrong_limit",
+        "wrong_version",
+        "empty_continuation",
+    ] {
+        let f = Fixture::new(false).await;
+        let mut first_node = f.node_json();
+        first_node["id"] = json!(Uuid::from_u128(2));
+        let mut second_node = f.node_json();
+        second_node["id"] = json!(Uuid::from_u128(3));
+        match case {
+            "duplicate" => second_node["id"] = first_node["id"].clone(),
+            "unordered" => second_node["id"] = json!(Uuid::from_u128(1)),
+            _ => {}
+        }
+        f.inventory_page(false, None, page(json!([first_node]), false, "next"), 200)
+            .await;
+        let mut response = page(json!([second_node]), false, "");
+        match case {
+            "repeated_cursor" => response["pagination"]["next_cursor"] = json!("next"),
+            "missing_ack" => {
+                response.as_object_mut().unwrap().remove("pagination");
+            }
+            "wrong_limit" => response["pagination"]["limit"] = json!(99),
+            "wrong_version" => response["pagination"]["version"] = json!(2),
+            "empty_continuation" => {
+                response["nodes"] = json!([]);
+                response["pagination"]["next_cursor"] = json!("again");
+            }
+            _ => {}
+        }
+        f.inventory_page(false, Some("next"), response, 200).await;
+        f.activity(None, 0).await;
+        f.busy(None).await;
+        let client = f.client();
+        let error = client
+            .compute_pool(&ComputePoolQuery {
+                mode: JobMode::Dedicated,
+                capabilities: Vec::new(),
+                match_all_capabilities: false,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "invalid_response", "{case}");
+        client.close().await;
+    }
+}
+
+#[tokio::test]
+async fn inventory_page_methods_validate_inputs_and_accept_empty_final_page() {
+    let f = Fixture::new(false).await;
+    let cancel = CancellationToken::new();
+    for limit in [0, 101] {
+        assert!(
+            f.session
+                .inventory_nodes_page(limit, None, &cancel)
+                .await
+                .is_err()
+        );
+    }
+    for cursor in ["".to_string(), "a".repeat(2049)] {
+        assert!(
+            f.session
+                .inventory_nodes_page(100, Some(&cursor), &cancel)
+                .await
+                .is_err()
+        );
+    }
+    let last = f
+        .inventory_page(false, Some("last"), page(json!([]), false, ""), 200)
+        .await;
+    let response = f
+        .session
+        .inventory_nodes_page(100, Some("last"), &cancel)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(response.items.is_empty());
+    assert!(response.paginated);
+    assert!(response.next_cursor.is_none());
+    last.assert_calls_async(1).await;
+}
+
+#[tokio::test]
+async fn closing_fleet_cancels_and_drains_a_later_inventory_page() {
+    let f = Fixture::new(false).await;
+    f.inventory_page(
+        false,
+        None,
+        page(json!([f.node_json()]), false, "slow"),
+        200,
+    )
+    .await;
+    let slow = f
+        .server
+        .mock_async(|when, then| {
+            when.method(GET)
+                .path("/api/v1/nodes")
+                .query_param("cursor", "slow");
+            then.delay(Duration::from_secs(10))
+                .header("content-type", "application/json")
+                .json_body(page(json!([]), false, ""));
+        })
+        .await;
+    f.activity(None, 0).await;
+    f.busy(None).await;
+    let client = f.client();
+    let running = client.clone();
+    let task = tokio::spawn(async move {
+        running
+            .compute_pool(&ComputePoolQuery {
+                mode: JobMode::Dedicated,
+                capabilities: Vec::new(),
+                match_all_capabilities: false,
+            })
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while slow.calls_async().await == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), client.close())
+        .await
+        .unwrap();
+    assert!(matches!(task.await.unwrap(), Err(FleetError::Closed)));
 }

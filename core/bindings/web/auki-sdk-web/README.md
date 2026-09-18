@@ -129,5 +129,6 @@ Both calls accept an optional `AbortSignal`. Queries use camelCase; typed snapsh
 results use snake_case. Errors preserve `kind`, `code`, and available `status`.
 Domain members and candidates are separate; missing busy information stays
 unknown. See the [fleet reference](../../../../docs/reference/fleet.md).
-The repository's `test-support/run-domain-data-browser-tests.sh` includes two
-fleet fixtures exercising the actual WASM/Fetch path in Chromium.
+The repository's `test-support/run-domain-data-browser-tests.sh` includes four
+fleet tests through WASM/Fetch in Chromium, covering pagination and cancellation
+during continuation.

@@ -539,6 +539,14 @@ impl AukiDmsTasks {
                     .await
                 {
                     Err(TaskError::Cancelled | TaskError::Closed) => return Ok(()),
+                    // A completed task whose outcome was a failure, not a
+                    // fault in this runtime. `execute_managed` has already
+                    // sent the receipt by the time `Handler` gets here, so
+                    // there is nothing left to report and nothing to retry --
+                    // a robot that fails one job claims the next one. Every
+                    // other variant says something about the runtime's own
+                    // health and still ends the loop.
+                    Err(TaskError::Handler) => {}
                     Err(error) => return Err(error),
                     Ok(_) => {}
                 }

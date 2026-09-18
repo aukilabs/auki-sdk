@@ -38,6 +38,11 @@ User and App login accept a persistent `client_id` for the installation.
 Close data clients and peers before closing their session. For tasks, await
 `tasks.close()` before closing the machine credential.
 
+`AukiDmsTasks.run()` records a handler failure and continues claiming tasks.
+`run_once()` handles a single task and re-raises the original Python handler
+exception after sending the failure receipt. Close a continuous runner to stop
+it, then await its running operation.
+
 ### Submit and monitor jobs
 
 User, App, and imported ZITADEL sessions can create a Domain-scoped jobs client
@@ -163,6 +168,14 @@ These use local DDS, DMS, and data fixtures:
 ~~~sh
 python -m pip install -r core/bindings/python/auki-sdk-py/python_tests/requirements.txt
 python -m pytest core/bindings/python/auki-sdk-py/python_tests/test_domain_data.py core/bindings/python/auki-sdk-py/python_tests/test_jobs.py core/bindings/python/auki-sdk-py/python_tests/test_zitadel_session.py core/bindings/python/auki-sdk-py/python_tests/test_tasks.py core/bindings/python/auki-sdk-py/python_tests/test_robot_tasks.py -q
+~~~
+
+For the full suite used in CI, rebuild with default features so the protocol
+export tests can run too:
+
+~~~sh
+maturin develop --locked --manifest-path core/bindings/python/auki-sdk-py/Cargo.toml
+python -m pytest core/bindings/python/auki-sdk-py/python_tests -q
 ~~~
 
 The process-exit regression uses fresh subprocesses, synthetic unregistered

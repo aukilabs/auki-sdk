@@ -14,7 +14,7 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
   section.innerHTML = `<div class="jobs-workspace">
     <div class="jobs-toolbar"><button id="jobs-back" type="button">← Jobs</button><h1 id="jobs-heading" tabindex="-1">Jobs</h1><button id="jobs-new" class="primary" type="button">New job</button></div>
     <p id="jobs-context" class="footnote"></p>
-    <div class="jobs-worker-strip"><button id="jobs-configure" type="button">Workers</button><span id="jobs-workers" hidden></span><button id="jobs-discover" type="button" hidden>Refresh workers</button></div>
+    <div class="jobs-worker-strip"><button id="jobs-configure" type="button">Workers</button><button id="jobs-view-fleet" type="button">View in Fleet</button><span id="jobs-workers" hidden></span><button id="jobs-discover" type="button" hidden>Refresh workers</button></div>
     <p id="jobs-status" role="status" aria-live="polite"></p>
     <div id="jobs-screen"></div>
     <button id="jobs-history" type="button">Recent jobs</button>
@@ -355,6 +355,7 @@ export function jobsUI(connection: Connection, getContext: () => JobsContext | u
   new MutationObserver(() => {
     if (section.hidden) {
       stopPolling();
+      if (section.dataset?.fleetVisit === 'true') { invalidateReads(true); return; }
       const auxiliary = section.dataset?.auxiliary === 'true';
       invalidateReads(auxiliary);
       if (auxiliary) {

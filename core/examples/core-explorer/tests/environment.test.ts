@@ -51,7 +51,7 @@ test('actual main startup and settings handlers do not sign in or read services'
     document: { getElementById: node, addEventListener() {} }, window: { addEventListener() {} },
     ScreenHistory, ReadLane, endpoint, environmentLabel, setTimeout, clearTimeout,
     Connection: class { beforeClose = async () => {}; async accept(pending: Promise<unknown>) { await pending; return false; } },
-    networkingUI: () => ({}), uploadUI: () => ({}), jobsUI: () => ({}),
+    fleetScreenUI: () => ({}), networkingUI: () => ({}), uploadUI: () => ({}), jobsUI: () => ({}),
     login: async () => { logins++; },
     fetch: () => { reads++; throw new Error('Unexpected service IO'); },
   });

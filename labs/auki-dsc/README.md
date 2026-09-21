@@ -25,6 +25,10 @@ Coordinates: metres, **Y-up** (domain OBJ / OpenGL). Landmass is Z-up; conversio
 
 `restrict` min-separation is **not** bake `walkable_radius`. DSC overloaded that name — use `BakeProfile::restrict_bake()` / `dsc(0.0)` for a zero-erosion bake, then pass min-separation to `restrict`.
 
+**DSC `radius` ≠ metres.** `@recast-navigation` feeds `walkableRadius` to Recast as int voxels with no m→vx convert, so HTTP `radius: 0.05` erodes 0 cells. Against that bake, `BakeProfile::dsc(0.0)` matches on-mesh corridors bit-for-bit on a real store OBJ (Hausdorff 0). `dsc(0.05)` is the physically correct 5 cm erosion and sits ~1 cell off DSC.
+
+Extents default `(100,10,100)` already matches DSC snap. Off-mesh stub prepend in DSC `full` is API cosmetics — not chased.
+
 Downward-facing triangles are flipped before bake (matches DSC Python). Polygon winding is reversed at the landmass boundary after the Y↔Z remap.
 
 `landmass_rerecast` is Bevy-tied; v0 bridges poly-mesh → landmass by hand.

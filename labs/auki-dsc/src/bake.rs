@@ -42,8 +42,14 @@ impl BakeProfile {
         }
     }
 
-    /// DSC Deno bake: cs=0.05, ch=0.01, walkable_radius = `agent_radius`.
-    /// Use [`Self::dsc`]`(0.0)` / [`Self::restrict_bake`] for restrict-style bake (no erosion).
+    /// DSC Deno bake: cs=0.05, ch=0.01, walkable_radius = `agent_radius` (metres → voxels via ceil).
+    ///
+    /// **DSC parity trap:** `@recast-navigation` passes `walkableRadius` straight into Recast's
+    /// int voxel field with no m→vx conversion. So DSC HTTP `radius: 0.05` erodes **0** cells
+    /// (`int(0.05)==0`). For bit-matching that bake, use [`Self::dsc`]`(0.0)`. Real 5 cm erosion
+    /// is [`Self::dsc`]`(0.05)` here (1 cell at cs=0.05).
+    ///
+    /// Use [`Self::restrict_bake`] for restrict-style bake (no erosion).
     pub fn dsc(agent_radius: f32) -> Self {
         Self::dsc_defaults(agent_radius)
     }

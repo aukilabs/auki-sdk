@@ -1,17 +1,24 @@
 use auki_dsc::{BakeProfile, Extents, NavMesh, Vec3, parse_obj};
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: path_obj <file.obj>");
+    let mut args = std::env::args().skip(1);
+    let path = args.next().expect("usage: path_obj <file.obj> [radius_m]");
+    // Default 0.0 matches DSC HTTP radius:0.05 (truncated to 0 vx). Pass 0.05 for real 5cm erosion.
+    let radius: f32 = args
+        .next()
+        .map(|s| s.parse().expect("radius_m"))
+        .unwrap_or(0.0);
+
     let text = std::fs::read_to_string(&path).expect("read obj");
     let mesh = parse_obj(&text).expect("parse");
     eprintln!(
-        "mesh: {} verts, {} tris, {} groups",
+        "mesh: {} verts, {} tris, {} groups; bake radius={radius}",
         mesh.vertices.len(),
         mesh.indices.len(),
         mesh.groups.len()
     );
 
-    let nav = NavMesh::bake(&mesh, &BakeProfile::dsc(0.05)).expect("bake");
+    let nav = NavMesh::bake(&mesh, &BakeProfile::dsc(radius)).expect("bake");
     let start = Vec3::new(-9.0, 0.0, -0.5);
     let end = Vec3::new(-3.5, 0.0, 1.5);
     let extents = Extents::default();

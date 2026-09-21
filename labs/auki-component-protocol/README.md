@@ -118,3 +118,14 @@ terminal notices across multiple batches, empty ended Products, and readers
 draining before closure.
 Additional subscription tests cover idle cancellation, partial-frame waits,
 withdrawal, endpoint shutdown, and explicit initial selection.
+Network-boundary regressions replace both peers' credentials during a live
+subscription, reject mismatched authority, shut down either peer, and cut a
+real authenticated loopback TCP connection. Explicit resubscription resumes
+from the accepted source cursor and reports evicted history; reconfiguration
+requires selecting the replacement Product from the Catalog. A transport error
+closes local readers without inventing a producer failure.
+
+These are local native tests, not live DDS/DMS relay or browser acceptance.
+An idle subscription has no heartbeat: a silent partition is not guaranteed
+to fail promptly. See [network lifetime](../../docs/reference/component-protocols.md#network-lifetime-is-not-producer-lifetime)
+for host deadlines and the distinction between retaining and processing data.

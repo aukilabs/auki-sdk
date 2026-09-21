@@ -24,7 +24,7 @@ auki-p2p = { path = "../../core/auki-p2p" }
 chrono = { workspace = true }
 futures = { workspace = true, features = ["executor"] }
 jsonwebtoken = "10.4"
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 uuid = { workspace = true }
 
 [lints.rust]

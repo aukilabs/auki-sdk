@@ -155,6 +155,41 @@ cancels admitted handlers through the existing SDK registration lifecycle.
 `active_subscriptions()` exposes the handler count for diagnostics. These
 actions do not stop the source or another subscriber.
 
+### Network lifetime is not producer lifetime
+
+Keep these events separate in the host application:
+
+- **Credential replacement:** a valid `ExternalAuthorityControl::replace` for
+  the same Peer and Domain is not Component reconfiguration. It does not change
+  Product manifests or require ending a healthy subscription. Rejected authority
+  replacements do not install a different Peer or Domain.
+- **Detected connection failure or peer shutdown:** `next()` returns an error,
+  the imported Buffer closes, and subsequent calls return `None`. Previously
+  retained data remains readable. No remote `ObservationEnd` is invented:
+  the producer may still be running. The host must preserve the error if it
+  needs to explain why local readers closed.
+- **Cancellation:** cancelling one pending `next()` only cancels that wait;
+  `close()` or dropping the subscription ends the relationship. Other
+  subscribers and the producer remain independent.
+- **Reconfiguration:** the source sends its actual terminal notice. Observing
+  the replacement requires selecting its new Product reference, creating a new
+  subscription, and explicitly binding any consuming Component to that Product.
+
+After a connection failure, the host may select a working route and create a
+new subscription with `FromSequence { sequence: old.next_sequence() }`. This
+resumes from the next observation accepted into the old local Buffer, **not**
+an acknowledgement that every downstream Component processed it. If the source
+has evicted that position, the new subscription reports a `Gap`. The new import
+has separate local retention; it does not reopen or append to the closed Buffer.
+Reusing a sequence applies only to the same exact Product, not a replacement.
+
+There is no subscription-level heartbeat or idle deadline. A silent partition
+that produces no transport error can leave an idle `next()` pending; the
+60-second started-frame deadline does not cover that wait. Applications needing
+a freshness deadline must choose one explicitly and close the subscription
+when it expires. A quiet sensor and a lost connection cannot be distinguished
+from observation silence alone.
+
 ## Serving
 
 Mounting an endpoint registers all four protocols. Serving remains explicit:
@@ -240,3 +275,13 @@ Subscription tests cover push into an ordinary Component input, independent
 subscribers, cancellation mid-frame, retention retry, termination, withdrawal,
 and endpoint shutdown. Cursor tests verify wake-up and cancellation cleanup,
 shared envelopes, and slow-reader gaps.
+
+The native two-peer suite also exercises authority replacement on both peers,
+rejection of wrong-Peer/wrong-Domain updates, either peer shutting down, and a
+transparent loopback TCP proxy that is cut after authentication. It checks
+retained-tail readability after transport loss, explicit resubscription with
+an eviction gap, and Catalog selection of a replacement after reconfiguration.
+These tests use fixture-signed credentials and no shared services. They do not
+prove browser behavior, silent-partition detection, or the combined live
+DDS/DMS relay-renewal path. Core relay tests provide separate lower-layer
+coverage; neither set substitutes for an authorized deployment test.

@@ -17,7 +17,8 @@ use auki_p2p::{
     P2P_TOKEN_AUDIENCE, P2P_TOKEN_ISSUER, P2P_TOKEN_SCOPE, P2P_TOKEN_TYPE, P2PAccessClaims,
 };
 use auki_sdk::{
-    AukiPeer, AukiPeerConfig, DdsVerificationKeys, ExternalAuthorityUpdate, Identity, Multiaddr,
+    AukiPeer, AukiPeerConfig, DdsVerificationKeys, ExternalAuthorityControl,
+    ExternalAuthorityReplaceOutcome, ExternalAuthorityUpdate, Identity, Multiaddr,
     SignedP2pCredential,
 };
 use chrono::{TimeZone, Utc};
@@ -36,16 +37,28 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
 -----END PUBLIC KEY-----"#;
 
 fn authority(identity: &Identity, domain_id: Uuid) -> ExternalAuthorityUpdate {
-    let issued_at = SystemTime::now()
+    authority_at(identity, domain_id, Uuid::new_v4(), unix_now() - 60)
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
-        .as_secs();
+        .as_secs()
+}
+
+fn authority_at(
+    identity: &Identity,
+    domain_id: Uuid,
+    subject: Uuid,
+    issued_at: u64,
+) -> ExternalAuthorityUpdate {
     let expires_at = issued_at + 30 * 60;
     let claims = P2PAccessClaims {
         token_type: P2P_TOKEN_TYPE.to_owned(),
         iss: P2P_TOKEN_ISSUER.to_owned(),
         aud: vec![P2P_TOKEN_AUDIENCE.to_owned()],
-        sub: Uuid::new_v4().to_string(),
+        sub: subject.to_string(),
         organization_id: None,
         peer_type: Some("test".to_owned()),
         peer_id: identity.peer_id().to_string(),
@@ -410,6 +423,14 @@ async fn catalog_products_and_operables_cross_two_authenticated_peers() {
 struct TwoPeerFixture {
     server: AukiPeer,
     client_peer: AukiPeer,
+    domain: Uuid,
+    server_identity: Identity,
+    client_identity: Identity,
+    server_subject: Uuid,
+    client_subject: Uuid,
+    server_authority: ExternalAuthorityControl,
+    client_authority: ExternalAuthorityControl,
+    runtime: ComponentRuntime,
     endpoint: ComponentProtocolEndpoint,
     client: ComponentProtocolClient,
     route: Multiaddr,
@@ -427,16 +448,21 @@ impl TwoPeerFixture {
         let domain = Uuid::new_v4();
         let server_id = Identity::generate();
         let client_id = Identity::generate();
-        let (server, _) = AukiPeer::start_external(
+        let server_subject = Uuid::new_v4();
+        let client_subject = Uuid::new_v4();
+        // Leave room for a genuinely newer credential without sleeping or
+        // issuing future-dated claims. Each peer keeps its authenticated subject.
+        let issued_at = unix_now() - 60;
+        let (server, server_authority) = AukiPeer::start_external(
             server_id.clone(),
-            authority(&server_id, domain),
+            authority_at(&server_id, domain, server_subject, issued_at),
             direct_config(),
         )
         .await
         .unwrap();
-        let (client_peer, _) = AukiPeer::start_external(
+        let (client_peer, client_authority) = AukiPeer::start_external(
             client_id.clone(),
-            authority(&client_id, domain),
+            authority_at(&client_id, domain, client_subject, issued_at),
             direct_config(),
         )
         .await
@@ -461,12 +487,21 @@ impl TwoPeerFixture {
         if publish_initial {
             output.publish(10, Arc::new(12.5)).unwrap();
         }
-        let endpoint = ComponentProtocolEndpoint::mount(server.protocols(), runtime).unwrap();
+        let endpoint =
+            ComponentProtocolEndpoint::mount(server.protocols(), runtime.clone()).unwrap();
         endpoint.export_product(&capture.product()).unwrap();
         let client = ComponentProtocolClient::new(client_peer.protocols());
         Self {
             server,
             client_peer,
+            domain,
+            server_identity: server_id,
+            client_identity: client_id,
+            server_subject,
+            client_subject,
+            server_authority,
+            client_authority,
+            runtime,
             endpoint,
             client,
             route,
@@ -528,6 +563,310 @@ async fn wait_for_subscriptions(endpoint: &ComponentProtocolEndpoint, count: usi
     })
     .await
     .expect("subscription handler cleanup timed out");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn credential_replacement_preserves_active_subscription_and_accepts_new_subscribers() {
+    let fixture = TwoPeerFixture::new().await;
+    let mut subscription = fixture.subscribe(ObservationStart::LatestExisting).await;
+    let reference = subscription.product().reference();
+    assert!(matches!(
+        subscription_event(&mut subscription).await,
+        RemoteObservationEvent::Observation(value) if value.sequence == 0
+    ));
+
+    // Replace both authorities while the relationship is idle, not a Component
+    // contract. This must not end or rebind the Product subscription.
+    let renewed_at = unix_now();
+    for (control, identity, subject) in [
+        (
+            &fixture.server_authority,
+            &fixture.server_identity,
+            fixture.server_subject,
+        ),
+        (
+            &fixture.client_authority,
+            &fixture.client_identity,
+            fixture.client_subject,
+        ),
+    ] {
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(3),
+            control.replace(authority_at(identity, fixture.domain, subject, renewed_at)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            ExternalAuthorityReplaceOutcome::Replaced { .. }
+        ));
+    }
+    fixture.output.publish(20, Arc::new(18.0)).unwrap();
+    assert!(matches!(
+        subscription_event(&mut subscription).await,
+        RemoteObservationEvent::Observation(value) if value.sequence == 1
+    ));
+    assert_eq!(subscription.product().reference(), reference);
+    assert!(subscription.end_notice().is_none());
+    assert!(!subscription.is_closed());
+
+    // A new stream must authenticate using the replacement credentials too.
+    let mut second = fixture.subscribe(ObservationStart::NewOnly).await;
+    wait_for_subscriptions(&fixture.endpoint, 2).await;
+    let renewed_expiry = Utc.timestamp_opt((renewed_at + 30 * 60) as i64, 0).unwrap();
+    for (observer, remote_id) in [
+        (&fixture.server, fixture.client_peer.peer_id()),
+        (&fixture.client_peer, fixture.server.peer_id()),
+    ] {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !observer
+                .known_peers()
+                .snapshot()
+                .peers()
+                .iter()
+                .any(|peer| {
+                    peer.peer_id() == remote_id && peer.authenticated_until() == renewed_expiry
+                })
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("new stream did not authenticate the replacement credential");
+    }
+    fixture.output.publish(30, Arc::new(24.0)).unwrap();
+    for reader in [&mut subscription, &mut second] {
+        assert!(matches!(
+            subscription_event(reader).await,
+            RemoteObservationEvent::Observation(value) if value.sequence == 2
+        ));
+    }
+    subscription.close().await.unwrap();
+    wait_for_subscriptions(&fixture.endpoint, 1).await;
+    fixture.output.publish(40, Arc::new(30.0)).unwrap();
+    assert!(matches!(
+        subscription_event(&mut second).await,
+        RemoteObservationEvent::Observation(value) if value.sequence == 3
+    ));
+    second.close().await.unwrap();
+    wait_for_subscriptions(&fixture.endpoint, 0).await;
+    fixture.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn invalid_authority_replacement_does_not_rebind_or_disrupt_the_subscription() {
+    let fixture = TwoPeerFixture::new().await;
+    let mut subscription = fixture.subscribe(ObservationStart::NewOnly).await;
+    let reference = subscription.product().reference();
+    // Validly signed test credentials, but for a different Domain or Peer.
+    let wrong_domain = authority(&fixture.server_identity, Uuid::new_v4());
+    let wrong_peer = authority(&Identity::generate(), fixture.domain);
+    for invalid in [wrong_domain, wrong_peer] {
+        assert!(
+            tokio::time::timeout(
+                Duration::from_secs(3),
+                fixture.server_authority.replace(invalid),
+            )
+            .await
+            .unwrap()
+            .is_err()
+        );
+    }
+    fixture.output.publish(20, Arc::new(18.0)).unwrap();
+    assert!(matches!(
+        subscription_event(&mut subscription).await,
+        RemoteObservationEvent::Observation(value) if value.sequence == 1
+    ));
+    assert_eq!(subscription.product().reference(), reference);
+    assert!(subscription.end_notice().is_none());
+    let mut second = fixture.subscribe(ObservationStart::LatestExisting).await;
+    assert!(matches!(
+        subscription_event(&mut second).await,
+        RemoteObservationEvent::Observation(value) if value.sequence == 1
+    ));
+    subscription.close().await.unwrap();
+    second.close().await.unwrap();
+    fixture.shutdown().await;
+}
+
+/// Transparent loopback TCP forwarding: the SDK still performs its real
+/// encrypted transport and signed peer handshake. Dropping the sockets injects
+/// a network loss without unexporting a Product or ending its producer.
+struct CuttableConnection {
+    route: Multiaddr,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl CuttableConnection {
+    async fn start(target: &Multiaddr) -> Self {
+        let target_port: u16 = target
+            .to_string()
+            .strip_prefix("/ip4/127.0.0.1/tcp/")
+            .expect("fixture must use loopback TCP")
+            .parse()
+            .unwrap();
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let route = format!(
+            "/ip4/127.0.0.1/tcp/{}",
+            listener.local_addr().unwrap().port()
+        )
+        .parse()
+        .unwrap();
+        let task = tokio::spawn(async move {
+            let (mut incoming, _) = listener.accept().await.unwrap();
+            drop(listener); // One connection only; no hidden reconnection path.
+            let mut outgoing =
+                tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, target_port))
+                    .await
+                    .unwrap();
+            let _ = tokio::io::copy_bidirectional(&mut incoming, &mut outgoing).await;
+        });
+        Self { route, task }
+    }
+
+    async fn cut(&mut self) {
+        self.task.abort();
+        let result = tokio::time::timeout(Duration::from_secs(3), &mut self.task)
+            .await
+            .expect("TCP forwarding did not stop");
+        assert!(result.is_err_and(|error| error.is_cancelled()));
+    }
+}
+
+impl Drop for CuttableConnection {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn connection_loss_requires_explicit_resubscription_and_reports_evicted_history() {
+    let fixture = TwoPeerFixture::new().await;
+    let mut connection = CuttableConnection::start(&fixture.route).await;
+    let mut subscription = fixture
+        .client
+        .subscribe_product_exact::<f64>(
+            fixture.server.peer_id(),
+            connection.route.clone(),
+            fixture.capture.product().reference(),
+            ObservationStart::LatestExisting,
+            BufferLimits::entries(16),
+            |_| 8,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        subscription_event(&mut subscription).await,
+        RemoteObservationEvent::Observation(value) if value.sequence == 0
+    ));
+    let old_product = subscription.product().clone();
+    let mut old_reader = old_product.buffer().subscribe(CursorStart::FromSequence(0));
+
+    connection.cut().await;
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(3), subscription.next())
+            .await
+            .unwrap(),
+        Err(ComponentProtocolError::Wire(_))
+    ));
+    assert!(subscription.is_closed());
+    assert!(
+        subscription.end_notice().is_none(),
+        "network loss is not a producer end"
+    );
+    assert_eq!(subscription.next_sequence(), 1);
+    wait_for_subscriptions(&fixture.endpoint, 0).await;
+    assert!(matches!(
+        old_reader.next_timeout(Duration::ZERO),
+        auki_components::CursorRead::Item(_)
+    ));
+    assert!(matches!(
+        old_reader.next_timeout(Duration::ZERO),
+        auki_components::CursorRead::Closed
+    ));
+
+    // Capture continues while disconnected and evicts the missing prefix.
+    for sequence in 1..=12 {
+        fixture
+            .output
+            .publish(10 + sequence, Arc::new(sequence as f64))
+            .unwrap();
+    }
+    assert!(fixture.capture.end_notice().is_none());
+    assert!(subscription.next().await.unwrap().is_none());
+    assert_eq!(old_product.buffer().range().entries, 1);
+
+    // The host deliberately selects a working route and resumes from its last
+    // accepted source sequence. This creates a new local Buffer, not a silent
+    // reconnection or splice into the closed imported Product.
+    let mut resumed = fixture
+        .subscribe(ObservationStart::FromSequence {
+            sequence: subscription.next_sequence(),
+        })
+        .await;
+    assert!(matches!(
+        subscription_event(&mut resumed).await,
+        RemoteObservationEvent::Gap(auki_component_protocol::SourceGap {
+            requested_sequence: 1,
+            available_from: 5,
+        })
+    ));
+    for expected in 5..=12 {
+        assert!(matches!(
+            subscription_event(&mut resumed).await,
+            RemoteObservationEvent::Observation(value) if value.sequence == expected
+        ));
+    }
+    assert_eq!(resumed.product().reference(), old_product.reference());
+    assert_eq!(resumed.product().buffer().range().entries, 8);
+    assert_eq!(old_product.buffer().range().entries, 1);
+    assert_eq!(resumed.next_sequence(), 13);
+    resumed.close().await.unwrap();
+    fixture.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn either_peer_shutdown_ends_idle_subscription_without_a_fictitious_source_notice() {
+    for shutdown_server in [true, false] {
+        let fixture = TwoPeerFixture::new().await;
+        let mut subscription = fixture.subscribe(ObservationStart::NewOnly).await;
+        let mut reader = subscription
+            .product()
+            .buffer()
+            .subscribe(CursorStart::Latest);
+        let (stopped, remaining) = if shutdown_server {
+            (fixture.server, fixture.client_peer)
+        } else {
+            (fixture.client_peer, fixture.server)
+        };
+        // Deliberately test peer-owned cleanup without closing the endpoint
+        // first (normal host shutdown still closes endpoints before the peer).
+        tokio::time::timeout(Duration::from_secs(3), stopped.shutdown())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), subscription.next())
+                .await
+                .unwrap()
+                .is_err()
+        );
+        assert!(subscription.is_closed());
+        assert!(subscription.end_notice().is_none());
+        assert!(matches!(
+            reader.next_timeout(Duration::ZERO),
+            auki_components::CursorRead::Closed
+        ));
+        assert!(subscription.next().await.unwrap().is_none());
+        wait_for_subscriptions(&fixture.endpoint, 0).await;
+        fixture.output.publish(20, Arc::new(18.0)).unwrap();
+        assert!(fixture.capture.end_notice().is_none());
+        fixture.endpoint.close().await.unwrap();
+        remaining.shutdown().await.unwrap();
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -601,6 +940,19 @@ async fn subscription_pushes_new_data_after_cancelled_wait_and_ends_without_migr
             30,
         )
         .unwrap();
+    let replacement_capture = fixture
+        .runtime
+        .capture_buffer(
+            "replacement-history",
+            &transition.replacement,
+            BufferLimits::entries(8),
+            |_| 8,
+        )
+        .unwrap();
+    fixture
+        .endpoint
+        .export_product(&replacement_capture.product())
+        .unwrap();
     transition.replacement.publish(40, Arc::new(99.0)).unwrap();
     let RemoteObservationEvent::Closed(Some(end)) = subscription_event(&mut subscription).await
     else {
@@ -616,6 +968,48 @@ async fn subscription_pushes_new_data_after_cancelled_wait_and_ends_without_migr
     ));
     assert!(subscription.next().await.unwrap().is_none());
     wait_for_subscriptions(&fixture.endpoint, 0).await;
+
+    // Reconfiguration requires inspecting the Catalog and deliberately selecting
+    // the replacement Product. The old handle and local input stay ended.
+    let CatalogResponse::Snapshot { snapshot } = fixture
+        .client
+        .catalog_exact(fixture.server.peer_id(), fixture.route.clone(), None)
+        .await
+        .unwrap()
+    else {
+        panic!("missing Catalog snapshot");
+    };
+    let replacement_reference = replacement_capture.product().reference();
+    let advertised = snapshot
+        .products
+        .iter()
+        .find(|entry| entry.manifest.product_id == replacement_reference.product_id)
+        .expect("replacement Product must be advertised");
+    assert_eq!(
+        advertised.manifest_hash,
+        replacement_reference.manifest_hash
+    );
+    assert_ne!(replacement_reference, product_reference);
+    let mut replacement_subscription = fixture
+        .client
+        .subscribe_product_exact::<f64>(
+            fixture.server.peer_id(),
+            fixture.route.clone(),
+            replacement_reference,
+            ObservationStart::FromSequence { sequence: 0 },
+            BufferLimits::entries(8),
+            |_| 8,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        subscription_event(&mut replacement_subscription).await,
+        RemoteObservationEvent::Observation(value)
+            if value.output == *transition.replacement.reference() && *value.payload == 99.0
+    ));
+    assert!(subscription.next().await.unwrap().is_none());
+    assert_eq!(subscription.product().buffer().range().entries, 1);
+    replacement_subscription.close().await.unwrap();
     fixture.shutdown().await;
 }
 

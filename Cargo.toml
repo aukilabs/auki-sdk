@@ -23,6 +23,7 @@ members = [
 
     # Experimental crates; application protocols remain optional.
     "labs/auki-datatypes",
+    "labs/auki-dsc",
     "labs/auki-geometry",
     "labs/auki-hash",
     "labs/auki-identity",

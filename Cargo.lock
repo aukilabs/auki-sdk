@@ -484,6 +484,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-dsc-py"
+version = "0.0.0"
+dependencies = [
+ "auki-dsc",
+ "pyo3",
+]
+
+[[package]]
 name = "auki-fleet"
 version = "0.1.0"
 dependencies = [

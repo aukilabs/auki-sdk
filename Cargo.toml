@@ -22,6 +22,8 @@ members = [
     "core/examples/portable-echo/web",
 
     # Experimental crates; application protocols remain optional.
+    "labs/auki-components",
+    "labs/auki-component-protocol",
     "labs/auki-datatypes",
     "labs/auki-geometry",
     "labs/auki-hash",
@@ -41,6 +43,7 @@ members = [
     "labs/auki-urdf-fk",
 
     # Experimental bindings and examples.
+    "labs/examples/volume-monitor",
     "labs/bindings/python/auki-geometry-py",
     "labs/bindings/python/auki-identity-py",
     "labs/bindings/python/auki-layout-py",

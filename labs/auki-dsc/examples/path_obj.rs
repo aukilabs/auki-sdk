@@ -3,11 +3,11 @@ use auki_dsc::{BakeProfile, Extents, NavMesh, Vec3, parse_obj};
 fn main() {
     let mut args = std::env::args().skip(1);
     let path = args.next().expect("usage: path_obj <file.obj> [radius_m]");
-    // Default 0.0 matches DSC HTTP radius:0.05 (truncated to 0 vx). Pass 0.05 for real 5cm erosion.
+    // metres → voxels. Default 0.05 (1 cell at cs=0.05). Pass 0.0 only to bit-match legacy DSC.
     let radius: f32 = args
         .next()
         .map(|s| s.parse().expect("radius_m"))
-        .unwrap_or(0.0);
+        .unwrap_or(0.05);
 
     let text = std::fs::read_to_string(&path).expect("read obj");
     let mesh = parse_obj(&text).expect("parse");

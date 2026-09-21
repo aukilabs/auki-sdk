@@ -474,6 +474,7 @@ dependencies = [
 name = "auki-dsc"
 version = "0.0.0"
 dependencies = [
+ "getrandom 0.3.4",
  "glam 0.32.1",
  "image",
  "landmass",
@@ -489,6 +490,18 @@ version = "0.0.0"
 dependencies = [
  "auki-dsc",
  "pyo3",
+]
+
+[[package]]
+name = "auki-dsc-web"
+version = "0.0.0"
+dependencies = [
+ "auki-dsc",
+ "getrandom 0.3.4",
+ "js-sys",
+ "serde",
+ "serde-wasm-bindgen",
+ "wasm-bindgen",
 ]
 
 [[package]]

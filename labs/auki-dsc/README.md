@@ -23,9 +23,9 @@ OcclusionMesh::from_mesh
 
 Coordinates: metres, **Y-up** (domain OBJ / OpenGL). Landmass is Z-up; conversion is only at the bake/query boundary inside this crate. No silent frame convert on the public API.
 
-`restrict` min-separation is **not** bake `walkable_radius`. DSC overloaded that name — use `BakeProfile::restrict_bake()` / `dsc(0.0)` for a zero-erosion bake, then pass min-separation to `restrict`.
+`BakeProfile::dsc(radius)` takes **metres** and converts to voxels (`ceil(m / cs)`). That is intentional — legacy DSC HTTP / `@recast-navigation` passed the float straight into Recast's int field (`int(0.05)==0`), which was a bug. Use `dsc(0.0)` / `restrict_bake()` only when you need to bit-match that broken bake; otherwise pass real metres (`0.05`, `0.4`, …).
 
-**DSC `radius` ≠ metres.** `@recast-navigation` feeds `walkableRadius` to Recast as int voxels with no m→vx convert, so HTTP `radius: 0.05` erodes 0 cells. Against that bake, `BakeProfile::dsc(0.0)` matches on-mesh corridors bit-for-bit on a real store OBJ (Hausdorff 0). `dsc(0.05)` is the physically correct 5 cm erosion and sits ~1 cell off DSC.
+`restrict` min-separation is **not** bake `walkable_radius`. DSC overloaded that name — zero-erosion bake, then pass min-separation to `restrict`.
 
 Extents default `(100,10,100)` already matches DSC snap. Off-mesh stub prepend in DSC `full` is API cosmetics — not chased.
 

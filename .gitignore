@@ -12,3 +12,4 @@ __pycache__/
 *.pyc
 /.venv/
 .env
+labs/bindings/web/auki-dsc-web/pkg/

@@ -46,7 +46,7 @@ fn golden_findpath_measurement() {
     let golden: GoldenPath = serde_json::from_str(&json).unwrap();
 
     let mesh = auki_dsc::parse_obj(&obj).unwrap();
-    // DSC HTTP radius:0.05 → 0 voxel erosion (see BakeProfile::dsc docs).
+    // Bit-match legacy DSC HTTP (radius:0.05 truncated to 0 vx). Prefer dsc(0.05) for real metres.
     let nav = auki_dsc::NavMesh::bake(&mesh, &auki_dsc::BakeProfile::dsc(0.0)).unwrap();
 
     let wps: Vec<_> = golden

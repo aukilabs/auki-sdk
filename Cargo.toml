@@ -43,6 +43,7 @@ members = [
 
     # Experimental bindings and examples.
     "labs/bindings/python/auki-dsc-py",
+    "labs/bindings/web/auki-dsc-web",
     "labs/bindings/python/auki-geometry-py",
     "labs/bindings/python/auki-identity-py",
     "labs/bindings/python/auki-layout-py",

@@ -103,6 +103,11 @@ dial is the authority check.
 
 ## Verification
 
+For a runnable app using this path, see the
+[two-peer volume monitor](../examples/volume-monitor/README.md). Its default
+mode uses synthetic audio and authenticated loopback peers; microphone capture
+is an explicit optional feature. It does not contact shared services.
+
 ```sh
 cargo test -p auki-component-protocol
 cargo clippy -p auki-component-protocol --all-targets --no-deps -- -D warnings

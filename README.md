@@ -23,6 +23,7 @@ Echo example. For Python, Web, Swift, or Expo, see
 | Run compute or robot handlers | [Run tasks](docs/how-to/run-compute-tasks.md) |
 | Use discovery or connect to a known address | [Connect to a peer](docs/how-to/connect.md) |
 | Compose typed Components and share retained Products | [Experimental Component protocols](docs/reference/component-protocols.md) |
+| Try typed audio and volume subscriptions without credentials | [Local two-peer volume monitor](labs/examples/volume-monitor/README.md) |
 | Exchange my own messages | [Use a custom protocol](docs/how-to/protocols.md) |
 | Keep a Peer ID and stop cleanly | [Manage a peer](docs/how-to/lifecycle.md) |
 | Understand peers, Domains, and task handling | [How networking works](docs/explanation/networking.md) |

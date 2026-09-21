@@ -43,6 +43,7 @@ members = [
     "labs/auki-urdf-fk",
 
     # Experimental bindings and examples.
+    "labs/examples/volume-monitor",
     "labs/bindings/python/auki-geometry-py",
     "labs/bindings/python/auki-identity-py",
     "labs/bindings/python/auki-layout-py",

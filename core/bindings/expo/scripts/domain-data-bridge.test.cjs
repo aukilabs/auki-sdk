@@ -48,6 +48,19 @@ async function main() {
   assert.equal(page.total, 27);
   assert.deepEqual(capturedQuery.query, { limit: 10, offset: 20 });
 
+  bridge.domainsForPortalPage = async (session, portal, organization, limit, cursor, operation) => {
+    assert.deepEqual([session, portal, organization, limit, cursor], ["session", "ABC12345678", "own", 1, "next"]);
+    assert.ok(operation);
+    return { items: [], next_cursor: null, paginated: true };
+  };
+  assert.equal((await domains("session").forPortalPage("ABC12345678", 1, "next")).paginated, true);
+  bridge.domainsPortalsPage = async (session, domain, limit, cursor, operation) => {
+    assert.deepEqual([session, domain, limit, cursor], ["session", metadata.domain_id, 1, null]);
+    assert.ok(operation);
+    return { items: [], next_cursor: null, paginated: true };
+  };
+  assert.equal((await domains("session").portalsPage(metadata.domain_id, 1)).paginated, true);
+
   let cancelledOperation;
   let rejectDomainList;
   bridge.domainsList = (_session, _query, operation) => {

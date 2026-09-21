@@ -322,38 +322,46 @@ async fn concurrent_exact_route_opens_single_flight_one_circuit() {
     let route = snapshot.publishable_route().unwrap().clone();
     let target_peer_id = target.peer_id();
     let source_peer_id = source.peer_id();
-    let protocol = ApplicationProtocol::new("/auki-p2p/single-flight-circuit/1").unwrap();
+    let protocols = [
+        ApplicationProtocol::new("/auki-p2p/single-flight-circuit/a/1").unwrap(),
+        ApplicationProtocol::new("/auki-p2p/single-flight-circuit/b/1").unwrap(),
+    ];
     let requirements = SessionRequirements::new(&domain_id)
         .unwrap()
         .with_expected_remote_peer_id(target_peer_id);
 
-    let mut incoming = target
-        .accept(
-            protocol.clone(),
-            SessionRequirements::new(&domain_id).unwrap(),
-        )
-        .unwrap();
-    let application_server = tokio::spawn(async move {
-        while let Some(result) = incoming.accept().await {
-            let mut stream = result.unwrap();
+    // libp2p-stream may drop simultaneous arrivals for one protocol when its
+    // bounded accept queue is full. Each protocol gets its own acceptor here
+    // so both opens can race for the same circuit without testing queue overload.
+    let mut application_servers = Vec::new();
+    for protocol in &protocols {
+        let mut incoming = target
+            .accept(
+                protocol.clone(),
+                SessionRequirements::new(&domain_id).unwrap(),
+            )
+            .unwrap();
+        application_servers.push(tokio::spawn(async move {
+            let mut stream = incoming.accept().await.unwrap().unwrap();
             assert_eq!(stream.remote_peer().peer_id, source_peer_id);
-            tokio::spawn(async move {
-                loop {
-                    let mut request = [0_u8; 1];
-                    if stream.read_exact(&mut request).await.is_err() {
-                        break;
-                    }
-                    stream.write_all(&request).await.unwrap();
-                    stream.flush().await.unwrap();
+            loop {
+                let mut request = [0_u8; 1];
+                if stream.read_exact(&mut request).await.is_err() {
+                    break;
                 }
-            });
-        }
-    });
+                if stream.write_all(&request).await.is_err() {
+                    break;
+                }
+                if stream.flush().await.is_err() {
+                    break;
+                }
+            }
+        }));
+    }
 
-    let open = |marker: u8| {
+    let open = |protocol: ApplicationProtocol, marker: u8| {
         let source = source.clone();
         let route = route.clone();
-        let protocol = protocol.clone();
         let requirements = requirements.clone();
         async move {
             let mut stream = must_succeed(source.open_exact_route(
@@ -368,11 +376,17 @@ async fn concurrent_exact_route_opens_single_flight_one_circuit() {
             let mut response = [0_u8; 1];
             stream.read_exact(&mut response).await.unwrap();
             assert_eq!(response, [marker]);
-            must_succeed(stream.close()).await;
+            stream
         }
     };
 
-    timeout(async { tokio::join!(open(b'A'), open(b'B')) }).await;
+    // Starting both futures does not guarantee their route ownership overlaps:
+    // the faster request could finish and release the last hop owner while the
+    // slower request is still opening. Retain both streams through the check.
+    let [first_protocol, second_protocol] = protocols;
+    let (first, mut second) =
+        timeout(async { tokio::join!(open(first_protocol, b'A'), open(second_protocol, b'B')) })
+            .await;
     assert_circuit(
         timeout(relay.circuits.recv()).await.unwrap(),
         source_peer_id,
@@ -385,11 +399,20 @@ async fn concurrent_exact_route_opens_single_flight_one_circuit() {
         "concurrent exact-route opens dialed a second circuit hop"
     );
 
+    must_succeed(first.close()).await;
+    second.write_all(b"C").await.unwrap();
+    second.flush().await.unwrap();
+    let mut response = [0_u8; 1];
+    must_succeed(second.read_exact(&mut response)).await;
+    assert_eq!(response, [b'C']);
+    must_succeed(second.close()).await;
+
+    for server in application_servers {
+        must_succeed(server).await;
+    }
     must_succeed(target.cancel_relay_reservation(reservation)).await;
     must_succeed(source.shutdown()).await;
     must_succeed(target.shutdown()).await;
-    application_server.abort();
-    let _ = application_server.await;
     relay.shutdown().await;
 }
 
@@ -999,6 +1022,74 @@ async fn an_established_circuit_may_open_after_its_connect_admission_expires() {
     let mut response = [0; 1];
     stream.read_exact(&mut response).await.unwrap();
     assert_eq!(response, *b"x");
+    must_succeed(server).await;
+
+    must_succeed(source.close_relay_route(&route_handle)).await;
+    must_succeed(target.cancel_relay_reservation(reservation)).await;
+    must_succeed(source.shutdown()).await;
+    must_succeed(target.shutdown()).await;
+    relay.shutdown().await;
+}
+
+/// An established circuit must keep carrying after `install_current_token`
+/// (the same TokenStore path as host `replace()`). New dials are not required
+/// for this survival check. DMS is not in this crate: the booking client still
+/// requires renew to return the same `booking_id`, takes `authority_expires_at`
+/// from the snapshot, and treats `StaleRequesterPrincipal` as a valid Renew 409.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_established_circuit_keeps_carrying_after_listener_credential_rotation() {
+    let dns = TestDns::start();
+    let mut relay = RelayHarness::start("credential-rotate").await;
+    let domain_id = Uuid::new_v4().to_string();
+    let target = node(&dns);
+    install_current_token(&target, PeerRole::Robot, vec![domain_id.clone()]).await;
+    let source = node(&dns);
+    install_current_token(&source, PeerRole::Compute, vec![domain_id.clone()]).await;
+
+    let reservation = must_succeed(target.start_relay_reservation(relay.provider())).await;
+    let snapshot = must_succeed(target.wait_relay_reservation(reservation)).await;
+    let route = snapshot.publishable_route().unwrap().clone();
+    let target_peer_id = target.peer_id();
+    let source_peer_id = source.peer_id();
+    let requirements = SessionRequirements::new(&domain_id)
+        .unwrap()
+        .with_expected_remote_peer_id(target_peer_id);
+    let protocol = ApplicationProtocol::new("/auki-p2p/credential-rotate/1").unwrap();
+    let mut incoming = target
+        .accept(
+            protocol.clone(),
+            SessionRequirements::new(&domain_id).unwrap(),
+        )
+        .unwrap();
+    let server = tokio::spawn(async move {
+        let mut stream = incoming.accept().await.unwrap().unwrap();
+        assert_eq!(stream.remote_peer().peer_id, source_peer_id);
+        for expected in [b'A', b'B'] {
+            let mut byte = [0; 1];
+            stream.read_exact(&mut byte).await.unwrap();
+            assert_eq!(byte, [expected]);
+            stream.write_all(&byte).await.unwrap();
+            stream.flush().await.unwrap();
+        }
+    });
+
+    let route_handle = must_succeed(source.connect_relayed(route, &requirements)).await;
+    let _ = timeout(relay.admissions.recv()).await.unwrap();
+    let _ = timeout(relay.circuits.recv()).await.unwrap();
+    let mut stream = must_succeed(source.open_relayed(&route_handle, protocol, requirements)).await;
+    stream.write_all(b"A").await.unwrap();
+    stream.flush().await.unwrap();
+    let mut response = [0; 1];
+    stream.read_exact(&mut response).await.unwrap();
+    assert_eq!(response, *b"A");
+
+    install_current_token(&target, PeerRole::Robot, vec![domain_id.clone()]).await;
+    install_current_token(&source, PeerRole::Compute, vec![domain_id.clone()]).await;
+
+    stream.write_all(b"B").await.unwrap();
+    stream.flush().await.unwrap();
+    stream.read_exact(&mut response).await.unwrap();
+    assert_eq!(response, *b"B");
     must_succeed(server).await;
 
     must_succeed(source.close_relay_route(&route_handle)).await;

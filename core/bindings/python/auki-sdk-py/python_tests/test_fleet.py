@@ -82,3 +82,29 @@ def test_cancellation_and_close_drain_the_real_extension():
 
     with fixture.FleetFixture() as services:
         asyncio.run(scenario(services))
+
+
+def test_server_pages_are_collected_by_the_python_binding():
+    async def scenario(services):
+        session = await login(services)
+        fleet = session.fleet(fixture.DOMAIN)
+        try:
+            inventory = await fleet.list()
+            assert inventory["complete"]
+            assert {m["id"] for m in inventory["machines"]} == {
+                fixture.ROBOT, fixture.ROBOT[:-1] + "a"}
+            pool = await fleet.compute_pool(mode="dedicated")
+            assert pool["complete"]
+            assert {m["id"] for m in pool["machines"]} == {
+                fixture.NODE, fixture.NODE[:-1] + "b"}
+            assert any(path.endswith("/robots") and q.get("cursor") == ["second"]
+                       for path, q in services.inventory_requests)
+            assert any(path.endswith("/nodes") and q.get("cursor") == ["second"]
+                       for path, q in services.inventory_requests)
+        finally:
+            await fleet.close()
+            await session.close()
+
+    with fixture.FleetFixture() as services:
+        services.paginated = True
+        asyncio.run(scenario(services))

@@ -181,6 +181,19 @@ impl From<DomainSummary> for AukiDomainSummary {
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
+pub struct AukiPortalPage {
+    pub items: Vec<AukiPortal>,
+    pub next_cursor: Option<String>,
+    pub paginated: bool,
+}
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct AukiPortalDomainPage {
+    pub items: Vec<AukiPortalDomain>,
+    pub next_cursor: Option<String>,
+    pub paginated: bool,
+}
+
+#[derive(Clone, Debug, uniffi::Record)]
 pub struct AukiDomainPage {
     pub domains: Vec<AukiDomainSummary>,
     pub total: u64,
@@ -394,6 +407,57 @@ pub struct AukiDomains {
 
 #[uniffi::export(async_runtime = "tokio")]
 impl AukiDomains {
+    #[uniffi::method(default(cursor = None, organization = None, cancellation = None))]
+    pub async fn for_portal_page(
+        &self,
+        portal: String,
+        limit: u32,
+        cursor: Option<String>,
+        organization: Option<String>,
+        cancellation: Option<Arc<AukiCancellation>>,
+    ) -> Result<AukiPortalDomainPage, AukiSdkError> {
+        let page = self
+            .inner
+            .for_portal_page(
+                &parse_portal(&portal)?,
+                organization.as_deref().unwrap_or("own"),
+                limit as usize,
+                cursor.as_deref(),
+                &operation_token(cancellation),
+            )
+            .await
+            .map_err(data_error)?;
+        Ok(AukiPortalDomainPage {
+            items: page.items.into_iter().map(Into::into).collect(),
+            next_cursor: page.next_cursor,
+            paginated: page.paginated,
+        })
+    }
+    #[uniffi::method(default(cursor = None, cancellation = None))]
+    pub async fn portals_page(
+        &self,
+        domain_id: String,
+        limit: u32,
+        cursor: Option<String>,
+        cancellation: Option<Arc<AukiCancellation>>,
+    ) -> Result<AukiPortalPage, AukiSdkError> {
+        let page = self
+            .inner
+            .portals_page(
+                parse_uuid(&domain_id, "Domain ID")?,
+                limit as usize,
+                cursor.as_deref(),
+                &operation_token(cancellation),
+            )
+            .await
+            .map_err(data_error)?;
+        Ok(AukiPortalPage {
+            items: page.items.into_iter().map(Into::into).collect(),
+            next_cursor: page.next_cursor,
+            paginated: page.paginated,
+        })
+    }
+
     #[uniffi::method(default(cancellation = None))]
     pub async fn list(
         &self,

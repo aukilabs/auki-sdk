@@ -886,3 +886,49 @@ async fn imported_data_cancels_api_and_dds_requests_without_retry() {
         assert_eq!(server.finish().await.len(), expected);
     }
 }
+
+#[tokio::test]
+async fn portal_cursor_pages_acknowledge_boundaries_and_reject_legacy_continuations() {
+    let portal = |id| {
+        json!({"id":Uuid::from_u128(id), "short_id":"ABC12345678", "name":"Portal", "size":10,
+        "created_at":"2026-09-01T00:00:00Z", "updated_at":"2026-09-01T00:00:00Z"})
+    };
+    let server = MockServer::start_with(|base| vec![
+        ordinary_user_listing_response(&[]),
+        grant_with_claims(base, DOMAIN, json!({
+            "iss":"dds", "domain_id":DOMAIN, "aud":[base,"dds"], "exp":Utc::now().timestamp()+300,
+            "type":"user-access", "sub":"fixture-user", "org":Uuid::from_u128(0xaaaa),
+            "scopes":["pose:r"]
+        })),
+        MockResponse::json(json!({"lighthouses":[portal(1)], "pagination":{"version":1,"limit":1,"next_cursor":"next+page"}})),
+        MockResponse::json(json!({"lighthouses":[portal(2)]})),
+        MockResponse::json(json!({"lighthouses":[portal(1),portal(1)], "pagination":{"version":1,"limit":2,"next_cursor":""}})),
+    ]).await;
+    let session = import(&server, Store::new(false, 0), false);
+    let cancel = CancellationToken::new();
+    let first = session
+        .list_portals_page(DOMAIN, 1, None, &cancel)
+        .await
+        .unwrap();
+    assert!(first.paginated);
+    assert_eq!(first.items.len(), 1);
+    assert_eq!(first.next_cursor.as_deref(), Some("next+page"));
+    assert!(
+        session
+            .list_portals_page(DOMAIN, 1, first.next_cursor.as_deref(), &cancel)
+            .await
+            .is_err()
+    );
+    assert!(
+        session
+            .list_portals_page(DOMAIN, 2, None, &cancel)
+            .await
+            .is_err()
+    );
+    session.close().await;
+    let requests = server.finish().await;
+    assert_eq!(requests.len(), 5);
+    assert!(requests[3].target.contains("cursor=next%2Bpage"));
+    assert_eq!(requests[0].target, "/service/domains-access-token");
+    assert!(requests[1].target.ends_with("/auth"));
+}

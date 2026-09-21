@@ -181,6 +181,10 @@ export async function runDomainDataCases(report) {
     stats = await domainFixture('/__stats');
     check(stats.importedRefreshes === 1 && snapshots.join(',') === 'imported-refresh-1,imported-refresh-1', 'imported retry rotated credentials twice');
 
+    const portalsPage = await domains(importedSession).portalsPage(DOMAIN_ID, 1);
+    check(portalsPage.items.length === 1 && portalsPage.paginated === false,
+      'portal page lost its bounded legacy acknowledgement');
+
     const page = await domains(importedSession).list({ limit: 1, offset: 1 });
     check(page.total === 2 && page.limit === 1 && page.offset === 1
       && page.domains[0]?.id === 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',

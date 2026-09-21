@@ -28,21 +28,129 @@ pub struct InventoryRobot {
     pub active_lease_expires_at: Option<DateTime<Utc>>,
 }
 
+/// One bounded provider page, or a bounded legacy complete response.
+/// `paginated` distinguishes DDS acknowledgement from ignored query parameters.
+#[derive(Clone, Debug, Serialize)]
+pub struct InventoryPage<T> {
+    pub items: Vec<T>,
+    pub next_cursor: Option<String>,
+    pub paginated: bool,
+}
+
+#[derive(Deserialize)]
+pub(super) struct InventoryPagination {
+    version: u32,
+    limit: usize,
+    next_cursor: String,
+}
+
+pub(super) fn inventory_page<T>(
+    items: Vec<T>,
+    pagination: Option<InventoryPagination>,
+    limit: Option<usize>,
+    cursor: Option<&str>,
+) -> Result<InventoryPage<T>> {
+    let Some(pagination) = pagination else {
+        if cursor.is_some() {
+            return Err(Error::invalid_response(
+                INVENTORY,
+                "provider stopped acknowledging pagination",
+            ));
+        }
+        return Ok(InventoryPage {
+            items,
+            next_cursor: None,
+            paginated: false,
+        });
+    };
+    if pagination.version != 1
+        || Some(pagination.limit) != limit
+        || items.len() > pagination.limit
+        || pagination.next_cursor.len() > 2048
+        || (!pagination.next_cursor.is_empty() && items.is_empty())
+    {
+        return Err(Error::invalid_response(
+            INVENTORY,
+            "invalid inventory pagination",
+        ));
+    }
+    let next_cursor = (!pagination.next_cursor.is_empty()).then_some(pagination.next_cursor);
+    Ok(InventoryPage {
+        items,
+        next_cursor,
+        paginated: true,
+    })
+}
+
+pub(super) fn inventory_page_query(
+    url: &mut Url,
+    limit: Option<usize>,
+    cursor: Option<&str>,
+) -> Result<()> {
+    if let Some(limit) = limit {
+        if !(1..=100).contains(&limit) {
+            return Err(Error::InvalidInput {
+                field: "inventory limit",
+                reason: "expected 1 through 100",
+            });
+        }
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string());
+    }
+    if let Some(cursor) = cursor {
+        if cursor.is_empty() || cursor.len() > 2048 {
+            return Err(Error::InvalidInput {
+                field: "inventory cursor",
+                reason: "expected 1 through 2048 bytes",
+            });
+        }
+        url.query_pairs_mut().append_pair("cursor", cursor);
+    }
+    Ok(())
+}
+
 impl AuthSession {
-    /// All visible public and own dedicated nodes, including unstaked/offline
-    /// entries. DDS has no pagination for this response; AuthLimits bounds it.
+    /// Legacy complete-list read, bounded by AuthLimits. Use
+    /// `inventory_nodes_page` to request server pagination.
     /// None means the imported grant cannot safely use this broad inventory.
     pub async fn inventory_nodes(
         &self,
         cancellation: &CancellationToken,
     ) -> Result<Option<Vec<InventoryNode>>> {
+        Ok(self
+            .inventory_nodes_request(None, None, cancellation)
+            .await?
+            .map(|page| page.items))
+    }
+
+    /// Request an authorized DDS node page (1-100 records). Pass the opaque
+    /// cursor unchanged. Older DDS returns a bounded legacy complete response
+    /// on the first request, identified by `paginated == false`.
+    pub async fn inventory_nodes_page(
+        &self,
+        limit: usize,
+        cursor: Option<&str>,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<InventoryPage<InventoryNode>>> {
+        self.inventory_nodes_request(Some(limit), cursor, cancellation)
+            .await
+    }
+
+    async fn inventory_nodes_request(
+        &self,
+        limit: Option<usize>,
+        cursor: Option<&str>,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<InventoryPage<InventoryNode>>> {
         let mut url = self.inner.client.dds_url("api/v1/nodes");
         url.query_pairs_mut()
             .append_pair("org", "all")
             .append_pair("staking_status", "all");
+        inventory_page_query(&mut url, limit, cursor)?;
         #[derive(Deserialize)]
         struct Nodes {
             nodes: Vec<InventoryNode>,
+            pagination: Option<InventoryPagination>,
         }
         let Some(response) = self
             .inventory_json::<Nodes>(url, None, cancellation)
@@ -61,29 +169,57 @@ impl AuthSession {
                 "invalid or duplicate node identity",
             ));
         }
-        Ok(Some(response.nodes))
+        inventory_page(response.nodes, response.pagination, limit, cursor).map(Some)
     }
 
-    /// Assignment inventory only. Listing robots does not grant task authority.
-    /// None means the imported token profile is unsupported by this DDS route.
+    /// Legacy complete assignment inventory, bounded by AuthLimits. Listing
+    /// robots does not grant task authority. None means an unsupported grant.
     pub async fn inventory_robots(
         &self,
         domain_id: Uuid,
         cancellation: &CancellationToken,
     ) -> Result<Option<Vec<InventoryRobot>>> {
+        Ok(self
+            .inventory_robots_request(domain_id, None, None, cancellation)
+            .await?
+            .map(|page| page.items))
+    }
+
+    /// Request a DDS Domain-robot page (1-100 records). Authorization and imported
+    /// session allowlists are checked on every page using the shared session.
+    pub async fn inventory_robots_page(
+        &self,
+        domain_id: Uuid,
+        limit: usize,
+        cursor: Option<&str>,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<InventoryPage<InventoryRobot>>> {
+        self.inventory_robots_request(domain_id, Some(limit), cursor, cancellation)
+            .await
+    }
+
+    async fn inventory_robots_request(
+        &self,
+        domain_id: Uuid,
+        limit: Option<usize>,
+        cursor: Option<&str>,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<InventoryPage<InventoryRobot>>> {
         if domain_id.is_nil() {
             return Err(Error::InvalidInput {
                 field: "Domain ID",
                 reason: "expected non-nil UUID",
             });
         }
-        let url = self
+        let mut url = self
             .inner
             .client
             .dds_url(&format!("api/v1/domains/{domain_id}/robots"));
+        inventory_page_query(&mut url, limit, cursor)?;
         #[derive(Deserialize)]
         struct Robots {
             robots: Vec<InventoryRobot>,
+            pagination: Option<InventoryPagination>,
         }
         let Some(response) = self
             .inventory_json::<Robots>(url, Some(domain_id), cancellation)
@@ -103,7 +239,7 @@ impl AuthSession {
                 "invalid, duplicate or wrong-Domain robot",
             ));
         }
-        Ok(Some(response.robots))
+        inventory_page(response.robots, response.pagination, limit, cursor).map(Some)
     }
 
     async fn inventory_json<T: DeserializeOwned>(

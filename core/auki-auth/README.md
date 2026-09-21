@@ -16,3 +16,12 @@ metadata. Unsupported imported grant profiles return `None`; an empty supported
 response returns `Some(Vec::new())`. Robot reads enforce the selected Domain and
 imported allowlist. The [fleet client](../auki-fleet/README.md) composes these
 reads with authorized DMS observations; inventory access grants no task authority.
+
+`inventory_nodes_page(limit, cursor, cancellation)` and
+`inventory_robots_page(domain_id, limit, cursor, cancellation)` request pages of
+1–100 records. `InventoryPage` exposes `items`, an opaque `next_cursor`, and
+`paginated`. A first legacy complete response has `paginated == false`; missing
+acknowledgement after continuation is an error. Per-page byte/deadline bounds,
+identity validation and authorization remain in force. The non-page methods
+retain their legacy complete-list behavior. Callers performing their own
+traversal must bound pages/time and pass cursors unchanged.

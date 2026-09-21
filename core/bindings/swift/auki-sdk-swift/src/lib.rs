@@ -145,8 +145,8 @@ pub enum AukiSdkError {
 pub use data::{
     AukiCancellation, AukiDataDownload, AukiDataFailureKind, AukiDataListQuery, AukiDataMetadata,
     AukiDataUpload, AukiDataWriteTarget, AukiDomainData, AukiDomainListQuery, AukiDomainPage,
-    AukiDomainSummary, AukiDomains, AukiPortal, AukiPortalDomain, AukiPortalPose,
-    AukiTransferOptions,
+    AukiDomainSummary, AukiDomains, AukiPortal, AukiPortalDomain, AukiPortalDomainPage,
+    AukiPortalPage, AukiPortalPose, AukiTransferOptions,
 };
 pub use fleet::AukiDomainFleet;
 pub use jobs::{AukiDomainJobs, AukiJobsFailureKind};

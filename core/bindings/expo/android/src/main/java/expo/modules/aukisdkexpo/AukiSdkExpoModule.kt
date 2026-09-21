@@ -7,12 +7,16 @@ import expo.modules.kotlin.modules.ModuleDefinition
 private class AndroidUnsupportedException :
   CodedException("AukiSdkExpo is not implemented on Android in this slice")
 
+private fun unsupported(): Boolean {
+  throw AndroidUnsupportedException()
+}
+
 class AukiSdkExpoModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("AukiSdkExpo")
 
     AsyncFunction("loginDev") { _: String, _: String, _: String? ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("loginWithEnvironment") {
@@ -23,135 +27,143 @@ class AukiSdkExpoModule : Module() {
         _: String,
         _: String?,
       ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("accessibleDomains") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("domainsList") { _: String, _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
+    }
+
+    AsyncFunction("domainsForPortalPage") { _: String, _: String, _: String, _: Int, _: String?, _: String ->
+      unsupported()
+    }
+
+    AsyncFunction("domainsPortalsPage") { _: String, _: String, _: Int, _: String?, _: String ->
+      unsupported()
     }
 
     AsyncFunction("domainsForPortal") { _: String, _: String, _: String?, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("domainsPortals") { _: String, _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("domainsPortal") { _: String, _: String, _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("domainDataOpen") { _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("domainDataList") { _: String, _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("domainDataGet") { _: String, _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("domainDataRead") { _: String, _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("domainDataWrite") { _: String, _: String, _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("domainDataDelete") { _: String, _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("domainDataPoses") { _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("domainDataPose") { _: String, _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("domainDataClose") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("dataOperationCancel") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("dataDownloadStart") { _: String, _: String, _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("dataDownloadNext") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("dataDownloadCancel") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("dataDownloadClose") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("dataUploadStart") { _: String, _: String, _: Double, _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("dataUploadNextMaximum") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("dataUploadPush") { _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("dataUploadResult") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("dataUploadCancel") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("dataUploadClose") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("startPeer") { _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("startPeerWithDiscovery") { _: String, _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("peerId") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("domainId") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("discover") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("discoverProtocol") { _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("infoFetchExact") { _: String, _: Map<String, String> ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("catalogFetchResourcesExact") {
@@ -159,11 +171,11 @@ class AukiSdkExpoModule : Module() {
         _: Map<String, String>,
         _: List<String>,
       ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("registryListExact") { _: String, _: Map<String, String>, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("registryFetchExact") {
@@ -173,11 +185,11 @@ class AukiSdkExpoModule : Module() {
         _: String,
         _: String,
       ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("blobFetchExact") { _: String, _: Map<String, String>, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("streamSubscribeExact") {
@@ -186,55 +198,55 @@ class AukiSdkExpoModule : Module() {
         _: String,
         _: String,
       ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("streamNext") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("streamCancel") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("messageOpenExact") { _: String, _: Map<String, String>, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("messageSend") { _: String, _: String, _: String, _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("messageClose") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("urdfModelFromXml") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("urdfJointCount") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("urdfResolve") { _: String, _: List<Double> ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("urdfResolveIdentity") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("urdfModelFree") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("shutdown") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
 
     AsyncFunction("waitStopped") { _: String ->
-      throw AndroidUnsupportedException()
+      unsupported()
     }
   }
 }

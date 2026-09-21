@@ -90,9 +90,12 @@ obtains potentially billed Domain tokens for every entry. Listing establishes
 visibility; it does not report effective read/write
 permission. Permission filters are not available.
 
-Data lists filter by `ids`, `name`, and `data_type`. They return metadata without
-server pagination. Portal and pose lists also return complete, bounded
-responses; oversized responses fail rather than being truncated.
+Data lists filter by `ids`, `name`, and `data_type`. They and Domain Server pose
+lists return bounded complete responses; oversized responses fail explicitly.
+DDS portal lists and portal-to-Domain associations also expose cursor pages via
+`portals_page` and `for_portal_page`. See [portal pages](../how-to/domain-data.md#read-portal-pages)
+for acknowledgement, continuation and provider compatibility. The original
+complete-list methods remain available.
 
 Portal metadata comes from DDS and poses come from the Domain Server. Both
 read routes require pose read permission. The underlying routes are named

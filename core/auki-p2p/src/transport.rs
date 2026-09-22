@@ -7,6 +7,9 @@ use std::{
     time::Duration,
 };
 
+use crate::inbound_stream::{
+    Behaviour as StreamBehaviour, Control as StreamControl, IncomingStreams,
+};
 use chrono::Utc;
 use futures::{FutureExt, StreamExt};
 #[cfg(target_os = "ios")]
@@ -21,7 +24,6 @@ use libp2p::{
     },
     tcp, yamux, Multiaddr, PeerId, Stream, Swarm, SwarmBuilder,
 };
-use libp2p_stream::{Behaviour as StreamBehaviour, IncomingStreams};
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex as AsyncMutex};
 use uuid::Uuid;
 
@@ -118,21 +120,35 @@ pub struct IncomingAuthenticatedStreams {
 
 impl IncomingAuthenticatedStreams {
     pub async fn accept(&mut self) -> Option<P2PResult<AuthenticatedStream>> {
+        Some(self.next_authentication().await?.await)
+    }
+
+    /// Dequeue a stream without waiting for its handshake. After dequeue there
+    /// is no suspension point before transferring ownership to the caller.
+    pub(crate) async fn next_authentication(
+        &mut self,
+    ) -> Option<impl Future<Output = P2PResult<AuthenticatedStream>> + Send + 'static> {
         let (remote_peer_id, stream) = self.inner.next().await?;
-        let result = authenticate(
-            stream,
-            self.local_peer_id,
-            remote_peer_id,
-            &self.tokens,
-            &self.verifier,
-            &self.requirements,
-        )
-        .await;
-        if let Ok(stream) = &result {
-            self.observations
-                .authenticated(self.requirements.domain_id(), stream.remote_peer().clone());
-        }
-        Some(result)
+        let local_peer_id = self.local_peer_id;
+        let tokens = self.tokens.clone();
+        let verifier = self.verifier.clone();
+        let requirements = self.requirements.clone();
+        let observations = self.observations.clone();
+        Some(async move {
+            let result = authenticate(
+                stream,
+                local_peer_id,
+                remote_peer_id,
+                &tokens,
+                &verifier,
+                &requirements,
+            )
+            .await;
+            if let Ok(stream) = &result {
+                observations.authenticated(requirements.domain_id(), stream.remote_peer().clone());
+            }
+            result
+        })
     }
 }
 
@@ -160,7 +176,7 @@ struct DirectListenFailure {
 pub struct Node {
     node_instance_id: Uuid,
     identity: Identity,
-    control: libp2p_stream::Control,
+    control: StreamControl,
     targeted_control: TargetedStreamControl,
     tokens: TokenStore,
     verifier: DdsTokenVerifier,
@@ -236,7 +252,7 @@ impl Node {
         identity: Identity,
         verifier: DdsTokenVerifier,
         listen_addresses: impl IntoIterator<Item = Multiaddr>,
-        control: libp2p_stream::Control,
+        control: StreamControl,
         targeted_control: TargetedStreamControl,
         mut swarm: Swarm<Behaviour>,
     ) -> P2PResult<Self> {

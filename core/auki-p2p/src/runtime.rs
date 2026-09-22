@@ -263,6 +263,7 @@ impl Drop for ApplicationProtocolServer {
 
 impl Node {
     /// Register and supervise one authenticated inbound application protocol.
+    /// Pending handshakes and running handlers share the spec concurrency limit.
     pub fn serve<H, F>(
         &self,
         spec: ApplicationProtocolSpec,
@@ -291,17 +292,20 @@ impl Node {
                             tracing::warn!(%error, "authenticated application protocol handler failed");
                         }
                     }
-                    accepted = incoming.accept(), if handlers.len() < max_concurrency => {
-                        let Some(accepted) = accepted else { break; };
-                        let stream = match accepted {
-                            Ok(stream) => stream,
-                            Err(error) => {
-                                tracing::warn!(%error, "authenticated application protocol session was rejected");
-                                continue;
-                            }
-                        };
+                    accepted = incoming.next_authentication(), if handlers.len() < max_concurrency => {
+                        let Some(authenticate) = accepted else { break; };
                         let handler = Arc::clone(&handler);
+                        // Own the handshake in the supervised task. Reaping
+                        // another task cannot cancel it, and a slow handshake
+                        // cannot stall the underlying inbound stream queue.
                         handlers.spawn(async move {
+                            let stream = match authenticate.await {
+                                Ok(stream) => stream,
+                                Err(error) => {
+                                    tracing::warn!(%error, "authenticated application protocol session was rejected");
+                                    return;
+                                }
+                            };
                             handler(AuthenticatedApplicationStream::new(stream, max_frame_bytes))
                                 .await
                         });

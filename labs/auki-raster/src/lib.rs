@@ -100,7 +100,16 @@ fn rasterize_segments(segments: &[(Vec3, Vec3)], ppm: f32) -> CrossSection {
 
     for &(a, b) in segments {
         draw_line(
-            &mut pixels, width, height, min_x, min_z, ppm, a.x, a.z, b.x, b.z,
+            &mut pixels,
+            width,
+            height,
+            min_x,
+            min_z,
+            ppm,
+            a.x,
+            a.z,
+            b.x,
+            b.z,
         );
     }
 
@@ -159,7 +168,8 @@ fn encode_png(width: u32, height: u32, pixels: &[u8]) -> Vec<u8> {
     let img: ImageBuffer<Luma<u8>, Vec<u8>> =
         ImageBuffer::from_raw(width, height, pixels.to_vec()).expect("png buffer size");
     let mut buf = Cursor::new(Vec::new());
-    img.write_to(&mut buf, ImageFormat::Png).expect("png encode");
+    img.write_to(&mut buf, ImageFormat::Png)
+        .expect("png encode");
     buf.into_inner()
 }
 

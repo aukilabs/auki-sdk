@@ -3,9 +3,9 @@
 //! Mesh ingest (`parseObj` / `fromIndexed`) is [`auki-geometry`]. Bake/path
 //! is compute. `bakeObj` is a non-canonical debug helper.
 
-use auki_navigation::{BakeProfile, NavMesh, Vec3};
-use auki_geometry::{TriangleMesh, parse_obj};
 use auki_geometry::mesh::Vec3 as MeshVec3;
+use auki_geometry::{TriangleMesh, parse_obj};
+use auki_navigation::{BakeProfile, NavMesh, Vec3};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -102,8 +102,8 @@ impl WasmNavMesh {
     #[wasm_bindgen]
     pub fn bake(mesh: &WasmTriangleMesh, radius: f32) -> Result<WasmNavMesh, JsValue> {
         let profile = BakeProfile::dsc(radius);
-        let inner = NavMesh::bake(&mesh.inner, &profile)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let inner =
+            NavMesh::bake(&mesh.inner, &profile).map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(Self { inner })
     }
 

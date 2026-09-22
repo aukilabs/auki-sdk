@@ -2,12 +2,12 @@
 
 use crate::bake::{BakeProfile, BakedNav, bake_navmesh, landmass_to_yup, yup_to_landmass};
 use crate::error::NavError;
-use auki_geometry::TriangleMesh;
 use crate::segment::{SegmentOpts, find_optimized_segment_path};
 use crate::types::{
     Extents, OnMeshPoint, OptimizedPathResult, PathResult, PathSegment, RestrictResult, Vec3,
     drop_duplicate_joints, path_length, require_waypoints,
 };
+use auki_geometry::TriangleMesh;
 use landmass::{
     Archipelago, ArchipelagoOptions, FromAgentRadius, Island, PathStep, PermittedAnimationLinks,
     PointSampleDistance3d, SampledPoint, Transform, XYZ,
@@ -48,11 +48,7 @@ impl NavMesh {
         }
     }
 
-    fn sample(
-        &self,
-        p: Vec3,
-        extents: Extents,
-    ) -> Result<SampledPoint<'_, XYZ>, NavError> {
+    fn sample(&self, p: Vec3, extents: Extents) -> Result<SampledPoint<'_, XYZ>, NavError> {
         self.archipelago
             .sample_point(yup_to_landmass(p), &Self::sample_distance(extents))
             .map_err(|_| NavError::OffMesh)
@@ -81,12 +77,7 @@ impl NavMesh {
     ) -> Result<Vec<Vec3>, NavError> {
         let steps = self
             .archipelago
-            .find_path(
-                start,
-                end,
-                &HashMap::new(),
-                PermittedAnimationLinks::All,
-            )
+            .find_path(start, end, &HashMap::new(), PermittedAnimationLinks::All)
             .map_err(|_| NavError::NoPath)?;
 
         let mut points = Vec::new();

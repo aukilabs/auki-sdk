@@ -1,5 +1,5 @@
-use auki_navigation::{BakeProfile, Extents, NavMesh, Vec3};
 use auki_geometry::parse_obj;
+use auki_navigation::{BakeProfile, Extents, NavMesh, Vec3};
 
 fn main() {
     let mut args = std::env::args().skip(1);

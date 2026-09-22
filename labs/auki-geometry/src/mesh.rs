@@ -166,13 +166,7 @@ impl TriangleMesh {
     }
 }
 
-fn ray_triangle(
-    origin: Vec3,
-    direction: Vec3,
-    v0: Vec3,
-    v1: Vec3,
-    v2: Vec3,
-) -> Option<RayHit> {
+fn ray_triangle(origin: Vec3, direction: Vec3, v0: Vec3, v1: Vec3, v2: Vec3) -> Option<RayHit> {
     const EPS: f32 = 1e-7;
     let edge1 = v1 - v0;
     let edge2 = v2 - v0;
@@ -213,15 +207,14 @@ pub fn parse_obj(text: &str) -> Result<TriangleMesh> {
     let mut current_name = String::from("default");
     let mut group_start = 0usize;
 
-    let flush_group =
-        |groups: &mut Vec<MeshGroup>, name: &str, start: usize, end: usize| {
-            if end > start {
-                groups.push(MeshGroup {
-                    name: name.to_string(),
-                    triangle_range: start..end,
-                });
-            }
-        };
+    let flush_group = |groups: &mut Vec<MeshGroup>, name: &str, start: usize, end: usize| {
+        if end > start {
+            groups.push(MeshGroup {
+                name: name.to_string(),
+                triangle_range: start..end,
+            });
+        }
+    };
 
     for (line_no, raw) in text.lines().enumerate() {
         let line = raw.trim();
@@ -263,10 +256,7 @@ pub fn parse_obj(text: &str) -> Result<TriangleMesh> {
                     .map(|tok| {
                         let idx_str = tok.split('/').next().unwrap_or(tok);
                         let idx: i32 = idx_str.parse().map_err(|_| {
-                            GeometryError::ObjParse(format!(
-                                "line {}: bad face index",
-                                line_no + 1
-                            ))
+                            GeometryError::ObjParse(format!("line {}: bad face index", line_no + 1))
                         })?;
                         let resolved = if idx < 0 {
                             (vertices.len() as i32 + idx + 1) as u32

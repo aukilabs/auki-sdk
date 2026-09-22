@@ -144,7 +144,11 @@ pub(crate) fn drop_duplicate_joints(points: &mut Vec<Vec3>) {
     let mut out = Vec::with_capacity(points.len());
     out.push(points[0]);
     for p in points.iter().skip(1) {
-        if out.last().map(|last| last.distance(*p) > 1e-5).unwrap_or(true) {
+        if out
+            .last()
+            .map(|last| last.distance(*p) > 1e-5)
+            .unwrap_or(true)
+        {
             out.push(*p);
         }
     }

@@ -3,12 +3,10 @@
 //! Public API is Y-up. Landmass stores Z-up; conversion is only here / in nav.
 
 use crate::error::NavError;
-use auki_geometry::TriangleMesh;
 use crate::types::Vec3;
+use auki_geometry::TriangleMesh;
 use landmass::{NavigationMesh, ValidNavigationMesh, XYZ};
-use rerecast::{
-    Aabb3d, AreaType, BuildContoursFlags, HeightfieldBuilder, PolygonNavmesh, TriMesh,
-};
+use rerecast::{Aabb3d, AreaType, BuildContoursFlags, HeightfieldBuilder, PolygonNavmesh, TriMesh};
 use std::sync::Arc;
 
 /// Recast bake knobs. Presets encode known client disagreement (Gotu vs DSC vs robots).
@@ -145,11 +143,7 @@ pub(crate) fn bake_navmesh(
     // Recast needs vertical room above the floor for agent height / climb filters.
     let pad = profile.cell_size * 2.0;
     let aabb = Aabb3d {
-        min: glam::Vec3::new(
-            aabb.min.x - pad,
-            aabb.min.y - pad,
-            aabb.min.z - pad,
-        ),
+        min: glam::Vec3::new(aabb.min.x - pad, aabb.min.y - pad, aabb.min.z - pad),
         max: glam::Vec3::new(
             aabb.max.x + pad,
             aabb.max.y + profile.agent_height + profile.walkable_climb + pad,

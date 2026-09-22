@@ -9,8 +9,8 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 #![allow(clippy::useless_conversion)]
 
-use auki_navigation_rs as nav;
 use auki_geometry::{MeshGroup, TriangleMesh};
+use auki_navigation_rs as nav;
 use pyo3::create_exception;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -142,9 +142,21 @@ fn py_to_extents(obj: Option<&Bound<'_, PyAny>>) -> PyResult<nav::Extents> {
         return Ok(nav::Extents::default());
     }
     Ok(nav::Extents {
-        x: obj.get_item("x").ok().and_then(|v| v.extract().ok()).unwrap_or(100.0),
-        y: obj.get_item("y").ok().and_then(|v| v.extract().ok()).unwrap_or(10.0),
-        z: obj.get_item("z").ok().and_then(|v| v.extract().ok()).unwrap_or(100.0),
+        x: obj
+            .get_item("x")
+            .ok()
+            .and_then(|v| v.extract().ok())
+            .unwrap_or(100.0),
+        y: obj
+            .get_item("y")
+            .ok()
+            .and_then(|v| v.extract().ok())
+            .unwrap_or(10.0),
+        z: obj
+            .get_item("z")
+            .ok()
+            .and_then(|v| v.extract().ok())
+            .unwrap_or(100.0),
     })
 }
 

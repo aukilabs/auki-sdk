@@ -1,9 +1,9 @@
 //! Optimized segment path — port of robot-runner-kit segment_path / DSC findOptimizedSegmentPath.
 
 use crate::error::NavError;
-use auki_geometry::TriangleMesh;
 use crate::nav::NavMesh;
 use crate::types::{Extents, PathResult, Vec3, path_length};
+use auki_geometry::TriangleMesh;
 
 /// Options for [`NavMesh::find_optimized_segment_path`].
 #[derive(Clone, Debug)]
@@ -175,7 +175,11 @@ fn generate_segments(
 ) -> Vec<Segment> {
     let mut out = Vec::new();
     for group in &mesh.groups {
-        let mut verts: Vec<Vec3> = mesh.group_vertices(group).into_iter().map(Into::into).collect();
+        let mut verts: Vec<Vec3> = mesh
+            .group_vertices(group)
+            .into_iter()
+            .map(Into::into)
+            .collect();
         if let Some(area) = area {
             verts.retain(|v| area.contains(*v));
         }

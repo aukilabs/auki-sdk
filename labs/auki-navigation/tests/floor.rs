@@ -1,4 +1,4 @@
-use auki_geometry::{parse_obj, TriangleMesh};
+use auki_geometry::{TriangleMesh, parse_obj};
 use auki_navigation::{BakeProfile, NavError, NavMesh, Vec3};
 
 fn floor_mesh() -> TriangleMesh {

@@ -47,7 +47,8 @@ fn golden_findpath_measurement() {
 
     let mesh = auki_geometry::parse_obj(&obj).unwrap();
     // Bit-match legacy DSC HTTP (radius:0.05 truncated to 0 vx). Prefer dsc(0.05) for real metres.
-    let nav = auki_navigation::NavMesh::bake(&mesh, &auki_navigation::BakeProfile::dsc(0.0)).unwrap();
+    let nav =
+        auki_navigation::NavMesh::bake(&mesh, &auki_navigation::BakeProfile::dsc(0.0)).unwrap();
 
     let wps: Vec<_> = golden
         .full

@@ -28,6 +28,8 @@ mod error;
 mod identity;
 #[cfg(not(target_arch = "wasm32"))]
 mod identity_store;
+#[cfg(not(target_arch = "wasm32"))]
+mod inbound_stream;
 #[allow(dead_code)]
 mod local_authority;
 #[cfg(not(target_arch = "wasm32"))]

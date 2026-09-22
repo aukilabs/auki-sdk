@@ -285,14 +285,14 @@ Out of spike: PyO3, Wasm, peyote cutover, MapBody, HTTP.
 | Decision | Lock |
 |----------|------|
 | **DSC obsolete** | Same results locally (ops + shapes); not HTTP / not remote compute. |
-| **Crate** | One kitchen-sink `labs/auki-dsc`; split later if needed. |
+| **Crate** | Split: `auki-geometry` (ingest + raycast), `auki-raster` (Y-slice), `auki-navigation` (bake + path). |
 | **Engine** | `rerecast` 0.4 bake + `landmass` 0.9 query. No Detour. `landmass_rerecast` skipped (Bevy). Manual Y-up↔Z-up at boundary. |
 | **Bake API** | `BakeProfile` with presets `gotu()`, `dsc(r)`, `robot_r40()`, `restrict_bake()`. Radius = walkable erosion. Restrict min-separation is query-time. |
 | **Ops** | path, optimized (greedy NN), restrict, raycast, cross-section (PNG+YAML, no STCM), segment path. |
 | **Cutover** | Spike + golden measurement → robot-runner-kit Python → gotu-web PathfindDebug → Helm undeploy. |
 | **Golden** | Hausdorff / max delta measurement vs DSC Deno; soft epsilon (0.5 m). Not a bit-identical merge gate. |
 
-v0 shipped on `feature/dsc` as `labs/auki-dsc` (workspace member).
+v0 shipped on `feature/dsc` as `labs/auki-dsc`; renamed/split to `auki-navigation` + `auki-geometry` + `auki-raster`.
 
 ---
 

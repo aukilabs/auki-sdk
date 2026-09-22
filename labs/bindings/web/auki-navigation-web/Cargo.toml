@@ -1,0 +1,24 @@
+[package]
+name = "auki-navigation-web"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "wasm-bindgen surface for auki-navigation (bake + pathfind for browser debug)."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+auki-navigation = { path = "../../../auki-navigation" }
+auki-geometry = { path = "../../../auki-geometry" }
+serde = { workspace = true, features = ["derive"] }
+js-sys = { workspace = true }
+serde-wasm-bindgen = { workspace = true }
+wasm-bindgen = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }

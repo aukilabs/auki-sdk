@@ -471,40 +471,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "auki-dsc"
-version = "0.0.0"
-dependencies = [
- "getrandom 0.3.4",
- "glam 0.32.1",
- "image",
- "landmass",
- "rerecast",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "auki-dsc-py"
-version = "0.0.0"
-dependencies = [
- "auki-dsc",
- "pyo3",
-]
-
-[[package]]
-name = "auki-dsc-web"
-version = "0.0.0"
-dependencies = [
- "auki-dsc",
- "getrandom 0.3.4",
- "js-sys",
- "serde",
- "serde-wasm-bindgen",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "auki-fleet"
 version = "0.1.0"
 dependencies = [
@@ -689,6 +655,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-navigation"
+version = "0.0.0"
+dependencies = [
+ "auki-geometry",
+ "getrandom 0.3.4",
+ "glam 0.32.1",
+ "landmass",
+ "rerecast",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "auki-navigation-py"
+version = "0.0.0"
+dependencies = [
+ "auki-geometry",
+ "auki-navigation",
+ "pyo3",
+]
+
+[[package]]
+name = "auki-navigation-web"
+version = "0.0.0"
+dependencies = [
+ "auki-geometry",
+ "auki-navigation",
+ "getrandom 0.3.4",
+ "js-sys",
+ "serde",
+ "serde-wasm-bindgen",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "auki-p2p"
 version = "0.1.0"
 dependencies = [
@@ -826,6 +828,23 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+]
+
+[[package]]
+name = "auki-raster"
+version = "0.0.0"
+dependencies = [
+ "auki-geometry",
+ "image",
+]
+
+[[package]]
+name = "auki-raster-py"
+version = "0.0.0"
+dependencies = [
+ "auki-geometry",
+ "auki-raster",
+ "pyo3",
 ]
 
 [[package]]

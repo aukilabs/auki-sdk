@@ -736,14 +736,15 @@ async fn a_failed_handler_does_not_stop_the_claim_loop() {
     let owner = runtime.clone();
     let running = tokio::spawn(async move { owner.run(&handlers, &child).await });
 
-    // Two handler calls means the loop claimed again AFTER the failed one.
+    // Wait for the next task's completion receipt, not just handler entry:
+    // cancellation can stop the final heartbeat before completion is reported.
     tokio::time::timeout(Duration::from_secs(5), async {
-        while calls.load(Ordering::SeqCst) < 2 {
+        while calls.load(Ordering::SeqCst) < 2 || complete.calls() == 0 {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
     .await
-    .expect("the loop stopped claiming after the handler failed");
+    .expect("the loop did not complete another task after the handler failed");
 
     cancel.cancel();
     // Cancellation is a clean stop, so the loop reports success: it ended

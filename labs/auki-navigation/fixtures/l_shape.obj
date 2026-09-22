@@ -1,0 +1,11 @@
+# L-shaped floor (CCW from +Y)
+v 0 0 0
+v 6 0 0
+v 6 0 2
+v 2 0 2
+v 2 0 6
+v 0 0 6
+f 1 2 3
+f 1 3 4
+f 1 4 5
+f 1 5 6

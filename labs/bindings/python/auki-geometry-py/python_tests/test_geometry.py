@@ -423,3 +423,26 @@ def test_axis_convention_matrix_raises_geometry_error_on_invalid_axes() -> None:
     valid = {"x": "right", "y": "up", "z": "backward"}
     with pytest.raises(auki_geometry.GeometryError):
         auki_geometry.axis_convention_matrix(duplicate, valid)
+
+
+def test_parse_obj_fans_quad() -> None:
+    import auki_geometry
+
+    mesh = auki_geometry.parse_obj(
+        "v 0 0 0\nv 1 0 0\nv 1 0 1\nv 0 0 1\nf 1 2 3 4\n"
+    )
+    assert mesh.vertex_count == 4
+    assert mesh.triangle_count == 2
+
+
+def test_raycast_hits_floor() -> None:
+    import auki_geometry
+
+    mesh = auki_geometry.parse_obj(
+        "v -1 0 -1\nv 1 0 -1\nv 1 0 1\nv -1 0 1\nf 1 2 3 4\n"
+    )
+    hits = mesh.raycast({"x": 0.0, "y": 5.0, "z": 0.0}, {"x": 0.0, "y": -1.0, "z": 0.0})
+    assert hits
+    assert abs(hits[0]["point"]["y"]) < 0.05
+    miss = mesh.raycast({"x": 0.0, "y": 5.0, "z": 0.0}, {"x": 0.0, "y": 1.0, "z": 0.0})
+    assert miss == []

@@ -24,6 +24,8 @@ members = [
     # Experimental crates; application protocols remain optional.
     "labs/auki-datatypes",
     "labs/auki-geometry",
+    "labs/auki-navigation",
+    "labs/auki-raster",
     "labs/auki-hash",
     "labs/auki-identity",
     "labs/auki-jcs",
@@ -42,6 +44,9 @@ members = [
 
     # Experimental bindings and examples.
     "labs/bindings/python/auki-geometry-py",
+    "labs/bindings/python/auki-navigation-py",
+    "labs/bindings/python/auki-raster-py",
+    "labs/bindings/web/auki-navigation-web",
     "labs/bindings/python/auki-identity-py",
     "labs/bindings/python/auki-layout-py",
     "labs/bindings/python/auki-logs-py",

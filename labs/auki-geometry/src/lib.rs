@@ -1,9 +1,13 @@
-//! Pure spatial math helpers for the Auki SDK.
+//! Spatial math and mesh ingest for the Auki SDK.
 //!
-//! This crate is deliberately small and IO-free. Registry entries
-//! declare coordinate conventions; datatypes carry poses; this crate
-//! converts, composes, and eventually queries geometry over those
-//! values.
+//! Frame conventions / pose ops live at the crate root. Mesh parse,
+//! n-gon triangulation, and [`TriangleMesh`] live in [`mesh`].
+//! Navmesh bake is **not** here — that is `auki-navigation`.
+//! Occupancy slice is `auki-raster`.
+
+pub mod mesh;
+
+pub use mesh::{MeshGroup, RayHit, TriangleMesh, parse_obj};
 
 use auki_datatypes::pose::{Quat, SpatialTransform, Vec3};
 use auki_registry::{AxisConvention, AxisDirection, FrameRegistryEntry, Handedness, LengthUnit};
@@ -31,6 +35,9 @@ pub enum GeometryError {
         from_frame_id: String,
         to_frame_id: String,
     },
+    EmptyMesh,
+    ObjParse(String),
+    InvalidIndex(String),
 }
 
 impl fmt::Display for GeometryError {
@@ -60,6 +67,9 @@ impl fmt::Display for GeometryError {
                 f,
                 "cannot convert only one side of a transform between frame {from_frame_id:?} and {to_frame_id:?}: they declare different length units, which would require a scale factor that a rotation quaternion cannot represent"
             ),
+            GeometryError::EmptyMesh => write!(f, "empty triangle mesh"),
+            GeometryError::ObjParse(msg) => write!(f, "invalid OBJ: {msg}"),
+            GeometryError::InvalidIndex(msg) => write!(f, "{msg}"),
         }
     }
 }

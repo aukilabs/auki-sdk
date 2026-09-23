@@ -695,7 +695,7 @@ async fn three_real_relays_confirm_route_exactly_and_cancel_generation_safely() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancellation_barrier_closes_every_direct_relay_connection_before_recreate() {
-    let dns = TestDns::start();
+    let dns = TestDns::start_with_timeout(TEST_TIMEOUT);
     let mut relay = RelayHarness::start("cancel-many").await;
     let domain_id = Uuid::new_v4().to_string();
     let target = node(&dns);
@@ -725,26 +725,69 @@ async fn cancellation_barrier_closes_every_direct_relay_connection_before_recrea
     }
     let live_connections = relay.wait_for_active_connections(target.peer_id(), 3).await;
 
-    let mut events = target.subscribe_relay_events();
-    let cancel_target = target.clone();
-    let mut cancellation =
-        tokio::spawn(async move { cancel_target.cancel_relay_reservation(reservation).await });
-    loop {
-        match timeout(events.recv()).await.unwrap() {
-            auki_p2p::RelayTransportEvent::Unpublished { handle } if handle == reservation => {
-                break;
-            }
-            _ => {}
-        }
-    }
+    // Keep one additional direct dial pending so cancellation cannot finish
+    // before the replacement rejection is checked, even if all three live
+    // connections close immediately. Use a fresh hostname to bypass DNS caching.
+    // libp2p 0.56's SwarmBuilder wraps the entire dial (including DNS) in
+    // a 10-second TransportTimeout. Bound the WHOLE gated phase from before
+    // dialing to release to 5 seconds, below both that and our 15-second DNS
+    // timeout. Per-operation timeouts could otherwise accumulate past expiry.
+    let gate_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let (late_open, mut cancellation) = tokio::time::timeout_at(gate_deadline, async {
+        dns.hold_queries();
+        let late_target = target.clone();
+        let late_peer_id = relay.peer_id;
+        let late_address = relay.base("late").parse().unwrap();
+        let late_open = tokio::spawn(async move {
+            late_target
+                .open(late_peer_id, vec![late_address], protocol, requirements)
+                .await
+        });
+        dns.wait_for_held_query().await;
 
-    // The selected connection is closed first. The tombstone must still
-    // reject a replacement while the two extra connections are draining.
-    assert!(target
-        .start_relay_reservation(provider.clone())
-        .await
-        .is_err());
+        let mut events = target.subscribe_relay_events();
+        let cancel_target = target.clone();
+        let mut cancellation =
+            tokio::spawn(async move { cancel_target.cancel_relay_reservation(reservation).await });
+        loop {
+            match events.recv().await.unwrap() {
+                auki_p2p::RelayTransportEvent::Unpublished { handle } if handle == reservation => {
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        // Exercise the old one-second DNS timeout gap. A held query must keep
+        // cancellation pending beyond that timeout and Hickory's retry. The
+        // query observation above, not this delay, synchronizes us.
+        tokio::select! {
+            biased;
+            result = &mut cancellation => {
+                panic!("cancellation completed while DNS was held: {result:?}");
+            }
+            _ = tokio::time::sleep(Duration::from_millis(2500)) => {}
+        }
+        // The tombstone rejects before dialing, without the held DNS response.
+        assert!(matches!(
+            target.start_relay_reservation(provider.clone()).await,
+            Err(auki_p2p::Error::RelayReservationClosed(_))
+        ));
+        assert!(!late_open.is_finished(), "held direct dial completed");
+        assert!(
+            !cancellation.is_finished(),
+            "cancellation completed while a direct relay dial was still pending"
+        );
+        // timeout_at may poll a ready future after its deadline on a stalled
+        // executor. Never accept assertions made after the safe gate window.
+        assert!(tokio::time::Instant::now() < gate_deadline);
+        dns.release_queries();
+        (late_open, cancellation)
+    })
+    .await
+    .expect("gated cancellation assertions exceeded the five-second deadline");
     must_succeed(&mut cancellation).await.unwrap();
+    assert!(must_succeed(late_open).await.is_err());
     relay
         .wait_for_connections_closed(target.peer_id(), live_connections)
         .await;
@@ -1543,6 +1586,7 @@ fn relay_limits() -> ExpectedRelayLimits {
 
 struct TestDns {
     address: SocketAddr,
+    resolver_timeout: Duration,
     shutdown: Arc<AtomicBool>,
     hold_queries: Arc<AtomicBool>,
     held_query_seen: Arc<AtomicBool>,
@@ -1551,6 +1595,10 @@ struct TestDns {
 
 impl TestDns {
     fn start() -> Self {
+        Self::start_with_timeout(Duration::from_secs(1))
+    }
+
+    fn start_with_timeout(resolver_timeout: Duration) -> Self {
         let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         socket
             .set_read_timeout(Some(Duration::from_millis(100)))
@@ -1587,6 +1635,7 @@ impl TestDns {
         });
         Self {
             address,
+            resolver_timeout,
             shutdown,
             hold_queries,
             held_query_seen,
@@ -1598,7 +1647,7 @@ impl TestDns {
         let name_server = NameServerConfig::new(self.address, DnsProtocol::Udp);
         let config = ResolverConfig::from_parts(None, Vec::new(), vec![name_server]);
         let mut options = ResolverOpts::default();
-        options.timeout = Duration::from_secs(1);
+        options.timeout = self.resolver_timeout;
         options.attempts = 1;
         (config, options)
     }

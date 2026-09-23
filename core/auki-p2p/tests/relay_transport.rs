@@ -1782,6 +1782,5 @@ fn unix_time() -> u64 {
         .as_secs()
 }
 
-#[cfg(feature = "_handover_experiment")]
 #[path = "handover_experiment/mod.rs"]
 mod handover_experiment;

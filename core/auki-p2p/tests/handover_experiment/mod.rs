@@ -165,6 +165,15 @@ impl Peers {
             .await
     }
 
+    fn replace(
+        &self,
+        old: &AuthenticatedRouteStream,
+    ) -> impl std::future::Future<Output = auki_p2p::Result<AuthenticatedRouteStream>> + Send + 'static
+    {
+        self.source
+            .prepare_route_replacement(old, self.protocol.clone(), self.requirements.clone())
+    }
+
     async fn finish(self, relay: &mut GoRelay) -> serde_json::Value {
         must_succeed(self.source.shutdown()).await;
         self.finish_after_source_shutdown(relay).await
@@ -270,8 +279,7 @@ async fn streaming(mode: Mode) {
         if mode != Mode::ForcedExpiry && Instant::now() >= next_rotation {
             let t = Instant::now();
             if mode == Mode::Overlap {
-                must_succeed(stream.retire_circuit_for_experiment()).await;
-                let replacement = must_succeed(peers.open()).await;
+                let replacement = must_succeed(peers.replace(&stream)).await;
                 let stats = relay.wait_active(2).await;
                 assert_eq!(stats["opened"].as_u64(), Some(rotations + 2));
                 drain(&mut stream, last, circuit_count).await;
@@ -361,9 +369,8 @@ async fn go_failed_dial_leaves_old_stream_usable() {
     let peers = Peers::start(&relay).await;
     let mut old = must_succeed(peers.open()).await;
     must_succeed(send(&mut old, 0)).await;
-    must_succeed(old.retire_circuit_for_experiment()).await;
     relay.command("deny");
-    assert!(timeout(peers.open()).await.is_err());
+    assert!(timeout(peers.replace(&old)).await.is_err());
     must_succeed(send(&mut old, 1)).await;
     drain(&mut old, Some(1), 2).await;
     must_succeed(old.close()).await;
@@ -380,7 +387,6 @@ async fn go_failed_auth_closes_candidate_and_preserves_old_stream() {
     let peers = Peers::start(&relay).await;
     let mut old = must_succeed(peers.open()).await;
     must_succeed(send(&mut old, 0)).await;
-    must_succeed(old.retire_circuit_for_experiment()).await;
     // Valid signature and correct target Peer ID, but no authority for our Domain.
     install_current_token(
         &peers.target,
@@ -388,7 +394,7 @@ async fn go_failed_auth_closes_candidate_and_preserves_old_stream() {
         vec![Uuid::new_v4().to_string()],
     )
     .await;
-    assert!(timeout(peers.open()).await.is_err());
+    assert!(timeout(peers.replace(&old)).await.is_err());
     relay.wait_active(1).await;
     must_succeed(send(&mut old, 1)).await;
     drain(&mut old, Some(1), 2).await;
@@ -405,10 +411,9 @@ async fn go_cancelled_dial_closes_candidate_and_preserves_old_stream() {
     let peers = Peers::start(&relay).await;
     let mut old = must_succeed(peers.open()).await;
     must_succeed(send(&mut old, 0)).await;
-    must_succeed(old.retire_circuit_for_experiment()).await;
     relay.command("delay");
     assert!(
-        tokio::time::timeout(Duration::from_millis(50), peers.open())
+        tokio::time::timeout(Duration::from_millis(50), peers.replace(&old))
             .await
             .is_err()
     );
@@ -438,14 +443,13 @@ async fn go_concurrent_replacement_shares_new_circuit_and_keeps_old_sibling() {
     let peers = Peers::start(&relay).await;
     let old = must_succeed(peers.open()).await;
     let mut old_sibling = must_succeed(peers.open()).await;
-    must_succeed(old.retire_circuit_for_experiment()).await;
-    let (new, sibling) = tokio::join!(peers.open(), peers.open());
+    let (new, sibling) = tokio::join!(peers.replace(&old), peers.replace(&old));
     let mut new = new.unwrap();
     let sibling = sibling.unwrap();
     let stats = relay.wait_active(2).await;
     assert_eq!(stats["opened"], 2);
     // A repeated request against the old generation must not retire the new one.
-    must_succeed(old.retire_circuit_for_experiment()).await;
+    must_succeed(must_succeed(peers.replace(&old)).await.close()).await;
     must_succeed(old.close()).await;
     assert_eq!(relay.command("stats")["active"], 2);
     must_succeed(send(&mut old_sibling, 0)).await;
@@ -467,8 +471,7 @@ async fn go_old_expiry_does_not_invalidate_new_circuit() {
     let peers = Peers::start(&relay).await;
     let old = must_succeed(peers.open()).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
-    must_succeed(old.retire_circuit_for_experiment()).await;
-    let mut new = must_succeed(peers.open()).await;
+    let mut new = must_succeed(peers.replace(&old)).await;
     relay.wait_active(2).await;
     relay.wait_active(1).await; // The Go deadline has reset the old circuit.
     must_succeed(old.close()).await;
@@ -488,8 +491,7 @@ async fn go_shutdown_releases_both_live_generations() {
     let mut relay = GoRelay::start(30);
     let peers = Peers::start(&relay).await;
     let old = must_succeed(peers.open()).await;
-    must_succeed(old.retire_circuit_for_experiment()).await;
-    let new = must_succeed(peers.open()).await;
+    let new = must_succeed(peers.replace(&old)).await;
     relay.wait_active(2).await;
     must_succeed(peers.source.shutdown()).await;
     relay.wait_active(0).await;
@@ -504,9 +506,8 @@ async fn go_old_stream_continues_while_preparing_replacement() {
     let mut relay = GoRelay::start(30);
     let peers = Peers::start(&relay).await;
     let mut old = must_succeed(peers.open()).await;
-    must_succeed(old.retire_circuit_for_experiment()).await;
     relay.command("delay");
-    let mut candidate = Box::pin(peers.open());
+    let mut candidate = Box::pin(peers.replace(&old));
     let mut tick = tokio::time::interval(Duration::from_millis(10));
     let mut count = 0;
     let mut new = timeout(async {
@@ -539,4 +540,33 @@ async fn go_old_stream_continues_while_preparing_replacement() {
     let stats = peers.finish(&mut relay).await;
     assert_eq!(stats["opened"], 2);
     assert_eq!(stats["admissions"], 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires the loopback Go fixture"]
+async fn go_replacement_rejects_foreign_node_and_bounds_generations() {
+    let mut relay = GoRelay::start(30);
+    let peers = Peers::start(&relay).await;
+    let old = must_succeed(peers.open()).await;
+    assert!(matches!(
+        peers
+            .target
+            .prepare_route_replacement(&old, peers.protocol.clone(), peers.requirements.clone())
+            .await,
+        Err(auki_p2p::Error::ForeignRelayRoute)
+    ));
+    let new = must_succeed(peers.replace(&old)).await;
+    assert!(timeout(peers.replace(&new)).await.is_err());
+    assert_eq!(relay.wait_active(2).await["opened"], 2);
+    must_succeed(old.close()).await;
+    relay.wait_active(1).await;
+    let mut third = must_succeed(peers.replace(&new)).await;
+    relay.wait_active(2).await;
+    must_succeed(new.close()).await;
+    must_succeed(send(&mut third, 0)).await;
+    drain(&mut third, Some(0), 1).await;
+    must_succeed(third.close()).await;
+    let stats = peers.finish(&mut relay).await;
+    assert_eq!(stats["opened"], 3);
+    assert_eq!(stats["peak"], 2);
 }

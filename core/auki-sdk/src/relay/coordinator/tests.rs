@@ -497,6 +497,7 @@ impl RelayRouteRegistry for RecordingRoutes {
 
 fn coordinator_config(idempotency_key: &str) -> RelayCoordinatorConfig {
     RelayCoordinatorConfig {
+        transport: RelayBaseTransport::Tcp,
         idempotency_key: RelayIdempotencyKey::new(idempotency_key).expect("valid test key"),
         mode: RelayBookingMode::Public,
         requested_duration_seconds: 900,

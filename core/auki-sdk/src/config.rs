@@ -197,6 +197,8 @@ pub struct AukiPeerConfig {
     #[cfg(not(target_arch = "wasm32"))]
     initial_peer_routes: Vec<InitialPeerRoutes>,
     relay: Option<AukiRelayConfig>,
+    #[cfg(not(target_arch = "wasm32"))]
+    relay_transport: auki_p2p::RelayBaseTransport,
 }
 
 impl AukiPeerConfig {
@@ -217,6 +219,8 @@ impl AukiPeerConfig {
             #[cfg(not(target_arch = "wasm32"))]
             initial_peer_routes: Vec::new(),
             relay: Some(AukiRelayConfig::default()),
+            #[cfg(not(target_arch = "wasm32"))]
+            relay_transport: auki_p2p::RelayBaseTransport::Tcp,
         })
     }
 
@@ -335,8 +339,21 @@ impl AukiPeerConfig {
         self.without_relay()
     }
 
+    /// Choose the native relay connection transport. TCP is the default; WSS
+    /// uses normal TLS certificate validation. Each booking still publishes both
+    /// addresses. Applications opening explicit routes must select matching bases.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_relay_transport(mut self, transport: auki_p2p::RelayBaseTransport) -> Self {
+        self.relay_transport = transport;
+        self
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn relay_transport(&self) -> auki_p2p::RelayBaseTransport {
+        self.relay_transport
+    }
+
     /// Require relay-backed reachability using an explicit validated policy.
-    ///
     /// This also re-enables relay allocation after opting out.
     pub fn with_relay(mut self, relay: AukiRelayConfig) -> Result<Self, AukiPeerConfigError> {
         relay.validate()?;

@@ -79,19 +79,6 @@ impl AuthenticatedRouteStream {
         self.relay.is_some()
     }
 
-    /// Local native handover experiment only. Keeps this stream alive while
-    /// future exact-route opens establish or reuse a replacement circuit.
-    #[cfg(feature = "_handover_experiment")]
-    pub async fn retire_circuit_for_experiment(&self) -> Result<()> {
-        if let Some(relay) = &self.relay {
-            relay
-                .node
-                .retire_relay_route_for_experiment(relay.route())
-                .await?;
-        }
-        Ok(())
-    }
-
     pub async fn close(mut self) -> Result<()> {
         drop(self.stream.take());
         if let Some(mut relay) = self.relay.take() {
@@ -206,6 +193,47 @@ impl Drop for RelayRouteGuard {
 }
 
 impl Node {
+    /// Prepare an authenticated replacement on a fresh circuit while `previous`
+    /// remains usable. The returned future owns its inputs, allowing writes on
+    /// the old stream during preparation. Concurrent preparations of the same
+    /// generation share the new hop; at most two generations are retained.
+    ///
+    /// The application must establish its own acknowledged message boundary,
+    /// switch to the new stream, and close the old stream. This method does not
+    /// replay bytes or guarantee delivery. Failed/cancelled preparation releases
+    /// the candidate and keeps old owners alive. No relay reservation is created.
+    pub fn prepare_route_replacement(
+        &self,
+        previous: &AuthenticatedRouteStream,
+        protocol: ApplicationProtocol,
+        requirements: SessionRequirements,
+    ) -> impl Future<Output = Result<AuthenticatedRouteStream>> + Send + 'static {
+        let node = self.clone();
+        let previous = previous.relay.as_ref().map(|relay| relay.route().clone());
+        async move {
+            let previous = previous
+                .ok_or_else(|| Error::Dial("replacement requires a relay circuit".into()))?;
+            let route = node
+                .connect_relayed_replacement(&previous, &requirements)
+                .await?;
+            let mut guard = RelayRouteGuard::new(node.clone(), route);
+            match node
+                .open_relayed(guard.route(), protocol, requirements)
+                .await
+            {
+                Ok(stream) => Ok(AuthenticatedRouteStream::relayed(
+                    node,
+                    stream,
+                    guard.take(),
+                )),
+                Err(error) => {
+                    guard.close().await?;
+                    Err(error)
+                }
+            }
+        }
+    }
+
     /// Open one authenticated application stream over exactly the supplied
     /// route. Circuit routes retain an RAII hop ref and never fall back to a
     /// direct or sibling-relay connection. Overlapping circuit opens share one

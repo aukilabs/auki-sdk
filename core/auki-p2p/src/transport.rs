@@ -1012,10 +1012,12 @@ fn build_swarm(
 ) -> P2PResult<Swarm<Behaviour>> {
     SwarmBuilder::with_existing_identity(identity)
         .with_tokio()
+        // WSS must match before DNS/TCP: DNS accepts the prefix even when
+        // TCP will reject the trailing /wss asynchronously, preventing fallback.
         .with_other_transport(|keypair| -> Result<_, Box<dyn StdError + Send + Sync>> {
-            let transport = libp2p::dns::tokio::Transport::system(tcp::tokio::Transport::new(
-                tcp::Config::default().nodelay(true),
-            ))?;
+            let transport = libp2p::websocket::Config::new(libp2p::dns::tokio::Transport::system(
+                tcp::tokio::Transport::new(tcp::Config::default().nodelay(true)),
+            )?);
             Ok(transport
                 .upgrade(Version::V1Lazy)
                 .authenticate(noise::Config::new(keypair)?)
@@ -1023,9 +1025,9 @@ fn build_swarm(
         })
         .map_err(|error| Error::TransportBuild(error.to_string()))?
         .with_other_transport(|keypair| -> Result<_, Box<dyn StdError + Send + Sync>> {
-            let transport = libp2p::websocket::Config::new(libp2p::dns::tokio::Transport::system(
-                tcp::tokio::Transport::new(tcp::Config::default().nodelay(true)),
-            )?);
+            let transport = libp2p::dns::tokio::Transport::system(tcp::tokio::Transport::new(
+                tcp::Config::default().nodelay(true),
+            ))?;
             Ok(transport
                 .upgrade(Version::V1Lazy)
                 .authenticate(noise::Config::new(keypair)?)
@@ -1057,15 +1059,8 @@ fn build_swarm(
 ) -> P2PResult<Swarm<Behaviour>> {
     SwarmBuilder::with_existing_identity(identity)
         .with_tokio()
-        .with_other_transport(|keypair| -> Result<_, Box<dyn StdError + Send + Sync>> {
-            let security = noise::Config::new(keypair)?;
-            let transport = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
-                .upgrade(Version::V1Lazy)
-                .authenticate(security)
-                .multiplex(yamux::Config::default());
-            Ok(SystemDnsTransport::new(transport))
-        })
-        .map_err(|error| Error::TransportBuild(error.to_string()))?
+        // WSS must match before DNS/TCP: DNS accepts the prefix even when
+        // TCP will reject the trailing /wss asynchronously, preventing fallback.
         .with_other_transport(|keypair| -> Result<_, Box<dyn StdError + Send + Sync>> {
             let transport = libp2p::websocket::Config::new(SystemDnsTransport::new(
                 tcp::tokio::Transport::new(tcp::Config::default().nodelay(true)),
@@ -1074,6 +1069,15 @@ fn build_swarm(
                 .upgrade(Version::V1Lazy)
                 .authenticate(noise::Config::new(keypair)?)
                 .multiplex(yamux::Config::default()))
+        })
+        .map_err(|error| Error::TransportBuild(error.to_string()))?
+        .with_other_transport(|keypair| -> Result<_, Box<dyn StdError + Send + Sync>> {
+            let security = noise::Config::new(keypair)?;
+            let transport = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
+                .upgrade(Version::V1Lazy)
+                .authenticate(security)
+                .multiplex(yamux::Config::default());
+            Ok(SystemDnsTransport::new(transport))
         })
         .map_err(|error| Error::TransportBuild(error.to_string()))?
         .with_relay_client(noise::Config::new, yamux::Config::default)
@@ -1102,12 +1106,14 @@ fn build_swarm_with_dns_config(
 ) -> P2PResult<Swarm<Behaviour>> {
     SwarmBuilder::with_existing_identity(identity)
         .with_tokio()
+        // WSS must match before DNS/TCP: DNS accepts the prefix even when
+        // TCP will reject the trailing /wss asynchronously, preventing fallback.
         .with_other_transport(|keypair| -> Result<_, Box<dyn StdError + Send + Sync>> {
-            let transport = libp2p::dns::tokio::Transport::custom(
+            let transport = libp2p::websocket::Config::new(libp2p::dns::tokio::Transport::custom(
                 tcp::tokio::Transport::new(tcp::Config::default().nodelay(true)),
                 resolver_config.clone(),
                 resolver_options.clone(),
-            );
+            ));
             Ok(transport
                 .upgrade(Version::V1Lazy)
                 .authenticate(noise::Config::new(keypair)?)
@@ -1115,11 +1121,11 @@ fn build_swarm_with_dns_config(
         })
         .map_err(|error| Error::TransportBuild(error.to_string()))?
         .with_other_transport(|keypair| -> Result<_, Box<dyn StdError + Send + Sync>> {
-            let transport = libp2p::websocket::Config::new(libp2p::dns::tokio::Transport::custom(
+            let transport = libp2p::dns::tokio::Transport::custom(
                 tcp::tokio::Transport::new(tcp::Config::default().nodelay(true)),
-                resolver_config,
-                resolver_options,
-            ));
+                resolver_config.clone(),
+                resolver_options.clone(),
+            );
             Ok(transport
                 .upgrade(Version::V1Lazy)
                 .authenticate(noise::Config::new(keypair)?)

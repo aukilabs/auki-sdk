@@ -2678,10 +2678,11 @@ mod relay_route_transport_tests {
             assert_eq!(parsed.target_peer_id, target);
             assert_eq!(parsed.relay_peer_id, relay);
         }
-        let insecure =
-            format!("/dns4/handover.relay.auki-p2p.dev/tcp/4443/ws/p2p/{relay}/p2p-circuit/p2p/{target}")
-                .parse()
-                .unwrap();
+        let insecure = format!(
+            "/dns4/handover.relay.auki-p2p.dev/tcp/4443/ws/p2p/{relay}/p2p-circuit/p2p/{target}"
+        )
+        .parse()
+        .unwrap();
         assert!(parse_relay_route(&insecure).is_err());
     }
 }

@@ -17,10 +17,33 @@ For Android, set `ANDROID_NDK_HOME` and run `bash scripts/sync-android-jni.sh`.
 Both scripts build [`auki-sdk-uniffi`](../uniffi/auki-sdk-uniffi/README.md), the
 shared native library `libauki_sdk_uniffi`. iOS gets Swift; Android gets Kotlin.
 Web does not use that library. `npm run build` compiles the separate Wasm crate
-[`auki-sdk-web`](../web/auki-sdk-web/README.md). Native outputs are gitignored.
-Add this package to your app as a local dependency. For Metro Web, include
-`wasm` in `assetExts` and the package in `watchFolders`; see the
-[example Metro configuration](example/metro.config.js).
+[`auki-sdk-web`](../web/auki-sdk-web/README.md). Native outputs are gitignored, but
+`.npmignore` still packs them for a local `file:` install and for `npm pack`.
+After syncing, reinstall the package in the app
+(`npm i @aukilabs/auki-sdk-expo`) so `node_modules` is not a stale copy. For
+Metro Web, include `wasm` in `assetExts` and the package in `watchFolders`; see
+the [example Metro configuration](example/metro.config.js).
+
+## npm package
+
+Pack from this directory. `npm pack` and `npm publish` run `prepare`, which
+runs `npm run build` again. They do not rebuild the native libraries, so sync
+those first when the tarball should include iOS and Android:
+
+~~~sh
+npm ci --ignore-scripts
+npm run build
+bash scripts/sync-ios-xcframework.sh
+bash scripts/sync-android-jni.sh
+npm pack --dry-run
+~~~
+
+The dry run should list `build/index.js`, `build/web/generated/`,
+`ios/AukiSDK.xcframework/`, `android/src/main/jniLibs/`, and
+`android/src/main/java/uniffi/`. It should not list `android/build/`,
+`example/`, or `src/web/generated/`. `publishConfig.access` is `public`.
+After `npm login` as an `@aukilabs` publisher, `npm publish` uploads
+`@aukilabs/auki-sdk-expo`. Bump `version` for each upload.
 
 ## Sign in and select a Domain
 

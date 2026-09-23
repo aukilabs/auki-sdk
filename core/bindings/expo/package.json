@@ -9,8 +9,8 @@
     "android",
     "build",
     "ios",
-    "src/web/generated",
     "expo-module.config.json",
+    "LICENSE",
     "README.md"
   ],
   "scripts": {
@@ -36,7 +36,10 @@
     "url": "git+https://github.com/aukilabs/auki-sdk.git",
     "directory": "core/bindings/expo"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "peerDependencies": {
     "expo": "*",
     "react": "*",

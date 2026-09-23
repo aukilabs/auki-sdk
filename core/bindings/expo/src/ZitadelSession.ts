@@ -61,7 +61,7 @@ export async function importZitadelSession(
   store: ZitadelSessionStore,
   environment?: AukiServiceEnvironment,
 ): Promise<string> {
-  if (typeof module._importZitadel !== "function") throw new Error("Zitadel sessions are supported on Web and iOS only");
+  if (typeof module._importZitadel !== "function") throw new Error("Zitadel sessions are supported on Web, iOS, and Android");
   if (typeof store !== "function") throw Object.assign(new Error("Storage callback required"), { code: "configuration" });
   subscribe();
   const id = await module._importZitadel(JSON.stringify(credentials), environment ? JSON.stringify(environment) : null);

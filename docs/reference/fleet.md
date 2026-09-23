@@ -161,5 +161,6 @@ Swift/Expo XCFramework with its wrappers. Never mix the previous generated FFI
 with the new native library. Fleet pagination adds optional DDS query parameters
 and response metadata;
 existing binding signatures and snapshot schemas remain unchanged. It adds no
-backend mutation or transport protocol contract. Expo supports Web and iOS;
-Android remains unimplemented.
+backend mutation or transport protocol contract. Expo supports Web, iOS, and
+Android. Rebuild the Android library with
+`core/bindings/expo/scripts/sync-android-jni.sh` when the native facade changes.

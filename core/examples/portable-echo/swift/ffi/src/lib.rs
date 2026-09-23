@@ -1,6 +1,6 @@
 //! Mechanical Swift adapter for the shared Rust portable-echo endpoint.
 //!
-//! The final Apple artifact contains this adapter and `auki-sdk-swift` in one
+//! The final Apple artifact contains this adapter and `auki-sdk-uniffi` in one
 //! Rust library. UniFFI object handles therefore never cross independently
 //! loaded Rust runtimes.
 

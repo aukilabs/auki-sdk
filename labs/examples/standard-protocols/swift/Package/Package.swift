@@ -11,13 +11,13 @@ let package = Package(
         .library(name: "AukiStandardPlayground", targets: ["AukiStandardPlayground"]),
     ],
     dependencies: [
-        .package(path: "../../../../../core/bindings/swift/auki-sdk-swift"),
+        .package(path: "../../../../../core/bindings/uniffi/auki-sdk-uniffi"),
     ],
     targets: [
         .target(
             name: "AukiStandardPlayground",
             dependencies: [
-                .product(name: "AukiSDK", package: "auki-sdk-swift"),
+                .product(name: "AukiSDK", package: "AukiSDK"),
             ]
         ),
     ]

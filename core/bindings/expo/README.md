@@ -1,7 +1,6 @@
 # Auki networking for Expo
 
-Use `@aukilabs/auki-sdk-expo` to connect an Expo app on Web or iOS.
-Android is not implemented.
+Use `@aukilabs/auki-sdk-expo` to connect an Expo app on Web, iOS, or Android.
 
 From the SDK repository root, with the
 [platform toolchains](../../../docs/reference/networking.md#platforms-and-installation)
@@ -14,6 +13,11 @@ npm run build
 ~~~
 
 For iOS, also run `bash scripts/sync-ios-xcframework.sh` from this directory.
+For Android, set `ANDROID_NDK_HOME` and run `bash scripts/sync-android-jni.sh`.
+Both scripts build [`auki-sdk-uniffi`](../uniffi/auki-sdk-uniffi/README.md), the
+shared native library `libauki_sdk_uniffi`. iOS gets Swift; Android gets Kotlin.
+Web does not use that library. `npm run build` compiles the separate Wasm crate
+[`auki-sdk-web`](../web/auki-sdk-web/README.md). Native outputs are gitignored.
 Add this package to your app as a local dependency. For Metro Web, include
 `wasm` in `assetExts` and the package in `watchFolders`; see the
 [example Metro configuration](example/metro.config.js).
@@ -193,7 +197,7 @@ for storage failures and DDS requirements.
 
 Open one receiver-owned Catalog `message_channel` through an exact advertised
 route, send, and close. `messageSend` waits for the ACK. This surface does not
-mount inbound Message or add `claim` / `connectRobot`. Android throws.
+mount inbound Message or add `claim` / `connectRobot`.
 
 ~~~ts
 const sender = await AukiSdkExpo.messageOpenExact(
@@ -223,13 +227,20 @@ bash scripts/run-domain-data-expo-web.sh
 # Generates ignored native files, builds a Release simulator app, then runs it.
 bash scripts/build-domain-data-expo-ios.sh
 bash scripts/run-domain-data-expo-ios.sh
+
+# Same loopback cases on an Android emulator. Requires ANDROID_NDK_HOME, the Android SDK, and JDK 17 or 21.
+bash scripts/build-domain-data-expo-android.sh
+bash scripts/run-domain-data-expo-android.sh
 ~~~
 
 The iOS build is written below the repository's
-`target/domain-data-expo-ios-app/` directory. Both host runs cover password and
+`target/domain-data-expo-ios-app/` directory. The Android APK is written to
+`target/domain-data-expo-android-app/`. These host runs cover password and
 imported sessions, renewal and storage failure, paged listing, portal/pose
 metadata, CRUD, bounded transfers, permission errors, cancellation, multipart
-abort, close, and fixture cleanup.
+abort, close, and fixture cleanup. The Android emulator reaches the host fixture through `adb reverse` on ports 18114, 18115, and 18111.
+Plain HTTP is accepted only for a loopback host, so the example keeps `127.0.0.1`. The Domain Server
+uses 18115 so that port can be reversed; other hosts leave it ephemeral.
 
 `npm run test:jobs` runs the offline jobs bridge tests for custom capability
 pass-through, paging, cancellation, ambiguous submission handling, persistence
@@ -250,10 +261,10 @@ try {
 }
 ```
 
-Web and iOS share typed queries and snake_case snapshot results. Both operations
-accept an optional `AbortSignal`. `FleetError` retains `kind`, `code`, and
+Web, iOS, and Android share typed queries and snake_case snapshot results. Every
+operation accepts an optional `AbortSignal`. `FleetError` retains `kind`, `code`, and
 available `status`; credential persistence and cancellation stay actionable.
-Rebuild/sync the XCFramework with its generated Swift wrappers for iOS. Android
-remains unsupported. Run `npm run test:fleet` for the bridge fixture and see the
+Rebuild/sync the XCFramework with its generated Swift wrappers for iOS, and run
+`scripts/sync-android-jni.sh` before an Android build. Run `npm run test:fleet` for the bridge fixture and see the
 [fleet reference](../../../docs/reference/fleet.md) for permissions, status and
 provider limits. Closing a fleet client leaves the session usable.

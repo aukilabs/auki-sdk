@@ -27,9 +27,10 @@ their origins; prismatic, floating, planar, and spherical joints are traversed
 at zero displacement. Use `Model::load` for a local file on native platforms,
 and `Model::from_str` when the application supplies XML, including on the web.
 
-The [Swift binding](../../core/bindings/swift/auki-sdk-swift/README.md) exposes
+The [UniFFI facade](../../core/bindings/uniffi/auki-sdk-uniffi/README.md) exposes
 this crate through its optional `urdf-fk` feature, also included in
-`standard-protocols`.
+`standard-protocols`. iOS and Android use that facade. Web uses
+[`auki-sdk-web`](../../core/bindings/web/auki-sdk-web/README.md).
 
 ## Source and compatibility
 

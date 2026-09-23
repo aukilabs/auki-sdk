@@ -1,7 +1,7 @@
 import Foundation
 import ExpoModulesCore
 
-#if canImport(auki_sdk_swiftFFI)
+#if canImport(auki_sdk_uniffiFFI)
 private struct DownloadEntry {
   let transfer: AukiDataDownload
   let operationId: String

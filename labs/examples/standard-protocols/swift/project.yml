@@ -7,7 +7,7 @@ options:
 
 packages:
   AukiSDK:
-    path: ../../../../core/bindings/swift/auki-sdk-swift
+    path: ../../../../core/bindings/uniffi/auki-sdk-uniffi
   AukiStandardPlayground:
     path: Package
 

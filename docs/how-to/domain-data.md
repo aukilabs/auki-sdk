@@ -174,18 +174,21 @@ See the [Web](../../core/bindings/web/auki-sdk-web/README.md) and
 [Python](../../core/bindings/python/auki-sdk-py/README.md) READMEs for build
 instructions and local tests.
 
-## Use Swift or Expo
+## Use the UniFFI facade or Expo
 
-Swift's `session.domains()` and `session.data(domainId:)` use the same login as
-its peer APIs. Expo exports `domains(session)` and `data(session, domainId)`
-for Web and iOS. Neither requires a running peer. Both support portal/pose
-reads, metadata filters, buffered CRUD, streamed downloads, and multipart uploads.
+iOS calls `session.domains()` and `session.data(domainId:)` through
+[`auki-sdk-uniffi`](../../core/bindings/uniffi/auki-sdk-uniffi/README.md). Android
+uses the same crate through generated Kotlin. Expo exports `domains(session)`
+and `data(session, domainId)` on Web, iOS, and Android. None of these require a
+running peer. They support portal/pose reads, metadata filters, buffered CRUD,
+streamed downloads, and multipart uploads.
 
-Start with the [Swift example and tests](../../core/bindings/swift/auki-sdk-swift/README.md#work-with-domains-and-domain-data)
-or the [Expo binding](../../core/bindings/expo/README.md). Streaming keeps one
-bounded chunk in flight across the native bridge and waits for the destination
-before continuing. Always cancel and await pending transfers before closing
-their client.
+Start with the [UniFFI facade](../../core/bindings/uniffi/auki-sdk-uniffi/README.md#work-with-domains-and-domain-data)
+or the [Expo binding](../../core/bindings/expo/README.md). Web uses the separate
+Wasm crate [`auki-sdk-web`](../../core/bindings/web/auki-sdk-web/README.md).
+Streaming keeps one bounded chunk in flight across the native bridge and waits
+for the destination before continuing. Always cancel and await pending transfers
+before closing their client.
 
 ## Reuse an imported login
 

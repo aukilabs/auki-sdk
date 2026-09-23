@@ -9,7 +9,7 @@ app chooses which protocols to handle.
 ## Start here
 
 [Run two peers and send a message](docs/tutorials/first-peer.md) with the Rust
-Echo example. For Python, Web, Swift, or Expo, see
+Echo example. For Python, Web, iOS, Android, or Expo, see
 [installation](docs/reference/networking.md#platforms-and-installation).
 
 ## Documentation
@@ -34,7 +34,7 @@ Echo example. For Python, Web, Swift, or Expo, see
 
 | Build | Use | Start with |
 | --- | --- | --- |
-| User app, such as Web or iOS | Talk to peers with an email/password or ZITADEL user login | [User authentication](docs/how-to/authenticate.md) |
+| User app, such as Web, iOS, or Android | Talk to peers with an email/password or ZITADEL user login | [User authentication](docs/how-to/authenticate.md) |
 | Backend service, such as Rust or Python | Talk to peers with an App access key and secret | [Service authentication](docs/how-to/authenticate.md#sign-in-as-a-backend-service) |
 | Compute node | Run Rust or Python handlers for eligible DMS tasks across Domains | [Compute requirements](docs/explanation/apps-nodes-and-robots.md#compute-nodes) |
 | Robot | Run Rust or Python handlers for DMS tasks in its assigned Domain | [Robot requirements](docs/explanation/apps-nodes-and-robots.md#robots) |

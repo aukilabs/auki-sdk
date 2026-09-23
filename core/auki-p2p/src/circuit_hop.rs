@@ -128,7 +128,9 @@ impl CircuitHopTable {
         if !entry.owners.is_empty() {
             return false;
         }
-        self.by_key.remove(&entry.key);
+        if self.by_key.get(&entry.key) == Some(&connection_id) {
+            self.by_key.remove(&entry.key);
+        }
         self.by_connection.remove(&connection_id);
         true
     }
@@ -137,7 +139,22 @@ impl CircuitHopTable {
     /// `open_exact` redials.
     pub(crate) fn invalidate(&mut self, connection_id: ConnectionId) {
         if let Some(entry) = self.by_connection.remove(&connection_id) {
-            self.by_key.remove(&entry.key);
+            if self.by_key.get(&entry.key) == Some(&connection_id) {
+                self.by_key.remove(&entry.key);
+            }
+        }
+    }
+
+    /// Experimental: stop reusing this circuit without closing its owners.
+    #[cfg(all(
+        feature = "_handover_experiment",
+        any(test, not(target_arch = "wasm32"))
+    ))]
+    pub(crate) fn retire(&mut self, connection_id: ConnectionId) {
+        if let Some(entry) = self.by_connection.get(&connection_id) {
+            if self.by_key.get(&entry.key) == Some(&connection_id) {
+                self.by_key.remove(&entry.key);
+            }
         }
     }
 
@@ -257,5 +274,62 @@ mod tests {
         table.mark_pending(hop.clone());
         table.fail_pending(&hop);
         assert_eq!(table.acquire(&hop), CircuitAcquire::Vacant);
+    }
+
+    #[cfg(feature = "_handover_experiment")]
+    #[test]
+    fn retiring_keeps_old_owners_and_old_release_preserves_replacement() {
+        let mut table = CircuitHopTable::default();
+        let hop = key(8);
+        let first = table.next_owner();
+        let sibling = table.next_owner();
+        table.established(hop.clone(), connection(20), [first, sibling]);
+        table.retire(connection(20));
+        assert_eq!(table.acquire(&hop), CircuitAcquire::Vacant);
+        table.mark_pending(hop.clone());
+        assert_eq!(table.acquire(&hop), CircuitAcquire::Pending);
+        let replacement = table.next_owner();
+        table.established(hop.clone(), connection(21), [replacement]);
+        table.retire(connection(20)); // A stale retirement cannot retire the new hop.
+        assert_eq!(table.live_connection(&hop), Some(connection(21)));
+        assert!(!table.release(connection(20), first));
+        assert!(table.release(connection(20), sibling));
+        assert_eq!(table.live_connection(&hop), Some(connection(21)));
+        assert!(table.release(connection(21), replacement));
+        assert_eq!(table.acquire(&hop), CircuitAcquire::Vacant);
+    }
+
+    #[cfg(feature = "_handover_experiment")]
+    #[test]
+    fn retired_remote_reset_cannot_remove_replacement() {
+        let mut table = CircuitHopTable::default();
+        let hop = key(9);
+        let old = table.next_owner();
+        table.established(hop.clone(), connection(22), [old]);
+        table.retire(connection(22));
+        let new = table.next_owner();
+        table.established(hop.clone(), connection(23), [new]);
+        table.invalidate(connection(22));
+        assert_eq!(table.live_connection(&hop), Some(connection(23)));
+        assert!(table.release(connection(23), new));
+    }
+
+    #[cfg(feature = "_handover_experiment")]
+    #[test]
+    fn failed_or_cancelled_replacement_preserves_retired_owners() {
+        let mut table = CircuitHopTable::default();
+        let hop = key(10);
+        let old = table.next_owner();
+        table.established(hop.clone(), connection(24), [old]);
+        table.retire(connection(24));
+        table.mark_pending(hop.clone());
+        table.fail_pending(&hop);
+        assert!(table.by_connection.contains_key(&connection(24)));
+        table.mark_pending(hop.clone());
+        table.established(hop.clone(), connection(25), []);
+        assert_eq!(table.acquire(&hop), CircuitAcquire::Vacant);
+        assert!(table.by_connection.contains_key(&connection(24)));
+        assert!(!table.by_connection.contains_key(&connection(25)));
+        assert!(table.release(connection(24), old));
     }
 }

@@ -752,6 +752,23 @@ impl Node {
             .await
     }
 
+    /// Local experiment only. Existing owners remain responsible for closing.
+    /// This is not an atomic replacement API or an automatic lifetime manager.
+    #[cfg(feature = "_handover_experiment")]
+    pub(crate) async fn retire_relay_route_for_experiment(
+        &self,
+        route: &RelayRouteHandle,
+    ) -> P2PResult<()> {
+        if route.node_instance_id != self.node_instance_id {
+            return Err(Error::ForeignRelayRoute);
+        }
+        self.send_unit_command(|response| Command::RetireCircuit {
+            connection_id: route.connection_id,
+            response,
+        })
+        .await
+    }
+
     pub async fn disconnect(&self, peer_id: PeerId) -> P2PResult<()> {
         self.send_unit_command(|response| Command::Disconnect { peer_id, response })
             .await
@@ -936,6 +953,11 @@ impl Node {
 }
 
 enum Command {
+    #[cfg(feature = "_handover_experiment")]
+    RetireCircuit {
+        connection_id: ConnectionId,
+        response: oneshot::Sender<P2PResult<()>>,
+    },
     Connect {
         peer_id: PeerId,
         addresses: Vec<Multiaddr>,
@@ -2096,6 +2118,14 @@ async fn run_swarm(
                             Err(error) => {
                                 let _ = response.send(Err(classify_dial_error(error)));
                             }
+                        }
+                    }
+                    #[cfg(feature = "_handover_experiment")]
+                    Command::RetireCircuit { connection_id, response } => {
+                        // A cancelled, unconsumed command must not alter selection.
+                        if !response.is_closed() {
+                            circuit_hops.retire(connection_id);
+                            let _ = response.send(Ok(()));
                         }
                     }
                     Command::CloseConnection {

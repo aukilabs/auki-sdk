@@ -9,6 +9,10 @@ authors.workspace = true
 description = "DDS-authenticated Auki P2P runtime, exact-route transport, and relay routing"
 readme = "README.md"
 
+[features]
+# Local investigation only; not a supported application API.
+_handover_experiment = []
+
 [dependencies]
 async-channel = { workspace = true }
 chrono = { workspace = true }

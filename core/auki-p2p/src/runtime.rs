@@ -79,6 +79,19 @@ impl AuthenticatedRouteStream {
         self.relay.is_some()
     }
 
+    /// Local native handover experiment only. Keeps this stream alive while
+    /// future exact-route opens establish or reuse a replacement circuit.
+    #[cfg(feature = "_handover_experiment")]
+    pub async fn retire_circuit_for_experiment(&self) -> Result<()> {
+        if let Some(relay) = &self.relay {
+            relay
+                .node
+                .retire_relay_route_for_experiment(relay.route())
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn close(mut self) -> Result<()> {
         drop(self.stream.take());
         if let Some(mut relay) = self.relay.take() {

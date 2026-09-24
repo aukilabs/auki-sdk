@@ -8,7 +8,7 @@ use tokio::time::Instant;
 
 const PAYLOAD: usize = 3200;
 
-struct GoRelay {
+pub(super) struct GoRelay {
     child: Child,
     input: ChildStdin,
     output: std::sync::mpsc::Receiver<serde_json::Value>,
@@ -17,7 +17,7 @@ struct GoRelay {
 }
 
 impl GoRelay {
-    fn start(seconds: u64) -> Self {
+    pub(super) fn start(seconds: u64) -> Self {
         let binary = std::env::var("AUKI_HANDOVER_GO_RELAY")
             .expect("set AUKI_HANDOVER_GO_RELAY to the locally built Go fixture");
         let mut child = Command::new(binary)
@@ -69,6 +69,10 @@ impl GoRelay {
         writeln!(self.input, "{command}").unwrap();
         self.input.flush().unwrap();
         self.output.recv_timeout(Duration::from_secs(3)).unwrap()
+    }
+
+    pub(super) fn provider(&self) -> RelayProvider {
+        self.provider.clone()
     }
 
     async fn wait_active(&mut self, expected: u64) -> serde_json::Value {

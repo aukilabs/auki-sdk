@@ -1277,6 +1277,13 @@ struct RelayHarness {
 
 impl RelayHarness {
     async fn start(label: &'static str) -> Self {
+        Self::start_with_reservation_duration(label, Duration::from_secs(4)).await
+    }
+
+    async fn start_with_reservation_duration(
+        label: &'static str,
+        reservation_duration: Duration,
+    ) -> Self {
         let identity = libp2p::identity::Keypair::generate_ed25519();
         let peer_id = identity.public().to_peer_id();
         let streams = StreamBehaviour::new();
@@ -1285,7 +1292,7 @@ impl RelayHarness {
             .accept(StreamProtocol::new(SOURCE_ADMISSION_PROTOCOL))
             .unwrap();
         let config = relay::Config {
-            reservation_duration: Duration::from_secs(4),
+            reservation_duration,
             reservation_rate_limiters: Vec::new(),
             max_circuit_duration: CIRCUIT_DURATION,
             max_circuit_bytes: CIRCUIT_DATA_BYTES,
@@ -1784,6 +1791,9 @@ fn unix_time() -> u64 {
 
 #[path = "handover_experiment/mod.rs"]
 mod handover_experiment;
+
+#[path = "stalled_connection/mod.rs"]
+mod stalled_connection;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dns_wss_reservation_dispatches_to_tls_before_tcp_dns_transport() {

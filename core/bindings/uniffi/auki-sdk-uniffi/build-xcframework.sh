@@ -7,7 +7,10 @@ set -euo pipefail
 
 CRATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(cd "$CRATE_DIR/../../../.." && pwd)"
-LIB_NAME="auki_sdk_swift"
+if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
+  export CARGO_TARGET_DIR="$WORKSPACE_ROOT/target"
+fi
+LIB_NAME="auki_sdk_uniffi"
 OUT="$CRATE_DIR/target-xcframework"
 BINDINGS="$OUT/bindings"
 SWIFT_OUT="$CRATE_DIR/Sources/AukiSDK/Generated"
@@ -21,22 +24,22 @@ mkdir -p "$BINDINGS" "$SWIFT_OUT"
 cd "$WORKSPACE_ROOT"
 
 for TARGET in aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
-  cargo build --locked --release -p auki-sdk-swift \
+  cargo build --locked --release -p auki-sdk-uniffi \
     --features standard-protocols \
     --target "$TARGET"
 done
 
-DEVICE_LIB="target/aarch64-apple-ios/release/lib${LIB_NAME}.a"
+DEVICE_LIB="$CARGO_TARGET_DIR/aarch64-apple-ios/release/lib${LIB_NAME}.a"
 # CocoaPods requires identical static library basenames across XCFramework slices.
 mkdir -p "$OUT/sim"
 SIM_FAT="$OUT/sim/lib${LIB_NAME}.a"
 lipo -create \
-  "target/aarch64-apple-ios-sim/release/lib${LIB_NAME}.a" \
-  "target/x86_64-apple-ios/release/lib${LIB_NAME}.a" \
+  "$CARGO_TARGET_DIR/aarch64-apple-ios-sim/release/lib${LIB_NAME}.a" \
+  "$CARGO_TARGET_DIR/x86_64-apple-ios/release/lib${LIB_NAME}.a" \
   -output "$SIM_FAT"
 
 cargo run --locked --release --features cli,standard-protocols \
-  -p auki-sdk-swift --bin uniffi-bindgen -- generate \
+  -p auki-sdk-uniffi --bin uniffi-bindgen -- generate \
   --library "$DEVICE_LIB" \
   --language swift \
   --out-dir "$BINDINGS"

@@ -1,17 +1,17 @@
 [package]
-name = "auki-sdk-swift"
+name = "auki-sdk-uniffi"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Mechanical UniFFI facade for authenticated Auki peers on Apple platforms"
+description = "UniFFI facade for the Auki SDK on iOS and Android"
 readme = "README.md"
 publish = false
 
 [lib]
-name = "auki_sdk_swift"
+name = "auki_sdk_uniffi"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [features]

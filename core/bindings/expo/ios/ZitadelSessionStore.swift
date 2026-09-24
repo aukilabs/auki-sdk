@@ -1,7 +1,7 @@
 import Foundation
 import ExpoModulesCore
 
-#if canImport(auki_sdk_swiftFFI)
+#if canImport(auki_sdk_uniffiFFI)
 // No secret-bearing record is included in event payloads or exception text.
 private struct ZitadelPayload: Codable {
   let accessToken: String

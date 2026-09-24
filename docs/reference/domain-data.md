@@ -6,7 +6,7 @@ The SDK reexports the types from
 
 ## Platforms and credentials
 
-| Credential | Rust | Python | Web | Swift/iOS | Expo Web/iOS |
+| Credential | Rust | Python | Web | Swift/iOS | Expo |
 | --- | --- | --- | --- | --- | --- |
 | User email/password | Listing and data | Listing and data | Listing and data | Listing and data | Listing and data |
 | App key and secret | Native listing and data | Listing and data | Not exposed | Not exposed | Not exposed |
@@ -16,7 +16,7 @@ The SDK reexports the types from
 
 App secrets belong on trusted backends. Machine credentials get their Domain
 from a lease or robot assignment; they do not provide a user Domain picker.
-Android is not implemented by the Expo binding.
+The Expo column covers Web, iOS, and Android.
 
 Imported-session data uses the existing ordinary API service exchange, then
 DDS selected-Domain authentication. The deployment must accept imported

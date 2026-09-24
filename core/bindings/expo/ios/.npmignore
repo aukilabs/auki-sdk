@@ -1,0 +1,4 @@
+# The package `files` entry includes this directory. Keep the XCFramework
+# and Swift sources; drop local Xcode and CocoaPods output.
+/build/
+/Pods/

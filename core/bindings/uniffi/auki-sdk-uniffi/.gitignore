@@ -1,4 +1,5 @@
 target-xcframework/
+target-android/
 Sources/AukiSDK/Generated/
 .build/
 .swiftpm/

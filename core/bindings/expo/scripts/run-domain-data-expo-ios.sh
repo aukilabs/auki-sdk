@@ -11,7 +11,32 @@ domain_device="${AUKI_DOMAIN_DATA_SIMULATOR_UDID:-}"
 domain_created=""
 domain_fixture_pid=""
 if [[ -z "$domain_device" ]]; then
-  domain_device="$(xcrun simctl create "Auki Domain data local $$" com.apple.CoreSimulator.SimDeviceType.iPhone-17 "${AUKI_DOMAIN_DATA_SIMULATOR_RUNTIME:-com.apple.CoreSimulator.SimRuntime.iOS-26-2}")"
+  domain_runtime="${AUKI_DOMAIN_DATA_SIMULATOR_RUNTIME:-}"
+  if [[ -z "$domain_runtime" ]]; then
+    domain_runtime="$(xcrun simctl list runtimes --json | node -e '
+      const data = JSON.parse(require("fs").readFileSync(0, "utf8"));
+      const ios = (data.runtimes || []).filter((runtime) =>
+        String(runtime.identifier || "").startsWith("com.apple.CoreSimulator.SimRuntime.iOS-") &&
+        runtime.isAvailable !== false
+      );
+      if (!ios.length) {
+        console.error("No available iOS simulator runtime.");
+        process.exit(1);
+      }
+      const parts = (version) => String(version || "0").split(".").map((part) => Number.parseInt(part, 10) || 0);
+      ios.sort((left, right) => {
+        const a = parts(left.version);
+        const b = parts(right.version);
+        for (let i = 0; i < Math.max(a.length, b.length); i++) {
+          const delta = (b[i] || 0) - (a[i] || 0);
+          if (delta) return delta;
+        }
+        return 0;
+      });
+      process.stdout.write(ios[0].identifier);
+    ')"
+  fi
+  domain_device="$(xcrun simctl create "Auki Domain data local $$" com.apple.CoreSimulator.SimDeviceType.iPhone-17 "$domain_runtime")"
   domain_created=1
 fi
 cleanup() {

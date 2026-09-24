@@ -25,14 +25,19 @@ android {
   defaultConfig {
     versionCode 1
     versionName "0.1.0"
+    consumerProguardFiles 'consumer-rules.pro'
   }
   lintOptions {
     abortOnError false
+  }
+  packagingOptions {
+    pickFirst '**/libjnidispatch.so'
   }
 }
 
 dependencies {
   implementation project(':expo-modules-core')
+  implementation 'net.java.dev.jna:jna:5.17.0@aar'
 }
 
 def safeExtGet(prop, fallback) {

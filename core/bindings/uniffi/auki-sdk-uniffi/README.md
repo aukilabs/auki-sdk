@@ -1,16 +1,27 @@
-# Auki networking for Swift
+# UniFFI facade for iOS and Android
 
-Use `AukiSession` and `AukiPeer` to connect your iOS app to the Auki network.
-The local Swift package requires Swift 6, iOS 17+, Xcode, and Rust 1.89+.
+`auki-sdk-uniffi` is the shared native facade. One Rust library, `libauki_sdk_uniffi`, generates Swift for iOS and Kotlin for Android. Expo loads that library on both platforms. Browsers do not use this crate: Web builds [`auki-sdk-web`](../../web/auki-sdk-web/README.md) to Wasm.
 
-Build from the SDK repository root:
+| Platform | Binding | Build |
+| --- | --- | --- |
+| iOS | Swift package `AukiSDK` | `build-xcframework.sh` |
+| Android | Kotlin in `uniffi.auki_sdk_uniffi` | `core/bindings/expo/scripts/sync-android-jni.sh` |
+| Web | separate Wasm crate `auki-sdk-web` | `core/bindings/web/auki-sdk-web` |
+
+iOS requires Swift 6, iOS 17+, Xcode, and Rust 1.89+. From the SDK repository root:
 
 ~~~sh
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
-bash core/bindings/swift/auki-sdk-swift/build-xcframework.sh
+bash core/bindings/uniffi/auki-sdk-uniffi/build-xcframework.sh
 ~~~
 
-Add this directory's local Swift package to your app. The build includes
+Android requires `ANDROID_NDK_HOME` (NDK r27+) and JDK 17 or 21:
+
+~~~sh
+bash core/bindings/expo/scripts/sync-android-jni.sh
+~~~
+
+Add this directory's local Swift package to an iOS app. The build includes
 experimental protocol bindings. Register the handlers you want to use.
 
 The `urdf-fk` feature (included in `standard-protocols`) uses the in-repository
@@ -25,8 +36,8 @@ See [custom protocols](../../../../docs/how-to/protocols.md).
 Run the offline Swift checks with:
 
 ~~~sh
-core/bindings/swift/auki-sdk-swift/run-domain-data-bindings-test.sh
-core/bindings/swift/auki-sdk-swift/run-jobs-bindings-test.sh
+core/bindings/uniffi/auki-sdk-uniffi/run-domain-data-bindings-test.sh
+core/bindings/uniffi/auki-sdk-uniffi/run-jobs-bindings-test.sh
 ~~~
 
 The Domain data check uses a loopback HTTP fixture. The jobs check exercises
@@ -225,5 +236,5 @@ do {
 closing the session. Handle `AukiSdkError.Fleet(kind:status:code:message:)` in
 exhaustive error switches and regenerate the matching UniFFI/XCFramework output.
 See the [fleet reference](../../../../docs/reference/fleet.md).
-After `build-xcframework.sh`, run `bash core/bindings/swift/auki-sdk-swift/run-fleet-bindings-test.sh`
+After `build-xcframework.sh`, run `bash core/bindings/uniffi/auki-sdk-uniffi/run-fleet-bindings-test.sh`
 from the repository root for a generated Swift/native loopback HTTP exercise.

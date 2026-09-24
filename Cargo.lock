@@ -394,7 +394,7 @@ name = "auki-camera-mesh-swift"
 version = "0.1.0"
 dependencies = [
  "auki-camera-mesh",
- "auki-sdk-swift",
+ "auki-sdk-uniffi",
  "parking_lot",
  "serde_json",
  "thiserror 2.0.20",
@@ -764,7 +764,7 @@ version = "0.1.0"
 dependencies = [
  "auki-portable-echo",
  "auki-sdk",
- "auki-sdk-swift",
+ "auki-sdk-uniffi",
  "parking_lot",
  "thiserror 2.0.20",
  "tokio",
@@ -960,7 +960,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "auki-sdk-swift"
+name = "auki-sdk-uniffi"
 version = "0.1.0"
 dependencies = [
  "async-channel",

@@ -83,7 +83,7 @@ Check each affected binding using its README and test harnesses:
   TypeScript checks; use `npm run build` for production assets.
 - [Python](core/bindings/python/auki-sdk-py/README.md): build in a virtual
   environment with the documented Maturin flags before running `python -m pytest`.
-- [Swift](core/bindings/swift/auki-sdk-swift/README.md) and
+- [UniFFI for iOS and Android](core/bindings/uniffi/auki-sdk-uniffi/README.md) and
   [Expo](core/bindings/expo/README.md): build with their platform toolchains and
   run the relevant harnesses in `test-support/`.
 
@@ -107,8 +107,8 @@ credentials or deployed services are required. Failed test logs and Python
 JUnit results are retained as artifacts when available.
 
 The Expo checks cover JavaScript bridges and the Web package. Swift/iOS and
-native Expo apps still need the local platform checks above; there is no macOS
-CI job. Android remains a stub. These jobs also do not validate Windows or
+the Android NDK library still need the local platform checks above; there is no
+macOS or Android CI job. These jobs also do not validate Windows or
 experimental `labs/` crates independently.
 
 ## Use local fixtures first

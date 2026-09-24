@@ -3,8 +3,12 @@
     "name": "Zitadel Handoff Test",
     "slug": "auki-zitadel-handoff-test",
     "version": "0.1.0",
-    "platforms": ["ios", "web"],
+    "platforms": ["ios", "android", "web"],
     "newArchEnabled": true,
+    "android": {
+      "package": "com.auki.zitadeltodo.z09",
+      "usesCleartextTraffic": true
+    },
     "ios": {
       "bundleIdentifier": "com.auki.zitadeltodo.z09",
       "infoPlist": {

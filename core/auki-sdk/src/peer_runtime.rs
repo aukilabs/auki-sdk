@@ -659,14 +659,17 @@ impl AukiPeer {
                         return Err(AukiPeerStartError::Relay(AukiPeerRelayError::client(error)));
                     }
                 };
-                let coordinator_config = match relay_coordinator_config(relay_config) {
-                    Ok(config) => config,
-                    Err(error) => {
-                        authority.shutdown().await;
-                        node.shutdown_now().await;
-                        return Err(AukiPeerStartError::Relay(AukiPeerRelayError::client(error)));
-                    }
-                };
+                let coordinator_config =
+                    match relay_coordinator_config(relay_config, config.relay_transport()) {
+                        Ok(config) => config,
+                        Err(error) => {
+                            authority.shutdown().await;
+                            node.shutdown_now().await;
+                            return Err(AukiPeerStartError::Relay(AukiPeerRelayError::client(
+                                error,
+                            )));
+                        }
+                    };
                 let coordinator = loop {
                     match RelayBookingCoordinator::start(
                         client.clone(),
@@ -1054,8 +1057,10 @@ async fn cleanup_relay_after_startup_failure(relay: Option<RelayBookingCoordinat
 
 fn relay_coordinator_config(
     relay: AukiRelayConfig,
+    transport: auki_p2p::RelayBaseTransport,
 ) -> Result<RelayCoordinatorConfig, RelayBookingClientError> {
     Ok(RelayCoordinatorConfig {
+        transport,
         idempotency_key: RelayIdempotencyKey::new(format!("auki-sdk-relay-{}", Uuid::new_v4()))?,
         mode: booking_mode(relay),
         requested_duration_seconds: relay.requested_duration.as_secs(),
@@ -2521,9 +2526,10 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
     #[test]
     fn relay_start_configs_use_fresh_keys_and_clones_retain_one_key() {
         let relay = AukiRelayConfig::default();
-        let first = relay_coordinator_config(relay).unwrap();
+        let first = relay_coordinator_config(relay, auki_p2p::RelayBaseTransport::Tcp).unwrap();
         let retry = first.clone();
-        let next_start = relay_coordinator_config(relay).unwrap();
+        let next_start =
+            relay_coordinator_config(relay, auki_p2p::RelayBaseTransport::Tcp).unwrap();
         assert_eq!(first.idempotency_key, retry.idempotency_key);
         assert_ne!(first.idempotency_key, next_start.idempotency_key);
     }

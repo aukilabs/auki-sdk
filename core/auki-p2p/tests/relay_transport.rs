@@ -1781,3 +1781,50 @@ fn unix_time() -> u64 {
         .unwrap()
         .as_secs()
 }
+
+#[path = "handover_experiment/mod.rs"]
+mod handover_experiment;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dns_wss_reservation_dispatches_to_tls_before_tcp_dns_transport() {
+    let dns = TestDns::start();
+    let client = node(&dns);
+    let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let relay = Identity::generate().peer_id();
+    let base = format!(
+        "/dns4/handover.relay.auki-p2p.dev/tcp/{}/wss/p2p/{relay}",
+        listener.local_addr().unwrap().port()
+    );
+    let provider = RelayProvider::new_for_transport(
+        relay,
+        [base],
+        auki_p2p::RelayBaseTransport::Wss,
+        ExpectedRelayLimits::new(Duration::from_secs(900), 64 * 1024 * 1024).unwrap(),
+    )
+    .unwrap();
+    let observe = async {
+        let (mut socket, _) = listener.accept().await?;
+        let mut header = [0u8; 2];
+        tokio::io::AsyncReadExt::read_exact(&mut socket, &mut header).await?;
+        Ok::<_, std::io::Error>(header)
+    };
+    let (observed, opened) = tokio::join!(
+        tokio::time::timeout(Duration::from_secs(2), observe),
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            client.start_relay_reservation(provider)
+        ),
+    );
+    must_succeed(client.shutdown()).await;
+    assert_eq!(
+        observed.expect("WSS must reach the listener").unwrap(),
+        [0x16, 0x03],
+        "WSS must initiate TLS, not raw Noise/TCP"
+    );
+    assert!(
+        !matches!(opened, Ok(Ok(_))),
+        "an incomplete TLS handshake cannot establish a reservation"
+    );
+}

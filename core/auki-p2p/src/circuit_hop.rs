@@ -1,6 +1,7 @@
 //! Live exact-route circuit hops, keyed like WSS `direct_connections`.
 //!
-//! One hop per `(target peer, circuit multiaddr)`. Unlike the relay WebSocket,
+//! One preferred hop per `(target peer, circuit multiaddr)`, plus at most one
+//! old generation during explicit replacement. Unlike the relay WebSocket,
 //! a circuit slot is scarce, so the last owner release tears the hop down.
 //! Releases are idempotent per owner so a cancelled `close` plus `Drop` cannot
 //! drop a sibling stream's hop.
@@ -104,6 +105,7 @@ impl CircuitHopTable {
         self.pending.remove(&key);
         let owners: HashSet<_> = owners.into_iter().collect();
         if owners.is_empty() {
+            self.restore_previous(&key);
             return;
         }
         self.by_key.insert(key.clone(), connection_id);
@@ -113,6 +115,7 @@ impl CircuitHopTable {
 
     pub(crate) fn fail_pending(&mut self, key: &CircuitHopKey) {
         self.pending.remove(key);
+        self.restore_previous(key);
     }
 
     /// Drop one owner of `connection_id`. A repeated release of the same owner
@@ -128,8 +131,12 @@ impl CircuitHopTable {
         if !entry.owners.is_empty() {
             return false;
         }
-        self.by_key.remove(&entry.key);
+        if self.by_key.get(&entry.key) == Some(&connection_id) {
+            self.by_key.remove(&entry.key);
+        }
+        let key = entry.key.clone();
         self.by_connection.remove(&connection_id);
+        self.restore_previous(&key);
         true
     }
 
@@ -137,7 +144,54 @@ impl CircuitHopTable {
     /// `open_exact` redials.
     pub(crate) fn invalidate(&mut self, connection_id: ConnectionId) {
         if let Some(entry) = self.by_connection.remove(&connection_id) {
-            self.by_key.remove(&entry.key);
+            if self.by_key.get(&entry.key) == Some(&connection_id) {
+                self.by_key.remove(&entry.key);
+            }
+            self.restore_previous(&entry.key);
+        }
+    }
+
+    /// Atomically stop selecting the old generation before acquiring its replacement.
+    /// Concurrent requests against the same old generation share one candidate.
+    /// A second rotation must wait for the previous generation's owners to close.
+    pub(crate) fn prepare_replacement(
+        &mut self,
+        key: &CircuitHopKey,
+        old: ConnectionId,
+    ) -> Result<(), &'static str> {
+        if self
+            .by_connection
+            .get(&old)
+            .is_some_and(|entry| &entry.key != key)
+        {
+            return Err("replacement route does not match the old circuit");
+        }
+        if self.by_key.get(key) != Some(&old) {
+            return Ok(());
+        }
+        if self
+            .by_connection
+            .values()
+            .filter(|entry| &entry.key == key)
+            .count()
+            >= 2
+        {
+            return Err("close the previous circuit generation before replacing again");
+        }
+        self.by_key.remove(key);
+        Ok(())
+    }
+
+    /// Failed or abandoned candidates restore selection of the still-live old hop.
+    fn restore_previous(&mut self, key: &CircuitHopKey) {
+        if !self.by_key.contains_key(key) && !self.pending.contains(key) {
+            if let Some((&id, _)) = self
+                .by_connection
+                .iter()
+                .find(|(_, entry)| &entry.key == key)
+            {
+                self.by_key.insert(key.clone(), id);
+            }
         }
     }
 
@@ -257,5 +311,78 @@ mod tests {
         table.mark_pending(hop.clone());
         table.fail_pending(&hop);
         assert_eq!(table.acquire(&hop), CircuitAcquire::Vacant);
+    }
+
+    #[test]
+    fn retiring_keeps_old_owners_and_old_release_preserves_replacement() {
+        let mut table = CircuitHopTable::default();
+        let hop = key(8);
+        let first = table.next_owner();
+        let sibling = table.next_owner();
+        table.established(hop.clone(), connection(20), [first, sibling]);
+        table.prepare_replacement(&hop, connection(20)).unwrap();
+        assert_eq!(table.acquire(&hop), CircuitAcquire::Vacant);
+        table.mark_pending(hop.clone());
+        assert_eq!(table.acquire(&hop), CircuitAcquire::Pending);
+        let replacement = table.next_owner();
+        table.established(hop.clone(), connection(21), [replacement]);
+        table.prepare_replacement(&hop, connection(20)).unwrap(); // A stale retirement cannot retire the new hop.
+        assert_eq!(table.live_connection(&hop), Some(connection(21)));
+        assert!(!table.release(connection(20), first));
+        assert!(table.release(connection(20), sibling));
+        assert_eq!(table.live_connection(&hop), Some(connection(21)));
+        assert!(table.release(connection(21), replacement));
+        assert_eq!(table.acquire(&hop), CircuitAcquire::Vacant);
+    }
+
+    #[test]
+    fn retired_remote_reset_cannot_remove_replacement() {
+        let mut table = CircuitHopTable::default();
+        let hop = key(9);
+        let old = table.next_owner();
+        table.established(hop.clone(), connection(22), [old]);
+        table.prepare_replacement(&hop, connection(22)).unwrap();
+        let new = table.next_owner();
+        table.established(hop.clone(), connection(23), [new]);
+        table.invalidate(connection(22));
+        assert_eq!(table.live_connection(&hop), Some(connection(23)));
+        assert!(table.release(connection(23), new));
+    }
+
+    #[test]
+    fn replacement_is_bounded_and_failed_candidate_restores_old_selection() {
+        let mut table = CircuitHopTable::default();
+        let hop = key(11);
+        let old = table.next_owner();
+        table.established(hop.clone(), connection(30), [old]);
+        table.prepare_replacement(&hop, connection(30)).unwrap();
+        let new = table.next_owner();
+        table.established(hop.clone(), connection(31), [new]);
+        assert!(table.prepare_replacement(&hop, connection(31)).is_err());
+        assert_eq!(table.live_connection(&hop), Some(connection(31)));
+        assert!(table.release(connection(31), new));
+        assert_eq!(table.live_connection(&hop), Some(connection(30)));
+        table.prepare_replacement(&hop, connection(30)).unwrap();
+        table.mark_pending(hop.clone());
+        table.fail_pending(&hop);
+        assert_eq!(table.live_connection(&hop), Some(connection(30)));
+    }
+
+    #[test]
+    fn failed_or_cancelled_replacement_preserves_retired_owners() {
+        let mut table = CircuitHopTable::default();
+        let hop = key(10);
+        let old = table.next_owner();
+        table.established(hop.clone(), connection(24), [old]);
+        table.prepare_replacement(&hop, connection(24)).unwrap();
+        table.mark_pending(hop.clone());
+        table.fail_pending(&hop);
+        assert!(table.by_connection.contains_key(&connection(24)));
+        table.mark_pending(hop.clone());
+        table.established(hop.clone(), connection(25), []);
+        assert_eq!(table.live_connection(&hop), Some(connection(24)));
+        assert!(table.by_connection.contains_key(&connection(24)));
+        assert!(!table.by_connection.contains_key(&connection(25)));
+        assert!(table.release(connection(24), old));
     }
 }

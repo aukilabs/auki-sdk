@@ -12,7 +12,6 @@ use crate::inbound_stream::{
 };
 use chrono::Utc;
 use futures::{FutureExt, StreamExt};
-#[cfg(target_os = "ios")]
 use libp2p::core::{upgrade::Version, Transport as _};
 use libp2p::{
     core::transport::{ListenerId, TransportError},
@@ -505,7 +504,9 @@ impl Node {
             .into_iter()
             .map(|address| normalize_remote_address(address, remote_peer_id, false))
             .collect::<P2PResult<Vec<_>>>()?;
-        let (connection_id, _) = self.connect_exact(remote_peer_id, addresses, None).await?;
+        let (connection_id, _) = self
+            .connect_exact(remote_peer_id, addresses, None, None)
+            .await?;
         let stream = self
             .targeted_control
             .open_stream(remote_peer_id, connection_id, protocol.stream_protocol())
@@ -594,7 +595,8 @@ impl Node {
         route: Multiaddr,
         requirements: &SessionRequirements,
     ) -> P2PResult<RelayRouteHandle> {
-        self.connect_relayed_inner(route, requirements, false).await
+        self.connect_relayed_inner(route, requirements, false, None)
+            .await
     }
 
     pub(crate) async fn connect_relayed_reusing_admission(
@@ -602,7 +604,25 @@ impl Node {
         route: Multiaddr,
         requirements: &SessionRequirements,
     ) -> P2PResult<RelayRouteHandle> {
-        self.connect_relayed_inner(route, requirements, true).await
+        self.connect_relayed_inner(route, requirements, true, None)
+            .await
+    }
+
+    pub(crate) async fn connect_relayed_replacement(
+        &self,
+        previous: &RelayRouteHandle,
+        requirements: &SessionRequirements,
+    ) -> P2PResult<RelayRouteHandle> {
+        if previous.node_instance_id != self.node_instance_id {
+            return Err(Error::ForeignRelayRoute);
+        }
+        self.connect_relayed_inner(
+            previous.route.clone(),
+            requirements,
+            true,
+            Some(previous.connection_id),
+        )
+        .await
     }
 
     async fn connect_relayed_inner(
@@ -610,6 +630,7 @@ impl Node {
         route: Multiaddr,
         requirements: &SessionRequirements,
         reuse_admission: bool,
+        replacement_of: Option<ConnectionId>,
     ) -> P2PResult<RelayRouteHandle> {
         let parsed = parse_relay_route(&route)?;
         let expected = requirements
@@ -652,6 +673,7 @@ impl Node {
                 parsed.target_peer_id,
                 vec![circuit_address.clone()],
                 Some(parsed.relay_peer_id),
+                replacement_of,
             )
             .await;
         let (connection_id, hop_owner) = match first_connection {
@@ -797,6 +819,7 @@ impl Node {
         peer_id: PeerId,
         addresses: Vec<Multiaddr>,
         circuit_relay_peer_id: Option<PeerId>,
+        replacement_of: Option<ConnectionId>,
     ) -> P2PResult<(ConnectionId, Option<CircuitHopOwner>)> {
         let circuit_permit = match circuit_relay_peer_id {
             Some(_) => Some(self.relay_circuit_dials.acquire().await),
@@ -809,6 +832,7 @@ impl Node {
                 addresses,
                 circuit_relay_peer_id,
                 circuit_permit,
+                replacement_of,
                 response,
             })
             .await
@@ -941,6 +965,7 @@ enum Command {
         addresses: Vec<Multiaddr>,
         circuit_relay_peer_id: Option<PeerId>,
         circuit_permit: Option<RelayCircuitDialPermit>,
+        replacement_of: Option<ConnectionId>,
         response: ExactDialReply,
     },
     SelectRelayConnection {
@@ -987,13 +1012,27 @@ fn build_swarm(
 ) -> P2PResult<Swarm<Behaviour>> {
     SwarmBuilder::with_existing_identity(identity)
         .with_tokio()
-        .with_tcp(
-            tcp::Config::default().nodelay(true),
-            noise::Config::new,
-            yamux::Config::default,
-        )
+        // WSS must match before DNS/TCP: DNS accepts the prefix even when
+        // TCP will reject the trailing /wss asynchronously, preventing fallback.
+        .with_other_transport(|keypair| -> Result<_, Box<dyn StdError + Send + Sync>> {
+            let transport = libp2p::websocket::Config::new(libp2p::dns::tokio::Transport::system(
+                tcp::tokio::Transport::new(tcp::Config::default().nodelay(true)),
+            )?);
+            Ok(transport
+                .upgrade(Version::V1Lazy)
+                .authenticate(noise::Config::new(keypair)?)
+                .multiplex(yamux::Config::default()))
+        })
         .map_err(|error| Error::TransportBuild(error.to_string()))?
-        .with_dns()
+        .with_other_transport(|keypair| -> Result<_, Box<dyn StdError + Send + Sync>> {
+            let transport = libp2p::dns::tokio::Transport::system(tcp::tokio::Transport::new(
+                tcp::Config::default().nodelay(true),
+            ))?;
+            Ok(transport
+                .upgrade(Version::V1Lazy)
+                .authenticate(noise::Config::new(keypair)?)
+                .multiplex(yamux::Config::default()))
+        })
         .map_err(|error| Error::TransportBuild(error.to_string()))?
         .with_relay_client(noise::Config::new, yamux::Config::default)
         .map_err(|error| Error::TransportBuild(error.to_string()))?
@@ -1020,6 +1059,18 @@ fn build_swarm(
 ) -> P2PResult<Swarm<Behaviour>> {
     SwarmBuilder::with_existing_identity(identity)
         .with_tokio()
+        // WSS must match before DNS/TCP: DNS accepts the prefix even when
+        // TCP will reject the trailing /wss asynchronously, preventing fallback.
+        .with_other_transport(|keypair| -> Result<_, Box<dyn StdError + Send + Sync>> {
+            let transport = libp2p::websocket::Config::new(SystemDnsTransport::new(
+                tcp::tokio::Transport::new(tcp::Config::default().nodelay(true)),
+            ));
+            Ok(transport
+                .upgrade(Version::V1Lazy)
+                .authenticate(noise::Config::new(keypair)?)
+                .multiplex(yamux::Config::default()))
+        })
+        .map_err(|error| Error::TransportBuild(error.to_string()))?
         .with_other_transport(|keypair| -> Result<_, Box<dyn StdError + Send + Sync>> {
             let security = noise::Config::new(keypair)?;
             let transport = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
@@ -1055,13 +1106,32 @@ fn build_swarm_with_dns_config(
 ) -> P2PResult<Swarm<Behaviour>> {
     SwarmBuilder::with_existing_identity(identity)
         .with_tokio()
-        .with_tcp(
-            tcp::Config::default().nodelay(true),
-            noise::Config::new,
-            yamux::Config::default,
-        )
+        // WSS must match before DNS/TCP: DNS accepts the prefix even when
+        // TCP will reject the trailing /wss asynchronously, preventing fallback.
+        .with_other_transport(|keypair| -> Result<_, Box<dyn StdError + Send + Sync>> {
+            let transport = libp2p::websocket::Config::new(libp2p::dns::tokio::Transport::custom(
+                tcp::tokio::Transport::new(tcp::Config::default().nodelay(true)),
+                resolver_config.clone(),
+                resolver_options.clone(),
+            ));
+            Ok(transport
+                .upgrade(Version::V1Lazy)
+                .authenticate(noise::Config::new(keypair)?)
+                .multiplex(yamux::Config::default()))
+        })
         .map_err(|error| Error::TransportBuild(error.to_string()))?
-        .with_dns_config(resolver_config, resolver_options)
+        .with_other_transport(|keypair| -> Result<_, Box<dyn StdError + Send + Sync>> {
+            let transport = libp2p::dns::tokio::Transport::custom(
+                tcp::tokio::Transport::new(tcp::Config::default().nodelay(true)),
+                resolver_config.clone(),
+                resolver_options.clone(),
+            );
+            Ok(transport
+                .upgrade(Version::V1Lazy)
+                .authenticate(noise::Config::new(keypair)?)
+                .multiplex(yamux::Config::default()))
+        })
+        .map_err(|error| Error::TransportBuild(error.to_string()))?
         .with_relay_client(noise::Config::new, yamux::Config::default)
         .map_err(|error| Error::TransportBuild(error.to_string()))?
         .with_behaviour(|_, relay| Behaviour {
@@ -1927,8 +1997,10 @@ async fn run_swarm(
                         addresses,
                         circuit_relay_peer_id,
                         circuit_permit,
+                        replacement_of,
                         response,
                     } => {
+                        if response.is_closed() { continue; }
                         let direct = addresses.iter().all(|address| {
                             !address
                                 .iter()
@@ -1979,6 +2051,12 @@ async fn run_swarm(
                             })
                             .flatten();
                         if let Some(key) = circuit_key.as_ref() {
+                            if let Some(old) = replacement_of {
+                                if let Err(reason) = circuit_hops.prepare_replacement(key, old) {
+                                    let _ = response.send(Err(Error::Dial(reason.into())));
+                                    continue;
+                                }
+                            }
                             match circuit_hops.acquire(key) {
                                 CircuitAcquire::Live {
                                     connection_id,
@@ -2043,6 +2121,7 @@ async fn run_swarm(
                                 );
                             }
                             Err(error) => {
+                                if let Some(key) = &circuit_key { circuit_hops.fail_pending(key); }
                                 let _ = response.send(Err(classify_dial_error(error)));
                             }
                         }
@@ -2364,32 +2443,19 @@ struct ParsedRelayRoute {
 }
 
 fn parse_relay_route(route: &Multiaddr) -> P2PResult<ParsedRelayRoute> {
-    let mut protocols = route.iter();
-    let (host, port, relay_peer_id, target_peer_id) = match (
-        protocols.next(),
-        protocols.next(),
-        protocols.next(),
-        protocols.next(),
-        protocols.next(),
-        protocols.next(),
-    ) {
-        (
-            Some(Protocol::Dns4(host)),
-            Some(Protocol::Tcp(port)),
-            Some(Protocol::P2p(relay_peer_id)),
-            Some(Protocol::P2pCircuit),
-            Some(Protocol::P2p(target_peer_id)),
-            None,
-        ) => (host, port, relay_peer_id, target_peer_id),
+    let mut base = route.clone();
+    let (target_peer_id, relay_peer_id) = match (base.pop(), base.pop(), base.pop()) {
+        (Some(Protocol::P2p(target)), Some(Protocol::P2pCircuit), Some(Protocol::P2p(relay))) => {
+            (target, relay)
+        }
         _ => {
             return Err(Error::InvalidRelayRoute {
                 address: route.to_string(),
-                reason: "expected exact dns4/tcp/p2p/p2p-circuit/p2p grammar".into(),
-            });
+                reason: "expected exact dns4/tcp[/wss]/p2p/p2p-circuit/p2p grammar".into(),
+            })
         }
     };
-
-    let raw_base = format!("/dns4/{host}/tcp/{port}/p2p/{relay_peer_id}");
+    let raw_base = base.with(Protocol::P2p(relay_peer_id)).to_string();
     let canonical = canonicalize_provider_base(&raw_base, relay_peer_id).map_err(|error| {
         Error::InvalidRelayRoute {
             address: route.to_string(),
@@ -2597,5 +2663,32 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
             TransportError::Other(io::Error::from(io::ErrorKind::ConnectionRefused)),
         )]);
         assert!(matches!(classify_dial_error(refused), Error::Dial(_)));
+    }
+}
+
+#[cfg(test)]
+mod relay_route_transport_tests {
+    use super::*;
+
+    #[test]
+    fn exact_relay_routes_accept_tcp_and_secure_websocket_only() {
+        let relay = PeerId::random();
+        let target = PeerId::random();
+        for transport in ["", "/wss"] {
+            let base = format!("/dns4/handover.relay.auki-p2p.dev/tcp/4443{transport}");
+            let route = format!("{base}/p2p/{relay}/p2p-circuit/p2p/{target}")
+                .parse()
+                .unwrap();
+            let parsed = parse_relay_route(&route).unwrap();
+            assert_eq!(parsed.direct_relay_address.to_string(), base);
+            assert_eq!(parsed.target_peer_id, target);
+            assert_eq!(parsed.relay_peer_id, relay);
+        }
+        let insecure = format!(
+            "/dns4/handover.relay.auki-p2p.dev/tcp/4443/ws/p2p/{relay}/p2p-circuit/p2p/{target}"
+        )
+        .parse()
+        .unwrap();
+        assert!(parse_relay_route(&insecure).is_err());
     }
 }

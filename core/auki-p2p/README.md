@@ -54,3 +54,11 @@ remain. Existing streams are not replayed or migrated by this guard.
 The `auki_p2p::relay_recovery` tracing target emits safe connection IDs, peer IDs,
 and bounded close-reason classifications. It excludes credentials and raw I/O
 error bodies. See the [local regression fixture](../../test-support/circuit-handover/README.md).
+
+Close diagnostics also include the base transport, nested I/O kinds, numeric OS
+codes, and allowlisted error layers (up to 16). Native WSS errors distinguish
+WebSocket framing, size, close/EOF and underlying I/O failures when those types
+survive upstream wrapping. Unknown errors remain `other`; no raw error message,
+WebSocket close reason or address is formatted. These observations do not identify
+which endpoint initiated a close by themselves. Browser errors can expose less
+detail than native WSS errors.

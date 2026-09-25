@@ -23,6 +23,7 @@ mod browser_route;
 mod browser_transport;
 mod candidate_route;
 mod circuit_hop;
+mod connection_diagnostics;
 mod error;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod identity;

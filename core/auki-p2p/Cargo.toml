@@ -31,6 +31,7 @@ tracing = { workspace = true }
 hickory-resolver = "0.25.2"
 libp2p = { workspace = true, features = ["tokio", "macros", "noise", "tcp", "yamux", "dns", "relay", "websocket"] }
 libp2p-stream = { workspace = true }
+soketto = "0.8.1"
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 zeroize = { workspace = true }

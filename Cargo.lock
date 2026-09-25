@@ -917,6 +917,7 @@ dependencies = [
  "chrono",
  "futures",
  "futures-timer",
+ "hickory-resolver",
  "httpmock",
  "js-sys",
  "jsonwebtoken 9.3.1",

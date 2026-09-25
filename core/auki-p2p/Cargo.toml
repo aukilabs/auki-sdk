@@ -25,6 +25,7 @@ thiserror = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
 uuid = { workspace = true }
 web-time = { workspace = true }
+tracing = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 hickory-resolver = "0.25.2"
@@ -32,7 +33,6 @@ libp2p = { workspace = true, features = ["tokio", "macros", "noise", "tcp", "yam
 libp2p-stream = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
-tracing = { workspace = true }
 zeroize = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

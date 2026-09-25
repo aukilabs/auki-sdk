@@ -335,7 +335,7 @@ impl BrowserNode {
 
         let stream_behaviour = StreamBehaviour::new();
         let streams = stream_behaviour.new_control();
-        let targeted_behaviour = TargetedStreamBehaviour::new();
+        let targeted_behaviour = TargetedStreamBehaviour::with_relay_recovery();
         let targeted_streams = targeted_behaviour.new_control();
         let swarm = build_swarm(identity.keypair(), stream_behaviour, targeted_behaviour)
             .map_err(|error| Error::TransportBuild(error.to_string()))?;
@@ -1420,8 +1420,22 @@ impl BrowserRuntime {
                 peer_id,
                 connection_id,
                 endpoint,
+                cause,
                 ..
             } => {
+                let reason = match cause.as_ref() {
+                    None => "local_close",
+                    Some(libp2p::swarm::ConnectionError::KeepAliveTimeout) => "keep_alive_timeout",
+                    Some(libp2p::swarm::ConnectionError::IO(_)) => "io_error",
+                };
+                tracing::info!(target: "auki_p2p::relay_recovery",
+                            local_peer_id = %swarm.local_peer_id(), remote_peer_id = %peer_id,
+                            connection_id = %connection_id, relayed = endpoint.is_relayed(), reason,
+                            io_kind = ?cause.as_ref().and_then(|cause| match cause {
+                                libp2p::swarm::ConnectionError::IO(error) => Some(error.kind()),
+                                _ => None,
+                            }),
+                            "connection closed");
                 if endpoint.is_relayed() {
                     self.circuit_hops.invalidate(connection_id);
                 }

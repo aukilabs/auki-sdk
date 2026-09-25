@@ -1,31 +1,27 @@
+#[path = "../../../test-support/circuit-handover/fixtures.rs"]
+#[allow(dead_code)]
+mod local_fixture;
+use local_fixture::*;
+
 use std::{
     collections::HashSet,
-    io::ErrorKind,
-    net::{Ipv4Addr, SocketAddr, UdpSocket},
+    net::Ipv4Addr,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
-    thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use auki_p2p::{
-    ApplicationProtocol, AuthenticatedRouteStream, DdsTokenVerifier, ExactRoute,
-    ExpectedRelayLimits, Identity, Node, P2PAccessClaims, PeerRole, RelayProvider,
-    RelayReservationState, SessionRequirements, SignedP2pCredential, P2P_TOKEN_AUDIENCE,
-    P2P_TOKEN_ISSUER, P2P_TOKEN_SCOPE, P2P_TOKEN_TTL, P2P_TOKEN_TYPE,
+    ApplicationProtocol, AuthenticatedRouteStream, ExactRoute, ExpectedRelayLimits, Identity, Node,
+    PeerRole, RelayProvider, RelayReservationState, SessionRequirements,
 };
 use chrono::{SecondsFormat, Utc};
 use futures::{
     io::{AsyncReadExt, AsyncWriteExt},
     StreamExt,
 };
-use hickory_resolver::{
-    config::{NameServerConfig, ResolverConfig, ResolverOpts},
-    proto::xfer::Protocol as DnsProtocol,
-};
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use libp2p::{
     multiaddr::Protocol,
     noise, relay,
@@ -36,17 +32,6 @@ use libp2p_stream::{Behaviour as StreamBehaviour, IncomingStreams};
 use serde::Deserialize;
 use tokio::{sync::mpsc, task::JoinHandle};
 use uuid::Uuid;
-
-const TEST_DDS_PRIVATE_KEY: &[u8] = br#"-----BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQggm4twpf4y/yNNw/k
-fqecEEl4zBTwZdRDFUFp/fSxV8qhRANCAARUxrDWJ0AtEGTAYZ4412VPHqMCKoPw
-UphDkcOIk7SODsKwUvTIiUr11NbXBJmbBRfhERczsuK4PVha5eg0fVqo
------END PRIVATE KEY-----"#;
-
-const TEST_DDS_PUBLIC_KEY: &[u8] = br#"-----BEGIN PUBLIC KEY-----
-MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
-8FKYQ5HDiJO0jg7CsFL0yIlK9dTW1wSZmwUX4REXM7LiuD1YWuXoNH1aqA==
------END PUBLIC KEY-----"#;
 
 const APPLICATION_PROTOCOL: &str = "/auki-p2p/relay-test/1";
 const SOURCE_ADMISSION_PROTOCOL: &str = "/auki-p2p/relay-auth/1";
@@ -1589,204 +1574,6 @@ async fn serve_source_admission(
 
 fn relay_limits() -> ExpectedRelayLimits {
     ExpectedRelayLimits::new(CIRCUIT_DURATION, CIRCUIT_DATA_BYTES).unwrap()
-}
-
-struct TestDns {
-    address: SocketAddr,
-    resolver_timeout: Duration,
-    shutdown: Arc<AtomicBool>,
-    hold_queries: Arc<AtomicBool>,
-    held_query_seen: Arc<AtomicBool>,
-    task: Option<thread::JoinHandle<()>>,
-}
-
-impl TestDns {
-    fn start() -> Self {
-        Self::start_with_timeout(Duration::from_secs(1))
-    }
-
-    fn start_with_timeout(resolver_timeout: Duration) -> Self {
-        let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        socket
-            .set_read_timeout(Some(Duration::from_millis(100)))
-            .unwrap();
-        let address = socket.local_addr().unwrap();
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let thread_shutdown = shutdown.clone();
-        let hold_queries = Arc::new(AtomicBool::new(false));
-        let thread_hold_queries = hold_queries.clone();
-        let held_query_seen = Arc::new(AtomicBool::new(false));
-        let thread_held_query_seen = held_query_seen.clone();
-        let task = thread::spawn(move || {
-            let mut query = [0; 512];
-            while !thread_shutdown.load(Ordering::Acquire) {
-                match socket.recv_from(&mut query) {
-                    Ok((length, remote)) => {
-                        if thread_hold_queries.load(Ordering::Acquire) {
-                            thread_held_query_seen.store(true, Ordering::Release);
-                            while thread_hold_queries.load(Ordering::Acquire)
-                                && !thread_shutdown.load(Ordering::Acquire)
-                            {
-                                thread::sleep(Duration::from_millis(5));
-                            }
-                        }
-                        if let Some(response) = dns_a_response(&query[..length]) {
-                            socket.send_to(&response, remote).unwrap();
-                        }
-                    }
-                    Err(error)
-                        if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
-                    Err(error) => panic!("test DNS receive failed: {error}"),
-                }
-            }
-        });
-        Self {
-            address,
-            resolver_timeout,
-            shutdown,
-            hold_queries,
-            held_query_seen,
-            task: Some(task),
-        }
-    }
-
-    fn resolver(&self) -> (ResolverConfig, ResolverOpts) {
-        let name_server = NameServerConfig::new(self.address, DnsProtocol::Udp);
-        let config = ResolverConfig::from_parts(None, Vec::new(), vec![name_server]);
-        let mut options = ResolverOpts::default();
-        options.timeout = self.resolver_timeout;
-        options.attempts = 1;
-        (config, options)
-    }
-
-    fn hold_queries(&self) {
-        self.held_query_seen.store(false, Ordering::Release);
-        self.hold_queries.store(true, Ordering::Release);
-    }
-
-    async fn wait_for_held_query(&self) {
-        timeout(async {
-            while !self.held_query_seen.load(Ordering::Acquire) {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await;
-    }
-
-    fn release_queries(&self) {
-        self.hold_queries.store(false, Ordering::Release);
-    }
-}
-
-impl Drop for TestDns {
-    fn drop(&mut self) {
-        self.hold_queries.store(false, Ordering::Release);
-        self.shutdown.store(true, Ordering::Release);
-        if let Some(task) = self.task.take() {
-            task.join().unwrap();
-        }
-    }
-}
-
-fn dns_a_response(query: &[u8]) -> Option<Vec<u8>> {
-    if query.len() < 17 || u16::from_be_bytes([query[4], query[5]]) != 1 {
-        return None;
-    }
-    let mut cursor = 12;
-    loop {
-        let label_length = *query.get(cursor)? as usize;
-        cursor += 1;
-        if label_length == 0 {
-            break;
-        }
-        cursor = cursor.checked_add(label_length)?;
-        if cursor > query.len() {
-            return None;
-        }
-    }
-    let question_end = cursor.checked_add(4)?;
-    let question = query.get(12..question_end)?;
-    let query_type = u16::from_be_bytes([query[cursor], query[cursor + 1]]);
-    let missing = query[12..cursor]
-        .windows(b"missing".len())
-        .any(|window| window == b"missing");
-
-    let mut response = Vec::with_capacity(question_end + 16);
-    response.extend_from_slice(&query[..2]);
-    response.extend_from_slice(&(if missing { 0x8183u16 } else { 0x8180u16 }).to_be_bytes());
-    response.extend_from_slice(&1u16.to_be_bytes());
-    response.extend_from_slice(&u16::from(query_type == 1 && !missing).to_be_bytes());
-    response.extend_from_slice(&0u16.to_be_bytes());
-    response.extend_from_slice(&0u16.to_be_bytes());
-    response.extend_from_slice(question);
-    if query_type == 1 && !missing {
-        response.extend_from_slice(&0xc00cu16.to_be_bytes());
-        response.extend_from_slice(&1u16.to_be_bytes());
-        response.extend_from_slice(&1u16.to_be_bytes());
-        response.extend_from_slice(&60u32.to_be_bytes());
-        response.extend_from_slice(&4u16.to_be_bytes());
-        response.extend_from_slice(&Ipv4Addr::LOCALHOST.octets());
-    }
-    Some(response)
-}
-
-fn node(dns: &TestDns) -> Node {
-    let (resolver_config, resolver_options) = dns.resolver();
-    Node::start_with_dns_config(
-        Identity::generate(),
-        verifier(),
-        ["/ip4/127.0.0.1/tcp/0".parse().unwrap()],
-        resolver_config,
-        resolver_options,
-    )
-    .unwrap()
-}
-
-async fn install_current_token(node: &Node, role: PeerRole, domain_ids: Vec<String>) -> String {
-    let credentials = node.authority();
-    let issued_at = credentials
-        .current_claims()
-        .await
-        .map(|claims| claims.iat + 1)
-        .unwrap_or_else(unix_time)
-        .max(unix_time());
-    let claims = P2PAccessClaims {
-        token_type: P2P_TOKEN_TYPE.into(),
-        iss: P2P_TOKEN_ISSUER.into(),
-        aud: vec![P2P_TOKEN_AUDIENCE.into()],
-        sub: Uuid::new_v4().to_string(),
-        organization_id: None,
-        peer_type: Some(role.to_string()),
-        peer_id: node.peer_id().to_string(),
-        domain_ids,
-        scopes: vec![P2P_TOKEN_SCOPE.into()],
-        application: None,
-        iat: issued_at,
-        nbf: None,
-        exp: issued_at + P2P_TOKEN_TTL.as_secs(),
-    };
-    let token = encode(
-        &Header::new(Algorithm::ES256),
-        &claims,
-        &EncodingKey::from_ec_pem(TEST_DDS_PRIVATE_KEY).unwrap(),
-    )
-    .unwrap();
-    credentials
-        .install_credential(SignedP2pCredential::new(token.clone()).unwrap())
-        .await
-        .unwrap();
-    token
-}
-
-fn verifier() -> DdsTokenVerifier {
-    DdsTokenVerifier::from_es256_pem(TEST_DDS_PUBLIC_KEY).unwrap()
-}
-
-fn unix_time() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
 }
 
 #[path = "handover_experiment/mod.rs"]

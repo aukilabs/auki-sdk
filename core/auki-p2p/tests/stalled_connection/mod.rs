@@ -3,121 +3,10 @@
 //! No DMS, DDS, AWS, public DNS or real credentials are used.
 
 use super::*;
-use tokio::{
-    io::{AsyncRead, AsyncWrite},
-    net::{TcpListener, TcpStream},
-    sync::watch,
-    task::JoinSet,
-};
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TunnelState {
-    Forward,
-    Stalled,
-    Closed,
-}
-
-struct FaultProxy {
-    port: u16,
-    accepted: mpsc::Receiver<watch::Sender<TunnelState>>,
-    task: JoinHandle<()>,
-}
-
-impl FaultProxy {
-    async fn start(relay_port: u16) -> Self {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let (sender, accepted) = mpsc::channel(8);
-        let task = tokio::spawn(async move {
-            let mut tunnels = JoinSet::new();
-            loop {
-                tokio::select! {
-                    result = listener.accept() => {
-                        let (client, _) = result.unwrap();
-                        let server = TcpStream::connect((Ipv4Addr::LOCALHOST, relay_port)).await.unwrap();
-                        client.set_nodelay(true).unwrap();
-                        server.set_nodelay(true).unwrap();
-                        let (control, state) = watch::channel(TunnelState::Forward);
-                        sender.send(control).await.unwrap();
-                        tunnels.spawn(async move {
-                            let (client_read, client_write) = client.into_split();
-                            let (server_read, server_write) = server.into_split();
-                            tokio::select! {
-                                _ = copy_controlled(client_read, server_write, state.clone()) => {},
-                                _ = copy_controlled(server_read, client_write, state) => {},
-                            }
-                        });
-                    },
-                    _ = tunnels.join_next(), if !tunnels.is_empty() => {},
-                }
-            }
-        });
-        Self {
-            port,
-            accepted,
-            task,
-        }
-    }
-}
-
-impl Drop for FaultProxy {
-    fn drop(&mut self) {
-        // Aborting drops the JoinSet too, so no tunnel tasks outlive the test.
-        self.task.abort();
-    }
-}
-
-async fn copy_controlled<R, W>(mut read: R, mut write: W, mut state: watch::Receiver<TunnelState>)
-where
-    R: AsyncRead + Unpin,
-    W: AsyncWrite + Unpin,
-{
-    let mut buffer = [0; 8192];
-    loop {
-        let mode = *state.borrow_and_update();
-        match mode {
-            TunnelState::Closed => return,
-            TunnelState::Stalled => {
-                if state.changed().await.is_err() {
-                    return;
-                }
-                continue;
-            }
-            TunnelState::Forward => {}
-        }
-        let size = tokio::select! {
-            changed = state.changed() => {
-                if changed.is_err() { return; }
-                continue;
-            },
-            result = tokio::io::AsyncReadExt::read(&mut read, &mut buffer) => {
-                match result { Ok(0) | Err(_) => return, Ok(size) => size }
-            },
-        };
-        // Preserve bytes already read if the fault arrives between read/write.
-        loop {
-            let mode = *state.borrow_and_update();
-            match mode {
-                TunnelState::Closed => return,
-                TunnelState::Forward => break,
-                TunnelState::Stalled => {
-                    if state.changed().await.is_err() {
-                        return;
-                    }
-                }
-            }
-        }
-        if tokio::io::AsyncWriteExt::write_all(&mut write, &buffer[..size])
-            .await
-            .is_err()
-        {
-            return;
-        }
-    }
-}
+use tokio::{sync::watch, task::JoinSet};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn stalled_connection_retries_same_transport_until_explicit_close() {
+async fn stalled_connection_is_retired_automatically() {
     // Exclude the fixture's usual four-second reservation renewal from the fault.
     let relay =
         RelayHarness::start_with_reservation_duration("stalled-source", Duration::from_secs(180))
@@ -128,8 +17,8 @@ async fn stalled_connection_retries_same_transport_until_explicit_close() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires the loopback Go fixture"]
-async fn go_stalled_connection_retries_same_transport_until_explicit_close() {
-    let relay = super::handover_experiment::GoRelay::start(60);
+async fn go_stalled_connection_is_retired_automatically() {
+    let relay = GoRelay::start(60);
     exercise_stalled_connection("go", relay.provider()).await;
 }
 
@@ -223,6 +112,7 @@ async fn exercise_stalled_connection(backend: &str, provider: RelayProvider) {
         }
         sibling.close().await.unwrap();
     });
+    let mut relay_events = affected.subscribe_relay_events();
     fault.send(TunnelState::Stalled).unwrap();
     for attempt in 1..=3 {
         let before = delivered.load(Ordering::SeqCst);
@@ -261,23 +151,18 @@ async fn exercise_stalled_connection(backend: &str, provider: RelayProvider) {
         );
         println!("backend={backend} attempt={attempt} outcome=negotiation_timeout connection={old_connection} elapsed_ms={} healthy_frames={}", began.elapsed().as_millis(), delivered.load(Ordering::SeqCst));
     }
-    // Show the same typed close error as the live TCP failures while an open waits.
-    let pending = affected.open_exact_route(
-        target.peer_id(),
-        ExactRoute::Circuit(proxy_route.clone()),
-        protocol.clone(),
-        requirements.clone(),
-    );
-    let (result, ()) = timeout(async {
-        tokio::join!(pending, async {
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            fault.send(TunnelState::Closed).unwrap();
-        })
+    // The SDK must retire the connection without the proxy or test closing it.
+    timeout(async {
+        loop {
+            if matches!(relay_events.recv().await.unwrap(),
+                auki_p2p::RelayTransportEvent::Canceled { handle } if handle == affected_reservation
+            ) {
+                break;
+            }
+        }
     })
     .await;
-    assert!(matches!(result, Err(auki_p2p::Error::TargetedStream(
-        auki_p2p::TargetedStreamError::SelectedConnectionClosed { connection_id, .. }
-    )) if connection_id == old_connection));
+    assert!(*fault.borrow() == TunnelState::Stalled);
     // Closure may already have retired the generation before explicit cleanup.
     assert!(matches!(
         timeout(affected.cancel_relay_reservation(affected_reservation)).await,

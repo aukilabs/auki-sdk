@@ -197,7 +197,7 @@ impl Node {
     ) -> P2PResult<Self> {
         let stream_behaviour = StreamBehaviour::new();
         let control = stream_behaviour.new_control();
-        let targeted_stream_behaviour = TargetedStreamBehaviour::new();
+        let targeted_stream_behaviour = TargetedStreamBehaviour::with_relay_recovery();
         let targeted_control = targeted_stream_behaviour.new_control();
         let swarm = build_swarm(
             identity.keypair(),
@@ -228,7 +228,7 @@ impl Node {
     ) -> P2PResult<Self> {
         let stream_behaviour = StreamBehaviour::new();
         let control = stream_behaviour.new_control();
-        let targeted_stream_behaviour = TargetedStreamBehaviour::new();
+        let targeted_stream_behaviour = TargetedStreamBehaviour::with_relay_recovery();
         let targeted_control = targeted_stream_behaviour.new_control();
         let swarm = build_swarm_with_dns_config(
             identity.keypair(),
@@ -536,7 +536,11 @@ impl Node {
         let direct_address =
             normalize_remote_address(provider.selected_base().clone(), relay_peer_id, false)?;
         let direct_connection = self
-            .select_relay_connection(relay_peer_id, direct_address)
+            .select_relay_connection(
+                relay_peer_id,
+                direct_address,
+                RelayConnectionPurpose::Reservation,
+            )
             .await?;
         let (response, receiver) = oneshot::channel();
         self.command_sender
@@ -644,7 +648,11 @@ impl Node {
         }
 
         let relay_connection = self
-            .select_relay_connection(parsed.relay_peer_id, parsed.direct_relay_address)
+            .select_relay_connection(
+                parsed.relay_peer_id,
+                parsed.direct_relay_address,
+                RelayConnectionPurpose::Circuit,
+            )
             .await?;
         let domain_id = requirements.domain_id();
         let admission = if reuse_admission {
@@ -844,12 +852,14 @@ impl Node {
         &self,
         peer_id: PeerId,
         address: Multiaddr,
+        purpose: RelayConnectionPurpose,
     ) -> P2PResult<ConnectionId> {
         let (response, receiver) = oneshot::channel();
         self.command_sender
             .send(Command::SelectRelayConnection {
                 peer_id,
                 address,
+                purpose,
                 response,
             })
             .await
@@ -971,6 +981,7 @@ enum Command {
     SelectRelayConnection {
         peer_id: PeerId,
         address: Multiaddr,
+        purpose: RelayConnectionPurpose,
         response: ExactDialReply,
     },
     CloseConnection {
@@ -1147,6 +1158,12 @@ fn build_swarm_with_dns_config(
                 })
                 .build()
         })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RelayConnectionPurpose {
+    Reservation,
+    Circuit,
 }
 
 struct ReservationRuntime {
@@ -1873,8 +1890,12 @@ async fn run_swarm(
                         connection_id,
                         endpoint,
                         num_established,
+                        cause,
                         ..
                     } => {
+                        crate::connection_diagnostics::log_connection_closed(
+                            swarm.local_peer_id(), &peer_id, connection_id, &endpoint, cause.as_ref(),
+                        );
                         observations.connection_closed(peer_id, connection_id);
                         if endpoint.is_relayed() {
                             circuit_hops.invalidate(connection_id);
@@ -2022,6 +2043,14 @@ async fn run_swarm(
                             )));
                             continue;
                         }
+                        // Recheck after source admission, before acquiring a
+                        // cached circuit or dispatching a new one.
+                        if circuit_relay_peer_id.is_some_and(|relay| !reservations.state.source_circuit_allowed(relay)) {
+                            let _ = response.send(Err(Error::RelayReservationClosed(
+                                "source relay reservation is not confirmed".into(),
+                            )));
+                            continue;
+                        }
                         if circuit_relay_peer_id.is_some_and(|relay_peer_id| {
                             swarm
                                 .behaviour()
@@ -2129,8 +2158,15 @@ async fn run_swarm(
                     Command::SelectRelayConnection {
                         peer_id,
                         address,
+                        purpose,
                         response,
                     } => {
+                        if purpose == RelayConnectionPurpose::Circuit && !reservations.state.source_circuit_allowed(peer_id) {
+                            let _ = response.send(Err(Error::RelayReservationClosed(
+                                "source relay reservation is not confirmed".into(),
+                            )));
+                            continue;
+                        }
                         if reservations.cancellation_barriers.contains_key(&peer_id) {
                             let _ = response.send(Err(Error::RelayReservationClosed(
                                 "relay cancellation is still closing direct connections".into(),

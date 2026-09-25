@@ -606,6 +606,19 @@ impl RelayReservationNode {
             .map(|entry| entry.handle)
     }
 
+    /// A source that has reserved on this relay must not reopen circuits while
+    /// its reservation is being replaced. Keep this fence after local teardown:
+    /// the provider may still accept the old authority until it learns of the
+    /// loss, then revoke every connection to this source. Only a new confirmed
+    /// reservation reopens the gate. Outbound-only relays remain independent.
+    pub(crate) fn source_circuit_allowed(&self, relay_peer_id: PeerId) -> bool {
+        !self.latest_generation.contains_key(&relay_peer_id)
+            || self
+                .reservations
+                .get(&relay_peer_id)
+                .is_some_and(|entry| entry.state == RelayReservationState::Publishable)
+    }
+
     /// Returns the current handle associated with a public listener event.
     pub fn handle_for_listener(&self, listener_id: ListenerId) -> Option<RelayReservationHandle> {
         self.reservations
@@ -1155,6 +1168,78 @@ mod tests {
         format!("/ip4/203.0.113.9/tcp/4001/p2p/{relay_peer_id}/p2p-circuit/p2p/{local_peer_id}")
             .parse()
             .unwrap()
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    fn source_circuits_wait_for_recovery_after_complete_teardown() {
+        for transport in [RelayBaseTransport::Tcp, RelayBaseTransport::Wss] {
+            let local = peer_id();
+            let relay = peer_id();
+            let sibling = peer_id();
+            let outbound_only = peer_id();
+            let mut node = RelayReservationNode::new(local);
+            let sibling_listener = ListenerId::next();
+            let sibling_handle = node
+                .begin(
+                    provider(sibling, "sibling.dev.aukiverse.com"),
+                    sibling_listener,
+                )
+                .unwrap();
+            node.observe_listener_address(
+                sibling_handle,
+                sibling_listener,
+                &response_address(sibling, local),
+            )
+            .unwrap();
+            node.observe_acceptance(sibling_handle, false, observed_limits())
+                .unwrap();
+            let provider = RelayProvider::new_dual_transport(
+                relay,
+                [
+                    format!("/dns4/relay.dev.aukiverse.com/tcp/443/p2p/{relay}"),
+                    format!("/dns4/relay.dev.aukiverse.com/tcp/4443/wss/p2p/{relay}"),
+                ],
+                transport,
+                limits(),
+            )
+            .unwrap();
+            assert!(node.source_circuit_allowed(relay));
+            for generation in 0..2 {
+                let listener = ListenerId::next();
+                let connection = ConnectionId::new_unchecked(100 + generation);
+                let handle = node.begin(provider.clone(), listener).unwrap();
+                assert!(!node.source_circuit_allowed(relay));
+                node.observe_direct_connection(handle, connection).unwrap();
+                node.observe_acceptance(handle, false, observed_limits())
+                    .unwrap();
+                assert!(
+                    !node.source_circuit_allowed(relay),
+                    "acceptance alone is insufficient"
+                );
+                node.observe_listener_address(handle, listener, &response_address(relay, local))
+                    .unwrap();
+                assert!(node.source_circuit_allowed(relay));
+
+                node.observe_direct_connection_closed(handle, connection)
+                    .unwrap();
+                assert!(!node.source_circuit_allowed(relay));
+                node.observe_listener_closed(handle, listener).unwrap();
+                assert!(node.handle_for_relay(relay).is_none());
+                assert!(
+                    !node.source_circuit_allowed(relay),
+                    "local teardown must retain the recovery fence"
+                );
+                assert!(
+                    node.source_circuit_allowed(sibling),
+                    "healthy reservations are independent"
+                );
+                assert!(
+                    node.source_circuit_allowed(outbound_only),
+                    "unreserved outgoing relays remain supported"
+                );
+            }
+        }
     }
 
     #[test]

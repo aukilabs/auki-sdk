@@ -72,6 +72,17 @@ open before the negotiation timer fires. The test checks exactly one fenced
 epoch, no new booking, restored delivery, and awaited booking deletion/shutdown.
 It does not test the live DMS service or its database.
 
+The coordinator regression also holds DMS in `Recovering` after complete local
+teardown and attempts to reopen a circuit. Before the source-reservation guard,
+this succeeds against the relay's still-accepted old authority. The regression
+now requires an immediate `RelayReservationClosed` result and no new TCP tunnel,
+then advances the provider to `Ready` and verifies fresh-reservation authenticated
+echo. The transport regressions check the same closed-generation fence before
+their explicit replacement reservation. Shared state-machine coverage exercises
+both TCP and WSS provider configurations, confirmed and awaiting-confirmation
+states, complete cancellation, replacement and independent relays; it runs in
+native tests and Chromium/WASM. Browser socket fault injection remains separate.
+
 The shared fixtures in `fixtures.rs` use loopback DNS, fixture credentials, and
 mock relay admission. No API/DDS/DMS endpoints or real credentials are used.
 Reservation lifetimes exceed the injected stall, excluding scheduled renewal.

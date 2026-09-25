@@ -154,6 +154,7 @@ async fn exercise_recovery() {
     .await
     .unwrap();
     until(|| routes.snapshot().unwrap().relay_routes.len() == 1).await;
+    let mut relay_events = source.subscribe_relay_events();
     let fault = proxy.accepted.recv().await.unwrap();
     fault.send(TunnelState::Stalled).unwrap();
     let route: auki_p2p::Multiaddr = format!("{base}/p2p-circuit/p2p/{}", target.peer_id())
@@ -187,6 +188,36 @@ async fn exercise_recovery() {
         "SDK, not the test, closes the tunnel"
     );
     assert_eq!(api.failures.lock()[0].reservation_epoch, original_epoch);
+    // Wait for complete local teardown, not just route unpublication. This is
+    // the window where the old provider authority can still be installed while
+    // DMS recovery is pending. Reopening now would inherit that old authority
+    // and get disconnected again when the provider revokes it.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if matches!(
+                relay_events.recv().await.unwrap(),
+                auki_p2p::RelayTransportEvent::Canceled { .. }
+            ) {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let premature = tokio::time::timeout(
+        Duration::from_secs(3),
+        source.connect_relayed(route.clone(), &requirements),
+    )
+    .await
+    .expect("recovering source must fail promptly, without dialing");
+    assert!(
+        matches!(premature, Err(auki_p2p::Error::RelayReservationClosed(_))),
+        "a new circuit must not open before source reservation recovery: {premature:?}"
+    );
+    assert!(
+        proxy.accepted.try_recv().is_err(),
+        "recovery gap must not dial a new tunnel"
+    );
     // Simulate the provider completing DMS Recover + Ready, preserving booking ID.
     let recovered_epoch = {
         let mut snapshot = api.snapshot.lock();

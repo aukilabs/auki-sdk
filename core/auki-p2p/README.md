@@ -38,6 +38,19 @@ lifecycle. Streams on the retired connection close and must be reopened by the
 application. Independent connections, including another connection to the same
 peer, are not selected for closure.
 
+After a node has reserved on a relay, new source circuits through that relay
+require a confirmed local reservation. This check runs before selecting/dialing
+the source connection and again before acquiring a circuit. It remains in force
+after cancellation completes, until a replacement reservation is confirmed.
+Otherwise a new connection could be accepted under the provider's old authority
+and then closed when the provider processes recovery. Opens during this window
+return `RelayReservationClosed`; callers should wait for readiness before retrying.
+Reservation establishment itself remains allowed so recovery can progress.
+Outbound-only use of relays on which the node has never reserved is unchanged.
+Low-level users that explicitly cancel a reservation must confirm a replacement
+before opening another circuit through that relay, even if other connections
+remain. Existing streams are not replayed or migrated by this guard.
+
 The `auki_p2p::relay_recovery` tracing target emits safe connection IDs, peer IDs,
 and bounded close-reason classifications. It excludes credentials and raw I/O
 error bodies. See the [local regression fixture](../../test-support/circuit-handover/README.md).

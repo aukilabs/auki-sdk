@@ -1020,6 +1020,12 @@ impl BrowserRuntime {
         if response.is_canceled() {
             return;
         }
+        if !self.reservations.source_circuit_allowed(peer_id) {
+            let _ = response.send(Err(Error::RelayReservationClosed(
+                "source relay reservation is not confirmed".into(),
+            )));
+            return;
+        }
         if let Some(existing) = self.direct_connections.get(&peer_id) {
             let result = if existing.address == address {
                 Ok(existing.connection_id)
@@ -1296,6 +1302,12 @@ impl BrowserRuntime {
         response: oneshot::Sender<Result<(ConnectionId, CircuitHopOwner)>>,
     ) {
         if response.is_canceled() {
+            return;
+        }
+        if !self.reservations.source_circuit_allowed(relay_peer_id) {
+            let _ = response.send(Err(Error::RelayReservationClosed(
+                "source relay reservation is not confirmed".into(),
+            )));
             return;
         }
         if swarm.behaviour().relay.has_pending_dispatch(relay_peer_id) {

@@ -171,6 +171,17 @@ async fn exercise_stalled_connection(backend: &str, provider: RelayProvider) {
                 auki_p2p::RelayReservationError::StaleHandle
             ))
     ));
+    assert!(
+        matches!(
+            timeout(affected.connect_relayed(proxy_route.clone(), &requirements)).await,
+            Err(auki_p2p::Error::RelayReservationClosed(_))
+        ),
+        "retired reservation must fence source circuits until a replacement is confirmed"
+    );
+    assert!(
+        proxy.accepted.try_recv().is_err(),
+        "no premature direct dial during recovery"
+    );
     let replacement = must_succeed(affected.start_relay_reservation(proxy_provider)).await;
     let snapshot = must_succeed(affected.wait_relay_reservation(replacement)).await;
     let new_connection = snapshot.direct_connection().unwrap();

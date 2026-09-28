@@ -46,7 +46,7 @@
     "react-native": "*"
   },
   "devDependencies": {
-    "expo": "~54.0.0",
+    "expo": "~57.0.25",
     "typescript": "~5.9.2"
   },
   "engines": {

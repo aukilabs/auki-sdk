@@ -50,7 +50,7 @@ let map = MapComponent::new(
     MapComponentConfig {
         component_id: "map".into(),
         publication_id: fresh_publication_id, // new ID on every publisher run
-        clock_id: host_clock_id,
+        clock: host_clock_reference,
         map: definition,
     },
     read_host_clock_ns,
@@ -236,7 +236,7 @@ let directory = MapDirectoryComponent::new(
     MapDirectoryConfig {
         component_id: "store-map-directory".into(),
         publication_id: fresh_directory_publication_id,
-        clock_id: host_clock_id,
+        clock: host_clock_reference,
         domain_reference: selected_domain,
     },
     read_host_clock_ns,

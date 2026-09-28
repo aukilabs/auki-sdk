@@ -21,7 +21,7 @@ fn map(peer: &str, name: &str, allowed: bool) -> Arc<MapComponent> {
             MapComponentConfig {
                 component_id: name.into(),
                 publication_id: name.into(),
-                clock_id: "clock".into(),
+                clock: fixture_clock("clock"),
                 map: MapDefinition {
                     map_id: name.into(),
                     name: None,
@@ -132,3 +132,7 @@ fn selected_map_resolution_is_exact_and_ignores_unrelated_denied_maps() {
             .is_ok()
     );
 }
+
+#[path = "../../auki-components/tests/support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

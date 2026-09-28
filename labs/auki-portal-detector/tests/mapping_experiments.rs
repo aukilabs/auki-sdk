@@ -124,7 +124,7 @@ fn make_map(r: &ComponentRuntime, name: &str, frame: &str, domain: Uuid) -> Arc<
             MapComponentConfig {
                 component_id: name.into(),
                 publication_id: name.into(),
-                clock_id: "map-clock".into(),
+                clock: fixture_clock("map-clock"),
                 map: MapDefinition {
                     map_id: name.into(),
                     name: Some(name.into()),
@@ -199,7 +199,7 @@ impl CameraRig {
                 ConfiguredObservableSpec::new(
                     "frames",
                     "camera-run",
-                    "capture-clock",
+                    fixture_clock("capture-clock"),
                     PayloadContract::Camera(CameraPayloadContract {
                         datatype: VideoFrame::DATATYPE.into(),
                         schema: "auki.video-frame/v1".into(),
@@ -232,7 +232,7 @@ impl CameraRig {
             maps.clone(),
             Metadata,
             domain,
-            "processing-clock",
+            fixture_clock("processing-clock"),
             move || ticks.fetch_add(1, Ordering::SeqCst),
         )
         .unwrap();
@@ -501,7 +501,7 @@ async fn voxel_experiment(
             ConfiguredObservableSpec::new(
                 "hits",
                 "depth-run",
-                "capture-clock",
+                fixture_clock("capture-clock"),
                 PayloadContract::Structured(StructuredPayloadContract {
                     modality: "depth".into(),
                     datatype: DepthHits::DATATYPE.into(),
@@ -532,7 +532,7 @@ async fn voxel_experiment(
         frame,
         capture.product().reference(),
         FrameRegistryEntry::ros_optical(r.peer_id(), &rig.frame),
-        "capture-clock".into(),
+        fixture_clock("capture-clock"),
         0.1,
     )
     .unwrap();
@@ -541,7 +541,7 @@ async fn voxel_experiment(
         r,
         "voxels",
         "voxels-run",
-        "voxel-publication-clock",
+        fixture_clock("voxel-publication-clock"),
         definition,
         move || ticks.fetch_add(1, Ordering::SeqCst),
     )
@@ -565,12 +565,12 @@ async fn voxel_experiment(
             source: capture.product().reference(),
             sequence: observed.sequence,
             timestamp_ns: time,
-            clock_id: "capture-clock".into(),
+            clock: fixture_clock("capture-clock"),
             sensor_frame_id: rig.frame.clone(),
             hit_points_m: observed.payload.0.clone(),
             pose: TimedSensorPose {
                 timestamp_ns: time,
-                clock_id: "capture-clock".into(),
+                clock: fixture_clock("capture-clock"),
                 sensor_to_map: pose,
                 portal_snapshot: portals.snapshot_reference(),
             },
@@ -806,3 +806,7 @@ async fn portal_mapping_localization_transfer_and_merge_export_usda() {
     .await
     .expect("experiment timeout");
 }
+
+#[path = "../../auki-components/tests/support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

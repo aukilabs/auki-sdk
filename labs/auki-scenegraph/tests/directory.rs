@@ -26,7 +26,7 @@ fn map(runtime: &ComponentRuntime, id: &str, name: &str) -> MapComponent {
         MapComponentConfig {
             component_id: id.into(),
             publication_id: id.into(),
-            clock_id: "clock".into(),
+            clock: fixture_clock("clock"),
             map: definition(id, name, "store"),
         },
         || 1,
@@ -41,7 +41,7 @@ fn directory(runtime: &ComponentRuntime, clock: Arc<AtomicU64>) -> MapDirectoryC
         MapDirectoryConfig {
             component_id: "directory".into(),
             publication_id: "directory-run".into(),
-            clock_id: "clock".into(),
+            clock: fixture_clock("clock"),
             domain_reference: "store".into(),
         },
         move || clock.fetch_add(1, Ordering::SeqCst),
@@ -337,3 +337,7 @@ fn failed_retention_clock_regression_and_shutdown_do_not_publish_new_defaults() 
     assert!(resolve(&dir, MapSelector::Id("a".into())).is_err());
     dir.close();
 }
+
+#[path = "../../auki-components/tests/support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

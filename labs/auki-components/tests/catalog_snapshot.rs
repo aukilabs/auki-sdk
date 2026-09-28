@@ -44,7 +44,7 @@ fn snapshots_are_consistent_and_revisions_track_visible_changes() {
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-1",
-            "peer-a.clock",
+            fixture_clock("peer-a.clock"),
             level_payload(),
         ))
         .unwrap();
@@ -83,7 +83,7 @@ fn capture_metadata_changes_revision_without_changing_product_identity() {
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "out",
-            "clock",
+            fixture_clock("clock"),
             level_payload(),
         ))
         .unwrap();
@@ -138,7 +138,7 @@ fn invalid_metadata_is_not_retained_or_advertised() {
             .configured_observable::<f64>(ConfiguredObservableSpec::new(
                 "level",
                 "out",
-                "clock",
+                fixture_clock("clock"),
                 level_payload(),
             ))
             .unwrap();
@@ -177,3 +177,7 @@ fn invalid_metadata_is_not_retained_or_advertised() {
         assert_eq!(capture.errors().len(), 1);
     }
 }
+
+#[path = "support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

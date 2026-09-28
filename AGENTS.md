@@ -41,6 +41,17 @@ and the affected crate or binding README. For identity or session changes, also 
   conventions do not establish alignment. Time-varying relationships must be
   associated with an observation time and clock.
 
+## Clock Contracts
+
+- Every reported timestamp must identify its clock, on the value or through a
+  mandatory enclosing manifest. Never infer a clock from a peer, field name,
+  process default, or numerical timestamp.
+- Component and Product clocks use full registry references (owner, ID, definition
+  hash), with boot/session and epoch retained in the referenced definition.
+- Preserve capture time and clock through processing and forwarding. Publication
+  time is a separate event. Compare clocks by full identity; converting between
+  clocks requires an explicit time transform.
+
 ## Identity & Security Boundaries
 
 - Distinguish local API User login, imported ZITADEL sessions, Auki App credentials,

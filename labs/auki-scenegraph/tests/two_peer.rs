@@ -46,7 +46,7 @@ async fn discover_fetch_lookup_move_and_follow_one_qr_across_authenticated_peers
             MapComponentConfig {
                 component_id: "qr-map".into(),
                 publication_id: Uuid::new_v4().to_string(),
-                clock_id: "test-clock".into(),
+                clock: fixture_clock("test-clock"),
                 map: MapDefinition {
                     map_id: "supermarket-qr-map".into(),
                     name: Some("QR map".into()),
@@ -277,3 +277,7 @@ async fn discover_fetch_lookup_move_and_follow_one_qr_across_authenticated_peers
     .await
     .expect("two-peer map acceptance timed out");
 }
+
+#[path = "../../auki-components/tests/support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

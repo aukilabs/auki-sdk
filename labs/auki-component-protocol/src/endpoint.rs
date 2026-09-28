@@ -1501,7 +1501,25 @@ where
     .await
     .and_then(|result| result.map_err(ComponentProtocolError::from_wire));
     let cleanup = close_stream(&mut stream).await;
-    prefer_primary(exchange, cleanup)
+    let response = prefer_primary(exchange, cleanup)?;
+    if let CatalogResponse::Snapshot { snapshot } = &response {
+        for component in &snapshot.components {
+            for output in component.current_outputs.values() {
+                output
+                    .manifest
+                    .validate()
+                    .map_err(ComponentProtocolError::InvalidResponse)?;
+            }
+            for input in component.current_product_inputs.values() {
+                input
+                    .manifest
+                    .producer
+                    .validate()
+                    .map_err(ComponentProtocolError::InvalidResponse)?;
+            }
+        }
+    }
+    Ok(response)
 }
 
 async fn observations_opened<F, T>(
@@ -1558,6 +1576,9 @@ where
                     "observation response does not match the requested Product".to_owned(),
                 ));
             }
+            producer
+                .validate()
+                .map_err(ComponentProtocolError::InvalidResponse)?;
             let producer_reference = producer.reference();
             if product.producer != producer_reference {
                 return Err(ComponentProtocolError::InvalidResponse(

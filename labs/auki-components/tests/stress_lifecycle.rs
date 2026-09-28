@@ -180,6 +180,7 @@ fn observer_errors_and_panics_become_failed_handles_without_harming_healthy_obse
         1,
         1,
         peer.catalog().clone(),
+        fixture_clock("peer-a.session-clock"),
         Vec::<String>::new(),
     )
     .unwrap();
@@ -244,6 +245,7 @@ fn producer_failure_is_terminal_and_closes_its_buffer_product() {
         1,
         1,
         peer.catalog().clone(),
+        fixture_clock("peer-a.session-clock"),
         Vec::<String>::new(),
     )
     .unwrap();
@@ -363,6 +365,7 @@ fn camera_buffer_local_detector_and_serialized_remote_have_explicit_copy_boundar
         2,
         2,
         peer.catalog().clone(),
+        fixture_clock("peer-a.session-clock"),
         Vec::<String>::new(),
     )
     .unwrap();
@@ -470,3 +473,7 @@ fn inline_panic_is_contained_and_inspectable() {
             .contains("broken component")
     );
 }
+
+#[path = "support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

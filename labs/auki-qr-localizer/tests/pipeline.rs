@@ -26,8 +26,13 @@ fn output<T: ContractType + Send + Sync + 'static>(
         .unwrap();
     let o = c
         .configured_observable(
-            ConfiguredObservableSpec::new("out", format!("{id}-out"), "clock", payload)
-                .in_spatial_frame(frame),
+            ConfiguredObservableSpec::new(
+                "out",
+                format!("{id}-out"),
+                fixture_clock("clock"),
+                payload,
+            )
+            .in_spatial_frame(frame),
         )
         .unwrap();
     c.expose().unwrap();
@@ -121,7 +126,7 @@ fn real_detector_localizes_camera_and_empty_frame_has_no_stale_pose() {
             MapComponentConfig {
                 component_id: "map".into(),
                 publication_id: "map-run".into(),
-                clock_id: "clock".into(),
+                clock: fixture_clock("clock"),
                 map: MapDefinition {
                     map_id: "map".into(),
                     name: None,
@@ -237,3 +242,7 @@ fn real_detector_localizes_camera_and_empty_frame_has_no_stale_pose() {
     assert!(localizer.input().is_none());
     assert!(localizer.poses().publish(202, empty.payload).is_err());
 }
+
+#[path = "../../auki-components/tests/support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

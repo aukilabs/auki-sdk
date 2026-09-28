@@ -17,7 +17,7 @@ fn fixture() -> (ComponentRuntime, MapComponent) {
         MapComponentConfig {
             component_id: "map".into(),
             publication_id: "run".into(),
-            clock_id: "clock".into(),
+            clock: fixture_clock("clock"),
             map: MapDefinition {
                 map_id: "shop-map".into(),
                 name: None,
@@ -186,3 +186,7 @@ fn oversized_complete_list_rejects_edit_before_publication() {
     }
     panic!("expected metadata size bound");
 }
+
+#[path = "../../auki-components/tests/support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

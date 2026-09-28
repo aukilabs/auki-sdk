@@ -18,7 +18,7 @@ use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-pub const VOXEL_SCHEMA: &str = "auki.voxel-map.snapshot/v2";
+pub const VOXEL_SCHEMA: &str = "auki.voxel-map.snapshot/v3";
 pub const MAX_SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_SOURCES: usize = 64;
 pub const MAX_POINTS: usize = 1024;
@@ -69,7 +69,7 @@ pub struct VoxelMapDefinition {
 pub struct SensorBinding {
     pub sensor_product: ProductReference,
     pub sensor_frame: FrameRegistryEntry,
-    pub observation_clock_id: String,
+    pub observation_clock: auki_components::ClockReference,
 }
 impl VoxelMapDefinition {
     /// Choose to use the portal map's frame directly; grid origin is explicitly [0,0,0].
@@ -82,7 +82,7 @@ impl VoxelMapDefinition {
         frame: FrameRegistryEntry,
         sensor_product: ProductReference,
         sensor_frame: FrameRegistryEntry,
-        observation_clock_id: String,
+        observation_clock: auki_components::ClockReference,
         voxel_size_m: f64,
     ) -> Result<Self, VoxelError> {
         portal_map.validate().map_err(error)?;
@@ -111,7 +111,7 @@ impl VoxelMapDefinition {
             sources: vec![SensorBinding {
                 sensor_product,
                 sensor_frame,
-                observation_clock_id,
+                observation_clock,
             }],
         };
         value.validate()?;
@@ -130,7 +130,8 @@ impl VoxelMapDefinition {
         )?;
         for (index, source) in self.sources.iter().enumerate() {
             reference(&source.sensor_product)?;
-            text(&source.observation_clock_id)?;
+            auki_components::clock::validate_clock(&source.observation_clock)
+                .map_err(VoxelError)?;
             require(
                 !self.sources[..index]
                     .iter()
@@ -182,7 +183,7 @@ impl VoxelMapDefinition {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TimedSensorPose {
     pub timestamp_ns: u64,
-    pub clock_id: String,
+    pub clock: auki_components::ClockReference,
     pub sensor_to_map: RigidTransform,
     /// Exact portal-map state used to establish this pose; corrections require rebuilding.
     pub portal_snapshot: SnapshotReference,
@@ -192,7 +193,7 @@ pub struct DepthObservation {
     pub source: ProductReference,
     pub sequence: u64,
     pub timestamp_ns: u64,
-    pub clock_id: String,
+    pub clock: auki_components::ClockReference,
     pub sensor_frame_id: String,
     /// Measured hit endpoints in meters, relative to the sensor optical centre.
     /// No-return/max-range values must not be represented as occupied hits.
@@ -204,7 +205,7 @@ pub struct ObservationProvenance {
     pub source: ProductReference,
     pub sequence: u64,
     pub timestamp_ns: u64,
-    pub clock_id: String,
+    pub clock: auki_components::ClockReference,
     pub pose: TimedSensorPose,
 }
 impl From<&DepthObservation> for ObservationProvenance {
@@ -213,7 +214,7 @@ impl From<&DepthObservation> for ObservationProvenance {
             source: o.source.clone(),
             sequence: o.sequence,
             timestamp_ns: o.timestamp_ns,
-            clock_id: o.clock_id.clone(),
+            clock: o.clock.clone(),
             pose: o.pose.clone(),
         }
     }
@@ -239,8 +240,8 @@ impl PortalVoxelMapper {
             "sensor binding mismatch",
         )?;
         require(
-            o.clock_id == binding.observation_clock_id
-                && o.pose.clock_id == o.clock_id
+            o.clock == binding.observation_clock
+                && o.pose.clock == o.clock
                 && o.pose.timestamp_ns == o.timestamp_ns,
             "pose must match the capture timestamp and clock exactly",
         )?;
@@ -399,8 +400,8 @@ impl VoxelSnapshot {
                 "invalid snapshot pose",
             )?;
             require(
-                last.clock_id == binding.observation_clock_id
-                    && last.pose.clock_id == last.clock_id
+                last.clock == binding.observation_clock
+                    && last.pose.clock == last.clock
                     && last.pose.timestamp_ns == last.timestamp_ns
                     && last.pose.portal_snapshot == self.definition.portal_snapshot
                     && last.pose.sensor_to_map.from_frame_id == binding.sensor_frame.frame_id
@@ -418,7 +419,7 @@ impl VoxelSnapshot {
     }
     fn metadata(&self, sequence: u64) -> Result<Option<CatalogProductMetadata>, String> {
         let metadata = CatalogProductMetadata {
-            schema: "auki.voxel-map.catalog/v2".into(),
+            schema: "auki.voxel-map.catalog/v3".into(),
             source_sequence: sequence,
             value: serde_json::json!({"definition":self.definition,"integrated_observations":self.integrated_observations}),
         };
@@ -448,12 +449,12 @@ impl VoxelMapComponent {
         runtime: &ComponentRuntime,
         component_id: &str,
         publication_id: &str,
-        publication_clock_id: &str,
+        publication_clock: auki_components::ClockReference,
         definition: VoxelMapDefinition,
         clock: impl Fn() -> u64 + Send + Sync + 'static,
     ) -> Result<Self, VoxelError> {
         text(publication_id)?;
-        text(publication_clock_id)?;
+        auki_components::clock::validate_clock(&publication_clock).map_err(VoxelError)?;
         let mapper = PortalVoxelMapper::new(definition.clone())?;
         let accumulator = VoxelMapAccumulator::new(
             definition.registry.registry_ref(),
@@ -484,7 +485,7 @@ impl VoxelMapComponent {
                 ConfiguredObservableSpec::new(
                     "voxels",
                     format!("{publication_id}/voxels"),
-                    publication_clock_id,
+                    publication_clock,
                     PayloadContract::Structured(StructuredPayloadContract {
                         modality: "voxel_map".into(),
                         datatype: VOXEL_SCHEMA.into(),

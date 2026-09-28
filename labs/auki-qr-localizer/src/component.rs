@@ -11,7 +11,7 @@ use auki_scenegraph::{
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
-pub const LOCALIZATION_SCHEMA: &str = "auki.qr-localization/v3";
+pub const LOCALIZATION_SCHEMA: &str = "auki.qr-localization/v4";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LocalizationBatch {
@@ -175,7 +175,7 @@ impl QrLocalizerComponent {
     ) -> Result<Self, BindError> {
         calibration.camera()?;
         gate.validate()?;
-        if detections.producer.clock_id != calibration.clock_id
+        if detections.producer.clock != calibration.clock
             || detections.producer.spatial_frame_id.as_deref() != Some(&calibration.camera_frame_id)
             || detections.producer.payload.schema() != QR_DETECTIONS_SCHEMA
         {
@@ -215,7 +215,7 @@ impl QrLocalizerComponent {
             component.configured_observable::<LocalizationBatch>(ConfiguredObservableSpec::new(
                 "poses",
                 output_id,
-                calibration.clock_id.clone(),
+                calibration.clock.clone(),
                 PayloadContract::Structured(StructuredPayloadContract {
                     modality: "pose".into(),
                     datatype: LocalizationBatch::DATATYPE.into(),
@@ -597,7 +597,7 @@ mod tests {
             id: "c".into(),
             camera_product: product.clone(),
             camera_frame_id: "optical".into(),
-            clock_id: "clock".into(),
+            clock: fixture_clock("clock"),
             width: 640,
             height: 480,
             fx: 500.,
@@ -792,7 +792,7 @@ mod tests {
                 ConfiguredObservableSpec::new(
                     "detections",
                     "detections-run",
-                    "clock",
+                    fixture_clock("clock"),
                     PayloadContract::Structured(StructuredPayloadContract {
                         modality: "qr".into(),
                         datatype: QrDetections::DATATYPE.into(),
@@ -1106,3 +1106,9 @@ mod tests {
         assert!(f.output.product().latest_existing().unwrap().is_none());
     }
 }
+
+#[path = "../../auki-components/tests/support/clock.rs"]
+#[cfg(test)]
+mod clock_fixture;
+#[cfg(test)]
+use clock_fixture::fixture_clock;

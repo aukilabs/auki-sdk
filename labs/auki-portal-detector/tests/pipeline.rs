@@ -77,7 +77,7 @@ fn portal_map(runtime: &ComponentRuntime, id: &str, size: f64) -> Arc<MapCompone
             MapComponentConfig {
                 component_id: id.into(),
                 publication_id: id.into(),
-                clock_id: "map-clock".into(),
+                clock: fixture_clock("map-clock"),
                 map: MapDefinition {
                     map_id: id.into(),
                     name: None,
@@ -153,7 +153,7 @@ fn fixture_payload(source: Metadata, payload: &str) -> Fixture {
             ConfiguredObservableSpec::new(
                 "frames",
                 "camera-output",
-                "camera-clock",
+                fixture_clock("camera-clock"),
                 PayloadContract::Camera(CameraPayloadContract {
                     datatype: VideoFrame::DATATYPE.into(),
                     schema: "auki.video-frame/v1".into(),
@@ -186,7 +186,7 @@ fn fixture_payload(source: Metadata, payload: &str) -> Fixture {
         maps.clone(),
         source,
         Uuid::nil(),
-        "processing-clock",
+        fixture_clock("processing-clock"),
         move || ticks.fetch_add(1, Ordering::SeqCst),
     )
     .unwrap();
@@ -259,7 +259,7 @@ fn real_qr_scanning_continues_during_coalesced_lookup_and_preserves_identity() {
         assert_eq!(matching.len(), 2);
         assert_eq!(matching[0].detection, matching[1].detection);
         assert_eq!(matching[1].source_frame.timestamp_ns, (sequence + 1) * 100);
-        assert_eq!(matching[1].capture_clock_id, "camera-clock");
+        assert_eq!(matching[1].capture_clock, fixture_clock("camera-clock"));
         assert_eq!(
             matching[1].detection_product,
             f.detector.detection_product().reference()
@@ -417,3 +417,7 @@ fn pending_observations_are_bounded_and_closed_maps_do_not_trigger_fallback() {
     assert!(matches!(records(&f)[0].size, PortalSize::Unresolved { .. }));
     assert_eq!(source.calls.load(Ordering::SeqCst), 0);
 }
+
+#[path = "../../auki-components/tests/support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

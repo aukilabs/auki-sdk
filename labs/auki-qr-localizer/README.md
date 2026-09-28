@@ -71,7 +71,7 @@ contains one estimate with the original detection index and selected snapshot.
 The request schema is now `auki.qr-localizer.localize-once/v2`. v1 requests without
 selection fields are rejected. Callers must supply both fields, and applications
 that previously relied on `bind` processing continuously must explicitly opt in.
-The result schema remains `auki.qr-localization/v3`.
+The result schema remains `auki.qr-localization/v4`.
 
 Processing is serialized. Concurrent controls return `Rejected("localizer busy")`
 while processing owns the component; there is no private unbounded work queue.
@@ -116,7 +116,7 @@ identified estimates; shared Domain membership does not align those maps.
 
 ## Results and lifecycle
 
-The `poses` Observable uses `auki.qr-localization/v3`. Each `LocalizedQr` has a
+The `poses` Observable uses `auki.qr-localization/v4`. Each `LocalizedQr` has a
 source detection index, resolved QR (including map/frame/snapshot), and camera
 pose estimate. Translation is in that map's units and quaternion order is WXYZ.
 There is no single output-level spatial frame because a batch can contain results
@@ -152,3 +152,8 @@ cargo test --locked -p auki-qr-localizer --all-features
 cargo clippy --locked -p auki-qr-localizer --all-features --all-targets --no-deps -- -D warnings
 cargo check --locked -p auki-qr-localizer --target wasm32-unknown-unknown
 ```
+
+Clock migration: `Calibration.clock` is a full clock registry reference, copied
+from the camera Product. Localization batch v4 embeds this reference and rejects
+detection Products with a different owner, ID or definition hash. Capture time is
+preserved; the processing time is not substituted for the observation time.

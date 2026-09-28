@@ -17,7 +17,7 @@ fn make_map(runtime: &ComponentRuntime, id: &str, name: &str, domain: &str) -> M
         MapComponentConfig {
             component_id: id.into(),
             publication_id: id.into(),
-            clock_id: "clock".into(),
+            clock: fixture_clock("clock"),
             map: MapDefinition {
                 map_id: id.into(),
                 name: Some(name.into()),
@@ -62,7 +62,7 @@ async fn catalog_and_remote_queries_agree_on_default_and_named_map_selection() {
             MapDirectoryConfig {
                 component_id: "directory".into(),
                 publication_id: "directory-run".into(),
-                clock_id: "clock".into(),
+                clock: fixture_clock("clock"),
                 domain_reference: domain.to_string(),
             },
             move || clock.fetch_add(1, Ordering::SeqCst),
@@ -250,3 +250,7 @@ async fn catalog_and_remote_queries_agree_on_default_and_named_map_selection() {
     .await
     .expect("isolated directory test timed out");
 }
+
+#[path = "../../auki-components/tests/support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

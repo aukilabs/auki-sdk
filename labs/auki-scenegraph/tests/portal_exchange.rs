@@ -128,7 +128,7 @@ fn map_with_id(
         MapComponentConfig {
             component_id: format!("map-{frame_id}"),
             publication_id: Uuid::new_v4().to_string(),
-            clock_id: "fixture-clock".into(),
+            clock: fixture_clock("fixture-clock"),
             map: MapDefinition {
                 map_id: map_id.into(),
                 name: None,
@@ -421,3 +421,7 @@ async fn peer_retrieves_two_remote_maps_aligns_and_advertises_a_new_merged_map()
         p1.shutdown().await.unwrap(); p2.shutdown().await.unwrap();
     }).await.expect("remote map merge timed out");
 }
+
+#[path = "../../auki-components/tests/support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

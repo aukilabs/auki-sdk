@@ -22,6 +22,7 @@ fn camera() -> (ComponentRuntime, CameraComponent) {
         2,
         2,
         peer.catalog().clone(),
+        fixture_clock("peer-a.session-clock"),
         ["peer-b".to_owned()],
     )
     .unwrap();
@@ -41,6 +42,7 @@ fn resize(camera: &CameraComponent, timestamp_ns: u64) {
                 width: 1,
                 height: 1,
                 effective_at_timestamp_ns: timestamp_ns,
+                clock: fixture_clock("peer-a.session-clock"),
             },
         )
         .unwrap();
@@ -62,7 +64,7 @@ fn fresh_camera_truthfully_supports_follow_new_only() {
     assert_eq!(
         observable
             .time_range(TimeRangeRequest {
-                clock_id: "peer-a.session-clock".to_owned(),
+                clock: fixture_clock("peer-a.session-clock"),
                 start_ns: 0,
                 end_ns: 10,
             })
@@ -80,8 +82,8 @@ fn fresh_camera_truthfully_supports_follow_new_only() {
         "camera"
     );
     assert_eq!(
-        catalog.current_outputs["frames"].manifest.clock_id,
-        "peer-a.session-clock"
+        catalog.current_outputs["frames"].manifest.clock,
+        fixture_clock("peer-a.session-clock")
     );
 }
 
@@ -106,7 +108,7 @@ fn retained_product_answers_latest_and_time_range_without_becoming_a_component()
 
     let selected = product
         .time_range(TimeRangeRequest {
-            clock_id: "peer-a.session-clock".to_owned(),
+            clock: fixture_clock("peer-a.session-clock"),
             start_ns: 15,
             end_ns: 25,
         })
@@ -136,7 +138,7 @@ fn retained_time_range_rejects_wrong_clock_and_invalid_bounds() {
 
     assert!(matches!(
         product.time_range(TimeRangeRequest {
-            clock_id: "some-other-clock".to_owned(),
+            clock: fixture_clock("some-other-clock"),
             start_ns: 0,
             end_ns: 20,
         }),
@@ -145,7 +147,7 @@ fn retained_time_range_rejects_wrong_clock_and_invalid_bounds() {
     assert_eq!(
         product
             .time_range(TimeRangeRequest {
-                clock_id: "peer-a.session-clock".to_owned(),
+                clock: fixture_clock("peer-a.session-clock"),
                 start_ns: 20,
                 end_ns: 10,
             })
@@ -339,7 +341,7 @@ fn serialized_product_queries_report_transport_work() {
         .time_range(
             &product,
             TimeRangeRequest {
-                clock_id: "peer-a.session-clock".to_owned(),
+                clock: fixture_clock("peer-a.session-clock"),
                 start_ns: 0,
                 end_ns: 10,
             },
@@ -428,3 +430,7 @@ fn queued_every_selected_keeps_its_explicit_delivery_guarantee() {
     assert_eq!(*sequences.lock().unwrap(), (0..16).collect::<Vec<_>>());
     assert_eq!(handle.stats().coalesced, 0);
 }
+
+#[path = "support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

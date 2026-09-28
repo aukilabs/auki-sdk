@@ -56,7 +56,7 @@ fn fixture() -> (ComponentRuntime, VoxelMapDefinition, DepthObservation) {
         FrameRegistryEntry::opengl("peer1", "portal-map-frame"),
         source.clone(),
         FrameRegistryEntry::ros_optical("peer1", "camera-optical"),
-        "camera-clock".into(),
+        fixture_clock("camera-clock"),
         0.1,
     )
     .unwrap();
@@ -64,7 +64,7 @@ fn fixture() -> (ComponentRuntime, VoxelMapDefinition, DepthObservation) {
         id: "cal".into(),
         camera_product: source.clone(),
         camera_frame_id: "camera-optical".into(),
-        clock_id: "camera-clock".into(),
+        clock: fixture_clock("camera-clock"),
         width: 640,
         height: 480,
         fx: 500.,
@@ -86,12 +86,12 @@ fn fixture() -> (ComponentRuntime, VoxelMapDefinition, DepthObservation) {
         source,
         sequence: 1,
         timestamp_ns: 100,
-        clock_id: "camera-clock".into(),
+        clock: fixture_clock("camera-clock"),
         sensor_frame_id: "camera-optical".into(),
         hit_points_m: vec![[0., 0., 0.5]],
         pose: TimedSensorPose {
             timestamp_ns: 100,
-            clock_id: "camera-clock".into(),
+            clock: fixture_clock("camera-clock"),
             sensor_to_map: pose.camera_pose_in_map,
             portal_snapshot: reference,
         },
@@ -104,7 +104,7 @@ fn component(runtime: &ComponentRuntime, definition: VoxelMapDefinition) -> Voxe
         runtime,
         "voxel-map",
         "voxel-run1",
-        "publication-clock",
+        fixture_clock("publication-clock"),
         definition,
         move || clock.fetch_add(1, Ordering::SeqCst),
     )
@@ -184,7 +184,7 @@ fn portal_pnp_pose_places_depth_and_publishes_explicitly_aligned_voxels() {
     let catalog = runtime.catalog().snapshot();
     assert_eq!(catalog.products.len(), 1);
     let metadata = catalog.products[0].metadata.as_ref().unwrap();
-    assert_eq!(metadata.schema, "auki.voxel-map.catalog/v2");
+    assert_eq!(metadata.schema, "auki.voxel-map.catalog/v3");
     assert_eq!(
         metadata.value["definition"]["portal_map"]["frame"]["id"],
         "portal-map-frame"
@@ -231,17 +231,19 @@ fn bad_pose_time_frame_provenance_and_input_leave_the_map_unchanged() {
     let (runtime, definition, observation) = fixture();
     let mut map = component(&runtime, definition);
     let initial = latest(&map);
-    for kind in 0..8 {
+    for kind in 0..10 {
         let mut bad = observation.clone();
         match kind {
             0 => bad.pose.timestamp_ns += 1,
-            1 => bad.pose.clock_id = "other".into(),
+            1 => bad.pose.clock = fixture_clock("other"),
             2 => bad.pose.sensor_to_map.from_frame_id = "other-sensor".into(),
             3 => bad.pose.sensor_to_map.to_frame_id = "other-map".into(),
             4 => bad.pose.portal_snapshot.sequence += 1,
             5 => bad.hit_points_m[0][0] = f64::NAN,
             6 => bad.hit_points_m = vec![[0., 0., 1.]; MAX_POINTS + 1],
-            _ => bad.source.product_id = "different-camera".into(),
+            7 => bad.source.product_id = "different-camera".into(),
+            8 => bad.pose.clock.peer_id = "another-peer".into(),
+            _ => bad.pose.clock.hash = "00000000000000000000000000000000".into(),
         }
         assert!(map.integrate(bad).is_err());
         assert_eq!(latest(&map), initial);
@@ -279,11 +281,15 @@ fn publication_clock_regression_is_atomic() {
     let (runtime, definition, observation) = fixture();
     let clock = Arc::new(AtomicU64::new(10));
     let copy = clock.clone();
-    let mut map =
-        VoxelMapComponent::new(&runtime, "voxel", "run", "clock", definition, move || {
-            copy.load(Ordering::SeqCst)
-        })
-        .unwrap();
+    let mut map = VoxelMapComponent::new(
+        &runtime,
+        "voxel",
+        "run",
+        fixture_clock("clock"),
+        definition,
+        move || copy.load(Ordering::SeqCst),
+    )
+    .unwrap();
     assert!(map.integrate(observation.clone()).is_err());
     assert_eq!(latest(&map).integrated_observations, 0);
     clock.store(11, Ordering::SeqCst);
@@ -319,7 +325,7 @@ fn sensor(
             ConfiguredObservableSpec::new(
                 "hits",
                 "camera-run",
-                clock,
+                fixture_clock(clock),
                 PayloadContract::Structured(StructuredPayloadContract {
                     modality: "depth".into(),
                     datatype: MeasuredHits::DATATYPE.into(),
@@ -348,7 +354,7 @@ fn one_mapper_consumes_two_peer_products_and_clears_a_moved_object() {
     definition.sources.push(SensorBinding {
         sensor_product: capture2.product().reference(),
         sensor_frame: FrameRegistryEntry::ros_optical("peer2", "peer2-optical"),
-        observation_clock_id: "peer2-clock".into(),
+        observation_clock: fixture_clock("peer2-clock"),
     });
     let mut map = component(&peer1, definition);
     output1
@@ -368,9 +374,9 @@ fn one_mapper_consumes_two_peer_products_and_clears_a_moved_object() {
     // Its clock is intentionally numerically behind peer1's clock.
     let mut second = first.clone();
     second.source = capture2.product().reference();
-    second.clock_id = "peer2-clock".into();
+    second.clock = fixture_clock("peer2-clock");
     second.sensor_frame_id = "peer2-optical".into();
-    second.pose.clock_id = second.clock_id.clone();
+    second.pose.clock = second.clock.clone();
     second.pose.sensor_to_map = RigidTransform {
         from_frame_id: "peer2-optical".into(),
         to_frame_id: "portal-map-frame".into(),
@@ -428,7 +434,7 @@ fn one_mapper_consumes_two_peer_products_and_clears_a_moved_object() {
         match kind {
             0 => bad.source.peer_id = "unadmitted-peer".into(),
             1 => bad.pose.sensor_to_map.to_frame_id = "unrelated-map".into(),
-            2 => bad.pose.clock_id = "camera-clock".into(),
+            2 => bad.pose.clock = fixture_clock("camera-clock"),
             _ => bad.pose.portal_snapshot.sequence += 1,
         }
         assert!(map.integrate(bad).is_err());
@@ -453,3 +459,7 @@ fn source_admission_is_bounded_unique_and_explicit() {
     bad.sources = vec![bad.sources[0].clone(); MAX_SOURCES + 1];
     assert!(bad.validate().is_err());
 }
+
+#[path = "../../auki-components/tests/support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

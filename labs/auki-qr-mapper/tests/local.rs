@@ -39,7 +39,7 @@ fn fixture(write: bool) -> (PortalMaps, Arc<MapComponent>, Database) {
             MapComponentConfig {
                 component_id: "map".into(),
                 publication_id: "run".into(),
-                clock_id: "clock".into(),
+                clock: fixture_clock("clock"),
                 map: MapDefinition {
                     map_id: "map".into(),
                     name: None,
@@ -202,3 +202,7 @@ async fn stale_placement_does_not_overwrite_newer_state() {
     assert_eq!(current, map.snapshot_reference());
     assert!(maps.resolve(PAYLOAD).unwrap().is_empty());
 }
+
+#[path = "../../auki-components/tests/support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

@@ -223,7 +223,7 @@ pub struct MapDirectoryConfig {
     pub component_id: String,
     /// Fresh for each publisher run, including restarts.
     pub publication_id: String,
-    pub clock_id: String,
+    pub clock: auki_components::ClockReference,
     pub domain_reference: String,
 }
 struct DirectoryState {
@@ -295,7 +295,9 @@ impl MapDirectoryComponent {
         authorize_write: impl Fn(&InvocationContext) -> bool + Send + Sync + 'static,
     ) -> Result<Self, DirectoryError> {
         let initial = DomainMapDirectory::new(config.domain_reference.clone())?;
-        if !valid_text(&config.publication_id) || !valid_text(&config.clock_id) {
+        if !valid_text(&config.publication_id)
+            || auki_components::clock::validate_clock(&config.clock).is_err()
+        {
             return Err(error("publication and clock IDs are required and bounded"));
         }
         let component = runtime
@@ -326,7 +328,7 @@ impl MapDirectoryComponent {
             .configured_observable::<DomainMapDirectory>(ConfiguredObservableSpec::new(
                 "directory",
                 format!("{}/directory", config.publication_id),
-                config.clock_id,
+                config.clock,
                 PayloadContract::Structured(StructuredPayloadContract {
                     modality: "map-directory".into(),
                     datatype: DomainMapDirectory::DATATYPE.into(),

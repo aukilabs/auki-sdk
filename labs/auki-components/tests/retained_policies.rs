@@ -322,7 +322,7 @@ fn external_storage_fanout_is_zero_copy_locally_and_readback_is_explicit_for_tra
         .configured_observable::<ExternalBytes>(ConfiguredObservableSpec::new(
             "frames",
             "frames-1",
-            "peer-a.session-clock",
+            fixture_clock("peer-a.session-clock"),
             PayloadContract::Structured(StructuredPayloadContract {
                 modality: "camera".to_owned(),
                 datatype: "external_bytes".to_owned(),
@@ -388,3 +388,7 @@ fn external_storage_fanout_is_zero_copy_locally_and_readback_is_explicit_for_tra
     assert_eq!(readbacks.load(Ordering::Relaxed), 1);
     assert!(transport.stats().encoded_bytes >= 1024);
 }
+
+#[path = "support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

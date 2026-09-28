@@ -18,7 +18,7 @@ Two Observables belong to the same Component:
 - `detections`: unmodified `QrDetections` schema, including empty batches and exact
   camera provenance. `detection_product()` retains the latest 64 batches and can
   be bound directly to the existing `QrLocalizerComponent`.
-- `portals`: `auki.portal-detection/v1`, one record per detected QR, with its
+- `portals`: `auki.portal-detection/v2`, one record per detected QR, with its
   corners/payload, raw detection Product/sequence/index, original camera frame
   reference and capture clock, plus size status. Retain this output explicitly
   if consumers need replay. Empty images are represented by the raw empty batch;
@@ -145,3 +145,9 @@ occupied voxels, below the portals and 45cm toward the cameras. Expected voxel
 centers are checked independently of the estimated PnP transforms. Free-space and
 unknown cells are not rendered. The OpenUSD validator verifies all cube sizes and
 world centers and generates `06-portals-and-voxels-preview.svg`.
+
+Clock migration: v2 records carry `capture_clock: ClockReference`, preserving the
+camera clock's peer, registry ID and definition hash with `source_frame.timestamp_ns`.
+The enclosing observation timestamp uses the configured publication clock in its
+Output Manifest v2. Pending and resolved enrichment updates retain the same
+capture timestamp and reference. `bind` requires a full publication clock reference.

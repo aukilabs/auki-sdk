@@ -33,8 +33,26 @@ errors reject that capture and appear in `errors()`. After retention, Product
 state and metadata are updated together in one Catalog revision, even if entry
 count did not change. Metadata never changes the Product Manifest hash.
 
-The field is additive in Catalog v1 JSON: older entries decode as `None`, and
-older readers ignore the new field. Rust `CatalogProductEntry` literals must
+The field remains optional in Catalog JSON: entries without it decode as `None`. Rust `CatalogProductEntry` literals must
 provide it. Metadata is publisher-supplied discovery data, not an authorization
 grant or a guarantee that its observation remains retained. Consumers compare its
 source sequence with a fetched observation when they require an exact match.
+
+Clock references are mandatory in Output Manifest v2. `ClockReference` reuses
+`auki_registry::RegistryRef`: `{ peer_id, id, hash }` identifies the exact clock
+registry entry, whose definition includes session/boot, clock type, native units,
+epoch and scope. The host must retain and make that definition available; a
+reference alone is not clock synchronization. All `*_ns` fields use nanoseconds
+relative to that clock's epoch (convert native ticks before publishing).
+
+An Observation and its terminal notice obtain their clock through their exact
+Output Manifest reference. Time-range requests carry `clock` explicitly and
+compare all three reference fields. Missing/malformed references are rejected at
+configuration, catalog and Product import boundaries. Cross-clock comparison
+requires an explicit time transform; matching names do not establish compatibility.
+Forwarding a Product preserves its source clock, including its owner and hash.
+
+Migration: pass a registered `ClockReference` to `ConfiguredObservableSpec::new`
+and `CameraComponent::new`, replacing string clock names. Camera resolution
+instructions/results also carry `clock`. There is no implicit conversion from a
+legacy clock ID. Coordinate frames remain explicit in pose/map contracts.

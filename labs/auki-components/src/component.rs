@@ -232,12 +232,19 @@ pub struct OutputManifest {
     pub component_manifest_hash: ManifestHash,
     pub slot: String,
     pub output_id: String,
-    pub clock_id: String,
+    pub clock: crate::ClockReference,
     pub spatial_frame_id: Option<String>,
     pub payload: PayloadContract,
 }
 
 impl OutputManifest {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema != "auki.component-output-manifest/v2" {
+            return Err("unsupported output manifest schema".into());
+        }
+        crate::clock::validate_clock(&self.clock)
+    }
+
     pub fn hash(&self) -> ManifestHash {
         manifest_hash(self)
     }
@@ -439,6 +446,7 @@ impl fmt::Debug for Catalog {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CatalogError {
+    InvalidOutput(String),
     DuplicateComponent(String),
     DuplicateProduct(String),
     UnknownComponent(String),
@@ -458,6 +466,7 @@ pub enum CatalogError {
 impl fmt::Display for CatalogError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidOutput(reason) => write!(formatter, "invalid output: {reason}"),
             Self::DuplicateComponent(component_id) => {
                 write!(formatter, "Catalog already has Component {component_id}")
             }
@@ -517,6 +526,7 @@ impl Catalog {
     }
 
     pub(crate) fn set_current_output(&self, manifest: OutputManifest) -> Result<(), CatalogError> {
+        manifest.validate().map_err(CatalogError::InvalidOutput)?;
         let manifest_hash = manifest.hash();
         let mut state = self.inner.write().unwrap();
         let component = state

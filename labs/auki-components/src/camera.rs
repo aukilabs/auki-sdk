@@ -29,11 +29,12 @@ impl ContractType for VideoFrame {
     const DATATYPE: &'static str = "video_frame";
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SetResolution {
     pub width: u32,
     pub height: u32,
     pub effective_at_timestamp_ns: u64,
+    pub clock: crate::ClockReference,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -44,6 +45,7 @@ pub struct AppliedResolution {
     pub replacement_output: OutputReference,
     pub previous_last_sequence: Option<u64>,
     pub effective_at_timestamp_ns: u64,
+    pub clock: crate::ClockReference,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -57,6 +59,7 @@ pub struct DriverReseeded {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CameraError {
     InvalidResolution,
+    ClockMismatch,
     FrameContractMismatch {
         expected_width: u32,
         expected_height: u32,
@@ -72,6 +75,9 @@ pub enum CameraError {
 impl fmt::Display for CameraError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ClockMismatch => {
+                formatter.write_str("camera operation clock does not match active output")
+            }
             Self::InvalidResolution => formatter.write_str("camera resolution must be positive"),
             Self::FrameContractMismatch {
                 expected_width,
@@ -110,15 +116,21 @@ struct ActiveCameraOutput {
 }
 
 impl ActiveCameraOutput {
-    fn new(component: &ComponentReference, generation: u64, width: u32, height: u32) -> Self {
+    fn new(
+        component: &ComponentReference,
+        generation: u64,
+        width: u32,
+        height: u32,
+        clock: crate::ClockReference,
+    ) -> Self {
         let manifest = OutputManifest {
-            schema: "auki.component-output-manifest/v1".to_owned(),
+            schema: "auki.component-output-manifest/v2".to_owned(),
             peer_id: component.peer_id.clone(),
             component_id: component.component_id.clone(),
             component_manifest_hash: component.manifest_hash.clone(),
             slot: FRAMES_SLOT.to_owned(),
             output_id: format!("frames-{generation}"),
-            clock_id: format!("{}.session-clock", component.peer_id),
+            clock,
             spatial_frame_id: Some(format!("{}.optical-frame", component.component_id)),
             payload: PayloadContract::Camera(CameraPayloadContract {
                 datatype: "video_frame".to_owned(),
@@ -195,6 +207,7 @@ impl CameraComponent {
         width: u32,
         height: u32,
         catalog: Catalog,
+        clock: crate::ClockReference,
         allowed_remote_peers: impl IntoIterator<Item = String>,
     ) -> Result<Self, CameraError> {
         if width == 0 || height == 0 {
@@ -222,8 +235,12 @@ impl CameraComponent {
             }],
         };
         let component_reference = component_manifest.reference();
-        let active = ActiveCameraOutput::new(&component_reference, 1, width, height);
+        let active = ActiveCameraOutput::new(&component_reference, 1, width, height, clock);
 
+        active
+            .manifest
+            .validate()
+            .map_err(CatalogError::InvalidOutput)?;
         catalog.register_component(component_manifest.clone())?;
         catalog.set_current_output(active.manifest.clone())?;
 
@@ -378,6 +395,9 @@ fn apply_resolution(
     }
 
     let mut state = inner.state.lock().unwrap();
+    if instruction.clock != state.active.manifest.clock {
+        return Err(CameraError::ClockMismatch);
+    }
     let previous = state.active.reference.clone();
     let previous_last_sequence = state.active.next_sequence.checked_sub(1);
     if state.active.width() == instruction.width && state.active.height() == instruction.height {
@@ -388,6 +408,7 @@ fn apply_resolution(
             replacement_output: previous,
             previous_last_sequence,
             effective_at_timestamp_ns: instruction.effective_at_timestamp_ns,
+            clock: instruction.clock,
         });
     }
 
@@ -397,6 +418,7 @@ fn apply_resolution(
         next_generation,
         instruction.width,
         instruction.height,
+        state.active.manifest.clock.clone(),
     );
     inner
         .catalog
@@ -426,6 +448,7 @@ fn apply_resolution(
         replacement_output: replacement_reference,
         previous_last_sequence,
         effective_at_timestamp_ns: instruction.effective_at_timestamp_ns,
+        clock: instruction.clock,
     })
 }
 

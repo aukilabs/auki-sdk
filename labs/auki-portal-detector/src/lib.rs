@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-pub const PORTAL_DETECTION_SCHEMA: &str = "auki.portal-detection/v1";
+pub const PORTAL_DETECTION_SCHEMA: &str = "auki.portal-detection/v2";
 const CAPACITY: usize = 64;
 const CACHE_CAPACITY: usize = 128;
 const LOOKUPS: usize = 8;
@@ -54,7 +54,7 @@ pub struct PortalDetection {
     pub detection_sequence: u64,
     pub detection_index: usize,
     pub source_frame: QrSourceFrame,
-    pub capture_clock_id: String,
+    pub capture_clock: auki_components::ClockReference,
     pub detection: QrDetection,
     pub size: PortalSize,
 }
@@ -100,7 +100,7 @@ impl PortalDetector {
         maps: PortalMaps,
         metadata: S,
         domain: Uuid,
-        publication_clock: &str,
+        publication_clock: auki_components::ClockReference,
         clock: impl Fn() -> u64 + Send + Sync + 'static,
     ) -> Result<Self, String> {
         let PayloadContract::Camera(contract) = &camera.producer.payload else {
@@ -116,7 +116,7 @@ impl PortalDetector {
                 .spatial_frame_id
                 .as_ref()
                 .is_none_or(|s| s.is_empty())
-            || publication_clock.is_empty()
+            || auki_components::clock::validate_clock(&publication_clock).is_err()
         {
             return Err("invalid camera or publication clock contract".into());
         }
@@ -152,7 +152,7 @@ impl PortalDetector {
                 ConfiguredObservableSpec::new(
                     "detections",
                     format!("{publication_id}/detections"),
-                    &camera.producer.clock_id,
+                    camera.producer.clock.clone(),
                     PayloadContract::Structured(StructuredPayloadContract {
                         modality: "qr".into(),
                         datatype: QrDetections::DATATYPE.into(),
@@ -194,7 +194,7 @@ impl PortalDetector {
         let raw_output = raw.clone();
         let source = camera.reference();
         let producer = camera.manifest.producer.clone();
-        let capture_clock = camera.producer.clock_id.clone();
+        let capture_clock = camera.producer.clock.clone();
         let ready = Arc::new((
             Mutex::new(None::<Result<ProductReference, String>>),
             std::sync::Condvar::new(),
@@ -248,7 +248,7 @@ impl PortalDetector {
                     detection_sequence: published.sequence,
                     detection_index: index,
                     source_frame: source_frame.clone(),
-                    capture_clock_id: capture_clock.clone(),
+                    capture_clock: capture_clock.clone(),
                     detection: code.clone(),
                     size: PortalSize::Pending,
                 };

@@ -18,7 +18,7 @@ use crate::runtime::ConfiguredObservable;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TimeRangeRequest {
-    pub clock_id: String,
+    pub clock: crate::ClockReference,
     pub start_ns: u64,
     pub end_ns: u64,
 }
@@ -41,8 +41,14 @@ impl<T> FiniteObservations<T> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductAccessError {
     UnsupportedRequest(ObservationAccess),
-    InvalidTimeRange { start_ns: u64, end_ns: u64 },
-    ClockMismatch { expected: String, requested: String },
+    InvalidTimeRange {
+        start_ns: u64,
+        end_ns: u64,
+    },
+    ClockMismatch {
+        expected: Box<crate::ClockReference>,
+        requested: Box<crate::ClockReference>,
+    },
     Transport(String),
 }
 
@@ -63,7 +69,7 @@ impl fmt::Display for ProductAccessError {
                 requested,
             } => write!(
                 formatter,
-                "time range uses clock {requested}, but Product timestamps use {expected}"
+                "time range uses clock {requested:?}, but Product timestamps use {expected:?}"
             ),
             Self::Transport(error) => write!(formatter, "transport serialization failed: {error}"),
         }
@@ -122,6 +128,9 @@ impl<T> RetainedProduct<T> {
         limits: BufferLimits,
         retained_size: impl Fn(&T) -> usize + Send + Sync + 'static,
     ) -> Result<Self, ProductImportError> {
+        producer
+            .validate()
+            .map_err(ProductImportError::InvalidProducer)?;
         if manifest.form != ProductForm::Buffer {
             return Err(ProductImportError::NotBuffer(manifest.form));
         }
@@ -223,10 +232,10 @@ impl<T> RetainedProduct<T> {
                 end_ns: request.end_ns,
             });
         }
-        if request.clock_id != self.producer.clock_id {
+        if request.clock != self.producer.clock {
             return Err(ProductAccessError::ClockMismatch {
-                expected: self.producer.clock_id.clone(),
-                requested: request.clock_id,
+                expected: Box::new(self.producer.clock.clone()),
+                requested: Box::new(request.clock),
             });
         }
         Ok(FiniteObservations {
@@ -250,6 +259,7 @@ impl<T> RetainedProduct<T> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductImportError {
+    InvalidProducer(String),
     NotBuffer(ProductForm),
     ManifestHashMismatch { expected: String, actual: String },
     ProducerMismatch,
@@ -261,6 +271,7 @@ pub enum ProductImportError {
 impl fmt::Display for ProductImportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidProducer(reason) => write!(formatter, "invalid producer: {reason}"),
             Self::NotBuffer(form) => {
                 write!(formatter, "cannot mirror {form:?} as a Buffer Product")
             }
@@ -474,10 +485,10 @@ impl<T> EpisodeProduct<T> {
                 end_ns: request.end_ns,
             });
         }
-        if request.clock_id != self.producer.clock_id {
+        if request.clock != self.producer.clock {
             return Err(ProductAccessError::ClockMismatch {
-                expected: self.producer.clock_id.clone(),
-                requested: request.clock_id,
+                expected: Box::new(self.producer.clock.clone()),
+                requested: Box::new(request.clock),
             });
         }
         Ok(FiniteObservations {

@@ -81,11 +81,11 @@ fn reject(value: impl std::fmt::Display) -> InvocationError {
 }
 
 /// A publication ID must be fresh for each run, even when map_id persists.
-/// The supplied clock callback reports snapshot publication time on clock_id.
+/// The supplied clock callback reports snapshot publication time on clock.
 pub struct MapComponentConfig {
     pub component_id: String,
     pub publication_id: String,
-    pub clock_id: String,
+    pub clock: auki_components::ClockReference,
     pub map: MapDefinition,
 }
 
@@ -167,7 +167,9 @@ impl MapComponent {
     ) -> Result<Self, MapComponentError> {
         let snapshot =
             MapSnapshot::new(Scenegraph::new(config.map.clone()).map_err(error)?).map_err(error)?;
-        if config.publication_id.is_empty() || config.clock_id.is_empty() {
+        if config.publication_id.is_empty()
+            || auki_components::clock::validate_clock(&config.clock).is_err()
+        {
             return Err(error("publication and clock IDs are required"));
         }
         let spec = ComponentSpec::new(config.component_id)
@@ -202,7 +204,7 @@ impl MapComponent {
                 ConfiguredObservableSpec::new(
                     "scenegraph",
                     format!("{}/scenegraph", config.publication_id),
-                    config.clock_id,
+                    config.clock,
                     PayloadContract::Structured(StructuredPayloadContract {
                         modality: "scenegraph".into(),
                         datatype: MapSnapshot::DATATYPE.into(),

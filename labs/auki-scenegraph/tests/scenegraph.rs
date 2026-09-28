@@ -97,7 +97,7 @@ mod runtime {
             MapComponentConfig {
                 component_id: "map".into(),
                 publication_id: "run-1".into(),
-                clock_id: "clock".into(),
+                clock: fixture_clock("clock"),
                 map: scene().map,
             },
             move || clock.load(Ordering::SeqCst),
@@ -350,3 +350,7 @@ fn inspection_geometry_uses_map_units_without_changing_snapshot_contract() {
     assert_eq!(scene.to_usda().unwrap(), canonical);
     MapSnapshot::new(scene).unwrap().validate().unwrap();
 }
+
+#[path = "../../auki-components/tests/support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

@@ -18,7 +18,7 @@ fn calibration() -> Calibration {
     // Reference is opaque to the geometry API; the live adapter checks it against provenance.
     serde_json::from_value(serde_json::json!({
         "id":"cal-1", "camera_product":{"peer_id":"p", "product_id":"camera", "manifest_hash":"camera-hash"},
-        "camera_frame_id":"optical", "clock_id":"clock", "width":640,"height":480,
+        "camera_frame_id":"optical", "clock": fixture_clock("clock"), "width":640,"height":480,
         "fx":500.,"fy":500.,"cx":320.,"cy":240.,"distortion":{"model":"none"}
     })).unwrap()
 }
@@ -209,3 +209,7 @@ fn localization_labels_both_frames_and_rejects_wrong_anchor_destination() {
     map.anchors.get_mut("qr").unwrap().pose_in_map.to_frame_id = "unrelated".into();
     assert!(estimate(&map, "qr", corners, &cal, QualityGate::default()).is_err());
 }
+
+#[path = "../../auki-components/tests/support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

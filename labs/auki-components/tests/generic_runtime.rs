@@ -64,7 +64,7 @@ fn retained_product_end_is_shared_validated_and_does_not_change_its_manifest() {
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-1",
-            "peer-a.clock",
+            fixture_clock("peer-a.clock"),
             gauge_payload("battery_state_of_charge"),
         ))
         .unwrap();
@@ -163,7 +163,7 @@ fn components_can_expose_only_observables_only_operables_or_both() {
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-1",
-            "peer-a.session-clock",
+            fixture_clock("peer-a.session-clock"),
             gauge_payload("battery_state_of_charge"),
         ))
         .unwrap();
@@ -188,7 +188,7 @@ fn components_can_expose_only_observables_only_operables_or_both() {
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-1",
-            "peer-a.session-clock",
+            fixture_clock("peer-a.session-clock"),
             gauge_payload("load"),
         ))
         .unwrap();
@@ -226,7 +226,7 @@ fn configured_buffer_input_binds_behavior_contract_and_catalog_projection() {
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-1",
-            "peer-a.session-clock",
+            fixture_clock("peer-a.session-clock"),
             gauge_payload("load"),
         ))
         .unwrap();
@@ -293,7 +293,7 @@ fn configured_buffer_input_can_move_to_a_replacement_product() {
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-a",
-            "peer-a.session-clock",
+            fixture_clock("peer-a.session-clock"),
             gauge_payload("load"),
         ))
         .unwrap();
@@ -314,7 +314,7 @@ fn configured_buffer_input_can_move_to_a_replacement_product() {
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-b",
-            "peer-a.session-clock",
+            fixture_clock("peer-a.session-clock"),
             gauge_payload("load"),
         ))
         .unwrap();
@@ -387,7 +387,7 @@ fn configured_buffer_input_rejects_mismatch_and_requires_a_live_handle() {
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-1",
-            "peer-a.session-clock",
+            fixture_clock("peer-a.session-clock"),
             gauge_payload("load"),
         ))
         .unwrap();
@@ -479,7 +479,7 @@ fn exposure_requires_live_handles_and_exact_contracts() {
         component.configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-1",
-            "peer-a.session-clock",
+            fixture_clock("peer-a.session-clock"),
             mismatch,
         )),
         Err(ComponentBuildError::ContractMismatch { .. })
@@ -489,7 +489,7 @@ fn exposure_requires_live_handles_and_exact_contracts() {
             .configured_observable::<String>(ConfiguredObservableSpec::new(
                 "level",
                 "level-1",
-                "peer-a.session-clock",
+                fixture_clock("peer-a.session-clock"),
                 gauge_payload("load"),
             ))
             .unwrap_err(),
@@ -504,7 +504,7 @@ fn exposure_requires_live_handles_and_exact_contracts() {
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-1",
-            "peer-a.session-clock",
+            fixture_clock("peer-a.session-clock"),
             gauge_payload("load"),
         ))
         .unwrap();
@@ -529,7 +529,7 @@ fn configured_output_replacement_updates_catalog_ends_old_output_and_requires_ne
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-1",
-            "peer-a.session-clock",
+            fixture_clock("peer-a.session-clock"),
             gauge_payload("load"),
         ))
         .unwrap();
@@ -554,7 +554,7 @@ fn configured_output_replacement_updates_catalog_ends_old_output_and_requires_ne
             ConfiguredObservableSpec::new(
                 "level",
                 "level-2",
-                "peer-a.session-clock",
+                fixture_clock("peer-a.session-clock"),
                 gauge_payload("load after reconfiguration"),
             ),
             20,
@@ -621,7 +621,7 @@ fn configured_output_replacement_updates_catalog_ends_old_output_and_requires_ne
                 ConfiguredObservableSpec::new(
                     "level",
                     "level-3",
-                    "peer-a.session-clock",
+                    fixture_clock("peer-a.session-clock"),
                     gauge_payload("load"),
                 ),
                 40,
@@ -641,7 +641,7 @@ fn deleting_a_buffer_capture_unregisters_its_product_and_stops_retention() {
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-1",
-            "peer-a.session-clock",
+            fixture_clock("peer-a.session-clock"),
             gauge_payload("load"),
         ))
         .unwrap();
@@ -679,7 +679,7 @@ fn live_buffer_product_limits_can_be_reconfigured() {
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-1",
-            "peer-a.session-clock",
+            fixture_clock("peer-a.session-clock"),
             gauge_payload("load"),
         ))
         .unwrap();
@@ -750,7 +750,7 @@ fn fresh_observables_cannot_claim_retained_access_or_outlive_their_handle_at_exp
             .configured_observable::<f64>(ConfiguredObservableSpec::new(
                 "level",
                 "level-1",
-                "peer-a.session-clock",
+                fixture_clock("peer-a.session-clock"),
                 gauge_payload("load"),
             ))
             .unwrap_err(),
@@ -767,7 +767,7 @@ fn fresh_observables_cannot_claim_retained_access_or_outlive_their_handle_at_exp
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-1",
-            "peer-a.session-clock",
+            fixture_clock("peer-a.session-clock"),
             gauge_payload("load"),
         ))
         .unwrap();
@@ -793,7 +793,7 @@ fn local_and_serialized_paths_preserve_semantics_and_caller_identity() {
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-1",
-            "peer-a.session-clock",
+            fixture_clock("peer-a.session-clock"),
             gauge_payload("load"),
         ))
         .unwrap();
@@ -883,7 +883,7 @@ fn local_and_serialized_live_paths_match_queued_and_coalescing_delivery() {
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-1",
-            "peer-a.session-clock",
+            fixture_clock("peer-a.session-clock"),
             gauge_payload("load"),
         ))
         .unwrap();
@@ -1266,3 +1266,7 @@ fn cancelled_queued_invocation_releases_its_instruction_when_drained() {
     });
     assert_eq!(entered.load(Ordering::Acquire), 1);
 }
+
+#[path = "support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

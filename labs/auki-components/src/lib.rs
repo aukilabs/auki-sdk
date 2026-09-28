@@ -84,3 +84,7 @@ pub use runtime::{
     Component, ComponentBuildError, ComponentSpec, ConfiguredBufferInput, ConfiguredObservable,
     ConfiguredObservableReplacement, ConfiguredObservableSpec, ContractType, PublishError,
 };
+
+/// Registry identity of a clock, including owner and the hash of its boot-specific definition.
+pub use auki_registry::RegistryRef as ClockReference;
+pub mod clock;

@@ -46,11 +46,11 @@ evidence. Per-point evidence is not normalized by scan density or uncertainty.
 Only actual hit endpoints are accepted: no-return or max-range samples need a
 separate sensor-model adapter and must not be treated as occupied surfaces.
 
-The `auki.voxel-map.snapshot/v2` Product retains one complete checkpoint. It contains
+The `auki.voxel-map.snapshot/v3` Product retains one complete checkpoint. It contains
 the existing SDK `MapUpdate` protobuf bytes, map/frame contracts, Portal-map
 snapshot reference, observation count, and latest observation/pose provenance.
 The Observable explicitly declares its spatial frame. Catalog metadata uses
-`auki.voxel-map.catalog/v2` and advertises the grid and Portal alignment reference.
+`auki.voxel-map.catalog/v3` and advertises the grid and Portal alignment reference.
 It does not claim that the voxel map contains a copied list of Portal anchors.
 `VoxelSnapshot::accumulator()` validates and decodes received snapshots.
 
@@ -133,3 +133,11 @@ or canonical Portal snapshot. It emits one Cube per occupied cell and is intende
 for bounded prototype maps rather than optimized large-scene rendering.
 The `auki-portal-detector` mapping experiment exercises this export with real
 rendered-QR localization, synthetic synchronized depth, and OpenUSD validation.
+
+Snapshot/catalog v3 replace bare clock names with full registry references.
+`SensorBinding.observation_clock`, `DepthObservation.clock`, `TimedSensorPose.clock`
+and retained provenance must agree on peer, ID and definition hash. Publication
+uses a separately supplied clock reference. Observations from different clocks
+are never ordered against one another; pose/depth time matching requires the same
+clock and timestamp. Hosts must explicitly transform times before combining
+samples that originate on different clocks.

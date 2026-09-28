@@ -29,7 +29,7 @@ pub struct Calibration {
     pub id: String,
     pub camera_product: ProductReference,
     pub camera_frame_id: String,
-    pub clock_id: String,
+    pub clock: auki_components::ClockReference,
     pub width: u32,
     pub height: u32,
     pub fx: f64,
@@ -91,7 +91,7 @@ impl Calibration {
                 .spatial_frame_id
                 .clone()
                 .ok_or(LocalizationError::Calibration)?,
-            clock_id: product.producer.clock_id.clone(),
+            clock: product.producer.clock.clone(),
             width: *width,
             height: *height,
             fx: intrinsics.fx,
@@ -107,7 +107,7 @@ impl Calibration {
     fn camera(&self) -> Result<Camera, LocalizationError> {
         if self.id.is_empty()
             || self.camera_frame_id.is_empty()
-            || self.clock_id.is_empty()
+            || auki_components::clock::validate_clock(&self.clock).is_err()
             || self.width == 0
             || self.height == 0
             || ![self.fx, self.fy, self.cx, self.cy]

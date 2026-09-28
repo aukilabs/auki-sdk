@@ -484,3 +484,13 @@ code {
     font-size: 12px;
   }
 }
+
+.source-panel { margin: 0 0 18px; }
+.source-panel h3 { margin: 10px 0; }
+.source-panel svg { width: 100%; height: 360px; display: block; margin-top: 18px; background: #fdfcfe; border: 1px solid #ece8f2; border-radius: 8px; }
+#portal-panel { margin-bottom: 18px; }
+.portal-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 0; border-bottom: 1px solid #eeeaf2; font-size: 12px; }
+.portal-row > div { min-width: 0; overflow-wrap: anywhere; }
+.portal-row button { flex-shrink: 0; }
+.portal-row p { margin: 6px 0 0; font-size: 11px; line-height: 1.6; }
+.portal-row.conflicting { color: #bd4558; }

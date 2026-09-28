@@ -113,6 +113,46 @@ try {
     bridge: "#52a897",
     banana: "translate(-6 15)",
   });
+  const views = await page.evaluate(async () => {
+    const { MapViews } = await import("/src/map-views.ts");
+    const { Grid } = await import("/src/grid.ts");
+    const removed = [];
+    const maps = new MapViews(new Grid(document.getElementById("grid")), name => removed.push(name));
+    const portal = (name, x, y, peer) => ({ id: name, name, x, y, contributors: [peer] });
+    const view = {
+      state: "aligned", reason: null, local_peer: "b", remote_peer: "a",
+      local_frame: "frame-b", remote_frame: "frame-a", display_frame: "frame-a",
+      conflicts: [], local_portals: [portal("bridge", 10, 20, "b")],
+      remote_portals: [portal("bridge", 0, 0, "a"), portal("partner-only", 2, 3, "a")],
+      portals: [portal("bridge", 0, 0, "a"), portal("partner-only", 2, 3, "a")],
+    };
+    maps.render(view);
+    const aligned = {
+      local: document.querySelector('#grid [data-portal="bridge"]').getAttribute("transform"),
+      remote: document.querySelector('#remote-grid [data-portal="bridge"]').getAttribute("transform"),
+      combined: document.querySelectorAll('#combined-grid [data-portal]').length,
+      buttons: document.querySelectorAll('#portal-list button').length,
+    };
+    view.state = "conflict";
+    view.local_portals.push(portal("bad", 4, 5, "b"));
+    view.remote_portals.push(portal("bad", 9, 9, "a"));
+    view.conflicts = [{ name: "bad", disagrees_with: ["bridge"] }, { name: "bridge", disagrees_with: ["bad"] }];
+    maps.render(view);
+    const conflict = {
+      combinedHidden: document.getElementById("combined-grid").hasAttribute("hidden"),
+      combinedCount: document.querySelectorAll('#combined-grid [data-portal]').length,
+      highlighted: document.querySelectorAll('[data-conflict="true"]').length,
+      evidence: document.getElementById("portal-list").textContent.includes("Incompatible with: bridge"),
+    };
+    document.querySelector('[aria-label="Remove bad from my map"]').click();
+    return { aligned, conflict, removed };
+  });
+  assert.deepEqual(views, {
+    aligned: { local: "translate(10 -20)", remote: "translate(0 0)", combined: 2, buttons: 1 },
+    conflict: { combinedHidden: true, combinedCount: 0, highlighted: 4, evidence: true },
+    removed: ["bad"],
+  });
+  await page.screenshot({ path: "test-results/conflict-desktop.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(
     await page.evaluate(
@@ -124,6 +164,8 @@ try {
     path: "test-results/initial-mobile.png",
     fullPage: true,
   });
+  await page.locator("#portal-panel").scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "test-results/conflict-mobile.png" });
   assert.equal(await page.locator("#remote-card").count(), 0);
   assert.equal(await page.locator("#local-card").count(), 0);
   await checkDiscovery(page);

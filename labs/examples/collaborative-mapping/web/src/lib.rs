@@ -146,6 +146,13 @@ impl AukiMapping {
             .map_err(error)?;
         view(&self.state)
     }
+    pub fn remove(&self, name: String) -> Result<String, JsValue> {
+        if self.state.cancel.is_cancelled() {
+            return Err(error("Map is closing"));
+        }
+        self.state.model.borrow_mut().remove(&name).map_err(error)?;
+        view(&self.state)
+    }
     /// One driven subscription; callers await this Promise during shutdown.
     /// Callbacks carry serialized view state and human-readable transport state.
     pub fn follow(

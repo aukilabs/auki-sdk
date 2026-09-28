@@ -87,6 +87,16 @@ work. The caller can fetch current state, reconsider, and retry. This is optimis
 concurrency, not observation fusion. Retrying a successful edit with its old base
 returns a conflict; invocation IDs do not provide exactly-once mutation semantics.
 
+`remove_qr` removes an anchor by ID with the same write authorizer and exact
+`expected_snapshot` check as upsert. Missing anchors are no-ops; changed snapshots
+update retained geometry, USDA and Catalog membership atomically. This additive
+Operable uses `auki.scenegraph.remove-qr/v1`; existing snapshot/upsert wire formats
+are unchanged. Hosts must explicitly export it to permit network invocation.
+The collaborative mapping demo invokes it locally only and exports no edits.
+Existing consumers continue reading snapshot v2, including removed anchors;
+no backend rollout is required. The demo's WASM adapter adds `remove(name)` and
+its view JSON adds explicit source frames and pairwise conflict diagnostics.
+
 The host's publication clock must advance for each changed snapshot. Invalid
 geometry, clock regression, bounds violations and conflicting bases leave state
 unchanged. A retention failure closes publication without acknowledging the

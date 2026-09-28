@@ -14,6 +14,9 @@ export interface View {
   reason: string | null;
   local_peer: string;
   remote_peer: string | null;
+  local_frame: string;
+  remote_frame: string | null;
+  conflicts: { name: string; disagrees_with: string[] }[];
   display_frame: string;
   local_to_display: {
     from_frame_id: string;
@@ -53,7 +56,7 @@ export class Grid {
       selected(Math.round(point.x), Math.round(-point.y));
     });
   }
-  render(portals: Portal[], peers: string[]): void {
+  render(portals: Portal[], peers: string[], conflicts: string[] = []): void {
     const sortedPeers = [...peers].sort();
     const xs = portals.map((p) => p.x),
       ys = portals.map((p) => p.y);
@@ -100,8 +103,18 @@ export class Grid {
         "stroke-dasharray": `${0.14 * unit} ${0.15 * unit}`,
       }),
     );
+    for (const [label, x, y] of [
+      ["0", 0.2 * unit, 0.5 * unit],
+      ["+X", left + size - unit, 0.5 * unit],
+      ["+Y", 0.2 * unit, top + unit],
+    ] as const) {
+      const axis = svg("text", { x, y, fill: "#81758f", "font-size": 0.4 * unit });
+      axis.textContent = label;
+      this.root.append(axis);
+    }
     for (const portal of portals) {
-      const color =
+      const conflicting = conflicts.includes(portal.name);
+      const color = conflicting ? "#bd4558" :
         portal.contributors.length > 1
           ? "#52a897"
           : portal.contributors[0] === sortedPeers[0]
@@ -110,6 +123,7 @@ export class Grid {
       const group = svg("g", {
         transform: `translate(${portal.x} ${-portal.y})`,
         "data-portal": portal.name,
+        "data-conflict": String(conflicting),
         "data-x": portal.x,
         "data-y": portal.y,
       });

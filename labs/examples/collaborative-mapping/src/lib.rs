@@ -6,7 +6,7 @@ use auki_components::{
 use auki_scenegraph::{
     MapDefinition, MapFrame, MapSnapshot, QrAnchor, RigidTransform,
     alignment::{AlignmentOptions, AlignmentResult, MapAlignmentChecker},
-    component::{MapComponent, MapComponentConfig, SnapshotReference, UpsertQr},
+    component::{MapComponent, MapComponentConfig, RemoveQr, SnapshotReference, UpsertQr},
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -37,11 +37,20 @@ pub struct PortalView {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct PortalConflict {
+    pub name: String,
+    pub disagrees_with: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct View {
     pub state: String,
     pub reason: Option<String>,
     pub local_peer: String,
     pub remote_peer: Option<String>,
+    pub local_frame: String,
+    pub remote_frame: Option<String>,
+    pub conflicts: Vec<PortalConflict>,
     pub display_frame: String,
     pub local_to_display: RigidTransform,
     pub local_reference: SnapshotReference,
@@ -261,13 +270,18 @@ impl DemoMap {
         self.ensure_open()?;
         validate_name(name)?;
         let view = self.view()?;
-        if view.display_frame != frame {
+        if view.display_frame != frame && view.local_frame != frame {
             return Err("Display frame changed; place the Portal again".into());
         }
         let pose = &view.local_to_display;
         // The demo validates every input as XY, fixed-heading: only translation is possible.
-        let x = x - pose.translation[0];
-        let y = y - pose.translation[1];
+        let offset = if frame == view.local_frame {
+            [0.; 3]
+        } else {
+            pose.translation
+        };
+        let x = x - offset[0];
+        let y = y - offset[1];
         validate_position(x, y)?;
         let current = self.publication();
         let id = portal_id(&self.session, name);
@@ -303,6 +317,26 @@ impl DemoMap {
         Ok(())
     }
 
+    pub fn remove(&mut self, name: &str) -> Result<()> {
+        self.ensure_open()?;
+        validate_name(name)?;
+        InMemoryTransport
+            .invoke(
+                self.map.remove_qr(),
+                InvocationContext {
+                    invocation_id: Uuid::new_v4().to_string(),
+                    caller_peer_id: self.peer.clone(),
+                    caller_component_id: "grid-editor".into(),
+                },
+                RemoveQr {
+                    expected_snapshot: self.map.snapshot_reference(),
+                    anchor_id: portal_id(&self.session, name),
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     pub fn view(&mut self) -> Result<View> {
         let local = self.publication();
         self.checker
@@ -314,16 +348,24 @@ impl DemoMap {
         let mut state = "waiting".to_owned();
         let mut reason = None;
         let mut shared_names = vec![];
+        let mut offsets = vec![];
         if let Some(remote) = &self.remote {
+            for (id, anchor) in &local.snapshot.scenegraph.anchors {
+                if let Some(other) = remote.snapshot.scenegraph.anchors.get(id) {
+                    shared_names.push(anchor.payload.clone());
+                    offsets.push((
+                        anchor.payload.clone(),
+                        [
+                            anchor.pose_in_map.translation[0] - other.pose_in_map.translation[0],
+                            anchor.pose_in_map.translation[1] - other.pose_in_map.translation[1],
+                        ],
+                    ));
+                }
+            }
             state = "separate".into();
             match self.checker.check("remote", "local") {
                 AlignmentResult::Available { transform, .. } => {
                     state = "aligned".into();
-                    for (id, anchor) in &local.snapshot.scenegraph.anchors {
-                        if remote.snapshot.scenegraph.anchors.contains_key(id) {
-                            shared_names.push(anchor.payload.clone());
-                        }
-                    }
                     if self.peer < remote.reference.product.peer_id {
                         remote_to_display = Some(transform);
                     } else {
@@ -380,6 +422,23 @@ impl DemoMap {
                 }
             }
         }
+        // Validated demo coordinates are integral with fixed heading. Unequal offsets
+        // differ by at least a meter, beyond the checker's 2 cm tolerance. Report
+        // pairwise contradictions without choosing an arbitrary "correct" anchor.
+        let conflicts = offsets
+            .iter()
+            .filter_map(|(name, offset)| {
+                let disagrees_with: Vec<_> = offsets
+                    .iter()
+                    .filter(|(_, other)| other != offset)
+                    .map(|(other, _)| other.clone())
+                    .collect();
+                (!disagrees_with.is_empty()).then(|| PortalConflict {
+                    name: name.clone(),
+                    disagrees_with,
+                })
+            })
+            .collect();
         shared_names.sort();
         Ok(View {
             state,
@@ -389,6 +448,12 @@ impl DemoMap {
                 .remote
                 .as_ref()
                 .map(|r| r.reference.product.peer_id.clone()),
+            local_frame: frame.clone(),
+            remote_frame: self
+                .remote
+                .as_ref()
+                .map(|r| r.snapshot.scenegraph.map.frame.id.clone()),
+            conflicts,
             display_frame: local_to_display.to_frame_id.clone(),
             local_to_display,
             local_reference: local.reference,

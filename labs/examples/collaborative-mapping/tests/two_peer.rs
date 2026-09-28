@@ -116,6 +116,26 @@ async fn authenticated_exchange_resubscription_and_idle_shutdown() {
         receive(&mut sb, &mut b).await;
         assert_eq!(a.view().unwrap().state, "aligned");
         assert_eq!(a.view().unwrap().portals, b.view().unwrap().portals);
+        // Conflicting evidence and removal propagate through the same snapshot stream.
+        let af = a.view().unwrap().local_frame;
+        let bf = b.view().unwrap().local_frame;
+        a.place("bad", 2., 2., &af).unwrap();
+        b.place("bad", 99., 99., &bf).unwrap();
+        receive(&mut sa, &mut a).await;
+        receive(&mut sb, &mut b).await;
+        assert_eq!(a.view().unwrap().state, "conflict");
+        assert_eq!(b.view().unwrap().state, "conflict");
+        a.remove("bad").unwrap();
+        receive(&mut sb, &mut b).await;
+        assert_eq!(a.view().unwrap().state, "aligned");
+        assert_eq!(a.view().unwrap().portals, b.view().unwrap().portals);
+        assert!(
+            b.view()
+                .unwrap()
+                .local_portals
+                .iter()
+                .any(|p| p.name == "bad")
+        );
         // Closing a pending idle read must not lose the cursor or prevent orderly shutdown.
         assert!(
             tokio::time::timeout(Duration::from_millis(25), sa.next())

@@ -35,27 +35,32 @@ never writes Domain Server records, provisions nodes, or submits DMS tasks.
    If several peers share the session, choose your partner in the displayed picker
    (or use a unique session for your pair). The demo still supports two peers.
 4. In A, place `apple` at `(1, 2)`. In B, place `banana` at `(4, 5)`.
-   Each main grid stays independent; a separate preview shows the partner's map.
+   The local and partner views always show their original, independent coordinates.
 5. In A, place `bridge` at `(0, 0)`. In B, place `bridge` at `(10, 20)`.
-   Both now show three Portals, including one shared `bridge`. The display frame
+   The third, combined view now shows three Portals, including one shared `bridge`. Its display frame
    belongs to the lexicographically smaller Peer ID, so its exact coordinates
    depend on which browser owns that ID. Both browsers agree on them.
-6. Add more Portals in either view. Clicking the shared grid is converted back
-   into that peer's original map frame before publishing. Reusing your own name
-   moves the existing Portal. Shared Portal names are case-sensitive.
-7. Click **Stop peer & reset map** in both tabs before closing them. This awaits
+6. Add more Portals by clicking **Your local map** or entering local coordinates.
+   Reusing your own name moves that Portal. Shared names are case-sensitive.
+   The partner and combined views are read only. Each view labels its frame.
+7. Contradictory shared placements hide the combined view. Both source maps
+   highlight the conflicting names in red; **Your portals** lists which shared
+   names imply incompatible offsets. No placement is automatically judged wrong.
+   Use **Remove mine** to delete only your own placement, or move it. The updated
+   snapshot is sent to your partner and alignment is checked again.
+8. Click **Stop peer & reset map** in both tabs before closing them. This awaits
    subscription cancellation, endpoint closure and peer shutdown to release
    relay bookings and removes the discovery registration. **Sign out** also closes the User session.
 
 Maps are in memory only. Restarting gives a fresh peer and Product, which is
 rediscovered and validated against the same Domain/session. Closing a browser abruptly cannot promise awaited cleanup. There is no
-persistence, remote edit permission, or single-Portal delete in this example.
+persistence or remote edit permission in this example.
 
 ## Components and spatial contract
 
 - `DemoMap` owns a `ComponentRuntime` and an existing
   [`MapComponent`](../../auki-scenegraph/README.md). Local edits invoke its
-  authorized `upsert_qr` operation with the exact current snapshot reference.
+  authorized `upsert_qr` and `remove_qr` operations with the exact current snapshot reference.
 - The WASM adapter mounts [`ComponentProtocolEndpoint`](../../auki-component-protocol/README.md),
   exports only the snapshot Product, checks the remote Catalog and subscribes
   with `LatestExisting`. It exports no remote editing Operables.
@@ -143,11 +148,11 @@ WASM_BINDGEN_TEST_RUNNER=/path/to/wasm-bindgen-test-runner npm run test:wasm
 Tests use local fixtures only; they do not create an offline app mode.
 The native integration test uses isolated signed loopback peers and verifies
 Catalog/subscription exchange, convergence, resubscription and idle shutdown.
-The nine mapping/discovery regression tests also run in actual Chromium WASM, including
+The eleven mapping/discovery regression tests also run in actual Chromium WASM, including
 session/Domain/peer filtering, bidirectional empty-map discovery, invalid
 geometry/identity, stale publication and conflict cases. UI tests load
 the real generated WASM module, verify the relay-only setup, grid rendering,
-click conversion and mobile layout, without signing in. Injected test discovery
+click conversion, three independent views, conflict highlighting, local removal controls and mobile layout, without signing in. Injected test discovery
 ports cover staggered starts, automatic subscriptions in both directions, expired
 candidates, route fallback, multiple matches, cancellation, restart, and bounded
 failures. These test fixtures are not an app mode. Chrome must be installed;

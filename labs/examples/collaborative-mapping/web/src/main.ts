@@ -6,6 +6,7 @@ import init, {
   AukiUserSession,
 } from "../pkg-web/auki_collaborative_mapping_web.js";
 import { Grid, type View } from "./grid";
+import { MapViews } from "./map-views";
 import { DomainDiscovery } from "./discovery";
 import "./styles.css";
 
@@ -31,22 +32,19 @@ const board = new Grid(get<SVGSVGElement>("grid"), (x, y) => {
   input("y").value = String(y);
   if (input("portal-name").reportValidity()) place();
 });
-const partnerBoard = new Grid(get<SVGSVGElement>("remote-grid"));
+const maps = new MapViews(board, (name) => {
+  if (!mapping || busy || stopping) return;
+  try {
+    render(mapping.remove(name));
+    notice(`Removed ${name} from your map.`);
+  } catch (error) { notice(error); }
+});
 board.render([], []);
 
 function render(json: string): void {
   latest = JSON.parse(json) as View;
   const view = latest;
-  const peers = [
-    view.local_peer,
-    ...(view.remote_peer ? [view.remote_peer] : []),
-  ];
-  board.render(view.portals, peers);
-  partnerBoard.render(view.remote_portals, peers);
-  get("empty").hidden = view.portals.length > 0;
-  get("remote-panel").hidden = !view.remote_peer || view.state === "aligned";
-  get("map-title").textContent =
-    view.state === "aligned" ? "Our common ground" : "Your local map";
+  maps.render(view);
   get("alignment").textContent =
     (
       {
@@ -57,14 +55,6 @@ function render(json: string): void {
         pending: "Checking alignment",
       } as Record<string, string>
     )[view.state] ?? view.state;
-  get("map-caption").textContent =
-    view.state === "aligned"
-      ? "Shared view · original maps preserved"
-      : "Independent local frame";
-  get("frame-caption").textContent = `Frame ${view.display_frame.slice(-8)}`;
-  get("frame-caption").title = view.display_frame;
-  get("portal-count").textContent =
-    `${view.portals.length} portal${view.portals.length === 1 ? "" : "s"}`;
   get("sequences").textContent =
     `Local ${view.local_reference.sequence} · Partner ${view.remote_reference?.sequence ?? "—"}`;
   get("evidence").textContent =
@@ -82,7 +72,7 @@ function place(): void {
         input("portal-name").value,
         Number(input("x").value),
         Number(input("y").value),
-        latest.display_frame,
+        latest.local_frame,
       ),
     );
     notice("Portal saved to your map.");
@@ -94,13 +84,7 @@ get<HTMLFormElement>("place").onsubmit = (event) => {
   event.preventDefault();
   place();
 };
-button("fit").onclick = () => {
-  if (latest)
-    board.render(latest.portals, [
-      latest.local_peer,
-      ...(latest.remote_peer ? [latest.remote_peer] : []),
-    ]);
-};
+button("fit").onclick = () => { if (latest) maps.render(latest); };
 get<HTMLSelectElement>("environment").onchange = () => {
   const custom = get<HTMLSelectElement>("environment").value === "custom";
   get("custom-environment").hidden = !custom;
@@ -335,18 +319,18 @@ function stop(): Promise<void> {
     current?.free();
     running?.free();
     latest = undefined;
-    board.render([], []);
-    get("running").hidden = get("remote-panel").hidden = true;
+    maps.clear();
+    get("running").hidden = true;
     get("start").hidden = !session;
     get("empty").hidden = false;
-    get("map-title").textContent = "Your map starts here";
+    get("map-title").textContent = "Your local map";
     get("alignment").textContent = "Peer stopped";
     get("transport").textContent = "Not connected";
     get("evidence").textContent = "No shared portals yet";
     get("sequences").textContent = "Local — · Partner —";
     get("portal-count").textContent = "0 portals";
     get("frame-caption").textContent = "No frame yet";
-    get("map-caption").textContent = "Independent local frame";
+    get("map-caption").textContent = "Your coordinates · editable";
     get("partner-picker").hidden = true;
     get<HTMLSelectElement>("peer-choice").replaceChildren();
     button("stop-button").disabled = button("retry-discovery").disabled = false;

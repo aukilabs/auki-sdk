@@ -158,7 +158,7 @@
               </fieldset>
             </form>
             <p class="hint">
-              Enter a name and click the grid, or use coordinates. Reusing your
+              Enter a name and click your local grid, or use local coordinates. Reusing your
               own name moves that portal.
             </p>
           </section>
@@ -167,7 +167,7 @@
           <div class="map-header">
             <div>
               <span class="eyebrow">LIVE WORKSPACE</span>
-              <h2 id="map-title">Your map starts here</h2>
+              <h2 id="map-title">Your local map</h2>
             </div>
             <span id="alignment" class="pill">Waiting for a peer</span>
           </div>
@@ -179,7 +179,7 @@
               viewBox="-12 -12 24 24"
             ></svg>
             <div class="board-top">
-              <span id="map-caption">Independent local frame</span
+              <span id="map-caption">Your coordinates · editable</span
               ><button id="fit" type="button" class="secondary">Fit map</button>
             </div>
             <div id="empty" class="empty">
@@ -200,13 +200,13 @@
               <i class="dot shared"></i>Shared portal</span
             ><span id="frame-caption">No frame yet</span>
           </div>
-          <section id="remote-panel" class="panel remote-panel" hidden>
+          <section id="remote-panel" class="panel source-panel">
             <div>
               <div class="eyebrow">PARTNER’S LOCAL MAP</div>
-              <h3>Waiting for a shared name</h3>
+              <h3>Partner’s local map</h3>
+              <code id="remote-frame">No partner frame yet</code>
               <p class="hint">
-                These origins are independent. Place a portal with the same name
-                in both maps to align them.
+                Original partner coordinates · read only. These origins remain independent even when the maps align.
               </p>
             </div>
             <svg
@@ -215,6 +215,20 @@
               aria-label="Partner map in its own frame"
               viewBox="-12 -12 24 24"
             ></svg>
+          </section>
+          <section class="panel source-panel">
+            <div>
+              <div class="eyebrow">COMBINED MAP</div>
+              <h3>Our common ground</h3>
+              <code id="combined-frame">No aligned frame yet</code>
+              <p id="combined-status" class="hint">Place a shared portal to align the maps.</p>
+            </div>
+            <svg id="combined-grid" role="img" aria-label="Combined map in its aligned frame" viewBox="-12 -12 24 24" hidden></svg>
+          </section>
+          <section class="panel" id="portal-panel">
+            <h2>Your portals</h2>
+            <p id="conflict-summary" class="hint">Remove a portal from your map here. Your partner’s original map is preserved.</p>
+            <div id="portal-list"></div>
           </section>
           <section class="panel inspector">
             <div>
@@ -245,7 +259,7 @@
               The combined map uses the frame of the lexicographically smaller
               Peer ID. Each peer keeps ownership of its original placements.
               Conflicting shared portals separate the views until you correct
-              their positions. Synthetic map snapshots are readable by
+              their positions or remove a conflicting portal from your own map. Synthetic map snapshots are readable by
               authenticated peers admitted in this Domain. Session matching
               selects a partner; it does not create a private read ACL.
             </p>

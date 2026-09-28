@@ -192,9 +192,12 @@ fn stale_snapshots_and_unselected_publications_are_rejected() {
 fn stale_display_frames_and_edits_after_close_are_rejected() {
     let (mut a, mut b) = (map("a"), map("b"));
     pair(&mut a, &mut b);
-    let old_frame = b.view().unwrap().display_frame;
     place(&mut a, "bridge", 0., 0.);
     place(&mut b, "bridge", 1., 1.);
+    exchange(&mut a, &mut b);
+    let old_frame = b.view().unwrap().display_frame;
+    // Losing shared evidence invalidates the former combined frame on peer B.
+    a.remove("bridge").unwrap();
     exchange(&mut a, &mut b);
     assert!(b.place("oops", 0., 0., &old_frame).is_err());
     b.close();
@@ -261,4 +264,90 @@ fn discovered_peers_subscribe_both_ways_without_a_shared_portal_first() {
     exchange(&mut a, &mut b);
     assert_eq!(a.view().unwrap().state, "aligned");
     assert_eq!(a.view().unwrap().portals, b.view().unwrap().portals);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn conflicting_portals_are_identified_and_local_removal_restores_alignment() {
+    let (mut a, mut b) = (map("peer-a"), map("peer-b"));
+    pair(&mut a, &mut b);
+    for (name, ax, bx) in [("bridge", 0., 10.), ("cafe", 2., 12.), ("bad", 4., 19.)] {
+        place(&mut a, name, ax, 0.);
+        place(&mut b, name, bx, 20.);
+    }
+    exchange(&mut a, &mut b);
+    let view = a.view().unwrap();
+    assert_eq!(view.state, "conflict");
+    assert_eq!(view.shared_names.len(), 3);
+    let bad = view.conflicts.iter().find(|c| c.name == "bad").unwrap();
+    assert_eq!(bad.disagrees_with.len(), 2);
+    let bridge = view.conflicts.iter().find(|c| c.name == "bridge").unwrap();
+    assert_eq!(bridge.disagrees_with, vec!["bad"]);
+    let original_b = b.publication();
+    a.remove("bad").unwrap();
+    exchange(&mut a, &mut b);
+    let va = a.view().unwrap();
+    let vb = b.view().unwrap();
+    assert_eq!(va.state, "aligned");
+    assert!(va.conflicts.is_empty());
+    assert_eq!(va.portals, vb.portals);
+    assert_eq!(va.local_portals.len(), 2);
+    assert_eq!(va.remote_portals.len(), 3);
+    assert_eq!(b.publication().snapshot, original_b.snapshot);
+    // Local coordinates stay editable even on the noncanonical peer after alignment.
+    b.place("local", 25., 26., &vb.local_frame).unwrap();
+    let local = b
+        .view()
+        .unwrap()
+        .local_portals
+        .into_iter()
+        .find(|p| p.name == "local")
+        .unwrap();
+    assert_eq!((local.x, local.y), (25., 26.));
+    a.remove("bridge").unwrap();
+    a.remove("cafe").unwrap();
+    exchange(&mut a, &mut b);
+    assert_eq!(b.view().unwrap().state, "separate");
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn removal_requires_owner_and_current_snapshot_and_updates_catalog() {
+    use auki_components::{InMemoryTransport, InvocationContext};
+    use auki_scenegraph::component::RemoveQr;
+    let mut a = map("peer-a");
+    place(&mut a, "bridge", 0., 0.);
+    let reference = a.publication().reference;
+    let request = RemoveQr {
+        expected_snapshot: reference.clone(),
+        anchor_id: portal_id("demo", "bridge"),
+    };
+    let context = |peer: &str| InvocationContext {
+        invocation_id: "remove-test".into(),
+        caller_peer_id: peer.into(),
+        caller_component_id: "grid-editor".into(),
+    };
+    assert!(
+        InMemoryTransport
+            .invoke(a.map.remove_qr(), context("peer-b"), request.clone())
+            .is_err()
+    );
+    assert_eq!(a.publication().reference, reference);
+    place(&mut a, "cafe", 1., 1.);
+    assert!(
+        InMemoryTransport
+            .invoke(a.map.remove_qr(), context("peer-a"), request)
+            .is_err()
+    );
+    let before = a.publication().reference.sequence;
+    a.remove("bridge").unwrap();
+    assert_eq!(a.publication().reference.sequence, before + 1);
+    let catalog = a.runtime.catalog().snapshot();
+    let serialized = serde_json::to_string(&catalog).unwrap();
+    assert!(!serialized.contains("\"payload\":\"bridge\""));
+    assert!(serialized.contains("\"payload\":\"cafe\""));
+    a.remove("bridge").unwrap(); // no-op does not publish a new snapshot
+    assert_eq!(a.publication().reference.sequence, before + 1);
+    a.close();
+    assert!(a.remove("cafe").is_err());
 }

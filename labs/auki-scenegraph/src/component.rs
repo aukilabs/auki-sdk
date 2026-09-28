@@ -14,6 +14,8 @@ use std::sync::{Arc, Mutex};
 
 pub const LOOKUP_QR: &str = "lookup_qr";
 pub const FIND_QR: &str = "find_qr";
+pub const REMOVE_QR: &str = "remove_qr";
+
 pub const UPSERT_QR: &str = "upsert_qr";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,6 +29,12 @@ pub struct UpsertQr {
     /// Compare-and-set prevents a stale mapper from silently overwriting newer state.
     pub expected_snapshot: SnapshotReference,
     pub anchor: QrAnchor,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RemoveQr {
+    pub expected_snapshot: SnapshotReference,
+    pub anchor_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -62,6 +70,7 @@ macro_rules! contract {
     };
 }
 contract!(MapSnapshot, "auki.scenegraph.qr-snapshot/v2");
+contract!(RemoveQr, "auki.scenegraph.remove-qr/v1");
 contract!(UpsertQr, "auki.scenegraph.upsert-qr/v2");
 contract!(FindQr, "auki.scenegraph.find-qr/v1");
 contract!(FindQrResult, "auki.scenegraph.find-qr-result/v2");
@@ -122,6 +131,26 @@ impl State {
         scene
             .anchors
             .insert(request.anchor.anchor_id.clone(), request.anchor);
+        self.publish_scene(scene)
+    }
+
+    fn remove(&mut self, request: RemoveQr) -> Result<SnapshotReference, InvocationError> {
+        if self.closed {
+            return Err(InvocationError::TargetUnavailable);
+        }
+        if request.expected_snapshot != self.reference() {
+            return Err(reject(
+                "snapshot conflict; fetch current state before retrying",
+            ));
+        }
+        let mut scene = self.current.payload.scenegraph.clone();
+        if scene.anchors.remove(&request.anchor_id).is_none() {
+            return Ok(self.reference());
+        }
+        self.publish_scene(scene)
+    }
+
+    fn publish_scene(&mut self, scene: Scenegraph) -> Result<SnapshotReference, InvocationError> {
         let snapshot = MapSnapshot::new(scene).map_err(reject)?;
         // Preflight the complete relevance list before publishing anything. Reserve
         // maximum sequence width so a later sequence cannot overflow this bound.
@@ -154,6 +183,7 @@ pub struct MapComponent {
     lookup: Operable<LookupQr, LookupQrResult>,
     find: Operable<FindQr, FindQrResult>,
     upsert: Operable<UpsertQr, SnapshotReference>,
+    remove: Operable<RemoveQr, SnapshotReference>,
     state: Arc<Mutex<Option<State>>>,
 }
 
@@ -188,6 +218,12 @@ impl MapComponent {
                 name: FIND_QR.into(),
                 instruction: FindQr::DATATYPE.into(),
                 result: FindQrResult::DATATYPE.into(),
+                exposure: Exposure::Cluster,
+            })
+            .operable(OperableContract {
+                name: REMOVE_QR.into(),
+                instruction: RemoveQr::DATATYPE.into(),
+                result: SnapshotReference::DATATYPE.into(),
                 exposure: Exposure::Cluster,
             })
             .operable(OperableContract {
@@ -266,16 +302,37 @@ impl MapComponent {
                 },
             )
             .map_err(error)?;
+        let authorize_write = Arc::new(authorize_write);
+        let authorize_remove = Arc::clone(&authorize_write);
+        let writer = Arc::clone(&state);
+        let remove = component
+            .operable(
+                REMOVE_QR,
+                move |c| authorize_remove(c),
+                move |_, request: RemoveQr| {
+                    writer
+                        .lock()
+                        .map_err(|_| InvocationError::TargetUnavailable)?
+                        .as_mut()
+                        .ok_or(InvocationError::TargetUnavailable)?
+                        .remove(request)
+                },
+            )
+            .map_err(error)?;
         let writer = Arc::clone(&state);
         let upsert = component
-            .operable(UPSERT_QR, authorize_write, move |_, request: UpsertQr| {
-                writer
-                    .lock()
-                    .map_err(|_| InvocationError::TargetUnavailable)?
-                    .as_mut()
-                    .ok_or(InvocationError::TargetUnavailable)?
-                    .upsert(request)
-            })
+            .operable(
+                UPSERT_QR,
+                move |c| authorize_write(c),
+                move |_, request: UpsertQr| {
+                    writer
+                        .lock()
+                        .map_err(|_| InvocationError::TargetUnavailable)?
+                        .as_mut()
+                        .ok_or(InvocationError::TargetUnavailable)?
+                        .upsert(request)
+                },
+            )
             .map_err(error)?;
         component.expose().map_err(error)?;
         let capture = runtime
@@ -307,6 +364,7 @@ impl MapComponent {
             lookup,
             find,
             upsert,
+            remove,
             state,
         })
     }
@@ -322,6 +380,9 @@ impl MapComponent {
     }
     pub fn upsert_qr(&self) -> &Operable<UpsertQr, SnapshotReference> {
         &self.upsert
+    }
+    pub fn remove_qr(&self) -> &Operable<RemoveQr, SnapshotReference> {
+        &self.remove
     }
     pub fn product(&self) -> RetainedProduct<MapSnapshot> {
         self.state

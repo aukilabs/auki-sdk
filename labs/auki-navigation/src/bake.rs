@@ -63,6 +63,17 @@ impl BakeProfile {
         }
     }
 
+    /// Biped clearance bake. `radius` is the lateral half-width in metres (Recast erosion).
+    /// Climb is a few centimetres so a shelf is not a step. Agent height is about a K1.
+    pub fn biped(radius: f32) -> Self {
+        Self {
+            walkable_radius: radius,
+            agent_height: 1.1,
+            walkable_climb: 0.08,
+            ..Self::dsc_defaults(radius)
+        }
+    }
+
     /// DSC restrict bake (walkable_radius 0).
     pub fn restrict_bake() -> Self {
         Self::dsc(0.0)
@@ -106,6 +117,7 @@ pub(crate) struct BakedNav {
 pub(crate) fn bake_navmesh(
     mesh: &TriangleMesh,
     profile: &BakeProfile,
+    obstacles: Option<&TriangleMesh>,
 ) -> Result<BakedNav, NavError> {
     if mesh.is_empty() {
         return Err(NavError::EmptyMesh);
@@ -138,6 +150,35 @@ pub(crate) fn bake_navmesh(
     }
 
     trimesh.mark_walkable_triangles(profile.walkable_slope_angle);
+
+    // Obstacles are rasterized after the floor and stay NOT_WALKABLE. A tall
+    // span whose top is above walkable_climb keeps that flag when it merges
+    // with the floor, so the shelf footprint drops out of the navmesh.
+    if let Some(obstacles) = obstacles.filter(|m| !m.is_empty()) {
+        let mut blocked = TriMesh {
+            vertices: obstacles
+                .vertices
+                .iter()
+                .map(|v| glam::Vec3A::new(v.x, v.y, v.z))
+                .collect(),
+            indices: obstacles
+                .indices
+                .iter()
+                .map(|&[a, b, c]| glam::UVec3::new(a, b, c))
+                .collect(),
+            area_types: vec![AreaType::NOT_WALKABLE; obstacles.indices.len()],
+        };
+        for tri in &mut blocked.indices {
+            let a = blocked.vertices[tri.x as usize];
+            let b = blocked.vertices[tri.y as usize];
+            let c = blocked.vertices[tri.z as usize];
+            let normal = (b - a).cross(c - a);
+            if normal.y < 0.0 {
+                std::mem::swap(&mut tri.y, &mut tri.z);
+            }
+        }
+        trimesh.extend(blocked);
+    }
 
     let aabb = trimesh.compute_aabb().ok_or(NavError::EmptyMesh)?;
     // Recast needs vertical room above the floor for agent height / climb filters.

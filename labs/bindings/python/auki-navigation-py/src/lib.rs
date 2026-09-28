@@ -242,6 +242,14 @@ impl PyBakeProfile {
         }
     }
 
+    /// Lateral half-width in metres. Climb is a few centimetres; agent height ~1.1 m.
+    #[staticmethod]
+    fn biped(radius: f32) -> Self {
+        Self {
+            inner: nav::BakeProfile::biped(radius),
+        }
+    }
+
     #[getter]
     fn walkable_radius(&self) -> f32 {
         self.inner.walkable_radius
@@ -256,11 +264,26 @@ struct PyNavMesh {
 #[pymethods]
 impl PyNavMesh {
     #[staticmethod]
-    fn bake(py: Python<'_>, mesh: &Bound<'_, PyAny>, profile: &PyBakeProfile) -> PyResult<Self> {
+    #[pyo3(signature = (mesh, profile, obstacles=None))]
+    fn bake(
+        py: Python<'_>,
+        mesh: &Bound<'_, PyAny>,
+        profile: &PyBakeProfile,
+        obstacles: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
         let mesh = py_to_triangle_mesh(mesh)?;
+        let obstacles = match obstacles {
+            Some(obj) if !obj.is_none() => Some(py_to_triangle_mesh(obj)?),
+            _ => None,
+        };
         let profile = profile.inner.clone();
         let inner = py
-            .allow_threads(|| nav::NavMesh::bake(&mesh, &profile))
+            .allow_threads(|| match &obstacles {
+                Some(blocked) if !blocked.is_empty() => {
+                    nav::NavMesh::bake_with_obstacles(&mesh, blocked, &profile)
+                }
+                _ => nav::NavMesh::bake(&mesh, &profile),
+            })
             .map_err(map_err)?;
         Ok(Self { inner })
     }

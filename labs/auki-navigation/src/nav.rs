@@ -14,7 +14,8 @@ use landmass::{
 };
 use std::collections::HashMap;
 
-/// Baked navigation mesh. [`Self::bake`] takes [`TriangleMesh`] only.
+/// Baked navigation mesh. [`Self::bake`] takes a walkable [`TriangleMesh`].
+/// [`Self::bake_with_obstacles`] also rasterizes a second mesh that is never walkable.
 pub struct NavMesh {
     archipelago: Archipelago<XYZ>,
     agent_radius: f32,
@@ -22,10 +23,23 @@ pub struct NavMesh {
 
 impl NavMesh {
     pub fn bake(mesh: &TriangleMesh, profile: &BakeProfile) -> Result<Self, NavError> {
+        Self::from_bake(bake_navmesh(mesh, profile, None)?)
+    }
+
+    /// Bake `mesh` as the floor and `obstacles` as blocked geometry (shelves).
+    pub fn bake_with_obstacles(
+        mesh: &TriangleMesh,
+        obstacles: &TriangleMesh,
+        profile: &BakeProfile,
+    ) -> Result<Self, NavError> {
+        Self::from_bake(bake_navmesh(mesh, profile, Some(obstacles))?)
+    }
+
+    fn from_bake(baked: BakedNav) -> Result<Self, NavError> {
         let BakedNav {
             archipelago_mesh,
             agent_radius,
-        } = bake_navmesh(mesh, profile)?;
+        } = baked;
 
         let mut archipelago =
             Archipelago::<XYZ>::new(ArchipelagoOptions::from_agent_radius(agent_radius));

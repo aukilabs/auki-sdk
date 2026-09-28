@@ -13,8 +13,9 @@ cargo test -p auki-navigation
 ## Compute (this crate)
 
 ```text
-BakeProfile { gotu(), dsc(radius), robot_r40(), restrict_bake() }
-NavMesh::bake(mesh, profile)           // TriangleMesh only
+BakeProfile { gotu(), dsc(radius), robot_r40(), biped(radius), restrict_bake() }
+NavMesh::bake(mesh, profile)           // walkable TriangleMesh
+NavMesh::bake_with_obstacles(mesh, obstacles, profile)
   find_closest_point / find_path / find_optimized_path
   find_optimized_segment_path / restrict / agent_radius
 ```

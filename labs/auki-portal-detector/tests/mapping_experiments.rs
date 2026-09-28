@@ -471,6 +471,184 @@ async fn receive(reader: &AukiPeer, owner: &AukiPeer, map: &MapComponent) -> Map
     stream.close().await.unwrap();
     value
 }
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct DepthHits(Vec<[f64; 3]>);
+impl ContractType for DepthHits {
+    const DATATYPE: &'static str = "fixture.depth-hits/v1";
+}
+
+async fn voxel_experiment(
+    r: &ComponentRuntime,
+    rig: &CameraRig,
+    portals: &Arc<MapComponent>,
+    out: &Path,
+) {
+    use auki_registry::{AxisConvention, AxisDirection, FrameRegistryEntry};
+    use auki_voxel_map::*;
+    rig.maps.register(portals.clone()).unwrap();
+    let component = r
+        .component(ComponentSpec::new("depth").observable(ObservableContract {
+            name: "hits".into(),
+            datatype: DepthHits::DATATYPE.into(),
+            schema: DepthHits::DATATYPE.into(),
+            access: vec![ObservationAccess::FollowNew],
+            exposure: Exposure::Cluster,
+        }))
+        .unwrap();
+    let depth = component
+        .configured_observable(
+            ConfiguredObservableSpec::new(
+                "hits",
+                "depth-run",
+                "capture-clock",
+                PayloadContract::Structured(StructuredPayloadContract {
+                    modality: "depth".into(),
+                    datatype: DepthHits::DATATYPE.into(),
+                    schema: DepthHits::DATATYPE.into(),
+                    observes: "synthetic surfaces below portals".into(),
+                    unit: Some("meters".into()),
+                }),
+            )
+            .in_spatial_frame(&rig.frame),
+        )
+        .unwrap();
+    component.expose().unwrap();
+    let capture = r
+        .capture_buffer("depth-product", &depth, BufferLimits::entries(3), |_| 1024)
+        .unwrap();
+    // The fixture explicitly co-locates RGB and depth optical frames.
+    let mut frame = FrameRegistryEntry::ros_body(r.peer_id(), "store-frame");
+    frame.axes = AxisConvention {
+        x: AxisDirection::Right,
+        y: AxisDirection::Forward,
+        z: AxisDirection::Up,
+    };
+    let definition = VoxelMapDefinition::from_portal_map(
+        r.peer_id(),
+        "store-voxels",
+        portals.snapshot_reference(),
+        &snapshot(portals),
+        frame,
+        capture.product().reference(),
+        FrameRegistryEntry::ros_optical(r.peer_id(), &rig.frame),
+        "capture-clock".into(),
+        0.1,
+    )
+    .unwrap();
+    let ticks = AtomicU64::new(1);
+    let mut voxels = VoxelMapComponent::new(
+        r,
+        "voxels",
+        "voxels-run",
+        "voxel-publication-clock",
+        definition,
+        move || ticks.fetch_add(1, Ordering::SeqCst),
+    )
+    .unwrap();
+    let mut expected = vec![];
+    for (n, x) in [(1, 0.), (2, 2.), (3, 4.)] {
+        let (record, range) = rig.observe(n).await;
+        let pose = rig.localize(r, &record, portals).camera_pose_in_map;
+        check_pose(&pose, &camera_pose(&rig.frame, x, range));
+        let mut hits = vec![];
+        for horizontal in [-0.25, 0.05, 0.35] {
+            for down in [0.65, 0.95, 1.25] {
+                hits.push([horizontal, down, range - 0.45]);
+                expected.push([x + horizontal, -0.45, 1.5 - down]);
+            }
+        }
+        let time = record.source_frame.timestamp_ns;
+        depth.publish(time, Arc::new(DepthHits(hits))).unwrap();
+        let observed = capture.product().latest_existing().unwrap().unwrap();
+        let observation = DepthObservation {
+            source: capture.product().reference(),
+            sequence: observed.sequence,
+            timestamp_ns: time,
+            clock_id: "capture-clock".into(),
+            sensor_frame_id: rig.frame.clone(),
+            hit_points_m: observed.payload.0.clone(),
+            pose: TimedSensorPose {
+                timestamp_ns: time,
+                clock_id: "capture-clock".into(),
+                sensor_to_map: pose,
+                portal_snapshot: portals.snapshot_reference(),
+            },
+        };
+        assert_eq!(
+            voxels.integrate(observation.clone()).unwrap(),
+            IntegrationResult::Applied
+        );
+        assert_eq!(
+            voxels.integrate(observation).unwrap(),
+            IntegrationResult::Duplicate
+        );
+    }
+    let result = voxels
+        .product()
+        .latest_existing()
+        .unwrap()
+        .unwrap()
+        .payload
+        .clone();
+    let occupied = result.accumulator().unwrap().viewer_snapshot(0.).unwrap();
+    let cells: Vec<_> = occupied
+        .chunks
+        .iter()
+        .flat_map(|chunk| &chunk.voxels)
+        .collect();
+    assert_eq!(cells.len(), 27);
+    for position in &expected {
+        assert!(
+            cells.iter().any(|cell| cell
+                .center_m
+                .iter()
+                .zip(position)
+                .all(|(a, b)| (a - b).abs() < 1e-6)),
+            "missing expected occupied voxel {position:?}"
+        );
+    }
+    let portal_snapshot = snapshot(portals);
+    let usda = result
+        .to_usda_with_portals(&portal_snapshot, &portals.snapshot_reference())
+        .unwrap();
+    assert_eq!(usda.matches("def Cube").count(), 27);
+    assert_eq!(usda.matches("def Mesh").count(), 3);
+    let mut wrong = portals.snapshot_reference();
+    wrong.sequence += 1;
+    assert!(
+        result
+            .to_usda_with_portals(&portal_snapshot, &wrong)
+            .is_err()
+    );
+    let mut wrong_frame = portal_snapshot.scenegraph.clone();
+    wrong_frame.map.map_id = "unrelated".into();
+    assert!(
+        result
+            .to_usda_with_portals(
+                &MapSnapshot::new(wrong_frame).unwrap(),
+                &portals.snapshot_reference()
+            )
+            .is_err()
+    );
+    // Expected centers come from independent fixture geometry, not reverse-transforming the PnP result.
+    std::fs::write(out.join("06-portals-and-voxels.usda"), usda).unwrap();
+    std::fs::write(
+        out.join("06-portals-and-voxels.json"),
+        serde_json::to_vec_pretty(&*result).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        out.join("06-expected-voxel-centers.json"),
+        serde_json::to_vec_pretty(&expected).unwrap(),
+    )
+    .unwrap();
+    voxels.close();
+    println!(
+        "PASS 5: three portal localizations -> depth observations -> 27 occupied 10cm voxels in the same USDA as three 40cm portals"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn portal_mapping_localization_transfer_and_merge_export_usda() {
     tokio::time::timeout(Duration::from_secs(60), async {
@@ -612,6 +790,7 @@ async fn portal_mapping_localization_transfer_and_merge_export_usda() {
         println!(
             "PASS 4: A,B + rotated/translated B,C -> A,B,C; B deduplicated; originals unchanged"
         );
+        voxel_experiment(&r1, &rig1, &merged, &out).await;
         println!("USDA artifacts: {}", out.display());
         rig1.close();
         rig2.close();

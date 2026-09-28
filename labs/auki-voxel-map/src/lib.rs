@@ -313,6 +313,44 @@ impl ContractType for VoxelSnapshot {
     const DATATYPE: &'static str = VOXEL_SCHEMA;
 }
 impl VoxelSnapshot {
+    /// Inspection export of an explicitly matching Portal map and positive voxel
+    /// evidence. No alignment is inferred; free/unknown cells are not rendered.
+    pub fn to_usda_with_portals(
+        &self,
+        portals: &MapSnapshot,
+        reference: &SnapshotReference,
+    ) -> Result<String, VoxelError> {
+        use std::fmt::Write;
+        portals.validate().map_err(error)?;
+        let view = self.accumulator()?.viewer_snapshot(0.).map_err(error)?;
+        require(
+            reference == &self.definition.portal_snapshot
+                && portals.scenegraph.map == self.definition.portal_map,
+            "Portal snapshot/frame does not match voxel-map alignment",
+        )?;
+        let mut stage = portals
+            .scenegraph
+            .to_usda_with_portal_geometry()
+            .map_err(error)?;
+        // The canonical exporter owns the enclosing /Map root; add a sibling
+        // voxel layer inside that root, with no extra spatial transform.
+        require(stage.ends_with("}\n"), "invalid stage root")?;
+        stage.truncate(stage.len() - 2);
+        let grid = self.definition.grid();
+        let size = grid.voxel_size_m.0;
+        writeln!(stage, "    def Xform \"Voxels\"\n    {{\n        custom string auki:frameId = {}\n        custom double auki:voxelSizeMeters = {size}",
+            serde_json::to_string(&self.definition.frame.frame_id).map_err(error)?).unwrap();
+        let mut index = 0;
+        for chunk in view.chunks {
+            for voxel in chunk.voxels {
+                let [x, y, z] = voxel.center_m;
+                writeln!(stage, "        def Cube \"Cell_{index}\"\n        {{\n            double size = {size}\n            double3 xformOp:translate = ({x}, {y}, {z})\n            uniform token[] xformOpOrder = [\"xformOp:translate\"]\n            color3f[] primvars:displayColor = [(0.12, 0.7, 0.8)]\n            custom double auki:occupancyEvidence = {}\n        }}", voxel.occupancy_evidence).unwrap();
+                index += 1;
+            }
+        }
+        stage.push_str("    }\n}\n");
+        Ok(stage)
+    }
     pub fn encoded_size(&self) -> usize {
         serde_json::to_vec(self).map_or(usize::MAX, |v| v.len())
     }

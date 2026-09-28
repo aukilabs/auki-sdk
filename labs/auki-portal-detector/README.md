@@ -137,3 +137,11 @@ python labs/auki-portal-detector/tests/validate_experiment_usd.py target/portal-
 
 The validator checks mesh topology, color, dimensions, frame labels and world
 transforms. It also writes a front-view SVG preview from the actual USD vertices.
+
+The experiment also localizes against each portal in the final merged map and
+integrates a synchronized synthetic depth observation in that same optical frame.
+It writes `06-portals-and-voxels.usda`: three white 40cm portals plus 27 teal 10cm
+occupied voxels, below the portals and 45cm toward the cameras. Expected voxel
+centers are checked independently of the estimated PnP transforms. Free-space and
+unknown cells are not rendered. The OpenUSD validator verifies all cube sizes and
+world centers and generates `06-portals-and-voxels-preview.svg`.

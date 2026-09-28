@@ -18,6 +18,8 @@ tokio-util.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+auki-voxel-map = { path = "../auki-voxel-map" }
+auki-registry = { path = "../auki-registry" }
 auki-component-protocol = { path = "../auki-component-protocol" }
 auki-sdk = { path = "../../core/auki-sdk" }
 auki-p2p = { path = "../../core/auki-p2p" }

@@ -117,3 +117,19 @@ cargo test --locked -p auki-voxel-map -p auki-mappers -p auki-maps
 cargo clippy --locked -p auki-voxel-map --all-targets --no-deps -- -D warnings
 cargo check --locked -p auki-voxel-map --target wasm32-unknown-unknown
 ```
+
+## Combined USDA inspection export
+
+`VoxelSnapshot::to_usda_with_portals(&portal_snapshot, &portal_reference)` exports
+one Z-up/Y-up stage using the existing Portal frame, with white encoded-size portal
+squares and teal cubes for positive voxel evidence. Cubes use the grid's physical
+voxel size and cell-center coordinates, including negative chunk coordinates.
+Free-space evidence and unknown cells are not rendered. The Portal map definition
+and exact snapshot reference must match the voxel map's pinned alignment; this
+method does not infer or apply an alignment between unrelated frames.
+
+This is an inspection artifact, not a replacement for the typed voxel checkpoint
+or canonical Portal snapshot. It emits one Cube per occupied cell and is intended
+for bounded prototype maps rather than optimized large-scene rendering.
+The `auki-portal-detector` mapping experiment exercises this export with real
+rendered-QR localization, synthetic synchronized depth, and OpenUSD validation.

@@ -142,7 +142,7 @@ fn real_detector_localizes_camera_and_empty_frame_has_no_stale_pose() {
     };
     let maps = PortalMaps::new(context.clone());
     maps.register(map.clone()).unwrap();
-    let mut localizer = QrLocalizerComponent::bind(
+    let mut localizer = QrLocalizerComponent::bind_with_controls(
         &runtime,
         "localizer",
         "localizer-out",
@@ -150,6 +150,8 @@ fn real_detector_localizes_camera_and_empty_frame_has_no_stale_pose() {
         Arc::new(maps.clone()),
         calibration,
         QualityGate::default(),
+        false,
+        |_| true,
     )
     .unwrap();
     assert!(localizer.poses().manifest().spatial_frame_id.is_none());

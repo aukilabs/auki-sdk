@@ -4,7 +4,10 @@ use auki_components::*;
 use auki_qr_detector::{
     QR_DETECTION_SCHEMA_VERSION, QR_DETECTIONS_SCHEMA, QrDetections, QrSourceFrame,
 };
-use auki_scenegraph::resolution::{QrResolver, ResolvedQr};
+use auki_scenegraph::{
+    component::SnapshotReference,
+    resolution::{QrResolver, ResolvedQr},
+};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
@@ -68,9 +71,13 @@ impl ContractType for ControlRequest {
 pub struct LocalizeOnce {
     pub detection_product: ProductReference,
     pub detection_sequence: u64,
+    /// Index in the original detection batch, not an anchor ID.
+    pub detection_index: usize,
+    /// Exact target map Product and revision; its definition declares the target frame.
+    pub target_map: SnapshotReference,
 }
 impl ContractType for LocalizeOnce {
-    const DATATYPE: &'static str = "auki.qr-localizer.localize-once/v1";
+    const DATATYPE: &'static str = "auki.qr-localizer.localize-once/v2";
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProcessingMode {
@@ -129,7 +136,8 @@ pub struct QrLocalizerComponent {
     localize_once: Operable<LocalizeOnce, LocalizationBatch>,
 }
 impl QrLocalizerComponent {
-    /// Continuous by default. Control authorization defaults to the owning peer only.
+    /// Paused by default: localization requires an explicit request or resume.
+    /// Control authorization defaults to the owning peer only.
     pub fn bind(
         runtime: &ComponentRuntime,
         component_id: impl Into<String>,
@@ -148,7 +156,7 @@ impl QrLocalizerComponent {
             resolver,
             calibration,
             gate,
-            false,
+            true,
             move |ctx| ctx.caller_peer_id == owner,
         )
     }
@@ -318,7 +326,25 @@ impl QrLocalizerComponent {
                         "detection sequence mismatch".into(),
                     ));
                 }
-                let batch = worker.process(&observation.payload);
+                if observation.payload.output != worker.detections.manifest.producer {
+                    return Err(InvocationError::Rejected(
+                        "detection producer mismatch".into(),
+                    ));
+                }
+                let batch = localize_selected_batch(
+                    worker.resolver.as_ref(),
+                    &worker.calibration,
+                    worker.gate,
+                    worker.detections.reference(),
+                    &observation.payload,
+                    Some((request.detection_index, &request.target_map)),
+                );
+                if let Some(reason) = &batch.rejection {
+                    return Err(InvocationError::Rejected(reason.clone()));
+                }
+                if let Some(rejected) = batch.rejected_codes.first() {
+                    return Err(InvocationError::Rejected(rejected.reason.clone()));
+                }
                 guard.status.one_shot_processed = guard.status.one_shot_processed.saturating_add(1);
                 guard.status.last_detection_sequence = Some(batch.detection_sequence);
                 // Historical requests return directly, without disturbing the continuous output clock.
@@ -419,6 +445,23 @@ fn localize_batch(
     detection_product: ProductReference,
     observation: &Observation<QrDetections>,
 ) -> LocalizationBatch {
+    localize_selected_batch(
+        resolver,
+        calibration,
+        gate,
+        detection_product,
+        observation,
+        None,
+    )
+}
+fn localize_selected_batch(
+    resolver: &dyn QrResolver,
+    calibration: &Calibration,
+    gate: QualityGate,
+    detection_product: ProductReference,
+    observation: &Observation<QrDetections>,
+    selection: Option<(usize, &SnapshotReference)>,
+) -> LocalizationBatch {
     let data = &observation.payload;
     let mut batch = LocalizationBatch {
         calibration: calibration.clone(),
@@ -451,9 +494,28 @@ fn localize_batch(
     if batch.rejection.is_some() {
         return batch;
     }
+    if selection.is_some_and(|(index, _)| index >= data.codes.len()) {
+        batch.rejection = Some("detection index out of range".into());
+        return batch;
+    }
     for (index, code) in data.codes.iter().enumerate() {
+        if selection.is_some_and(|(selected, _)| selected != index) {
+            continue;
+        }
         let resolved = if code.mirrored {
             Err("mirrored_qr_unsupported".to_string())
+        } else if let Some((_, target)) = selection {
+            resolver
+                .resolve_in(&code.payload, target)
+                .and_then(|qr| {
+                    if &qr.snapshot != target {
+                        return Err(auki_scenegraph::resolution::ResolutionError(
+                            "resolver returned another map revision".into(),
+                        ));
+                    }
+                    Ok(vec![qr])
+                })
+                .map_err(|e| e.to_string())
         } else {
             resolver.resolve(&code.payload).map_err(|e| e.to_string())
         };
@@ -705,7 +767,14 @@ mod tests {
         data: QrDetections,
     }
     fn controlled(start_paused: bool) -> Controlled {
-        let (resolver, cal, observation) = fixture();
+        let (mut resolver, cal, observation) = fixture();
+        let mut second = resolver.0[0].clone();
+        second.snapshot.product.product_id = "second-map".into();
+        second.map.map_id = "second-map".into();
+        second.map.frame.id = "second-frame".into();
+        second.anchor.pose_in_map.to_frame_id = "second-frame".into();
+        second.anchor.pose_in_map.translation = [10., 0., 0.];
+        resolver.0.push(second);
         let runtime = ComponentRuntime::new("owner");
         let c = runtime
             .component(
@@ -744,17 +813,29 @@ mod tests {
                 |_| 4096,
             )
             .unwrap();
-        let localizer = QrLocalizerComponent::bind_with_controls(
-            &runtime,
-            "localizer",
-            "poses-run",
-            &detections.product(),
-            Arc::new(resolver),
-            cal,
-            QualityGate::default(),
-            start_paused,
-            |c| c.caller_peer_id == "owner" && c.caller_component_id == "controller",
-        )
+        let localizer = if start_paused {
+            QrLocalizerComponent::bind(
+                &runtime,
+                "localizer",
+                "poses-run",
+                &detections.product(),
+                Arc::new(resolver),
+                cal,
+                QualityGate::default(),
+            )
+        } else {
+            QrLocalizerComponent::bind_with_controls(
+                &runtime,
+                "localizer",
+                "poses-run",
+                &detections.product(),
+                Arc::new(resolver),
+                cal,
+                QualityGate::default(),
+                false,
+                |c| c.caller_peer_id == "owner" && c.caller_component_id == "controller",
+            )
+        }
         .unwrap();
         let output = runtime
             .capture_buffer(
@@ -793,6 +874,8 @@ mod tests {
         LocalizeOnce {
             detection_product: f.detections.product().reference(),
             detection_sequence: sequence,
+            detection_index: 0,
+            target_map: fixture().0.0[0].snapshot.clone(),
         }
     }
     #[test]
@@ -964,5 +1047,62 @@ mod tests {
             InMemoryTransport.invoke(&op, ctx(), request),
             Err(InvocationError::TargetUnavailable)
         ));
+    }
+    #[test]
+    fn one_shot_selects_one_qr_and_exact_map_without_fallback() {
+        let mut f = controlled(true);
+        let known = f.data.codes[0].clone();
+        f.data.codes[0].payload = "unknown".into();
+        f.data.codes.push(known);
+        emit(&mut f, 100);
+        drained(&f, 1);
+        assert!(f.output.product().latest_existing().unwrap().is_none());
+        let mut request = one(&f, 0);
+        request.detection_index = 1;
+        let first = InMemoryTransport
+            .invoke(f.localizer.localize_once(), ctx(), request.clone())
+            .unwrap()
+            .result;
+        assert_eq!(first.estimates.len(), 1);
+        assert_eq!(first.estimates[0].detection_index, 1);
+        assert_eq!(
+            first.estimates[0].pose.camera_pose_in_map.to_frame_id,
+            "map"
+        );
+        assert!(first.needs_mapping.is_empty());
+        request.target_map.product.product_id = "second-map".into();
+        let second = InMemoryTransport
+            .invoke(f.localizer.localize_once(), ctx(), request.clone())
+            .unwrap()
+            .result;
+        assert_eq!(second.estimates.len(), 1);
+        assert_eq!(second.estimates[0].qr.snapshot, request.target_map);
+        assert_eq!(
+            second.estimates[0].pose.camera_pose_in_map.to_frame_id,
+            "second-frame"
+        );
+        assert!(
+            (second.estimates[0].pose.camera_pose_in_map.translation[0]
+                - first.estimates[0].pose.camera_pose_in_map.translation[0]
+                - 10.)
+                .abs()
+                < 1e-6
+        );
+        for case in 0..5 {
+            let mut bad = request.clone();
+            match case {
+                0 => bad.target_map.sequence += 1,
+                1 => bad.target_map.product.manifest_hash = "other".into(),
+                2 => bad.target_map.product.product_id = "absent".into(),
+                3 => bad.detection_index = 99,
+                _ => bad.detection_index = 0,
+            }
+            assert!(
+                InMemoryTransport
+                    .invoke(f.localizer.localize_once(), ctx(), bad)
+                    .is_err()
+            );
+        }
+        assert!(f.output.product().latest_existing().unwrap().is_none());
     }
 }

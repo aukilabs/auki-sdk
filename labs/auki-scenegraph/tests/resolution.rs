@@ -97,3 +97,38 @@ fn remote_ownership_denial_and_closed_maps_are_not_mistaken_for_absence() {
     closed.close();
     assert!(maps.resolve("qr").is_err());
 }
+
+#[test]
+fn selected_map_resolution_is_exact_and_ignores_unrelated_denied_maps() {
+    let maps = PortalMaps::new(context());
+    let selected = map("local", "selected", true);
+    let denied = map("local", "denied", false);
+    maps.register(denied).unwrap();
+    maps.register(selected.clone()).unwrap();
+    insert(&selected, "one");
+    let revision = selected.snapshot_reference();
+    let qr = maps.resolve_in("qr", &revision).unwrap();
+    assert_eq!(qr.snapshot, revision);
+    assert_eq!(qr.map.frame.id, "selected-frame");
+    assert!(maps.resolve_in("absent", &revision).is_err());
+    let mut wrong = revision.clone();
+    wrong.product.manifest_hash = "wrong".into();
+    assert!(maps.resolve_in("qr", &wrong).is_err());
+    let mut changed = qr.anchor;
+    changed.pose_in_map.translation[0] = 1.;
+    InMemoryTransport
+        .invoke(
+            selected.upsert_qr(),
+            context(),
+            UpsertQr {
+                expected_snapshot: revision.clone(),
+                anchor: changed,
+            },
+        )
+        .unwrap();
+    assert!(maps.resolve_in("qr", &revision).is_err());
+    assert!(
+        maps.resolve_in("qr", &selected.snapshot_reference())
+            .is_ok()
+    );
+}

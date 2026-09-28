@@ -2,7 +2,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #[path = "../../../auki-scenegraph/tests/support/mod.rs"]
 mod support;
-use auki_collaborative_mapping::{DemoMap, PublishedMap};
+use auki_collaborative_mapping::{DemoMap, PublishedMap, discover_map};
 use auki_component_protocol::{
     CatalogResponse, ComponentProtocolClient, ComponentProtocolEndpoint, ObservationStart,
     RemoteObservationEvent, RemoteProductSubscription,
@@ -32,7 +32,16 @@ async fn subscribe(
         panic!("Catalog missing")
     };
     assert_eq!(snapshot.products.len(), 1);
-    let product = snapshot.products[0].manifest.reference();
+    let domain = model
+        .publication()
+        .snapshot
+        .scenegraph
+        .map
+        .domain_reference
+        .unwrap();
+    let product = discover_map(&snapshot, &owner.peer_id().to_string(), &domain, "demo")
+        .unwrap()
+        .unwrap();
     model.select_partner(product.clone()).unwrap();
     client
         .subscribe_product_exact(

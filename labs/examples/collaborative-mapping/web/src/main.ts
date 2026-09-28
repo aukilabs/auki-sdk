@@ -1,10 +1,12 @@
 import init, {
+  AukiDiscoveryMode,
   AukiMapping,
   AukiPeer,
   AukiPeerReachabilityMode,
   AukiUserSession,
 } from "../pkg-web/auki_collaborative_mapping_web.js";
 import { Grid, type View } from "./grid";
+import { DomainDiscovery } from "./discovery";
 import "./styles.css";
 
 const get = <T extends Element = HTMLElement>(id: string): T =>
@@ -19,8 +21,9 @@ let session: AukiUserSession | undefined,
   peer: AukiPeer | undefined,
   mapping: AukiMapping | undefined;
 let latest: View | undefined,
-  following: Promise<void> | undefined,
+  discoveryTask: Promise<void> | undefined,
   stopping: Promise<void> | undefined;
+let discovery: DomainDiscovery | undefined;
 let busy = false;
 const board = new Grid(get<SVGSVGElement>("grid"), (x, y) => {
   if (!mapping || busy || stopping) return;
@@ -172,8 +175,9 @@ async function start(): Promise<void> {
   button("start-button").disabled = button("logout-button").disabled = true;
   let started: AukiPeer | undefined;
   try {
-    started = await session.startPeer(
+    started = await session.startPeerWithDiscovery(
       get<HTMLSelectElement>("domain").value,
+      AukiDiscoveryMode.DiscoverAndAdvertise,
       AukiPeerReachabilityMode.RelayBacked,
     );
     const mounted = await AukiMapping.mount(started, input("session").value);
@@ -183,19 +187,20 @@ async function start(): Promise<void> {
     get("start").hidden = true;
     get("running").hidden = false;
     get("peer-id").textContent = peer.peerId;
-    get<HTMLTextAreaElement>("local-card").value = mapping.connectionCard();
     get<HTMLFieldSetElement>("editor").disabled = false;
-    button("pair-button").disabled = false;
     render(mapping.view());
-    get("transport").textContent = "Relay ready · exchange connection cards";
+    get("transport").textContent = "Relay ready · discovering matching peers";
     notice(
-      "Name a portal and click a grid cell. Pair both browsers to share maps.",
+      "Peers in the same Domain and demo session connect automatically in both directions.",
     );
+    startDiscovery();
     const running = peer;
     void running.waitStopped().then(
       () => {
         if (peer === running && !stopping) {
-          notice("Peer stopped. Start again and exchange fresh cards.");
+          notice(
+            "Peer stopped. Start again to advertise and discover this session.",
+          );
           void stop().catch(notice);
         }
       },
@@ -222,48 +227,85 @@ async function start(): Promise<void> {
     button("start-button").disabled = button("logout-button").disabled = false;
   }
 }
-button("copy-card").onclick = () => {
-  void navigator.clipboard
-    .writeText(get<HTMLTextAreaElement>("local-card").value)
-    .then(
-      () => notice("Connection card copied."),
-      () => notice("Select and copy the card from the text box."),
-    );
-};
-get<HTMLFormElement>("pair").onsubmit = (event) => {
-  event.preventDefault();
-  if (!mapping || following || stopping) return;
-  const current = mapping;
-  try {
-    button("pair-button").disabled = true;
-    const promise = mapping.follow(
-      get<HTMLTextAreaElement>("remote-card").value,
-      (json: string) => {
-        if (mapping === current && !stopping) render(json);
-      },
-      (status: string) => {
-        if (mapping === current && !stopping)
-          get("transport").textContent = status;
-      },
-    );
-    render(mapping.view());
-    following = Promise.resolve(promise)
-      .then(() => undefined)
-      .catch((error) => {
-        if (mapping === current && !stopping) {
-          get("transport").textContent = "Disconnected · remote map is stale";
-          notice(error);
+function startDiscovery(): void {
+  if (!peer || !mapping || discoveryTask || stopping) return;
+  const running = peer,
+    current = mapping;
+  button("retry-discovery").disabled = true;
+  const controller = new DomainDiscovery({
+    localPeer: running.peerId,
+    async discover() {
+      const candidates = await running.discoverProtocol(current.protocol);
+      return candidates.map((candidate) => {
+        try {
+          return {
+            peerId: candidate.peerId,
+            routes: candidate.routes,
+            expiresAt: candidate.expiresAt,
+          };
+        } finally {
+          candidate.free();
         }
-      })
-      .finally(() => {
-        following = undefined;
-        if (!stopping) button("pair-button").disabled = false;
       });
-  } catch (error) {
-    notice(error);
-    button("pair-button").disabled = false;
-  }
-};
+    },
+    inspect: (peerId, route) => current.inspectPeer(peerId, route),
+    async follow(selection) {
+      get<HTMLSelectElement>("peer-choice").disabled = true;
+      try {
+        const task = current.follow(
+          selection,
+          (json: string) => {
+            if (mapping === current && !stopping) render(json);
+          },
+          (status: string) => {
+            if (mapping === current && !stopping)
+              get("transport").textContent = status;
+          },
+        );
+        render(current.view());
+        await task;
+      } finally {
+        get<HTMLSelectElement>("peer-choice").disabled = false;
+      }
+    },
+    matches(matches) {
+      if (mapping !== current || stopping) return;
+      get("partner-picker").hidden = matches.length <= 1;
+      const select = get<HTMLSelectElement>("peer-choice"),
+        previous = select.value;
+      select.replaceChildren(
+        new Option("Choose a partner", ""),
+        ...matches.map((match) => new Option(match.peerId, match.peerId)),
+      );
+      if (matches.some((match) => match.peerId === previous))
+        select.value = previous;
+    },
+    status(message) {
+      if (mapping === current && !stopping)
+        get("transport").textContent = message;
+    },
+  });
+  discovery = controller;
+  discoveryTask = controller
+    .run()
+    .catch((error) => {
+      if (mapping === current && !stopping) {
+        get("transport").textContent = "Discovery paused · retry to reconnect";
+        notice(error);
+      }
+    })
+    .finally(() => {
+      if (discovery === controller) {
+        discovery = undefined;
+        discoveryTask = undefined;
+      }
+      if (mapping === current && !stopping)
+        button("retry-discovery").disabled = false;
+    });
+}
+button("retry-discovery").onclick = startDiscovery;
+get<HTMLSelectElement>("peer-choice").onchange = () =>
+  discovery?.choose(get<HTMLSelectElement>("peer-choice").value);
 button("stop-button").onclick = () => {
   void stop().catch(notice);
 };
@@ -272,10 +314,12 @@ function stop(): Promise<void> {
   stopping = (async () => {
     const current = mapping,
       running = peer;
+    const pendingDiscovery = discoveryTask;
+    discovery?.cancel();
     mapping = undefined;
     peer = undefined;
     get<HTMLFieldSetElement>("editor").disabled = true;
-    button("stop-button").disabled = button("pair-button").disabled = true;
+    button("stop-button").disabled = button("retry-discovery").disabled = true;
     let failure: unknown;
     try {
       if (current) await current.close();
@@ -287,7 +331,7 @@ function stop(): Promise<void> {
     } catch (error) {
       failure ??= error;
     }
-    if (following) await following;
+    if (pendingDiscovery) await pendingDiscovery;
     current?.free();
     running?.free();
     latest = undefined;
@@ -303,10 +347,9 @@ function stop(): Promise<void> {
     get("portal-count").textContent = "0 portals";
     get("frame-caption").textContent = "No frame yet";
     get("map-caption").textContent = "Independent local frame";
-    get<HTMLTextAreaElement>("local-card").value = get<HTMLTextAreaElement>(
-      "remote-card",
-    ).value = "";
-    button("stop-button").disabled = button("pair-button").disabled = false;
+    get("partner-picker").hidden = true;
+    get<HTMLSelectElement>("peer-choice").replaceChildren();
+    button("stop-button").disabled = button("retry-discovery").disabled = false;
     if (failure) throw failure;
     notice(
       "Peer stopped; relay cleanup completed. Start again for a fresh map.",

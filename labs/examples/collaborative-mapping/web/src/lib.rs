@@ -1,15 +1,15 @@
 //! Browser-only adapter. The same WASM module owns SDK handles and Map Components.
 #![cfg(target_arch = "wasm32")]
 #![forbid(unsafe_code)]
-use auki_collaborative_mapping::{DEMO_VERSION, DemoMap, PublishedMap, definition};
+use auki_collaborative_mapping::{DEMO_VERSION, DemoMap, PublishedMap, definition, discover_map};
 use auki_component_protocol::{
-    CatalogResponse, ComponentProtocolClient, ComponentProtocolEndpoint, ObservationStart,
-    RemoteObservationEvent,
+    CATALOG_PROTOCOL_ID, CatalogResponse, ComponentProtocolClient, ComponentProtocolEndpoint,
+    ObservationStart, RemoteObservationEvent,
 };
 use auki_components::{BufferLimits, ProductReference};
 use auki_scenegraph::{MAX_SNAPSHOT_BYTES, MapSnapshot, component::SnapshotReference};
 use auki_sdk::{Multiaddr, PeerId};
-pub use auki_sdk_web::{AukiPeer, AukiPeerReachabilityMode, AukiUserSession};
+pub use auki_sdk_web::{AukiDiscoveryMode, AukiPeer, AukiPeerReachabilityMode, AukiUserSession};
 use futures::{FutureExt, select_biased};
 use js_sys::{Function, Promise};
 use serde::{Deserialize, Serialize};
@@ -84,9 +84,53 @@ impl AukiMapping {
             }),
         })
     }
-    #[wasm_bindgen(js_name = connectionCard)]
-    pub fn connection_card(&self) -> Result<String, JsValue> {
-        serde_json::to_string(&self.state.card).map_err(error)
+    #[wasm_bindgen(getter)]
+    pub fn protocol(&self) -> String {
+        CATALOG_PROTOCOL_ID.into()
+    }
+
+    /// Inspect one fresh DDS candidate over its exact authenticated route. No session match is a
+    /// normal absence; discovery hints never bypass signed P2P authorization or snapshot checks.
+    #[wasm_bindgen(js_name = inspectPeer)]
+    pub async fn inspect_peer(
+        &self,
+        peer: String,
+        route: String,
+    ) -> Result<Option<String>, JsValue> {
+        if self.state.cancel.is_cancelled() {
+            return Err(error("Map is closing"));
+        }
+        if peer == self.state.card.peer {
+            return Ok(None);
+        }
+        let expected: PeerId = peer.parse().map_err(error)?;
+        let address = relay_route(&route)?;
+        let catalog = select_biased! {
+            _ = self.state.cancel.cancelled().fuse() => return Err(error("Discovery canceled")),
+            result = self.state.client.catalog_exact(expected, address, None).fuse() => result.map_err(error)?,
+        };
+        let CatalogResponse::Snapshot { snapshot } = catalog else {
+            return Err(error("Candidate Catalog unavailable"));
+        };
+        let Some(product) = discover_map(
+            &snapshot,
+            &peer,
+            &self.state.card.domain,
+            &self.state.card.session,
+        )
+        .map_err(error)?
+        else {
+            return Ok(None);
+        };
+        let selected = ConnectionCard {
+            version: DEMO_VERSION.into(),
+            domain: self.state.card.domain.clone(),
+            session: self.state.card.session.clone(),
+            peer,
+            route,
+            product,
+        };
+        serde_json::to_string(&selected).map(Some).map_err(error)
     }
     pub fn view(&self) -> Result<String, JsValue> {
         view(&self.state)
@@ -117,10 +161,10 @@ impl AukiMapping {
             return Err(error("Already following a peer"));
         }
         if card.len() > 8192 {
-            return Err(error("Connection card is too large"));
+            return Err(error("Discovered map selection is too large"));
         }
         let card: ConnectionCard =
-            serde_json::from_str(&card).map_err(|_| error("Invalid connection card"))?;
+            serde_json::from_str(&card).map_err(|_| error("Invalid discovered map selection"))?;
         if card.version != DEMO_VERSION
             || card.session != self.state.card.session
             || card.domain != self.state.card.domain
@@ -128,17 +172,11 @@ impl AukiMapping {
             || card.product.peer_id != card.peer
         {
             return Err(error(
-                "Card must be from the other peer in the same version, session and Domain",
+                "Discovered map must belong to another peer in the same version, session and Domain",
             ));
         }
         let peer: PeerId = card.peer.parse().map_err(error)?;
-        let route: Multiaddr = card.route.parse().map_err(error)?;
-        if !card.route.contains("/wss") && !card.route.contains("/tls/ws") {
-            return Err(error("Partner route must use WSS"));
-        }
-        if !card.route.contains("/p2p-circuit") {
-            return Err(error("Partner route must use a relay circuit"));
-        }
+        let route = relay_route(&card.route)?;
         self.state
             .model
             .borrow_mut()
@@ -216,7 +254,7 @@ async fn verify_catalog(
         p.manifest.reference() == card.product && p.manifest_hash == card.product.manifest_hash
     }) {
         return Err(error(
-            "Selected map is no longer exported; exchange fresh connection cards",
+            "Selected map is no longer exported; refresh discovery",
         ));
     }
     Ok(())
@@ -303,7 +341,7 @@ async fn receive_loop(
                     Some(RemoteObservationEvent::Closed(_)) | None => {
                         let _ = subscription.close().await;
                         return Err(error(
-                            "Partner stopped publishing; exchange fresh cards after restart",
+                            "Partner stopped publishing; refresh discovery after restart",
                         ));
                     }
                 }
@@ -315,6 +353,13 @@ async fn receive_loop(
         }
     }
     unreachable!()
+}
+fn relay_route(route: &str) -> Result<Multiaddr, JsValue> {
+    let address: Multiaddr = route.parse().map_err(error)?;
+    if (!route.contains("/wss") && !route.contains("/tls/ws")) || !route.contains("/p2p-circuit/") {
+        return Err(error("Partner route must use a WSS relay circuit"));
+    }
+    Ok(address)
 }
 fn error(value: impl std::fmt::Display) -> JsValue {
     js_sys::Error::new(&value.to_string()).into()

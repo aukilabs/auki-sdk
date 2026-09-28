@@ -203,3 +203,62 @@ fn stale_display_frames_and_edits_after_close_are_rejected() {
     assert!(b.place("oops", 0., 0., &frame).is_err());
     assert!(b.receive(a.publication()).is_err());
 }
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn catalog_discovery_matches_domain_session_and_authenticated_peer() {
+    use auki_collaborative_mapping::discover_map;
+    let b = map("b");
+    let catalog = b.runtime.catalog().snapshot();
+    assert_eq!(
+        discover_map(&catalog, "b", "domain", "demo").unwrap(),
+        Some(b.publication().reference.product)
+    );
+    assert_eq!(
+        discover_map(&catalog, "b", "domain", "other-session").unwrap(),
+        None
+    );
+    assert_eq!(
+        discover_map(&catalog, "b", "other-domain", "demo").unwrap(),
+        None
+    );
+    assert!(discover_map(&catalog, "intruder", "domain", "demo").is_err());
+    let mut corrupt = catalog.clone();
+    corrupt.products[0].manifest_hash = "tampered".into();
+    assert!(discover_map(&corrupt, "b", "domain", "demo").is_err());
+    let mut no_metadata = catalog.clone();
+    no_metadata.products[0].metadata = None;
+    assert_eq!(
+        discover_map(&no_metadata, "b", "domain", "demo").unwrap(),
+        None
+    );
+    let mut multiple = catalog.clone();
+    multiple.products.push(catalog.products[0].clone());
+    assert!(discover_map(&multiple, "b", "domain", "demo").is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn discovered_peers_subscribe_both_ways_without_a_shared_portal_first() {
+    use auki_collaborative_mapping::discover_map;
+    let (mut a, mut b) = (map("a"), map("b"));
+    // Both discover the other's empty map: sharing a Portal is not a discovery prerequisite.
+    let a_product = discover_map(&a.runtime.catalog().snapshot(), "a", "domain", "demo")
+        .unwrap()
+        .unwrap();
+    let b_product = discover_map(&b.runtime.catalog().snapshot(), "b", "domain", "demo")
+        .unwrap()
+        .unwrap();
+    a.select_partner(b_product).unwrap();
+    b.select_partner(a_product).unwrap();
+    place(&mut a, "apple", 1., 2.);
+    place(&mut b, "banana", 4., 5.);
+    exchange(&mut a, &mut b);
+    assert_eq!(a.view().unwrap().remote_portals[0].name, "banana");
+    assert_eq!(b.view().unwrap().remote_portals[0].name, "apple");
+    place(&mut a, "bridge", 0., 0.);
+    place(&mut b, "bridge", 10., 20.);
+    exchange(&mut a, &mut b);
+    assert_eq!(a.view().unwrap().state, "aligned");
+    assert_eq!(a.view().unwrap().portals, b.view().unwrap().portals);
+}

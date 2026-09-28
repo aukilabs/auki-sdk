@@ -19,17 +19,21 @@ npm run dev
 Open the printed URL in two tabs or browsers. The app has no offline mode.
 Starting the local Vite server does not make the backend local. Before signing
 in against shared services, obtain approval for the environment, User account,
-Domain, relay bookings, P2P map publication/read operations, and cleanup, following
+Domain, relay bookings, DDS discovery advertisement/lookups, P2P map publication/read operations, and cleanup, following
 [the first-peer tutorial](../../../docs/tutorials/first-peer.md). This example
 never writes Domain Server records, provisions nodes, or submits DMS tasks.
 
 1. Select **Shared development services**, or choose **Custom environment** and
    enter matching API, DDS, and DMS base URLs. Sign in with a User account.
 2. Select the same Domain and demo session in both tabs. Click **Start relay peer**
-   in each. Both peers book inbound WSS relay routes; DDS discovery is disabled.
-3. Copy each connection card into the other browser and click **Connect to partner**
-   in both. Cards carry an exact Peer ID, WSS circuit route, immutable Product
-   reference, Domain, session and demo contract version. They contain no tokens.
+   in each. Both peers book inbound WSS relay routes and enable DDS
+   **DiscoverAndAdvertise** against the session's configured DDS environment.
+3. Each browser automatically discovers same-Domain component peers, authenticates
+   their exact WSS relay routes, and checks Catalog metadata for the same demo
+   session. With two matching peers, both subscribe to the other's map without
+   exchanging cards or clicking Connect. Empty maps are discoverable too.
+   If several peers share the session, choose your partner in the displayed picker
+   (or use a unique session for your pair). The demo still supports two peers.
 4. In A, place `apple` at `(1, 2)`. In B, place `banana` at `(4, 5)`.
    Each main grid stays independent; a separate preview shows the partner's map.
 5. In A, place `bridge` at `(0, 0)`. In B, place `bridge` at `(10, 20)`.
@@ -41,10 +45,10 @@ never writes Domain Server records, provisions nodes, or submits DMS tasks.
    moves the existing Portal. Shared Portal names are case-sensitive.
 7. Click **Stop peer & reset map** in both tabs before closing them. This awaits
    subscription cancellation, endpoint closure and peer shutdown to release
-   relay bookings. **Sign out** also closes the User session.
+   relay bookings and removes the discovery registration. **Sign out** also closes the User session.
 
-Maps are in memory only. Restarting gives a fresh peer and Product; exchange new
-cards. Closing a browser abruptly cannot promise awaited cleanup. There is no
+Maps are in memory only. Restarting gives a fresh peer and Product, which is
+rediscovered and validated against the same Domain/session. Closing a browser abruptly cannot promise awaited cleanup. There is no
 persistence, remote edit permission, or single-Portal delete in this example.
 
 ## Components and spatial contract
@@ -73,23 +77,37 @@ persistence, remote edit permission, or single-Portal delete in this example.
 - Publication timestamps use a named, monotonic per-publication logical clock.
   These synthetic placements do not represent time-varying physical observations.
 
-The connection card selects the partner this app consumes. It is not a Product
-read ACL: exported synthetic snapshots are readable by authenticated peers
+Domain discovery plus session metadata selects the partner this app consumes.
+A session name is not a secret or a Product read ACL: exported synthetic snapshots are readable by authenticated peers
 admitted to the selected Domain. Do not use this demo to publish sensitive maps.
 P2P admission never grants map mutation or Domain Server write authority.
 
 ## Recovery and compatibility
 
-The receive task makes at most three connection attempts per **Connect** action,
-with 1 s / 2 s backoff. It marks remote state stale during reconnect, resubscribes
-to the exact Product and recovers from a complete snapshot. An idle subscription
-probes the Catalog every 15 seconds with the component protocol's bounded request
-deadlines. A new publication requires a fresh card; it is never selected silently.
-The user may edit the local map while disconnected; the displayed remote map is
-last-known evidence until it reconnects.
+Each browser searches every five seconds while waiting for a partner. Normal
+empty discovery results keep waiting until Stop, so the other person may join
+later. Expired advertisements and self entries are ignored. Candidate inspection
+uses up to four concurrent Catalog requests, two WSS routes per peer, and at most
+16 peers per round; exceeding that limit fails explicitly instead of silently
+selecting from an incomplete list.
+
+A subscription makes at most three connection attempts with 1 s / 2 s backoff.
+On exhaustion the host refreshes discovery and can select the matching peer's new
+publication or relay route. Three failed discovery/connection rounds pause the
+host until **Retry discovery**. Transport loss marks remote evidence stale.
+An idle subscription probes the Catalog every 15 seconds using bounded protocol
+deadlines. Stop cancels inspection/subscription work and retry waits, awaits DDS
+lookup cancellation through peer shutdown, and joins the discovery task before
+freeing WASM handles. Explicit selection among multiple matches stays pinned to
+that Peer ID; restart with a unique session to resume automatic pair selection.
+
+Live reload is disabled in the development server because it would discard
+in-memory maps and skip awaited relay cleanup. Stop the peer before manually
+reloading after a code update.
 
 Both browsers must run the same demo contract `auki.collaborative-grid/v1`.
-Existing Catalog v1, observation-stream v1, and scenegraph snapshot v2 contracts
+Both browsers need this discovery-enabled example build for automatic two-way
+connection. Existing Catalog v1, observation-stream v1, and scenegraph snapshot v2 contracts
 are reused. There are no API/DDS/DMS contract or deployment changes. The SDK and
 experimental adapter are compiled into one WASM module, using the
 [Portable Echo pattern](../../../core/examples/portable-echo/web/README.md);
@@ -125,13 +143,17 @@ WASM_BINDGEN_TEST_RUNNER=/path/to/wasm-bindgen-test-runner npm run test:wasm
 Tests use local fixtures only; they do not create an offline app mode.
 The native integration test uses isolated signed loopback peers and verifies
 Catalog/subscription exchange, convergence, resubscription and idle shutdown.
-The seven mapping regression tests also run in actual Chromium WASM, including
-invalid geometry/identity, stale publication and conflict cases. UI tests load
+The nine mapping/discovery regression tests also run in actual Chromium WASM, including
+session/Domain/peer filtering, bidirectional empty-map discovery, invalid
+geometry/identity, stale publication and conflict cases. UI tests load
 the real generated WASM module, verify the relay-only setup, grid rendering,
-click conversion and mobile layout, without signing in. Chrome must be installed;
+click conversion and mobile layout, without signing in. Injected test discovery
+ports cover staggered starts, automatic subscriptions in both directions, expired
+candidates, route fallback, multiple matches, cancellation, restart, and bounded
+failures. These test fixtures are not an app mode. Chrome must be installed;
 UI artifacts are written under ignored `web/test-results/`.
 
-These checks do **not** prove deployed authentication, WSS relay booking/renewal,
+These checks do **not** prove deployed authentication, DDS advertisement/discovery, WSS relay booking/renewal,
 or real two-browser relay cleanup. Run the approved live sequence above before
 claiming shared-environment compatibility. Python, Swift and Expo bindings are
 unchanged and are not included in this example's validation.

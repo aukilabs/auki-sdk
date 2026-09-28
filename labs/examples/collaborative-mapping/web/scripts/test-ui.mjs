@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import { once } from "node:events";
 import { chromium } from "playwright";
+import { checkDiscovery } from "./discovery-checks.mjs";
 const port = 18146;
 const server = spawn(
   process.execPath,
@@ -123,6 +124,9 @@ try {
     path: "test-results/initial-mobile.png",
     fullPage: true,
   });
+  assert.equal(await page.locator("#remote-card").count(), 0);
+  assert.equal(await page.locator("#local-card").count(), 0);
+  await checkDiscovery(page);
   assert.deepEqual(errors, []);
   console.log(
     "Passed: real WASM load, relay-only controls, environment form, grid geometry/colors, click conversion, mobile overflow.",

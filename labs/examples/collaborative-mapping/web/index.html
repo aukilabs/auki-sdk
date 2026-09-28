@@ -90,31 +90,26 @@
             </form>
             <div id="running" hidden>
               <div class="hint">YOUR PEER</div>
-              <code id="peer-id"></code
-              ><label
-                >Your connection card<textarea
-                  id="local-card"
-                  readonly
-                  rows="2"
-                  aria-label="Your connection card"
-                ></textarea></label
-              ><button id="copy-card" type="button" class="secondary">
-                Copy connection card
-              </button>
+              <code id="peer-id"></code>
               <p class="hint">
-                Exchange cards with your partner. Both peers must paste the
-                other’s card.
+                Peers in the same Domain and demo session find each other
+                automatically. Both maps synchronize over relays.
               </p>
-              <form id="pair">
+              <div id="partner-picker" hidden>
                 <label
-                  >Partner’s connection card<textarea
-                    id="remote-card"
-                    rows="3"
-                    required
-                    maxlength="8192"
-                  ></textarea></label
-                ><button id="pair-button">Connect to partner</button>
-              </form>
+                  >Several matching peers: choose your partner<select
+                    id="peer-choice"
+                  ></select
+                ></label>
+              </div>
+              <button
+                id="retry-discovery"
+                type="button"
+                class="secondary"
+                disabled
+              >
+                Retry discovery
+              </button>
               <button id="stop-button" type="button" class="secondary danger">
                 Stop peer & reset map
               </button>
@@ -251,8 +246,8 @@
               Peer ID. Each peer keeps ownership of its original placements.
               Conflicting shared portals separate the views until you correct
               their positions. Synthetic map snapshots are readable by
-              authenticated peers admitted in this Domain; connection cards
-              select a partner, not a private read ACL.
+              authenticated peers admitted in this Domain. Session matching
+              selects a partner; it does not create a private read ACL.
             </p>
             <p>
               Use Stop before closing a tab to await relay cleanup. Reloading

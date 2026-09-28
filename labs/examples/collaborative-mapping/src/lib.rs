@@ -1,6 +1,8 @@
 //! Synthetic, fixed-heading Portal maps. Transport and rendering belong to the browser host.
 #![forbid(unsafe_code)]
-use auki_components::{ComponentRuntime, InMemoryTransport, InvocationContext, ProductReference};
+use auki_components::{
+    CatalogSnapshot, ComponentRuntime, InMemoryTransport, InvocationContext, ProductReference,
+};
 use auki_scenegraph::{
     MapDefinition, MapFrame, MapSnapshot, QrAnchor, RigidTransform,
     alignment::{AlignmentOptions, AlignmentResult, MapAlignmentChecker},
@@ -90,6 +92,41 @@ pub fn definition(peer: &str, domain: &str, session: &str) -> MapDefinition {
             "Independent simulated origin; XY plane, fixed +X portal heading, Z out of grid",
         ),
     }
+}
+
+/// Select only this demo's exact session/Domain map from an authenticated peer Catalog.
+/// Catalog metadata is a relevance hint; the subscription still validates its producer and payload.
+pub fn discover_map(
+    catalog: &CatalogSnapshot,
+    peer: &str,
+    domain: &str,
+    session: &str,
+) -> Result<Option<ProductReference>> {
+    use auki_scenegraph::catalog::{MAP_CATALOG_SCHEMA, MapCatalogData};
+    let expected = definition(peer, domain, session);
+    let mut found = None;
+    for entry in &catalog.products {
+        if entry.manifest.peer_id != peer || entry.manifest.hash() != entry.manifest_hash {
+            return Err("Catalog Product does not match authenticated peer or manifest".into());
+        }
+        let Some(metadata) = &entry.metadata else {
+            continue;
+        };
+        if metadata.schema != MAP_CATALOG_SCHEMA {
+            continue;
+        }
+        let Ok(data) = serde_json::from_value::<MapCatalogData>(metadata.value.clone()) else {
+            continue;
+        };
+        if data.map != expected {
+            continue;
+        }
+        if found.is_some() {
+            return Err("Peer exports multiple maps for this demo session".into());
+        }
+        found = Some(entry.manifest.reference());
+    }
+    Ok(found)
 }
 
 pub struct DemoMap {

@@ -144,7 +144,7 @@ impl<S: PortalMetadataSource> PortalMapper<S> {
 }
 
 /// Accept a Portal ID or the Console's R8.HR URL convention. Never fetch the URL.
-fn portal_id(payload: &str) -> Result<PortalId, MappingError> {
+pub fn portal_id(payload: &str) -> Result<PortalId, MappingError> {
     if let Ok(id) = PortalId::parse(payload) {
         return Ok(id);
     }

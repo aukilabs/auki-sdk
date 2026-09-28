@@ -60,8 +60,8 @@ jobs:
             2>&1 | tee output/ci/component-tests.log
       - name: Validate calibrated QR localization
         run: |
-          cargo test --locked -p auki-qr-localizer -p auki-qr-mapper -p auki-voxel-map -p auki-mappers -p auki-maps --all-features
-          cargo clippy --locked -p auki-qr-localizer -p auki-qr-detector -p auki-qr-mapper -p auki-voxel-map --all-features --all-targets --no-deps -- -D warnings
+          cargo test --locked -p auki-qr-localizer -p auki-qr-mapper -p auki-portal-detector -p auki-voxel-map -p auki-mappers -p auki-maps --all-features
+          cargo clippy --locked -p auki-qr-localizer -p auki-qr-detector -p auki-qr-mapper -p auki-portal-detector -p auki-voxel-map --all-features --all-targets --no-deps -- -D warnings
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:

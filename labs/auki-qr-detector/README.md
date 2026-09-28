@@ -31,3 +31,8 @@ Product, original frame sequence and source timestamp, including after input
 replacement. Legacy/standalone paths leave it absent. This is additive in v1 JSON;
 Rust `QrDetections` literals must now set the field. See the experimental
 [QR localizer](../auki-qr-localizer/README.md) for calibrated pose estimation.
+
+For Auki Portal detection with local-map size lookup and asynchronous database
+enrichment inside one addressable Component, see
+[Portal Detector](../auki-portal-detector/README.md). The generic detector remains
+independent of these Portal-specific responsibilities.

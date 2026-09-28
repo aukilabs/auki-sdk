@@ -76,3 +76,6 @@ provide explicit default-map selection and lookup by name or ID.
 Portal-aligned voxel mapping is available experimentally in
 [`auki-voxel-map`](labs/auki-voxel-map/README.md), with explicit sensor/map frames
 and time-matched poses.
+
+The experimental [Portal Detector](labs/auki-portal-detector/README.md) combines
+QR detection with local-map-first physical-size enrichment in one Component.

@@ -806,6 +806,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-portal-detector"
+version = "0.1.0"
+dependencies = [
+ "auki-components",
+ "auki-domain-client",
+ "auki-qr-detector",
+ "auki-qr-localizer",
+ "auki-qr-mapper",
+ "auki-scenegraph",
+ "futures",
+ "qrcode",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
 name = "auki-protocols"
 version = "0.1.0"
 dependencies = [

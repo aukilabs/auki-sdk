@@ -40,6 +40,7 @@ members = [
     "labs/auki-maps",
     "labs/auki-protocols",
     "labs/auki-qr-detector",
+    "labs/auki-portal-detector",
     "labs/auki-registry",
     "labs/auki-ros-adapter",
     "labs/auki-session",

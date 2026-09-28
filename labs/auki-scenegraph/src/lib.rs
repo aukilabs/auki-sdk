@@ -205,6 +205,16 @@ impl Scenegraph {
     /// Generate a self-contained ASCII USD stage. No references, payload assets or external files.
     /// User identifiers are attributes; deterministic hex prim names prevent path injection.
     pub fn to_usda(&self) -> Result<String, SceneError> {
+        self.export_usda(false)
+    }
+
+    /// Inspection artifact with white, double-sided encoded-size portal squares.
+    /// This is not the canonical snapshot representation and must not replace its USDA.
+    pub fn to_usda_with_portal_geometry(&self) -> Result<String, SceneError> {
+        self.export_usda(true)
+    }
+
+    fn export_usda(&self, geometry: bool) -> Result<String, SceneError> {
         self.validate()?;
         let q = |s: &str| serde_json::to_string(s).expect("string serialization");
         let mut out = format!(
@@ -230,7 +240,12 @@ impl Scenegraph {
                 .collect();
             let [x, y, z] = anchor.pose_in_map.translation;
             let [w, qx, qy, qz] = anchor.pose_in_map.rotation_wxyz;
-            writeln!(out, "    def Xform \"QR_{path}\"\n    {{\n        custom string auki:kind = \"qr_anchor\"\n        custom string auki:anchorId = {}\n        custom string auki:fromFrameId = {}\n        custom string auki:toFrameId = {}\n        custom string auki:qr:payload = {}\n        custom double auki:qr:sideLengthMeters = {}\n        custom token auki:qr:frameConvention = \"center_xRight_yUp_zOut\"\n        double3 xformOp:translate = ({x}, {y}, {z})\n        quatd xformOp:orient = ({w}, {qx}, {qy}, {qz})\n        uniform token[] xformOpOrder = [\"xformOp:translate\", \"xformOp:orient\"]\n    }}", q(&anchor.anchor_id), q(&anchor.pose_in_map.from_frame_id), q(&anchor.pose_in_map.to_frame_id), q(&anchor.payload), anchor.side_length_m).unwrap();
+            writeln!(out, "    def Xform \"QR_{path}\"\n    {{\n        custom string auki:kind = \"qr_anchor\"\n        custom string auki:anchorId = {}\n        custom string auki:fromFrameId = {}\n        custom string auki:toFrameId = {}\n        custom string auki:qr:payload = {}\n        custom double auki:qr:sideLengthMeters = {}\n        custom token auki:qr:frameConvention = \"center_xRight_yUp_zOut\"\n        double3 xformOp:translate = ({x}, {y}, {z})\n        quatd xformOp:orient = ({w}, {qx}, {qy}, {qz})\n        uniform token[] xformOpOrder = [\"xformOp:translate\", \"xformOp:orient\"]", q(&anchor.anchor_id), q(&anchor.pose_in_map.from_frame_id), q(&anchor.pose_in_map.to_frame_id), q(&anchor.payload), anchor.side_length_m).unwrap();
+            if geometry {
+                let h = anchor.side_length_m / self.map.frame.meters_per_unit / 2.;
+                writeln!(out, "        def Mesh \"PortalSquare\"\n        {{\n            point3f[] points = [(-{h}, -{h}, 0), ({h}, -{h}, 0), ({h}, {h}, 0), (-{h}, {h}, 0)]\n            int[] faceVertexCounts = [4]\n            int[] faceVertexIndices = [0, 1, 2, 3]\n            uniform token subdivisionScheme = \"none\"\n            uniform bool doubleSided = true\n            color3f[] primvars:displayColor = [(1, 1, 1)]\n        }}").unwrap();
+            }
+            out.push_str("    }\n");
         }
         out.push_str("}\n");
         Ok(out)

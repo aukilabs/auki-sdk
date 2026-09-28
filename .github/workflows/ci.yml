@@ -62,6 +62,14 @@ jobs:
         run: |
           cargo test --locked -p auki-qr-localizer -p auki-qr-mapper -p auki-portal-detector -p auki-voxel-map -p auki-mappers -p auki-maps --all-features
           cargo clippy --locked -p auki-qr-localizer -p auki-qr-detector -p auki-qr-mapper -p auki-portal-detector -p auki-voxel-map --all-features --all-targets --no-deps -- -D warnings
+      - name: Upload portal mapping USDA artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: portal-mapping-experiments
+          path: target/portal-experiments
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:

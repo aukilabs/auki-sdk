@@ -334,3 +334,19 @@ fn poses_require_explicit_frames_and_map_destination_must_match() {
     scene.anchors.insert(qr.anchor_id.clone(), qr);
     assert!(MapSnapshot::new(scene).is_err());
 }
+
+#[test]
+fn inspection_geometry_uses_map_units_without_changing_snapshot_contract() {
+    let mut scene = scene();
+    scene.map.frame.meters_per_unit = 0.01;
+    let qr = anchor();
+    scene.anchors.insert(qr.anchor_id.clone(), qr);
+    let canonical = scene.to_usda().unwrap();
+    let visual = scene.to_usda_with_portal_geometry().unwrap();
+    assert!(visual.contains("(-10, -10, 0)")); // 20cm square in centimeter stage units.
+    assert!(visual.contains("primvars:displayColor = [(1, 1, 1)]"));
+    assert!(visual.contains("doubleSided = true"));
+    assert!(!canonical.contains("def Mesh"));
+    assert_eq!(scene.to_usda().unwrap(), canonical);
+    MapSnapshot::new(scene).unwrap().validate().unwrap();
+}

@@ -18,6 +18,14 @@ tokio-util.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+auki-component-protocol = { path = "../auki-component-protocol" }
+auki-sdk = { path = "../../core/auki-sdk" }
+auki-p2p = { path = "../../core/auki-p2p" }
+auki-geometry = { path = "../auki-geometry", features = ["pnp"] }
+auki-datatypes = { path = "../auki-datatypes" }
+chrono.workspace = true
+jsonwebtoken = "10.4"
+
 auki-qr-localizer = { path = "../auki-qr-localizer", features = ["qr-detector"] }
 auki-domain-client = { path = "../../core/auki-domain-client" }
 serde_json.workspace = true

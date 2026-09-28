@@ -97,3 +97,43 @@ cargo clippy --locked -p auki-portal-detector -p auki-qr-mapper --all-targets --
 Tests render actual QR images and use fixture metadata, separate capture and
 publication clocks, delayed requests, map changes, conflicting sizes, queue limits,
 identity mismatches, arbitrary URLs, and cancellation. No live backend is contacted.
+
+## Mapping experiments and visual artifacts
+
+Run the staged experiment with authenticated **localhost-only** peers:
+
+```sh
+cargo test --locked -p auki-portal-detector --test mapping_experiments -- --nocapture
+```
+
+The test renders actual QR images and runs `PortalDetector`, fixture metadata,
+calibrated PnP placement in the host, `PortalMapper` admission and explicit
+`localize_once` requests. It verifies these stages in order:
+
+1. Place A, then localize against it using a fresh image.
+2. Add B and check the two-portal map against known fixture geometry.
+3. Transfer A–B over authenticated loopback, import it into Peer2's local maps,
+   and localize Peer2 from a fresh image.
+4. Independently construct B–C in Peer2's rotated/translated frame, transfer it
+   to Peer1, align through B, and merge into a new A–B–C map without duplicating B
+   or modifying either source map.
+
+Mapping uses host-supplied capture-time camera poses, not estimated odometry.
+Fixture size lookup replaces the backend; no robot or shared services are used.
+The numerical checks allow 2cm translation error for rasterized QR corners.
+
+Artifacts are written to `target/portal-experiments/` at workspace root; set
+`AUKI_PORTAL_EXPERIMENT_OUTPUT` to override. Each stage writes USDA and matching
+scenegraph JSON. `05-peer1-ABC.usda` is the final merged map. These inspection
+exports add white, double-sided, encoded-size squares under each portal transform.
+They use Z-up and meters. No textures or external assets are required. The
+canonical network snapshots remain unchanged; geometry is an optional export.
+
+With OpenUSD's `usd-core` Python package installed, validate all five artifacts:
+
+```sh
+python labs/auki-portal-detector/tests/validate_experiment_usd.py target/portal-experiments
+```
+
+The validator checks mesh topology, color, dimensions, frame labels and world
+transforms. It also writes a front-view SVG preview from the actual USD vertices.

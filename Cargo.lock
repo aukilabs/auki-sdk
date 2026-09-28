@@ -409,6 +409,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "auki-collaborative-mapping"
+version = "0.1.0"
+dependencies = [
+ "auki-component-protocol",
+ "auki-components",
+ "auki-p2p",
+ "auki-scenegraph",
+ "auki-sdk",
+ "chrono",
+ "jsonwebtoken 10.4.0",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "auki-collaborative-mapping-web"
+version = "0.1.0"
+dependencies = [
+ "auki-collaborative-mapping",
+ "auki-component-protocol",
+ "auki-components",
+ "auki-scenegraph",
+ "auki-sdk",
+ "auki-sdk-web",
+ "futures",
+ "futures-timer",
+ "js-sys",
+ "serde",
+ "serde_json",
+ "tokio-util",
+ "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+]
+
+[[package]]
 name = "auki-component-protocol"
 version = "0.1.0"
 dependencies = [
@@ -456,6 +496,7 @@ dependencies = [
  "crossbeam-channel",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]

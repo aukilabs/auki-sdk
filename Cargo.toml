@@ -48,6 +48,8 @@ members = [
 
     # Experimental bindings and examples.
     "labs/examples/volume-monitor",
+    "labs/examples/collaborative-mapping",
+    "labs/examples/collaborative-mapping/web",
     "labs/bindings/python/auki-geometry-py",
     "labs/bindings/python/auki-identity-py",
     "labs/bindings/python/auki-layout-py",

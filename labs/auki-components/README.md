@@ -38,3 +38,11 @@ older readers ignore the new field. Rust `CatalogProductEntry` literals must
 provide it. Metadata is publisher-supplied discovery data, not an authorization
 grant or a guarantee that its observation remains retained. Consumers compare its
 source sequence with a fetched observation when they require an exact match.
+
+Browser buffer appends use `web_time::Instant` for arrival timestamps; native
+builds retain `std::time::Instant`. WASM callers of `Buffer::append_shared_at`
+must likewise use `web_time::Instant`. This fixes a runtime panic when publishing
+Map Component snapshots in browsers, with no native API or wire-format change.
+The collaborative mapping example runs its snapshot/edit regression suite in
+Chromium through WASM. Blocking cursor reads and thread-backed workers remain
+native facilities; browser consumers use `next_async` and inline captures.

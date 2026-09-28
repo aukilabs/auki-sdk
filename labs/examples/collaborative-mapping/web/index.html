@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Common ground · Collaborative mapping</title>
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="./"
+        ><span class="brand-mark">a</span> auki
+        <span class="divider">/</span> labs</a
+      ><span class="eyebrow">COLLABORATIVE MAPPING · EXPERIMENT 01</span
+      ><span id="runtime" class="pill">Loading WASM…</span>
+    </header>
+    <main>
+      <section class="intro">
+        <div>
+          <div class="eyebrow">TWO PEERS. ONE SHARED PLACE.</div>
+          <h1>Common ground<span>.</span></h1>
+          <p>
+            Build your own map. Find a shared portal. Watch two perspectives
+            line up.
+          </p>
+        </div>
+        <div class="steps">
+          <span>01 <b>Connect</b></span
+          ><span>02 <b>Place portals</b></span
+          ><span>03 <b>Find common ground</b></span>
+        </div>
+      </section>
+      <div class="workspace">
+        <aside>
+          <section class="panel">
+            <div class="panel-heading">
+              <h2>Your connection</h2>
+              <span class="tag">WASM + WSS</span>
+            </div>
+            <form id="login">
+              <label
+                >Environment<select id="environment">
+                  <option value="dev">Shared development services</option>
+                  <option value="custom">Custom environment</option>
+                </select></label
+              >
+              <div id="custom-environment" hidden>
+                <label
+                  >API URL<input
+                    id="api"
+                    type="url"
+                    placeholder="https://…" /></label
+                ><label
+                  >DDS URL<input
+                    id="dds"
+                    type="url"
+                    placeholder="https://…" /></label
+                ><label
+                  >DMS URL<input id="dms" type="url" placeholder="https://…"
+                /></label>
+              </div>
+              <label
+                >Email<input
+                  id="email"
+                  type="email"
+                  autocomplete="username"
+                  required /></label
+              ><label
+                >Password<input
+                  id="password"
+                  type="password"
+                  autocomplete="current-password"
+                  required /></label
+              ><button id="login-button" disabled>Sign in</button>
+            </form>
+            <form id="start" hidden>
+              <label>Domain<select id="domain" required></select></label
+              ><label
+                >Demo session<input
+                  id="session"
+                  value="mapping-demo"
+                  maxlength="64"
+                  required
+                  pattern="[A-Za-z0-9 _\-]+"
+              /></label>
+              <p class="hint">
+                Use the same Domain and session in both browsers. Each start
+                creates a new peer and an empty map.
+              </p>
+              <button id="start-button">Start relay peer</button>
+            </form>
+            <div id="running" hidden>
+              <div class="hint">YOUR PEER</div>
+              <code id="peer-id"></code
+              ><label
+                >Your connection card<textarea
+                  id="local-card"
+                  readonly
+                  rows="2"
+                  aria-label="Your connection card"
+                ></textarea></label
+              ><button id="copy-card" type="button" class="secondary">
+                Copy connection card
+              </button>
+              <p class="hint">
+                Exchange cards with your partner. Both peers must paste the
+                other’s card.
+              </p>
+              <form id="pair">
+                <label
+                  >Partner’s connection card<textarea
+                    id="remote-card"
+                    rows="3"
+                    required
+                    maxlength="8192"
+                  ></textarea></label
+                ><button id="pair-button">Connect to partner</button>
+              </form>
+              <button id="stop-button" type="button" class="secondary danger">
+                Stop peer & reset map
+              </button>
+            </div>
+            <button id="logout-button" type="button" class="text-button" hidden>
+              Sign out
+            </button>
+          </section>
+          <section class="panel">
+            <div class="panel-heading">
+              <h2>Place a portal</h2>
+              <span class="tag">1 CELL = 1 M</span>
+            </div>
+            <form id="place">
+              <fieldset id="editor" disabled>
+                <label
+                  >Portal name<input
+                    id="portal-name"
+                    placeholder="e.g. bridge"
+                    maxlength="64"
+                    required
+                    pattern="[A-Za-z0-9 _\-]+"
+                /></label>
+                <div class="coordinate-inputs">
+                  <label
+                    >X<input
+                      id="x"
+                      type="number"
+                      value="0"
+                      min="-10000"
+                      max="10000"
+                      step="1"
+                      required /></label
+                  ><label
+                    >Y<input
+                      id="y"
+                      type="number"
+                      value="0"
+                      min="-10000"
+                      max="10000"
+                      step="1"
+                      required
+                  /></label>
+                </div>
+                <button>Place / move portal</button>
+              </fieldset>
+            </form>
+            <p class="hint">
+              Enter a name and click the grid, or use coordinates. Reusing your
+              own name moves that portal.
+            </p>
+          </section>
+        </aside>
+        <section class="mapping">
+          <div class="map-header">
+            <div>
+              <span class="eyebrow">LIVE WORKSPACE</span>
+              <h2 id="map-title">Your map starts here</h2>
+            </div>
+            <span id="alignment" class="pill">Waiting for a peer</span>
+          </div>
+          <div class="board-shell">
+            <svg
+              id="grid"
+              role="img"
+              aria-label="Editable portal map"
+              viewBox="-12 -12 24 24"
+            ></svg>
+            <div class="board-top">
+              <span id="map-caption">Independent local frame</span
+              ><button id="fit" type="button" class="secondary">Fit map</button>
+            </div>
+            <div id="empty" class="empty">
+              <div class="empty-icon">＋</div>
+              <h3>A place to meet</h3>
+              <p>
+                Start your relay peer, then give<br />your first portal a name.
+              </p>
+            </div>
+            <div class="board-bottom">
+              <span>XY PLANE · Z UP · METERS</span
+              ><span id="portal-count">0 portals</span>
+            </div>
+          </div>
+          <div class="map-footer">
+            <span
+              ><i class="dot peer-a"></i>Peer A <i class="dot peer-b"></i>Peer B
+              <i class="dot shared"></i>Shared portal</span
+            ><span id="frame-caption">No frame yet</span>
+          </div>
+          <section id="remote-panel" class="panel remote-panel" hidden>
+            <div>
+              <div class="eyebrow">PARTNER’S LOCAL MAP</div>
+              <h3>Waiting for a shared name</h3>
+              <p class="hint">
+                These origins are independent. Place a portal with the same name
+                in both maps to align them.
+              </p>
+            </div>
+            <svg
+              id="remote-grid"
+              role="img"
+              aria-label="Partner map in its own frame"
+              viewBox="-12 -12 24 24"
+            ></svg>
+          </section>
+          <section class="panel inspector">
+            <div>
+              <span class="eyebrow">CONNECTION</span>
+              <p id="transport">Not connected</p>
+            </div>
+            <div>
+              <span class="eyebrow">ALIGNMENT EVIDENCE</span>
+              <p id="evidence">No shared portals yet</p>
+            </div>
+            <div>
+              <span class="eyebrow">SNAPSHOTS</span>
+              <p id="sequences">Local — · Partner —</p>
+            </div>
+          </section>
+          <p id="notice" role="status" aria-live="polite"></p>
+          <details>
+            <summary>How this experiment works</summary>
+            <p>
+              Both maps live in your browsers. Authenticated snapshots travel
+              through WSS relays. Names are exact and case-sensitive simulated
+              Portal identities scoped to this demo session. All portals have
+              the same fixed heading and size, so one shared portal establishes
+              translation. This is not a claim that real-world names establish
+              spatial alignment.
+            </p>
+            <p>
+              The combined map uses the frame of the lexicographically smaller
+              Peer ID. Each peer keeps ownership of its original placements.
+              Conflicting shared portals separate the views until you correct
+              their positions. Synthetic map snapshots are readable by
+              authenticated peers admitted in this Domain; connection cards
+              select a partner, not a private read ACL.
+            </p>
+            <p>
+              Use Stop before closing a tab to await relay cleanup. Reloading
+              starts a new map; no map is saved to a Domain Server.
+            </p>
+          </details>
+        </section>
+      </div>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

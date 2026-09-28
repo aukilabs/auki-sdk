@@ -1,0 +1,36 @@
+[package]
+name = "auki-scenegraph"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Experimental QR scenegraphs and optional Map Component"
+
+[features]
+default = ["components"]
+components = ["dep:auki-components", "dep:auki-geometry", "dep:auki-datatypes", "dep:uuid"]
+
+[dependencies]
+auki-geometry = { path = "../auki-geometry", optional = true }
+auki-datatypes = { path = "../auki-datatypes", optional = true }
+uuid = { version = "1.10.1", default-features = false, features = ["std"], optional = true }
+auki-components = { path = "../auki-components", optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+auki-geometry = { path = "../auki-geometry" }
+auki-datatypes = { path = "../auki-datatypes" }
+auki-component-protocol = { path = "../auki-component-protocol" }
+auki-sdk = { path = "../../core/auki-sdk" }
+auki-p2p = { path = "../../core/auki-p2p" }
+chrono.workspace = true
+jsonwebtoken = "10.4"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+uuid.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

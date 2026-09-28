@@ -24,3 +24,17 @@ optional authenticated protocol adapter and its fetch/subscription limits.
 same retained history as `next_timeout`. It reports items, gaps, and closure
 without a timer or worker thread. Dropping a pending read unregisters its waker;
 it does not advance the cursor or create a second history queue.
+
+Buffer captures can attach application discovery data through
+`capture_buffer_with_metadata`. Each optional `CatalogProductEntry.metadata`
+contains a schema, original observation sequence and JSON value (up to 256 KiB
+including its envelope). Projection and validation happen before retention;
+errors reject that capture and appear in `errors()`. After retention, Product
+state and metadata are updated together in one Catalog revision, even if entry
+count did not change. Metadata never changes the Product Manifest hash.
+
+The field is additive in Catalog v1 JSON: older entries decode as `None`, and
+older readers ignore the new field. Rust `CatalogProductEntry` literals must
+provide it. Metadata is publisher-supplied discovery data, not an authorization
+grant or a guarantee that its observation remains retained. Consumers compare its
+source sequence with a fetched observation when they require an exact match.

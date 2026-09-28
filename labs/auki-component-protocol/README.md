@@ -134,3 +134,10 @@ These are local native tests, not live DDS/DMS relay or browser acceptance.
 An idle subscription has no heartbeat: a silent partition is not guaranteed
 to fail promptly. See [network lifetime](../../docs/reference/component-protocols.md#network-lifetime-is-not-producer-lifetime)
 for host deadlines and the distinction between retaining and processing data.
+
+Catalog Product entries may carry optional, schema-tagged `metadata` tied to an
+original observation sequence. This additive Catalog v1 field passes through only
+for exported Products, follows Catalog revision invalidation, and does not alter
+Product Manifest hashes. Older readers may ignore it; missing metadata means
+unknown discovery information. The aggregate 1 MiB Catalog bound still applies;
+responses are never made to fit by truncating application membership lists.

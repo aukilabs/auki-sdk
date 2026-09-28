@@ -54,16 +54,17 @@ pub use camera::{
 pub use component::{
     AudioLayout, AudioPayloadContract, AudioSampleFormat, CameraPayloadContract, Catalog,
     CatalogComponentEntry, CatalogError, CatalogOutputEntry, CatalogProductEntry,
-    CatalogProductInputEntry, CatalogSnapshot, ComponentManifest, ComponentReference,
-    ComponentRuntime, EverySelectedDelivery, Exposure, GaugePayloadContract, InMemoryTransport,
-    Invocation, InvocationContext, InvocationError, InvocationHandle, InvocationOptions,
-    InvocationOrdering, InvocationStatus, ManifestHash, Observable, ObservableContract,
-    Observation, ObservationAccess, ObservationDelivery, ObservationEnd, ObservationEndReason,
-    ObservationError, ObservationEvent, ObservationHandle, ObservationStats, ObservationStatus,
-    Operable, OperableContract, OutputManifest, OutputReference, PayloadContract, ProductForm,
-    ProductInputBindingManifest, ProductInputContract, ProductManifest, ProductReference,
-    ProductState, SerializedInMemoryTransport, StructuredPayloadContract, TransportStats,
-    manifest_hash, observation_input,
+    CatalogProductInputEntry, CatalogProductMetadata, CatalogSnapshot, ComponentManifest,
+    ComponentReference, ComponentRuntime, EverySelectedDelivery, Exposure, GaugePayloadContract,
+    InMemoryTransport, Invocation, InvocationContext, InvocationError, InvocationHandle,
+    InvocationOptions, InvocationOrdering, InvocationStatus, MAX_CATALOG_METADATA_BYTES,
+    ManifestHash, Observable, ObservableContract, Observation, ObservationAccess,
+    ObservationDelivery, ObservationEnd, ObservationEndReason, ObservationError, ObservationEvent,
+    ObservationHandle, ObservationStats, ObservationStatus, Operable, OperableContract,
+    OutputManifest, OutputReference, PayloadContract, ProductForm, ProductInputBindingManifest,
+    ProductInputContract, ProductManifest, ProductReference, ProductState,
+    SerializedInMemoryTransport, StructuredPayloadContract, TransportStats, manifest_hash,
+    observation_input,
 };
 pub use episode::{Episode, EpisodeError, EpisodeState, connect_episode};
 pub use ports::{

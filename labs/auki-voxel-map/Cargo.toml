@@ -1,0 +1,28 @@
+[package]
+name = "auki-voxel-map"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Portal-aligned single-writer voxel map Components"
+
+[dependencies]
+auki-components = { path = "../auki-components" }
+auki-scenegraph = { path = "../auki-scenegraph" }
+auki-mappers = { path = "../auki-mappers", default-features = false }
+auki-maps = { path = "../auki-maps" }
+auki-registry = { path = "../auki-registry" }
+auki-geometry = { path = "../auki-geometry" }
+auki-datatypes = { path = "../auki-datatypes" }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+prost = "0.13"
+thiserror.workspace = true
+
+[dev-dependencies]
+auki-qr-localizer = { path = "../auki-qr-localizer" }
+
+[lints.rust]
+unsafe_code = "forbid"

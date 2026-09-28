@@ -8,6 +8,11 @@ repository.workspace = true
 authors.workspace = true
 description = "Pure spatial math helpers for Auki frame conventions and pose operations."
 
+[features]
+default = []
+pnp = ["dep:pnp-core"]
+
 [dependencies]
 auki-datatypes = { path = "../auki-datatypes" }
 auki-registry = { path = "../auki-registry" }
+pnp-core = { git = "https://github.com/aukilabs/pnp-lab.git", rev = "c56b1d4d5518eac997f020168a4e508bb27d599a", optional = true }

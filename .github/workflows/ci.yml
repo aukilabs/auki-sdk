@@ -51,13 +51,17 @@ jobs:
       - name: Lint the Component experiment and synthetic volume demo
         run: |
           cargo clippy --locked -p auki-components -p auki-component-protocol \
-            -p auki-component-volume-monitor --all-targets --no-deps -- -D warnings
+            -p auki-component-volume-monitor -p auki-scenegraph --all-targets --no-deps -- -D warnings
       - name: Test Components and authenticated loopback volume exchange
         run: |
           # Default features: no microphone access, audio drivers, or shared services.
           cargo test --locked -p auki-components -p auki-component-protocol \
-            -p auki-qr-detector -p auki-component-volume-monitor \
+            -p auki-qr-detector -p auki-component-volume-monitor -p auki-scenegraph \
             2>&1 | tee output/ci/component-tests.log
+      - name: Validate calibrated QR localization
+        run: |
+          cargo test --locked -p auki-qr-localizer -p auki-qr-mapper -p auki-voxel-map -p auki-mappers -p auki-maps --all-features
+          cargo clippy --locked -p auki-qr-localizer -p auki-qr-detector -p auki-qr-mapper -p auki-voxel-map --all-features --all-targets --no-deps -- -D warnings
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
@@ -125,6 +129,8 @@ jobs:
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy --target wasm32-unknown-unknown
           npm install --global wasm-pack@0.13.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Check portable QR geometry
+        run: cargo check --locked -p auki-qr-localizer -p auki-qr-mapper -p auki-voxel-map --target wasm32-unknown-unknown
       - name: Lint the WASM SDK and binding
         run: |
           cargo clippy --locked --target wasm32-unknown-unknown \

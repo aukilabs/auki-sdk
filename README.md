@@ -61,3 +61,18 @@ for task state. SDK handlers or Posemesh runners execute the work.
 To work on the SDK, see [Contributing](CONTRIBUTING.md).
 
 [MIT license](LICENSE).
+
+The experimental [QR scenegraph Map Component](labs/auki-scenegraph/README.md)
+publishes USD-backed snapshots and exposes authorized QR placement and lookup.
+
+The experimental [QR localizer](labs/auki-qr-localizer/README.md) estimates calibrated
+camera poses against individual anchors resolved from local maps, with source-frame
+and map provenance. The [QR Mapper](labs/auki-qr-mapper/README.md) resolves unknown
+Portal sizes and admits explicitly placed anchors into local maps.
+
+[Domain map directories](labs/auki-scenegraph/README.md#default-and-named-maps-for-a-domain)
+provide explicit default-map selection and lookup by name or ID.
+
+Portal-aligned voxel mapping is available experimentally in
+[`auki-voxel-map`](labs/auki-voxel-map/README.md), with explicit sensor/map frames
+and time-matched poses.

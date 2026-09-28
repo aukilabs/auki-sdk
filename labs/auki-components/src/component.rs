@@ -343,8 +343,39 @@ pub struct CatalogComponentEntry {
     pub current_outputs: BTreeMap<String, CatalogOutputEntry>,
 }
 
+/// Bound discovery metadata independently of immutable Product identity.
+pub const MAX_CATALOG_METADATA_BYTES: usize = 256 * 1024;
+
+/// Complete application-defined discovery data for one retained observation.
+/// The Product reference is supplied by the containing Catalog entry.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CatalogProductMetadata {
+    pub schema: String,
+    pub source_sequence: u64,
+    pub value: serde_json::Value,
+}
+impl CatalogProductMetadata {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.schema.is_empty()
+            || self.schema.len() > 256
+            || self.schema.chars().any(char::is_control)
+        {
+            return Err("invalid Catalog metadata schema".into());
+        }
+        let bytes = serde_json::to_vec(self).map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_CATALOG_METADATA_BYTES {
+            return Err(
+                "Catalog metadata exceeds size bound; partial lists are not permitted".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CatalogProductEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<CatalogProductMetadata>,
     pub manifest: ProductManifest,
     pub manifest_hash: ManifestHash,
     pub state: ProductState,
@@ -609,6 +640,7 @@ impl Catalog {
         state.products.insert(
             manifest.product_id.clone(),
             CatalogProductEntry {
+                metadata: None,
                 manifest,
                 manifest_hash,
                 state: product_state,
@@ -616,6 +648,23 @@ impl Catalog {
         );
         state.changed();
         Ok(())
+    }
+
+    /// Publish retained state and its discovery metadata in one Catalog revision.
+    pub(crate) fn update_product_capture(
+        &self,
+        product_id: &str,
+        product_state: ProductState,
+        metadata: Option<CatalogProductMetadata>,
+    ) {
+        let mut state = self.inner.write().unwrap();
+        if let Some(product) = state.products.get_mut(product_id)
+            && (product.state != product_state || product.metadata != metadata)
+        {
+            product.state = product_state;
+            product.metadata = metadata;
+            state.changed();
+        }
     }
 
     pub(crate) fn update_product_state(&self, product_id: &str, product_state: ProductState) {

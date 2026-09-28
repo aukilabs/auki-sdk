@@ -24,6 +24,7 @@ pub enum VoxelMapperMapFrameBinding {
 }
 
 impl VoxelMapperMapFrameBinding {
+    #[cfg(any(feature = "runtime", test))]
     pub(crate) fn pose_frame(&self) -> &RegistryRef {
         match self {
             Self::Exact(frame) => frame,
@@ -31,6 +32,7 @@ impl VoxelMapperMapFrameBinding {
         }
     }
 
+    #[cfg(any(feature = "runtime", test))]
     pub(crate) fn matches_map(&self, map_frame: &RegistryRef) -> bool {
         match self {
             Self::Exact(frame) => frame == map_frame,

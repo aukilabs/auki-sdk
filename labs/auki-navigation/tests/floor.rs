@@ -111,10 +111,7 @@ fn box_mesh(min: MeshVec3, max: MeshVec3) -> TriangleMesh {
 #[test]
 fn shelf_blocks_corridor_the_floor_would_allow() {
     let floor = corridor_floor();
-    let shelf = box_mesh(
-        MeshVec3::new(-0.4, 0.0, -1.6),
-        MeshVec3::new(0.4, 1.5, 1.6),
-    );
+    let shelf = box_mesh(MeshVec3::new(-0.4, 0.0, -1.6), MeshVec3::new(0.4, 1.5, 1.6));
     let profile = BakeProfile::biped(0.2);
     assert!((profile.walkable_radius - 0.2).abs() < 1e-6);
     let start = Vec3::new(-4.0, 0.0, 0.0);

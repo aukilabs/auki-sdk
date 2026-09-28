@@ -538,6 +538,12 @@ impl AukiDmsTasks {
                     .run_once(capability, handlers[capability].as_ref(), cancellation)
                     .await
                 {
+                    // DMS cancelled this one task (a heartbeat answered
+                    // `cancel: true`), not the runtime: the task is already
+                    // canceled server-side and the node is free to claim the
+                    // next one. Only the host's token or `close` ends the loop.
+                    Err(TaskError::Cancelled)
+                        if !cancellation.is_cancelled() && !self.0.closed.is_cancelled() => {}
                     Err(TaskError::Cancelled | TaskError::Closed) => return Ok(()),
                     // A completed task whose outcome was a failure, not a
                     // fault in this runtime. `execute_managed` has already

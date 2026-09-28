@@ -113,7 +113,7 @@ struct Fixture {
     _camera: Component,
     _capture: BufferProductCapture<VideoFrame>,
     frames: ConfiguredObservable<VideoFrame>,
-    detector: PortalDetectorComponent,
+    detector: PortalDetector,
     results: BufferProductCapture<PortalDetection>,
     image: VideoFrame,
     maps: PortalMaps,
@@ -178,7 +178,7 @@ fn fixture_payload(source: Metadata, payload: &str) -> Fixture {
         .unwrap();
     let maps = PortalMaps::new(context());
     let ticks = AtomicU64::new(1);
-    let detector = PortalDetectorComponent::bind(
+    let detector = PortalDetector::bind(
         &runtime,
         "portal-detector",
         "run1",

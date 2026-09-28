@@ -79,7 +79,7 @@ impl Publisher {
 
 /// Camera input and both outputs belong to this single Component. No PortalSizer
 /// or child detector Component is registered. Host controls Product retention/export.
-pub struct PortalDetectorComponent {
+pub struct PortalDetector {
     component: Component,
     input: Option<ConfiguredBufferInput<VideoFrame>>,
     raw: ConfiguredObservable<QrDetections>,
@@ -90,7 +90,7 @@ pub struct PortalDetectorComponent {
     publisher: Arc<Publisher>,
     last_error: Arc<Mutex<Option<String>>>,
 }
-impl PortalDetectorComponent {
+impl PortalDetector {
     #[allow(clippy::too_many_arguments)]
     pub fn bind<S: PortalMetadataSource + Send + Sync + 'static>(
         runtime: &ComponentRuntime,
@@ -371,7 +371,7 @@ impl PortalDetectorComponent {
         self.raw_capture.cancel();
     }
 }
-impl Drop for PortalDetectorComponent {
+impl Drop for PortalDetector {
     fn drop(&mut self) {
         self.close();
     }

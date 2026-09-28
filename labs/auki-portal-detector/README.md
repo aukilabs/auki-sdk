@@ -1,6 +1,6 @@
 # Portal Detector
 
-`PortalDetectorComponent` combines QR scanning with an internal asynchronous
+`PortalDetector` combines QR scanning with an internal asynchronous
 size-resolution helper. There is one catalog Component with one `frames` Product
 input, not a separately addressable PortalSizer. The generic `auki-qr-detector`
 remains independent of Portal maps and database access.

@@ -91,8 +91,56 @@ pub fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Screen-plane axis orientation. All presets retain right-handed XY, +Z out, meters.
+/// The choice is declared in the exact map definition; it does not align independent origins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Convention {
+    XRight,
+    XUp,
+    XLeft,
+    XDown,
+}
+impl Convention {
+    pub const ALL: [Self; 4] = [Self::XRight, Self::XUp, Self::XLeft, Self::XDown];
+    pub fn parse(value: &str) -> Result<Self> {
+        match value {
+            "x_right" => Ok(Self::XRight),
+            "x_up" => Ok(Self::XUp),
+            "x_left" => Ok(Self::XLeft),
+            "x_down" => Ok(Self::XDown),
+            _ => Err("Unknown coordinate convention".into()),
+        }
+    }
+    pub fn to_plane(self, x: f64, y: f64) -> [f64; 2] {
+        match self {
+            Self::XRight => [x, y],
+            Self::XUp => [-y, x],
+            Self::XLeft => [-x, -y],
+            Self::XDown => [y, -x],
+        }
+    }
+    pub fn portal_rotation(self) -> [f64; 4] {
+        let q = std::f64::consts::FRAC_1_SQRT_2;
+        match self {
+            Self::XRight => [1., 0., 0., 0.],
+            Self::XUp => [q, 0., 0., -q],
+            Self::XLeft => [0., 0., 0., 1.],
+            Self::XDown => [q, 0., 0., q],
+        }
+    }
+}
+
 pub fn definition(peer: &str, domain: &str, session: &str) -> MapDefinition {
-    MapDefinition {
+    definition_with_convention(peer, domain, session, Convention::XRight)
+}
+pub fn definition_with_convention(
+    peer: &str,
+    domain: &str,
+    session: &str,
+    convention: Convention,
+) -> MapDefinition {
+    let mut map = MapDefinition {
         map_id: format!("grid-{}", portal_id(session, peer)),
         name: Some(format!("Grid {session}")),
         domain_reference: Some(domain.into()),
@@ -100,7 +148,29 @@ pub fn definition(peer: &str, domain: &str, session: &str) -> MapDefinition {
             format!("grid-frame-{}", portal_id(session, peer)),
             "Independent simulated origin; XY plane, fixed +X portal heading, Z out of grid",
         ),
+    };
+    if convention != Convention::XRight {
+        map.frame.id = format!("{}-{:?}", map.frame.id, convention);
+        map.frame.origin_description = format!(
+            "Independent simulated origin; XY plane; screen convention {:?}; +Z out; Portal printed-right is screen-right",
+            convention
+        );
     }
+    map
+}
+
+pub fn map_convention(
+    map: &MapDefinition,
+    peer: &str,
+    domain: &str,
+    session: &str,
+) -> Result<Convention> {
+    Convention::ALL
+        .into_iter()
+        .find(|c| *map == definition_with_convention(peer, domain, session, *c))
+        .ok_or_else(|| {
+            "Map does not declare a supported demo session, Domain and coordinate convention".into()
+        })
 }
 
 /// Select only this demo's exact session/Domain map from an authenticated peer Catalog.
@@ -112,7 +182,6 @@ pub fn discover_map(
     session: &str,
 ) -> Result<Option<ProductReference>> {
     use auki_scenegraph::catalog::{MAP_CATALOG_SCHEMA, MapCatalogData};
-    let expected = definition(peer, domain, session);
     let mut found = None;
     for entry in &catalog.products {
         if entry.manifest.peer_id != peer || entry.manifest.hash() != entry.manifest_hash {
@@ -127,7 +196,7 @@ pub fn discover_map(
         let Ok(data) = serde_json::from_value::<MapCatalogData>(metadata.value.clone()) else {
             continue;
         };
-        if data.map != expected {
+        if map_convention(&data.map, peer, domain, session).is_err() {
             continue;
         }
         if found.is_some() {
@@ -144,6 +213,7 @@ pub struct DemoMap {
     peer: String,
     domain: String,
     session: String,
+    convention: Convention,
     selected: BTreeMap<String, ProductReference>,
     remotes: BTreeMap<String, PublishedMap>,
     checker: MapAlignmentChecker,
@@ -152,6 +222,14 @@ pub struct DemoMap {
 
 impl DemoMap {
     pub fn new(peer: String, domain: String, session: String) -> Result<Self> {
+        Self::with_convention(peer, domain, session, Convention::XRight)
+    }
+    pub fn with_convention(
+        peer: String,
+        domain: String,
+        session: String,
+        convention: Convention,
+    ) -> Result<Self> {
         validate_name(&session)?;
         if peer.is_empty() || peer.len() > 128 || domain.is_empty() || domain.len() > 128 {
             return Err("Invalid peer or Domain".into());
@@ -167,7 +245,7 @@ impl DemoMap {
                 component_id: "grid-map".into(),
                 publication_id: publication.clone(),
                 clock_id: format!("grid-logical-{publication}"),
-                map: definition(&peer, &domain, &session),
+                map: definition_with_convention(&peer, &domain, &session, convention),
             },
             move || clock.fetch_add(1, Ordering::Relaxed),
             |_| false,
@@ -182,6 +260,7 @@ impl DemoMap {
             peer,
             domain,
             session,
+            convention,
             selected: BTreeMap::new(),
             remotes: BTreeMap::new(),
             checker: MapAlignmentChecker::new(AlignmentOptions::default())
@@ -228,17 +307,12 @@ impl DemoMap {
         }
         incoming.snapshot.validate().map_err(|e| e.to_string())?;
         let scene = &incoming.snapshot.scenegraph;
-        if scene.map
-            != definition(
-                &incoming.reference.product.peer_id,
-                &self.domain,
-                &self.session,
-            )
-        {
-            return Err(
-                "Snapshot belongs to a different demo session, Domain or frame contract".into(),
-            );
-        }
+        let convention = map_convention(
+            &scene.map,
+            &incoming.reference.product.peer_id,
+            &self.domain,
+            &self.session,
+        )?;
         if scene.anchors.len() > MAX_PORTALS {
             return Err("Too many portals".into());
         }
@@ -249,7 +323,7 @@ impl DemoMap {
             if anchor.anchor_id != id
                 || pose.from_frame_id != format!("simulated-portal-{id}")
                 || anchor.side_length_m != 0.25
-                || pose.rotation_wxyz != [1., 0., 0., 0.]
+                || pose.rotation_wxyz != convention.portal_rotation()
                 || pose.translation[2] != 0.
             {
                 return Err(
@@ -275,8 +349,8 @@ impl DemoMap {
         self.ensure_open()?;
         validate_name(name)?;
         let local_frame = self.publication().snapshot.scenegraph.map.frame.id;
-        let offset = if frame == local_frame {
-            [0.; 3]
+        let [x, y] = if frame == local_frame {
+            [x, y]
         } else {
             let peer = self
                 .remotes
@@ -295,10 +369,8 @@ impl DemoMap {
             else {
                 return Err("Display frame is not aligned to your map".into());
             };
-            transform.translation
+            inverse_point(&transform, x, y)
         };
-        let x = x - offset[0];
-        let y = y - offset[1];
         validate_position(x, y)?;
         let current = self.publication();
         let id = portal_id(&self.session, name);
@@ -325,7 +397,7 @@ impl DemoMap {
                             from_frame_id: format!("simulated-portal-{id}"),
                             to_frame_id: current.snapshot.scenegraph.map.frame.id,
                             translation: [x, y, 0.],
-                            rotation_wxyz: [1., 0., 0., 0.],
+                            rotation_wxyz: self.convention.portal_rotation(),
                         },
                     },
                 },
@@ -389,10 +461,7 @@ impl DemoMap {
                     shared_names.push(anchor.payload.clone());
                     offsets.push((
                         anchor.payload.clone(),
-                        [
-                            anchor.pose_in_map.translation[0] - other.pose_in_map.translation[0],
-                            anchor.pose_in_map.translation[1] - other.pose_in_map.translation[1],
-                        ],
+                        shared_offset(self.convention, self.convention_of(remote)?, anchor, other),
                     ));
                 }
             }
@@ -430,15 +499,14 @@ impl DemoMap {
                 AlignmentResult::NoConnection => {}
             }
         }
-        let local_portals = portals(&local, [0., 0., 0.]);
-        let remote_portals = remote.map(|r| portals(r, [0., 0., 0.])).unwrap_or_default();
-        let mut combined: BTreeMap<String, PortalView> =
-            portals(&local, local_to_display.translation)
-                .into_iter()
-                .map(|p| (p.id.clone(), p))
-                .collect();
+        let local_portals = portals(&local, None);
+        let remote_portals = remote.map(|r| portals(r, None)).unwrap_or_default();
+        let mut combined: BTreeMap<String, PortalView> = portals(&local, Some(&local_to_display))
+            .into_iter()
+            .map(|p| (p.id.clone(), p))
+            .collect();
         if let (Some(remote), Some(transform)) = (remote, remote_to_display) {
-            for portal in portals(remote, transform.translation) {
+            for portal in portals(remote, Some(&transform)) {
                 match combined.entry(portal.id.clone()) {
                     std::collections::btree_map::Entry::Vacant(e) => {
                         e.insert(portal);
@@ -546,7 +614,7 @@ impl DemoMap {
                     _ => ("separate", None),
                 }
             };
-            let transformed = transform.as_ref().map(|t| portals(&map, t.translation));
+            let transformed = transform.as_ref().map(|t| portals(&map, Some(t)));
             if let Some(visible) = &transformed {
                 for portal in visible {
                     combined
@@ -559,11 +627,12 @@ impl DemoMap {
                 }
             }
             layers.push(MapLayer {
+                convention: self.convention_of(&map)?,
                 peer: map.reference.product.peer_id.clone(),
                 frame: map.snapshot.scenegraph.map.frame.id.clone(),
                 sequence: map.reference.sequence,
                 state: state.into(),
-                portals: portals(&map, [0.; 3]),
+                portals: portals(&map, None),
                 aligned_portals: transformed,
                 to_display: transform,
             });
@@ -574,6 +643,8 @@ impl DemoMap {
         originals.extend(self.remotes.values().cloned());
         for (i, a) in originals.iter().enumerate() {
             for b in originals.iter().skip(i + 1) {
+                let ac = self.convention_of(a)?;
+                let bc = self.convention_of(b)?;
                 let offsets: Vec<_> = a
                     .snapshot
                     .scenegraph
@@ -581,15 +652,7 @@ impl DemoMap {
                     .iter()
                     .filter_map(|(id, anchor)| {
                         b.snapshot.scenegraph.anchors.get(id).map(|other| {
-                            (
-                                anchor.payload.clone(),
-                                [
-                                    anchor.pose_in_map.translation[0]
-                                        - other.pose_in_map.translation[0],
-                                    anchor.pose_in_map.translation[1]
-                                        - other.pose_in_map.translation[1],
-                                ],
-                            )
+                            (anchor.payload.clone(), shared_offset(ac, bc, anchor, other))
                         })
                     })
                     .collect();
@@ -621,6 +684,14 @@ impl DemoMap {
         })
     }
 
+    fn convention_of(&self, map: &PublishedMap) -> Result<Convention> {
+        map_convention(
+            &map.snapshot.scenegraph.map,
+            &map.reference.product.peer_id,
+            &self.domain,
+            &self.session,
+        )
+    }
     pub fn close(&mut self) {
         self.closed = true;
         self.map.close();
@@ -642,23 +713,63 @@ fn validate_position(x: f64, y: f64) -> Result<()> {
     }
     Ok(())
 }
-fn portals(map: &PublishedMap, offset: [f64; 3]) -> Vec<PortalView> {
+// Presets and accepted Portal orientations allow only quarter turns. Round floating-point
+// quaternion noise back to exact integer cells, without accepting arbitrary remote rotations.
+fn rotate(q: [f64; 4], x: f64, y: f64) -> [f64; 2] {
+    let [w, _, _, z] = q;
+    [
+        (1. - 2. * z * z) * x - 2. * w * z * y,
+        2. * w * z * x + (1. - 2. * z * z) * y,
+    ]
+}
+fn inverse_point(t: &RigidTransform, x: f64, y: f64) -> [f64; 2] {
+    let [w, qx, qy, qz] = t.rotation_wxyz;
+    let [x, y] = rotate(
+        [w, -qx, -qy, -qz],
+        x - t.translation[0],
+        y - t.translation[1],
+    );
+    [snap(x), snap(y)]
+}
+fn snap(v: f64) -> f64 {
+    if (v - v.round()).abs() < 1e-8 {
+        v.round()
+    } else {
+        v
+    }
+}
+fn shared_offset(a: Convention, b: Convention, aa: &QrAnchor, bb: &QrAnchor) -> [f64; 2] {
+    let [ax, ay] = a.to_plane(aa.pose_in_map.translation[0], aa.pose_in_map.translation[1]);
+    let [bx, by] = b.to_plane(bb.pose_in_map.translation[0], bb.pose_in_map.translation[1]);
+    [ax - bx, ay - by]
+}
+fn portals(map: &PublishedMap, transform: Option<&RigidTransform>) -> Vec<PortalView> {
     map.snapshot
         .scenegraph
         .anchors
         .values()
-        .map(|anchor| PortalView {
-            id: anchor.anchor_id.clone(),
-            name: anchor.payload.clone(),
-            x: anchor.pose_in_map.translation[0] + offset[0],
-            y: anchor.pose_in_map.translation[1] + offset[1],
-            contributors: vec![map.reference.product.peer_id.clone()],
+        .map(|anchor| {
+            let [x, y, _] = anchor.pose_in_map.translation;
+            let [x, y] = transform
+                .map(|t| {
+                    let [x, y] = rotate(t.rotation_wxyz, x, y);
+                    [snap(x + t.translation[0]), snap(y + t.translation[1])]
+                })
+                .unwrap_or([x, y]);
+            PortalView {
+                id: anchor.anchor_id.clone(),
+                name: anchor.payload.clone(),
+                x,
+                y,
+                contributors: vec![map.reference.product.peer_id.clone()],
+            }
         })
         .collect()
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct MapLayer {
+    pub convention: Convention,
     pub peer: String,
     pub frame: String,
     pub sequence: u64,

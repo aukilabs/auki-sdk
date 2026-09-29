@@ -1,11 +1,22 @@
+import {
+  conventions,
+  toCanvas,
+  fromCanvas,
+  inversePoint,
+  type Convention,
+} from "./conventions";
 import { Grid, peerColor, type View, type Portal } from "./grid";
 const get = <T extends Element = HTMLElement>(id: string): T =>
   document.getElementById(id) as unknown as T;
 export class MapViews {
   private latest?: View;
   private hidden = new Set<string>();
-  private coordinate = "combined";
+  private coordinate = "mine";
   private frame = "";
+  private convention: Convention = "x_right";
+  toCoordinates(x: number, y: number): [number, number] {
+    return fromCanvas(this.convention, x, y);
+  }
   readonly statuses = new Map<string, string>();
   constructor(
     private board: Grid,
@@ -34,7 +45,7 @@ export class MapViews {
     this.board.cancelMove();
     this.latest = undefined;
     this.frame = "";
-    this.coordinate = "combined";
+    this.coordinate = "mine";
     this.hidden.clear();
     this.statuses.clear();
     this.board.render([]);
@@ -43,7 +54,7 @@ export class MapViews {
     get("portal-list").replaceChildren();
     get("conflict-panel").hidden = true;
     get<HTMLSelectElement>("coordinate-frame").replaceChildren(
-      new Option("Combined view", "combined"),
+      new Option("My map · my coordinates", "mine"),
     );
     get("frame-caption").textContent = "Start a session to place portals";
     get("portal-count").textContent = "0 portals";
@@ -55,27 +66,30 @@ export class MapViews {
       this.coordinate !== "combined" &&
       !view.layers.some((l) => l.peer === this.coordinate)
     )
-      this.coordinate = "combined";
+      this.coordinate = view.local_peer;
     const selected = view.layers.find((l) => l.peer === this.coordinate);
     const frame = selected?.frame ?? view.display_frame;
     const frameChanged = frame !== this.frame;
     if (frameChanged) this.board.cancelMove();
     this.frame = frame;
+    this.convention = view.layers.find((l) => l.frame === frame)!.convention;
+    const axes = conventions[this.convention];
+    this.board.setAxes(axes.right, axes.up);
     const coordinate = get<HTMLSelectElement>("coordinate-frame");
     coordinate.replaceChildren(
-      new Option("Combined · aligned layers", "combined"),
-      ...view.layers.map(
-        (l) =>
-          new Option(
-            l.peer === view.local_peer
-              ? "My original coordinates"
-              : `Peer ${l.peer.slice(-6)} · original coordinates`,
-            l.peer,
-          ),
-      ),
+      new Option("My map · my coordinates", view.local_peer),
+      new Option("Shared canonical frame", "combined"),
+      ...view.layers
+        .filter((l) => l.peer !== view.local_peer)
+        .map(
+          (l) =>
+            new Option(
+              `Peer ${l.peer.slice(-6)} · original coordinates`,
+              l.peer,
+            ),
+        ),
     );
     coordinate.value = this.coordinate;
-    const offset = selected?.to_display?.translation ?? [0, 0, 0];
     const union = new Map<string, Portal>();
     const rows = view.layers.map((layer) => {
       const own = layer.peer === view.local_peer;
@@ -101,7 +115,7 @@ export class MapViews {
       const title = document.createElement("strong");
       title.textContent = own ? "My map" : `Peer ${layer.peer.slice(-6)}`;
       const sub = document.createElement("small");
-      sub.textContent = `${layer.portals.length} portals · ${own ? "you" : (this.statuses.get(layer.peer) ?? "Live")} · #${layer.sequence}`;
+      sub.textContent = `${conventions[layer.convention].label} · ${layer.portals.length} portals · ${own ? "you" : (this.statuses.get(layer.peer) ?? "Live")} · #${layer.sequence}`;
       text.append(title, sub);
       label.append(checkbox, dot, text);
       row.append(label);
@@ -120,11 +134,12 @@ export class MapViews {
         const portals =
           layer.frame === frame
             ? layer.portals
-            : (layer.aligned_portals ?? []).map((p) => ({
-                ...p,
-                x: p.x - offset[0],
-                y: p.y - offset[1],
-              }));
+            : (layer.aligned_portals ?? []).map((p) => {
+                const [x, y] = selected?.to_display
+                  ? inversePoint(selected.to_display, p.x, p.y)
+                  : [p.x, p.y];
+                return { ...p, x, y };
+              });
         for (const portal of portals) {
           const prior = union.get(portal.id);
           if (prior) prior.contributors.push(...portal.contributors);
@@ -150,10 +165,17 @@ export class MapViews {
     }
     get("layers").replaceChildren(...rows);
     const conflicts = view.conflicts.map((c) => c.name);
-    this.board.render([...union.values()], [], conflicts);
+    this.board.render(
+      [...union.values()].map((p) => {
+        const [x, y] = toCanvas(this.convention, p.x, p.y);
+        return { ...p, x, y, coordinates: [p.x, p.y] };
+      }),
+      [],
+      conflicts,
+    );
     if (frameChanged) this.board.fit();
     get("frame-caption").textContent =
-      `${selected ? "Original frame" : "Aligned frame"} ${frame.slice(-8)} · XY · meters`;
+      `${selected?.peer === view.local_peer ? "My coordinates" : selected ? "Peer coordinates" : "Shared frame"} ${frame.slice(-8)} · ${axes.label} · meters`;
     get("frame-caption").title = frame;
     get("portal-count").textContent = `${union.size} visible portals`;
     get("session-count").textContent =

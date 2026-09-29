@@ -68,6 +68,18 @@
                 required
                 pattern="[A-Za-z0-9 _\-]+"
             /></label>
+            <label
+              >My coordinate convention<select id="axis-convention">
+                <option value="x_right">+X right · +Y up</option>
+                <option value="x_up">+X up · +Y left</option>
+                <option value="x_left">+X left · +Y down</option>
+                <option value="x_down">+X down · +Y right</option>
+              </select></label
+            >
+            <p class="hint">
+              Directions on the map. +Z stays out of the map; units are meters.
+              Choose before joining.
+            </p>
             <p class="hint">
               Start on your own. Anyone using this Domain and session can join
               you.
@@ -122,7 +134,7 @@
           <label class="frame-control"
             ><span class="sr-only">Coordinate view</span
             ><select id="coordinate-frame">
-              <option value="combined">Combined · aligned layers</option>
+              <option value="mine">My map · my coordinates</option>
             </select></label
           ><button id="add-pin" disabled>＋ Drop portal</button>
         </div>

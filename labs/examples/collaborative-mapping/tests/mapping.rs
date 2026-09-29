@@ -461,3 +461,108 @@ fn remote_conflicts_and_stale_evidence_do_not_create_false_overlays() {
     assert_eq!(a.session_view().unwrap().layers.len(), 3);
     assert!(a.session_view().unwrap().conflicts.is_empty());
 }
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn all_axis_presets_align_without_relabelling_source_coordinates() {
+    use auki_collaborative_mapping::{Convention, discover_map};
+    // Coordinates of screen-plane (10,20) and (13,24) in each preset, independently specified.
+    let bridge = [[10., 20.], [20., -10.], [-10., -20.], [-20., 10.]];
+    let extra = [[13., 24.], [24., -13.], [-13., -24.], [-24., 13.]];
+    let expected = [[3., 4.], [4., -3.], [-3., -4.], [-4., 3.]];
+    for (ai, ac) in Convention::ALL.into_iter().enumerate() {
+        for (bi, bc) in Convention::ALL.into_iter().enumerate() {
+            let mut a =
+                DemoMap::with_convention("a".into(), "domain".into(), "demo".into(), ac).unwrap();
+            let mut b =
+                DemoMap::with_convention("b".into(), "domain".into(), "demo".into(), bc).unwrap();
+            let af = a.publication().snapshot.scenegraph.map.frame.id;
+            let bf = b.publication().snapshot.scenegraph.map.frame.id;
+            a.place("bridge", 0., 0., &af).unwrap();
+            b.place("bridge", bridge[bi][0], bridge[bi][1], &bf)
+                .unwrap();
+            b.place("extra", extra[bi][0], extra[bi][1], &bf).unwrap();
+            assert_eq!(
+                discover_map(&b.runtime.catalog().snapshot(), "b", "domain", "demo").unwrap(),
+                Some(b.publication().reference.product)
+            );
+            pair(&mut a, &mut b);
+            exchange(&mut a, &mut b);
+            let av = a.session_view().unwrap();
+            let bv = b.session_view().unwrap();
+            assert_eq!(av.portals, bv.portals);
+            let pin = av.portals.iter().find(|p| p.name == "extra").unwrap();
+            assert_eq!([pin.x, pin.y], expected[ai]);
+            assert_eq!(
+                bv.layers.iter().find(|l| l.peer == "b").unwrap().convention,
+                bc
+            );
+            // Editing through A's displayed frame must apply inverse rotation as well as translation.
+            b.place("placed", expected[ai][0], expected[ai][1], &af)
+                .unwrap();
+            let local = b
+                .session_view()
+                .unwrap()
+                .layers
+                .into_iter()
+                .find(|l| l.peer == "b")
+                .unwrap();
+            let pin = local.portals.iter().find(|p| p.name == "placed").unwrap();
+            assert_eq!([pin.x, pin.y], extra[bi]);
+            a.place("extra", expected[ai][0], expected[ai][1], &af)
+                .unwrap();
+            exchange(&mut a, &mut b);
+            assert!(a.session_view().unwrap().conflicts.is_empty());
+            a.place("extra", expected[ai][0] + 1., expected[ai][1], &af)
+                .unwrap();
+            exchange(&mut a, &mut b);
+            assert!(!a.session_view().unwrap().conflicts.is_empty());
+            a.remove("extra").unwrap();
+            exchange(&mut a, &mut b);
+            assert!(
+                a.session_view()
+                    .unwrap()
+                    .layers
+                    .iter()
+                    .all(|l| l.to_display.is_some())
+            );
+        }
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn convention_contract_rejects_unknown_axes_and_mismatched_portal_orientation() {
+    use auki_collaborative_mapping::Convention;
+    let mut a = map("a");
+    let mut b =
+        DemoMap::with_convention("b".into(), "domain".into(), "demo".into(), Convention::XUp)
+            .unwrap();
+    place(&mut b, "bridge", 1., 2.);
+    pair(&mut a, &mut b);
+    assert!(Convention::parse("anything").is_err());
+    let invalid = rebuild(b.publication(), |s| {
+        s.map.frame.origin_description = "unlabelled axes".into()
+    });
+    assert!(a.receive(invalid).is_err());
+    let invalid = rebuild(b.publication(), |s| {
+        s.anchors
+            .values_mut()
+            .next()
+            .unwrap()
+            .pose_in_map
+            .rotation_wxyz = [1., 0., 0., 0.]
+    });
+    assert!(a.receive(invalid).is_err());
+    a.receive(b.publication()).unwrap();
+    assert!(
+        a.session_view()
+            .unwrap()
+            .layers
+            .iter()
+            .find(|l| l.peer == "b")
+            .unwrap()
+            .to_display
+            .is_none()
+    );
+}

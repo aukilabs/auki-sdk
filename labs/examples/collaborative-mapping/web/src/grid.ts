@@ -1,11 +1,14 @@
+import type { Convention } from "./conventions";
 export interface Portal {
   id: string;
   name: string;
   x: number;
   y: number;
   contributors: string[];
+  coordinates?: [number, number];
 }
 export interface Layer {
+  convention: Convention;
   peer: string;
   frame: string;
   sequence: number;
@@ -16,6 +19,7 @@ export interface Layer {
     from_frame_id: string;
     to_frame_id: string;
     translation: number[];
+    rotation_wxyz: number[];
   } | null;
 }
 export interface View {
@@ -43,6 +47,10 @@ export const peerColor = (peer: string): string => {
 };
 /** Persistent camera: incoming snapshots never reset the user's pan or zoom. */
 export class Grid {
+  private axisLabels = { right: "+X", up: "+Y" };
+  setAxes(right: string, up: string): void {
+    this.axisLabels = { right, up };
+  }
   private camera = { x: -12, y: -12, size: 24 };
   private portals: Portal[] = [];
   private conflicts: string[] = [];
@@ -315,8 +323,8 @@ export class Grid {
     );
     for (const [label, x, y] of [
       ["0", unit * 0.2, unit * 0.55],
-      ["+X", left + size - unit, unit * 0.55],
-      ["+Y", unit * 0.2, top + unit],
+      [this.axisLabels.right, left + size - unit, unit * 0.55],
+      [this.axisLabels.up, unit * 0.2, top + unit],
     ] as const) {
       const text = svg("text", {
         x,
@@ -357,7 +365,7 @@ export class Grid {
       });
       if (draft) group.removeAttribute("data-index");
       const title = svg("title");
-      title.textContent = `${portal.name} · (${portal.x}, ${portal.y})`;
+      title.textContent = `${portal.name} · (${(portal.coordinates ?? [portal.x, portal.y]).join(", ")})`;
       const pin = svg("path", {
         d: "M 0 0 C -.12 -.22 -.5 -.55 -.5 -.9 A .5 .5 0 1 1 .5 -.9 C .5 -.55 .12 -.22 0 0 Z",
         transform: `scale(${unit})`,

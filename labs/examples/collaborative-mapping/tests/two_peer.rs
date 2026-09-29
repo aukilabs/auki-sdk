@@ -177,10 +177,11 @@ async fn three_peers_exchange_live_edits_and_continue_after_one_leaves() {
             )
             .await
             .unwrap();
-            let mut map = DemoMap::new(
+            let mut map = DemoMap::with_convention(
                 peer.peer_id().to_string(),
                 domain.to_string(),
                 "demo".into(),
+                auki_collaborative_mapping::Convention::ALL[index],
             )
             .unwrap();
             place(&mut map, "bridge", index as f64 * 10., 0.);

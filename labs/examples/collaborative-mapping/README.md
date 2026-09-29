@@ -24,7 +24,11 @@ DDS discovery advertisement/lookups, P2P map publication/reads, and cleanup usin
 never writes Domain Server data, provisions nodes, or submits DMS tasks.
 
 1. Select shared development services or matching custom API/DDS/DMS endpoints.
-   Sign in, choose a Domain and session name, then **Start / join session**.
+   Sign in, choose a Domain, session name, and **My coordinate convention**, then
+   **Start / join session**. Each peer chooses independently: +X right / up / left /
+   down, with perpendicular +Y and +Z out of the map. These are screen-plane
+   directions, not different gravity axes. The choice is fixed for that publication;
+   leave and restart to change it without relabelling an existing map.
    You can map alone immediately once your relay peer is ready.
 2. Other browsers use the same Domain and session. Each browser continuously
    discovers and subscribes to matching peers, up to 16 session participants
@@ -34,8 +38,11 @@ never writes Domain Server data, provisions nodes, or submits DMS tasks.
    without publishing. **Drop portal** and Enter on the focused map drop at its
    center; arrow keys pan. Touch users can pan and use the visible controls.
 4. In A, place `bridge` at local `(0, 0)`; in B, place `bridge` at local `(10, 20)`.
-   Their maps align. **Combined** uses the lexicographically smallest reachable
-   peer's frame, so browsers with the same current evidence render the same union.
+   Their maps align. **My map · my coordinates** stays selected by default:
+   your axes and origin stay fixed, and aligned remote layers are transformed
+   into your coordinate system. Peers joining or leaving do not switch your view.
+   The optional **Shared canonical frame** uses the lexicographically smallest
+   reachable peer's frame for comparing identical numeric coordinates.
 5. Toggle peer layers to compare placements. The coordinate selector also shows
    each map's original frame. Unaligned maps cannot be overlaid as if their
    origins were shared; **Unaligned · view** opens that original coordinate space.
@@ -72,17 +79,24 @@ maps; manually reload after leaving to load new code.
   subscribes independently to each exact peer Product using `LatestExisting`.
   No remote editing Operables are exported.
 - Source layers retain explicit independent frame IDs, right-handed XY, Z-up,
-  meters. Every alignment carries source/destination frame IDs. The canvas
+  meters. Each preset declares an exact map definition and Portal orientation.
+  Non-default presets have distinct frame IDs and a declared screen-axis
+  convention in the origin description; discovery validates the complete known
+  definition rather than guessing a convention from a peer or Domain. Every alignment carries source/destination frame IDs. The canvas
   applies validated transforms only; missing alignment never means equal origins.
 - Session+name deterministically derives synthetic Portal UUIDv8 identity using
   SHA-256. Names are exact and case-sensitive, 1–64 ASCII letters/digits/spaces/
   underscores/hyphens, without leading/trailing spaces. These are not DDS records.
-- Portals have fixed +X heading and 0.25 m sides. A shared Portal therefore
-  determines translation, with no rotation estimation. This demo does not claim
+- Portals have fixed printed-right = screen-right heading and 0.25 m sides.
+  Their pose quaternion explicitly converts that Portal frame into the chosen
+  local axes. A shared Portal determines a rigid alignment with the appropriate
+  quarter-turn rotation and translation. Merely choosing a convention never
+  establishes shared origins. This demo does not claim
   arbitrary real-world names establish physical alignment. Integer source
   coordinates are bounded to ±10,000 m, with at most 128 Portals per peer.
 - Conflict diagnostics compare shared-Portal offsets pairwise across every map
-  pair. Different integer offsets exceed the checker's 2 cm tolerance. Diagnostics
+  pair after explicit conversion to the declared screen-plane basis. Different
+  integer offsets exceed the checker's 2 cm tolerance. Diagnostics
   do not choose a supposedly correct outlier or relax frame/geometry validation.
 - The canonical aligned subset includes the local map. Maps outside that subset
   remain separate layers. Each view exposes originals, optional transformed
@@ -130,9 +144,15 @@ work, then awaits discovery before freeing WASM handles.
 
 Existing Catalog v1, observation-stream v1, and scenegraph snapshot v2 contracts
 are unchanged. No API/DDS/DMS deployment or auth-profile changes are required.
-All browsers should run this multi-peer build for symmetric multi-peer behavior.
+All browsers should run this coordinate-convention build when testing mixed
+presets. Default +X-right maps retain their existing map/Portal contract. Older
+builds cannot discover or consume the new rotated map definitions; they must be
+upgraded together before using non-default presets. No shared backend contract
+changes are required.
 The example's WASM view JSON now contains `layers`, `display_frame`, and pairwise
-`conflicts`; UI and WASM must be rebuilt together. `follow` allows independent
+`conflicts`; each layer now declares `convention`, and transforms include
+rotation as well as translation. `mount(peer, session, convention)` requires a
+validated preset string. UI and WASM must be rebuilt together. `follow` allows independent
 subscriptions and `unfollow(peer)` cancels/joins one. These are demo binding
 changes, not stable SDK binding changes.
 
@@ -162,9 +182,13 @@ npm run test:ui
 WASM_BINDGEN_TEST_RUNNER=/path/to/wasm-bindgen-test-runner npm run test:wasm
 ```
 
-Use wasm-bindgen-test-runner 0.2.121 matching Cargo.lock. Thirteen mapping tests
+Use wasm-bindgen-test-runner 0.2.121 matching Cargo.lock. Fifteen mapping tests
 run natively and in Chromium WASM. Isolated authenticated loopback tests cover
-two- and three-peer streams, edits, conflict removal, resubscription and departure.
+two- and three-peer streams (including mixed axis presets), edits, conflict
+removal, resubscription and departure. Preset tests cover all 16 pairings, inverse
+placement transforms, rotated conflicts and recovery, and rejected unknown map
+definitions or mismatched Portal orientations. Browser tests cover rotated
+axis labels, double-click/drop coordinates, ⌘-drag, and remote-frame rendering.
 Browser controller tests cover solo startup, full-mesh joins, discovery during
 active subscriptions, failure recovery and cancellation. UI tests first load
 real generated WASM, then use a test-only intercepted WASM port fixture to drive

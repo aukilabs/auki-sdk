@@ -58,6 +58,7 @@ try {
   await page.click("#start-button");
   await page.getByText("1 peer", { exact: true }).waitFor();
   assert.equal(await page.locator("#add-pin").isEnabled(), true);
+  assert.equal(await page.inputValue("#coordinate-frame"), "local-test-peer");
   const grid = page.locator("#grid"),
     box = await grid.boundingBox();
   const before = await grid.getAttribute("viewBox");
@@ -89,6 +90,7 @@ try {
     });
     d.layers.push({
       peer: "peer-b",
+      convention: "x_right",
       frame: "frame-b",
       sequence: 3,
       state: "aligned",
@@ -98,10 +100,12 @@ try {
         from_frame_id: "frame-b",
         to_frame_id: "local-frame",
         translation: [-10, -20, 0],
+        rotation_wxyz: [1, 0, 0, 0],
       },
     });
     d.layers.push({
       peer: "peer-c",
+      convention: "x_right",
       frame: "frame-c",
       sequence: 1,
       state: "separate",
@@ -213,6 +217,117 @@ try {
   await page.click("#stop-button");
   assert.equal(await page.locator("#add-pin").isDisabled(), true);
   assert.equal(await grid.locator("[data-portal]").count(), 0);
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.selectOption("#axis-convention", "x_up");
+  await page.click("#start-button");
+  await page.getByText("1 peer", { exact: true }).waitFor();
+  const screen = await grid.evaluate((el) => {
+    const p = new DOMPoint(2, -3).matrixTransform(el.getScreenCTM());
+    return { x: p.x, y: p.y };
+  });
+  await page.mouse.dblclick(screen.x, screen.y);
+  assert.equal(await page.inputValue("#x"), "3");
+  assert.equal(await page.inputValue("#y"), "-2");
+  await page.fill("#portal-name", "rotated");
+  await page.click("#save-pin");
+  assert.equal(
+    await grid.locator('[data-portal="rotated"]').getAttribute("transform"),
+    "translate(2 -3)",
+  );
+  assert.ok((await grid.textContent()).includes("−Y"));
+  await dragPin("rotated");
+  const rotated = await page.evaluate(() =>
+    window.fixture.local.portals.find((p) => p.name === "rotated"),
+  );
+  assert.deepEqual([rotated.x, rotated.y], [6, -4]);
+  await page.evaluate(() => {
+    window.fixture.data.layers.push({
+      peer: "rotated-remote",
+      frame: "rotated-frame",
+      convention: "x_down",
+      sequence: 1,
+      state: "aligned",
+      portals: [
+        {
+          id: "remote",
+          name: "remote",
+          x: 5,
+          y: 7,
+          contributors: ["rotated-remote"],
+        },
+      ],
+      aligned_portals: [
+        {
+          id: "remote",
+          name: "remote",
+          x: 5,
+          y: 13,
+          contributors: ["rotated-remote"],
+        },
+      ],
+      to_display: {
+        from_frame_id: "rotated-frame",
+        to_frame_id: "local-frame",
+        translation: [10, 20, 0],
+        rotation_wxyz: [0, 0, 0, 1],
+      },
+    });
+  });
+  // Trigger the normal application render with another local placement.
+  await page.click("#add-pin");
+  await page.fill("#portal-name", "second");
+  await page.click("#save-pin");
+  assert.equal(
+    await grid.locator('[data-portal="remote"]').getAttribute("transform"),
+    "translate(-13 -5)",
+  );
+  await page.selectOption("#coordinate-frame", "rotated-remote");
+  assert.equal(
+    await grid.locator('[data-portal="remote"]').getAttribute("transform"),
+    "translate(7 5)",
+  );
+  assert.equal(
+    await grid.locator('[data-portal="rotated"]').getAttribute("transform"),
+    "translate(24 4)",
+  );
+  await page.selectOption("#coordinate-frame", "local-test-peer");
+  const localCamera = await grid.getAttribute("viewBox");
+  // A different peer becomes the canonical publisher. My view must retain its
+  // own convention, origin and camera while converting remote evidence back.
+  await page.evaluate(() => {
+    const fixture = window.fixture;
+    fixture.data.display_frame = "rotated-frame";
+    fixture.local.to_display = {
+      from_frame_id: "local-frame",
+      to_frame_id: "rotated-frame",
+      translation: [10, 20, 0],
+      rotation_wxyz: [0, 0, 0, 1],
+    };
+    const other = fixture.data.layers.find((l) => l.peer === "rotated-remote");
+    other.to_display = {
+      from_frame_id: "rotated-frame",
+      to_frame_id: "rotated-frame",
+      translation: [0, 0, 0],
+      rotation_wxyz: [1, 0, 0, 0],
+    };
+    other.aligned_portals = other.portals;
+  });
+  await page.click("#add-pin");
+  await page.fill("#portal-name", "after-join");
+  await page.click("#save-pin");
+  assert.equal(await page.inputValue("#coordinate-frame"), "local-test-peer");
+  assert.equal(await grid.getAttribute("viewBox"), localCamera);
+  assert.equal(
+    await grid.locator('[data-portal="remote"]').getAttribute("transform"),
+    "translate(-13 -5)",
+  );
+  assert.ok(
+    (await page.locator("#frame-caption").innerText()).includes(
+      "+X up · +Y left",
+    ),
+  );
+  await page.screenshot({ path: "test-results/coordinate-conventions.png" });
+  await page.click("#stop-button");
   assert.deepEqual(errors, []);
   console.log(
     "Passed: real WASM load; solo session; drag/zoom; named drop; cancel; layer toggles; frame isolation; ownership; removal; camera persistence; mobile layout; stop cleanup.",

@@ -1,7 +1,10 @@
 //! Browser-only adapter. The same WASM module owns SDK handles and Map Components.
 #![cfg(target_arch = "wasm32")]
 #![forbid(unsafe_code)]
-use auki_collaborative_mapping::{DEMO_VERSION, DemoMap, PublishedMap, definition, discover_map};
+use auki_collaborative_mapping::{
+    Convention, DEMO_VERSION, DemoMap, PublishedMap, definition_with_convention, discover_map,
+    map_convention,
+};
 use auki_component_protocol::{
     CATALOG_PROTOCOL_ID, CatalogResponse, ComponentProtocolClient, ComponentProtocolEndpoint,
     ObservationStart, RemoteObservationEvent,
@@ -22,6 +25,7 @@ use wasm_bindgen_futures::{JsFuture, future_to_promise};
 #[serde(deny_unknown_fields)]
 struct ConnectionCard {
     version: String,
+    convention: Convention,
     domain: String,
     session: String,
     peer: String,
@@ -45,13 +49,23 @@ pub struct AukiMapping {
 #[wasm_bindgen]
 impl AukiMapping {
     #[wasm_bindgen]
-    pub async fn mount(peer: &AukiPeer, session: String) -> Result<AukiMapping, JsValue> {
+    pub async fn mount(
+        peer: &AukiPeer,
+        session: String,
+        convention: String,
+    ) -> Result<AukiMapping, JsValue> {
         let route = peer
             .wss_route()
             .ok_or_else(|| error("A confirmed WSS relay route is required"))?;
         let protocols = peer.protocols().ok_or_else(|| error("Peer has stopped"))?;
-        let model =
-            DemoMap::new(peer.peer_id(), peer.domain_id(), session.clone()).map_err(error)?;
+        let convention = Convention::parse(&convention).map_err(error)?;
+        let model = DemoMap::with_convention(
+            peer.peer_id(),
+            peer.domain_id(),
+            session.clone(),
+            convention,
+        )
+        .map_err(error)?;
         let endpoint = ComponentProtocolEndpoint::mount(protocols.clone(), model.runtime.clone())
             .map_err(error)?;
         if let Err(e) = endpoint.export_product(&model.map.product()) {
@@ -59,6 +73,7 @@ impl AukiMapping {
             return Err(error(e));
         }
         let card = ConnectionCard {
+            convention,
             version: DEMO_VERSION.into(),
             domain: peer.domain_id(),
             session,
@@ -116,7 +131,23 @@ impl AukiMapping {
         else {
             return Ok(None);
         };
+        let metadata = snapshot
+            .products
+            .iter()
+            .find(|p| p.manifest.reference() == product)
+            .and_then(|p| p.metadata.as_ref())
+            .ok_or_else(|| error("Missing map convention"))?;
+        let data: auki_scenegraph::catalog::MapCatalogData =
+            serde_json::from_value(metadata.value.clone()).map_err(error)?;
+        let convention = map_convention(
+            &data.map,
+            &peer,
+            &self.state.card.domain,
+            &self.state.card.session,
+        )
+        .map_err(error)?;
         let selected = ConnectionCard {
+            convention,
             version: DEMO_VERSION.into(),
             domain: self.state.card.domain.clone(),
             session: self.state.card.session.clone(),
@@ -333,7 +364,7 @@ async fn receive_loop(
                 )
                 .await
                 .map_err(error)?;
-            let expected = definition(&card.peer, &card.domain, &card.session);
+            let expected = definition_with_convention(&card.peer, &card.domain, &card.session, card.convention);
             let producer = &subscription.product().producer;
             if producer.spatial_frame_id.as_deref() != Some(expected.frame.id.as_str())
                 || producer.payload.schema() != auki_scenegraph::SNAPSHOT_SCHEMA

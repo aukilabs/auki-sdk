@@ -29,11 +29,14 @@ export class AukiPeer {
   free() {}
 }
 export class AukiMapping {
-  static async mount() {
-    return (window.fixture = new AukiMapping());
+  static async mount(_peer, _session, convention) {
+    const fixture = new AukiMapping();
+    fixture.local.convention = convention;
+    return (window.fixture = fixture);
   }
   local = {
     peer: "local-test-peer",
+    convention: "x_right",
     frame: "local-frame",
     sequence: 0,
     state: "aligned",
@@ -43,6 +46,7 @@ export class AukiMapping {
       from_frame_id: "local-frame",
       to_frame_id: "local-frame",
       translation: [0, 0, 0],
+      rotation_wxyz: [1, 0, 0, 0],
     },
   };
   data = {

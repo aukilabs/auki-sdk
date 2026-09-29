@@ -72,7 +72,8 @@ function beginMove(
       return;
     }
     try {
-      render(current.place(own.name, x, y, frame));
+      const [cx, cy] = maps.toCoordinates(x, y);
+      render(current.place(own.name, cx, cy, frame));
       notice(`Moved ${own.name}.`);
     } catch (error) {
       render(current.view());
@@ -86,8 +87,9 @@ function dropPin(x: number, y: number): void {
   originalName = undefined;
   input("portal-name").value = "";
   input("portal-name").readOnly = false;
-  input("x").value = String(x);
-  input("y").value = String(y);
+  const [cx, cy] = maps.toCoordinates(x, y);
+  input("x").value = String(cx);
+  input("y").value = String(cy);
   input("x").readOnly = input("y").readOnly = false;
   button("save-pin").hidden = false;
   button("remove-pin").hidden = true;
@@ -105,7 +107,11 @@ function inspectPin(portal: Portal): void {
     .find((l) => l.peer === latest!.local_peer)!
     .portals.find((p) => p.id === portal.id);
   originalName = own?.name;
-  const point = own ?? portal;
+  const point = own ?? {
+    ...portal,
+    x: portal.coordinates?.[0] ?? portal.x,
+    y: portal.coordinates?.[1] ?? portal.y,
+  };
   pinFrame = own
     ? latest.layers.find((l) => l.peer === latest!.local_peer)!.frame
     : maps.placementFrame;
@@ -242,7 +248,11 @@ async function start(): Promise<void> {
       AukiDiscoveryMode.DiscoverAndAdvertise,
       AukiPeerReachabilityMode.RelayBacked,
     );
-    const mounted = await AukiMapping.mount(started, input("session").value);
+    const mounted = await AukiMapping.mount(
+      started,
+      input("session").value,
+      get<HTMLSelectElement>("axis-convention").value,
+    );
     peer = started;
     started = undefined;
     mapping = mounted;

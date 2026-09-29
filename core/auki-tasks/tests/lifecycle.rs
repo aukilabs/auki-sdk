@@ -757,3 +757,130 @@ async fn a_failed_handler_does_not_stop_the_claim_loop() {
     );
     runtime.close().await.unwrap();
 }
+
+/// Regression test for #423.
+///
+/// DMS cancels a running task by answering its next heartbeat with
+/// `cancel: true`, which surfaces as `TaskError::Cancelled` -- the same variant
+/// the host's own token produces. `run` used to treat both as "stop the
+/// runtime", so ending one job (a teleop lease, say) left the robot never
+/// claiming again while it still looked healthy.
+#[tokio::test]
+async fn a_dms_cancelled_task_does_not_stop_the_claim_loop() {
+    let server = MockServer::start();
+    let first = Uuid::new_v4();
+    let second = Uuid::new_v4();
+    let domain = Uuid::new_v4();
+    let first_grant = grant(&server, first, domain);
+    let second_grant = grant(&server, second, domain);
+
+    let mut claim_first = server.mock(|when, then| {
+        when.method(GET).path("/tasks");
+        then.json_body(first_grant.clone());
+    });
+    let mut first_alive = server.mock(|when, then| {
+        when.method(POST).path(format!("/tasks/{first}/heartbeat"));
+        then.json_body(first_grant.clone());
+    });
+    let first_complete = server.mock(|when, then| {
+        when.method(POST).path(format!("/tasks/{first}/complete"));
+        then.status(200);
+    });
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/tasks/{second}/heartbeat"));
+        then.json_body(second_grant.clone());
+    });
+    let second_complete = server.mock(|when, then| {
+        when.method(POST).path(format!("/tasks/{second}/complete"));
+        then.status(200);
+    });
+
+    // The first task holds until it is cancelled, like a lease does; the
+    // second one returns straight away.
+    let started = Arc::new(AtomicUsize::new(0));
+    let seen = started.clone();
+    let handler = Handler(move |task: TaskContext| {
+        let seen = seen.clone();
+        async move {
+            seen.fetch_add(1, Ordering::SeqCst);
+            if task.task.id == first {
+                task.cancelled().await;
+                return Err(TaskError::Cancelled);
+            }
+            Ok(TaskResult::default())
+        }
+    });
+    let mut handlers: BTreeMap<String, Arc<dyn TaskHandler>> = BTreeMap::new();
+    handlers.insert("/example/v1".into(), Arc::new(handler));
+
+    let client = DmsClient::new(
+        server.base_url().parse().unwrap(),
+        Duration::from_secs(2),
+        Arc::new(Auth),
+    )
+    .unwrap();
+    let runtime = AukiDmsTasks::from_client(
+        client,
+        "native-fixture".into(),
+        vec!["/example/v1".into()],
+        TasksConfig {
+            poll_interval: Duration::from_millis(10),
+            // Short, so the cancel reaches the running handler promptly.
+            heartbeat_interval: Duration::from_millis(20),
+            ..TasksConfig::default()
+        },
+    )
+    .unwrap();
+
+    let cancel = CancellationToken::new();
+    let child = cancel.clone();
+    let owner = runtime.clone();
+    let running = tokio::spawn(async move { owner.run(&handlers, &child).await });
+
+    let wait_for = |count: usize, why: &'static str| {
+        let started = started.clone();
+        async move {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while started.load(Ordering::SeqCst) < count {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect(why);
+        }
+    };
+    wait_for(1, "the first task never started").await;
+
+    // DMS cancels the running task, and only the second one is left to claim.
+    first_alive.delete();
+    let mut cancelled = first_grant.clone();
+    cancelled["cancel"] = json!(true);
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/tasks/{first}/heartbeat"));
+        then.json_body(cancelled.clone());
+    });
+    claim_first.delete();
+    server.mock(|when, then| {
+        when.method(GET).path("/tasks");
+        then.json_body(second_grant.clone());
+    });
+
+    wait_for(2, "the loop stopped claiming after DMS cancelled a task").await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while second_complete.calls() < 1 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the task claimed after the cancel never completed");
+    assert!(
+        !running.is_finished(),
+        "run returned although only a task was cancelled"
+    );
+
+    cancel.cancel();
+    running.await.unwrap().unwrap();
+    // A cancelled task gets no receipt; DMS already recorded the cancel.
+    first_complete.assert_calls(0);
+    runtime.close().await.unwrap();
+}

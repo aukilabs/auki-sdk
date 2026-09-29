@@ -970,6 +970,7 @@ dependencies = [
  "auki-datatypes",
  "auki-geometry",
  "auki-p2p",
+ "auki-registry",
  "auki-sdk",
  "chrono",
  "jsonwebtoken 10.4.0",

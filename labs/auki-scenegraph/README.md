@@ -357,7 +357,7 @@ Generic map-local anchor IDs are not treated as global Portal identities.
 
 The initial solver supports maps with equal, explicitly declared conventions
 and units. Differing conventions/units remain potential connections requiring
-explicit conversion. A shared Portal uses the centered QR convention declared
+explicit conversion with `MapConventionConversion` before alignment. A shared Portal uses the centered QR convention declared
 by `QrAnchor`; its physical sizes must agree. Multiple shared Portals and
 alternative paths are checked for consistency. Default residual tolerances are
 2 cm and 0.02 radians, configurable at construction. Conflicting evidence fails
@@ -385,3 +385,60 @@ Host-side test orchestration creates the distinct `merged-ABC` map, copies A–B
 transforms C into A's frame, and verifies shared B before deduplicating it.
 Peer2 then reads Peer1's catalog and fetches the complete A–B–C Product. The test
 checks all poses and that the source publications and catalog remain unchanged.
+
+## Explicit convention conversion
+
+`MapConventionConversion` converts a `Scenegraph` or complete `MapSnapshot` into a
+new map artifact, without mutating or publishing the source. It supports every
+convention currently representable by `MapFrame`: right-handed Y-up/Z-up and
+positive finite meters-per-unit scales. It is available without `components`.
+
+Use `from_registry_frames(source_frame, target_frame, source_registry,
+target_registry)` when complete axis conventions are available. Frame IDs,
+handedness, up axes and units must match the map declarations. The rotation is
+derived using `auki-geometry`, without assuming horizontal heading from up-axis
+metadata. The registry constructor supports the registry's meter/cm/mm units.
+For other positive scales, `new(source_frame, target_frame, axis_rotation)` takes
+an explicit zero-translation, labelled unit-quaternion rotation. Both APIs check
+that source up maps to target up. New frame and map IDs are required.
+
+```rust,ignore
+let conversion = MapConventionConversion::from_registry_frames(
+    source.scenegraph.map.frame.clone(),
+    target_frame,
+    &source_registry,
+    &target_registry,
+)?;
+let converted = conversion.convert_snapshot(&source, "converted-map")?;
+let point_transform = conversion.coordinate_transform(); // labelled 4x4, includes scale
+```
+
+Portal positions and orientations are transformed on the map side; Portal-local
+printed-right/up/out frames, identities, payloads and physical `side_length_m`
+remain unchanged. Translation and exported mesh coordinates use the destination
+units. Canonical USDA is regenerated with the new up axis, scale and labels;
+inconsistent source snapshot JSON/USDA is rejected. Conversion is atomic and
+rejects invalid/nonfinite rotations, mismatched declarations and numeric overflow.
+Names and Domain associations are preserved; the host can assign a distinct name
+before publication. Publication clock, Product identity and revision are supplied
+by the host, not fabricated by this pure conversion operation.
+
+Conversion preserves the physical origin. It does **not** align independent maps:
+normalize a map into the desired convention using a fresh frame ID, then use shared
+Portals with `MapAlignmentChecker` to establish the remaining alignment, and
+explicitly merge/admit the anchors. Never reuse another map's frame ID merely
+because the conventions match. `tests/conversion.rs` demonstrates a Y-up/cm B–C map
+converted to Z-up/meters, aligned against A–B, and merged into A–B–C.
+
+The coordinate conversion itself may include scale, so `coordinate_transform()`
+returns a labelled matrix rather than incorrectly representing it as a rigid
+quaternion pose. Left-handed scenegraphs are not supported by the current Portal
+pose representation; registry declarations requiring reflections are rejected.
+This API converts the current root-and-Portal scenegraph, not arbitrary USD files,
+nested meshes or voxel grids. No snapshot wire-schema change is needed.
+
+Runnable offline example (40cm square, center becomes `[100, 300, -200]` cm):
+
+```sh
+cargo run --locked -p auki-scenegraph --no-default-features --example convert_qr_map > /tmp/converted-portal.usda
+```

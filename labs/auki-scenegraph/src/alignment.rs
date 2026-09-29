@@ -277,7 +277,7 @@ impl MapAlignmentChecker {
                 };
                 let af = &a.catalog.map.frame;
                 let bf = &b.catalog.map.frame;
-                // Cross-convention conversion must be explicitly supplied by a future adapter.
+                // The host can normalize a map with MapConventionConversion before alignment.
                 if af.up_axis != bf.up_axis
                     || af.handedness != bf.handedness
                     || af.meters_per_unit != bf.meters_per_unit

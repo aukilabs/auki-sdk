@@ -10,11 +10,12 @@ description = "Experimental QR scenegraphs and optional Map Component"
 
 [features]
 default = ["components"]
-components = ["dep:auki-components", "dep:auki-geometry", "dep:auki-datatypes", "dep:uuid"]
+components = ["dep:auki-components", "dep:uuid"]
 
 [dependencies]
-auki-geometry = { path = "../auki-geometry", optional = true }
-auki-datatypes = { path = "../auki-datatypes", optional = true }
+auki-registry = { path = "../auki-registry" }
+auki-geometry = { path = "../auki-geometry" }
+auki-datatypes = { path = "../auki-datatypes" }
 uuid = { version = "1.10.1", default-features = false, features = ["std"], optional = true }
 auki-components = { path = "../auki-components", optional = true }
 serde = { workspace = true, features = ["derive"] }

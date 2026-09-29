@@ -1,6 +1,9 @@
 //! Small QR scenegraphs, with optional Component publication. No detector or network dependency.
 //! USD export is a deterministic projection, not a general USD composition engine.
 
+pub mod conversion;
+pub use conversion::{FramedConventionMatrix, MapConventionConversion};
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -54,6 +57,17 @@ pub struct MapFrame {
 }
 
 impl MapFrame {
+    pub fn validate(&self) -> Result<(), SceneError> {
+        text(&self.id, 256)?;
+        text(&self.origin_description, 4096)?;
+        if !self.meters_per_unit.is_finite() || self.meters_per_unit <= 0.0 {
+            return Err(SceneError::Invalid(
+                "meters_per_unit must be positive and finite",
+            ));
+        }
+        Ok(())
+    }
+
     /// Every v1 frame is right-handed; no implicit conversion or external alignment is asserted.
     pub fn z_up_meters(id: impl Into<String>, origin_description: impl Into<String>) -> Self {
         Self {
@@ -173,8 +187,7 @@ impl Scenegraph {
 
     pub fn validate(&self) -> Result<(), SceneError> {
         text(&self.map.map_id, 256)?;
-        text(&self.map.frame.id, 256)?;
-        text(&self.map.frame.origin_description, 4096)?;
+        self.map.frame.validate()?;
         for value in [&self.map.name, &self.map.domain_reference]
             .into_iter()
             .flatten()
@@ -182,11 +195,6 @@ impl Scenegraph {
             text(value, 256)?;
         }
         let scale = self.map.frame.meters_per_unit;
-        if !scale.is_finite() || scale <= 0.0 {
-            return Err(SceneError::Invalid(
-                "meters_per_unit must be positive and finite",
-            ));
-        }
         if self.anchors.len() > MAX_ANCHORS {
             return Err(SceneError::TooLarge);
         }

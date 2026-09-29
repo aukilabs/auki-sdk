@@ -346,6 +346,11 @@ async fn peer_retrieves_two_remote_maps_aligns_and_advertises_a_new_merged_map()
         let route = p2.listen_addresses()[0].clone();
         let CatalogResponse::Snapshot { snapshot: catalog } = client.catalog_exact(p2.peer_id(), route.clone(), None).await.unwrap() else { panic!("expected catalog") };
         assert_eq!(catalog.products.len(), 2);
+        let listed = auki_scenegraph::catalog::list_maps(&catalog).unwrap();
+        assert_eq!(listed.len(), 2);
+        let matches = auki_scenegraph::catalog::find_overlapping_maps(&listed[..1], &catalog).unwrap();
+        assert_eq!(matches.len(), 2); // The local selection shares B with both advertisements.
+        assert!(matches.iter().all(|m| !m.local_matches[0].shared_portal_ids.is_empty()));
         let mut checker = MapAlignmentChecker::new(AlignmentOptions { automatic: true, ..Default::default() }).unwrap();
         let mut advertised = std::collections::BTreeMap::new();
         for entry in &catalog.products {

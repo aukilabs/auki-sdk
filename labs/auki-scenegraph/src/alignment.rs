@@ -244,23 +244,7 @@ impl MapAlignmentChecker {
         let records: Vec<_> = self.records.iter().collect();
         for (i, (ak, a)) in records.iter().enumerate() {
             for (bk, b) in &records[i + 1..] {
-                let b_ids: BTreeSet<_> = b
-                    .catalog
-                    .portals
-                    .iter()
-                    .map(|p| p.anchor_id.as_str())
-                    .collect();
-                // Only canonical Portal UUIDs identify shared physical markers across publishers.
-                let common: Vec<_> = a
-                    .catalog
-                    .portals
-                    .iter()
-                    .filter(|p| {
-                        uuid::Uuid::parse_str(&p.anchor_id).is_ok()
-                            && b_ids.contains(p.anchor_id.as_str())
-                    })
-                    .map(|p| p.anchor_id.clone())
-                    .collect();
+                let common = crate::catalog::shared_portal_ids(&a.catalog, &b.catalog);
                 if common.is_empty() {
                     continue;
                 }
@@ -453,22 +437,12 @@ impl MapAlignmentChecker {
                 .map(|pair| {
                     let a = &self.records[&pair[0]];
                     let b = &self.records[&pair[1]];
-                    let ids: BTreeSet<_> = b.catalog.portals.iter().map(|p| &p.anchor_id).collect();
                     AlignmentStep {
                         from_map: pair[0].clone(),
                         to_map: pair[1].clone(),
                         from_snapshot: a.reference.clone(),
                         to_snapshot: b.reference.clone(),
-                        portal_ids: a
-                            .catalog
-                            .portals
-                            .iter()
-                            .filter(|p| {
-                                uuid::Uuid::parse_str(&p.anchor_id).is_ok()
-                                    && ids.contains(&p.anchor_id)
-                            })
-                            .map(|p| p.anchor_id.clone())
-                            .collect(),
+                        portal_ids: crate::catalog::shared_portal_ids(&a.catalog, &b.catalog),
                     }
                 })
                 .collect();

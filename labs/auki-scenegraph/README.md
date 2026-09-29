@@ -516,3 +516,35 @@ Run the complete example or select B:
 cargo run --locked -p auki-scenegraph --no-default-features --example duplicate_qr_map > /tmp/ros-map.usda
 cargo run --locked -p auki-scenegraph --no-default-features --example duplicate_qr_map -- --only-b > /tmp/ros-part.usda
 ```
+
+## Query a peer's advertised maps
+
+After fetching a peer's authorized catalog with `catalog_exact`, use the pure
+catalog helpers (default `components` feature):
+
+```rust,ignore
+use auki_scenegraph::catalog::{list_maps, find_overlapping_maps};
+
+let maps = list_maps(&peer_2_catalog)?;
+let mine = list_maps(&my_catalog)?;
+let overlapping = find_overlapping_maps(&mine, &peer_2_catalog)?;
+```
+
+`list_maps` returns each map advertised with supported map-catalog metadata,
+including its definition, complete Portal list and exact Product/sequence
+`SnapshotReference`. Local snapshots can instead be represented as
+`AdvertisedMap { snapshot: reference, data: MapCatalogData::from_snapshot(&snapshot) }`.
+`find_overlapping_maps` returns each matching remote entry once, with
+`local_matches` identifying each local map and its sorted shared Portal UUIDs.
+For local A–B–C and remote C–D–E / F–G, only C–D–E is returned, sharing C.
+Different conventions or units do not prevent identity matching. Domain names,
+generic anchor labels and equal QR payloads do not establish overlap.
+
+These helpers inspect an already-fetched catalog; they do not introduce another
+network operation, fetch geometry, subscribe, convert or merge. They preserve
+advertised revisions so the application can fetch and verify the selected
+snapshot before asking `MapAlignmentChecker` for alignment. No wire or backend
+contract changes are required. Missing/unsupported metadata is skipped as unknown
+membership, never treated as an empty map. Malformed supported metadata is an
+error. Consequently these queries cover supported advertised scenegraph maps,
+not arbitrary scenegraph/USD Products without map-catalog metadata.

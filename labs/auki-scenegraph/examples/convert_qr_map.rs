@@ -40,6 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut target_axes = FrameRegistryEntry::opengl("example-peer", "map-y");
     target_axes.units = LengthUnit::Centimeters;
     let target_frame = MapFrame {
+        convention: None,
         id: "map-y".into(),
         handedness: auki_scenegraph::Handedness::Right,
         up_axis: UpAxis::Y,

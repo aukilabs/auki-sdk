@@ -61,7 +61,7 @@ macro_rules! contract {
         }
     };
 }
-contract!(MapSnapshot, "auki.scenegraph.qr-snapshot/v2");
+contract!(MapSnapshot, "auki.scenegraph.qr-snapshot/v3");
 contract!(UpsertQr, "auki.scenegraph.upsert-qr/v2");
 contract!(FindQr, "auki.scenegraph.find-qr/v1");
 contract!(FindQrResult, "auki.scenegraph.find-qr-result/v2");

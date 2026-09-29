@@ -4,6 +4,7 @@ use auki_scenegraph::*;
 
 fn frame(id: &str, up_axis: UpAxis, meters_per_unit: f64) -> MapFrame {
     MapFrame {
+        convention: None,
         id: id.into(),
         handedness: Handedness::Right,
         up_axis,

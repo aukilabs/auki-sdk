@@ -255,3 +255,20 @@ fn invalid_metadata_and_mismatched_sizes_are_rejected_or_reported() {
         .is_err()
     );
 }
+
+#[test]
+fn named_conventions_must_match_even_when_both_maps_are_z_up() {
+    let mut a = snapshot("a", &[(1, [0.; 3])]);
+    a.scenegraph.map.frame.convention = Some(CoordinateConvention::Ros2Body);
+    a = MapSnapshot::new(a.scenegraph).unwrap();
+    let mut b = snapshot("b", &[(1, [0.; 3])]);
+    b.scenegraph.map.frame.convention = Some(CoordinateConvention::ZUpRightForward);
+    b = MapSnapshot::new(b.scenegraph).unwrap();
+    let mut index = checker(false);
+    index.receive_snapshot("a", reference("a", 0), a).unwrap();
+    index.receive_snapshot("b", reference("b", 0), b).unwrap();
+    assert!(matches!(
+        index.check("a", "b"),
+        AlignmentResult::PotentialConnection { .. }
+    ));
+}

@@ -65,7 +65,7 @@ endpoint.export_operable(map.upsert_qr())?;
 ```
 
 A fresh publication starts with an empty snapshot. Its Catalog Product carries
-`auki.scenegraph.qr-snapshot/v2`; the producer contract's `observes` is the map ID
+`auki.scenegraph.qr-snapshot/v3`; the producer contract's `observes` is the map ID
 and `spatial_frame_id` names its root frame. Consumers discover the endpoint via
 ordinary peer discovery, select the exact exported Product, and subscribe using
 `ObservationStart::LatestExisting`. The host owns discovery registration, routes,
@@ -296,7 +296,7 @@ QR geometry is converted from meters to those units for the USD stage.
 `RigidTransform::identity(from, to)` is an explicit declaration of coincident
 origins and axes, not an inferred alignment. USD preserves both endpoint IDs.
 
-The map snapshot, upsert request and anchor-bearing lookup responses now use
+Map snapshots use v3; upsert requests and anchor-bearing lookup responses use
 v2 contracts. Old unlabelled snapshots are rejected; migration requires the
 producer to supply the actual frame identities. No Domain or anchor ID is used
 as an implicit frame identity. The original retained-snapshot reference and
@@ -435,10 +435,84 @@ returns a labelled matrix rather than incorrectly representing it as a rigid
 quaternion pose. Left-handed scenegraphs are not supported by the current Portal
 pose representation; registry declarations requiring reflections are rejected.
 This API converts the current root-and-Portal scenegraph, not arbitrary USD files,
-nested meshes or voxel grids. No snapshot wire-schema change is needed.
+nested meshes or voxel grids. Named-convention metadata uses snapshot v3 (see below).
 
 Runnable offline example (40cm square, center becomes `[100, 300, -200]` cm):
 
 ```sh
 cargo run --locked -p auki-scenegraph --no-default-features --example convert_qr_map > /tmp/converted-portal.usda
+```
+
+## Duplicate a whole map or a selection into a named convention
+
+`CoordinateConvention` is shared with `auki-registry` and re-exported here. Use a
+named source declaration when creating the scene; up-axis metadata alone is not
+a full convention and is never guessed to mean OpenGL or ROS:
+
+```rust,ignore
+let frame = MapFrame::in_convention(
+    "opengl-frame", "physical origin description", CoordinateConvention::OpenGl, 1.0,
+)?;
+```
+
+Then duplicate a `Scenegraph` or `MapSnapshot` using only the target definition:
+
+```rust,ignore
+let target = MapDuplicateTarget::new(
+    "ros-copy", "ros-frame", CoordinateConvention::Ros2Body,
+);
+let whole = source.duplicate_in_convention(&target)?;
+let part = source.duplicate_part_in_convention(&["portal-B", "portal-C"], &target)?;
+```
+
+These are alternative example calls. Use distinct destination IDs if retaining
+both copies. `MapDuplicateTarget::new` defaults to meters; set its
+`meters_per_unit` explicitly for another scale. Rotation math is derived from the
+enum declarations. For OpenGL -> ROS2 body, `(x, y, z)` becomes `(-z, -x, y)` in
+matching units. Orientations are transformed too; a metadata-only relabel is
+never used.
+
+| Enum variant | Axis directions | Map duplication |
+|---|---|---|
+| `OpenGl` | X right, Y up, Z backward; right-handed | Supported |
+| `Ros2Body` | X forward, Y left, Z up; right-handed | Supported |
+| `ZUpRightForward` | X right, Y forward, Z up; right-handed | Supported |
+| `Ros2Optical` | X right, Y down, Z forward; right-handed | Not representable by current positive-up map metadata |
+| `Unity` | X right, Y up, Z forward; left-handed | Requires reflection-capable map poses |
+
+ROS2 body and optical conventions are deliberately distinct. `ZUpRightForward`
+is a specifically declared convention, not an inference about all Z-up USD files.
+Enums describe axes/handedness; unit scale remains explicit on the map. Existing
+registry preset constructors retain their full expanded declarations and hashes.
+
+A partial duplicate selects direct Portal children by anchor ID and retains their
+placements relative to the copied root. It does not rebase onto the first selected
+Portal. Unknown/repeated IDs fail without modifying the source; an empty selection
+copies the root only. Map/frame IDs must be fresh relative to the source, and the
+new root cannot reuse a selected Portal's local frame ID. Portal IDs, payloads and
+physical sizes are retained. Publication and authorization remain host-owned.
+The current graph has one root and Portal children; general nested USD subtrees
+are not supported by this helper.
+
+Migration: `MapFrame` gains `convention: Option<CoordinateConvention>`.
+`MapFrame::in_convention` records an explicit name; legacy `z_up_meters` continues
+to mean only what it previously declared and leaves `convention` absent. Legacy
+and custom unnamed maps remain readable, but the named helper rejects them until
+the caller supplies a known declaration; use the existing explicit conversion
+API when conventions are custom. Named declarations are checked against up-axis
+and registry axes, and explicit rotations cannot contradict a pair of names.
+
+Snapshot v3 serializes the name in the scenegraph and as the USD root attribute
+`auki:coordinateConvention`. Update producers/consumers of the snapshot datatype
+together; v2 consumers cannot validate the newly annotated canonical USD. Existing
+unnamed JSON/USDA data is still structurally readable without inventing a name.
+No backend or stable-core contract changes. Map catalogs include the declared
+name; alignment remains potential until conventions (including named metadata)
+are compatible or an explicit converted map is supplied.
+
+Run the complete example or select B:
+
+```sh
+cargo run --locked -p auki-scenegraph --no-default-features --example duplicate_qr_map > /tmp/ros-map.usda
+cargo run --locked -p auki-scenegraph --no-default-features --example duplicate_qr_map -- --only-b > /tmp/ros-part.usda
 ```

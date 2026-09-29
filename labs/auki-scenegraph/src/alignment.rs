@@ -281,6 +281,7 @@ impl MapAlignmentChecker {
                 if af.up_axis != bf.up_axis
                     || af.handedness != bf.handedness
                     || af.meters_per_unit != bf.meters_per_unit
+                    || af.convention != bf.convention
                 {
                     continue;
                 }

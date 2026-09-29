@@ -30,6 +30,38 @@ pub struct MapConventionConversion {
 }
 
 impl MapConventionConversion {
+    /// Derive a conversion from enumerated conventions recorded on both frames.
+    /// No convention is inferred for legacy frames that only declare an up axis.
+    pub fn between_named_frames(source: MapFrame, target: MapFrame) -> Result<Self, SceneError> {
+        source.validate()?;
+        target.validate()?;
+        let from = source.convention.ok_or(SceneError::Invalid(
+            "source frame has no named convention; supply an explicit declaration or conversion",
+        ))?;
+        let to = target
+            .convention
+            .ok_or(SceneError::Invalid("target frame has no named convention"))?;
+        let axes = auki_geometry::axis_convention_matrix(&from.axes(), &to.axes())
+            .map_err(geometry_error)?;
+        let matrix = [
+            [axes[0][0], axes[0][1], axes[0][2], 0.],
+            [axes[1][0], axes[1][1], axes[1][2], 0.],
+            [axes[2][0], axes[2][1], axes[2][2], 0.],
+            [0., 0., 0., 1.],
+        ];
+        let q = auki_geometry::spatial_transform_from_matrix4(matrix)
+            .map_err(geometry_error)?
+            .orientation
+            .expect("matrix decomposition supplies orientation");
+        let rotation = RigidTransform {
+            from_frame_id: source.id.clone(),
+            to_frame_id: target.id.clone(),
+            translation: [0.; 3],
+            rotation_wxyz: [q.w, q.x, q.y, q.z],
+        };
+        Self::new(source, target, rotation)
+    }
+
     /// Derive the axis rotation from complete, caller-supplied registry frame
     /// conventions. IDs, handedness, up axes and units must match each map frame.
     /// Axis declarations specify convention, not alignment between physical origins.
@@ -44,7 +76,9 @@ impl MapConventionConversion {
                 UpAxis::Y => convention.axes.y,
                 UpAxis::Z => convention.axes.z,
             };
-            if frame.id != convention.frame_id
+            if frame.convention.is_some_and(|named| {
+                named.axes() != convention.axes || named.handedness() != convention.handedness
+            }) || frame.id != convention.frame_id
                 || convention.handedness != auki_registry::Handedness::Right
                 || up != auki_registry::AxisDirection::Up
                 || frame.meters_per_unit != auki_geometry::meters_per_unit(convention.units)
@@ -111,6 +145,19 @@ impl MapConventionConversion {
         }
         let rotation = numeric(&axis_rotation);
         let matrix = spatial_transform_to_matrix4(&rotation).map_err(geometry_error)?;
+        if let (Some(from), Some(to)) = (source.convention, target.convention) {
+            let expected = auki_geometry::axis_convention_matrix(&from.axes(), &to.axes())
+                .map_err(geometry_error)?;
+            for i in 0..3 {
+                for j in 0..3 {
+                    if (matrix[i][j] - expected[i][j]).abs() > 1e-9 {
+                        return Err(SceneError::Invalid(
+                            "axis rotation disagrees with named conventions",
+                        ));
+                    }
+                }
+            }
+        }
         let up_index = |up| match up {
             UpAxis::Y => 1,
             UpAxis::Z => 2,

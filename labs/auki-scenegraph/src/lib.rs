@@ -2,7 +2,10 @@
 //! USD export is a deterministic projection, not a general USD composition engine.
 
 pub mod conversion;
+mod duplicate;
+pub use auki_registry::CoordinateConvention;
 pub use conversion::{FramedConventionMatrix, MapConventionConversion};
+pub use duplicate::MapDuplicateTarget;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -19,7 +22,7 @@ pub mod directory;
 #[cfg(feature = "components")]
 pub mod resolution;
 
-pub const SNAPSHOT_SCHEMA: &str = "auki.scenegraph.qr-snapshot/v2";
+pub const SNAPSHOT_SCHEMA: &str = "auki.scenegraph.qr-snapshot/v3";
 pub const MAX_ANCHORS: usize = 1024;
 pub const MAX_SNAPSHOT_BYTES: usize = 4 * 1024 * 1024;
 
@@ -52,14 +55,44 @@ pub struct MapFrame {
     pub id: String,
     pub up_axis: UpAxis,
     pub meters_per_unit: f64,
+    /// Complete named axes when known. Missing on legacy/custom maps: never infer it from up_axis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub convention: Option<CoordinateConvention>,
     /// Human-readable establishment of the origin and horizontal heading; not an alignment proof.
     pub origin_description: String,
 }
 
 impl MapFrame {
+    /// Explicit named axes; currently only right-handed positive-Y/Z-up map conventions are representable.
+    pub fn in_convention(
+        id: impl Into<String>,
+        origin_description: impl Into<String>,
+        convention: CoordinateConvention,
+        meters_per_unit: f64,
+    ) -> Result<Self, SceneError> {
+        let up_axis = named_map_up(convention)?;
+        let frame = Self {
+            id: id.into(),
+            origin_description: origin_description.into(),
+            handedness: Handedness::Right,
+            up_axis,
+            meters_per_unit,
+            convention: Some(convention),
+        };
+        frame.validate()?;
+        Ok(frame)
+    }
+
     pub fn validate(&self) -> Result<(), SceneError> {
         text(&self.id, 256)?;
         text(&self.origin_description, 4096)?;
+        if let Some(convention) = self.convention
+            && named_map_up(convention)? != self.up_axis
+        {
+            return Err(SceneError::Invalid(
+                "named convention disagrees with map up axis",
+            ));
+        }
         if !self.meters_per_unit.is_finite() || self.meters_per_unit <= 0.0 {
             return Err(SceneError::Invalid(
                 "meters_per_unit must be positive and finite",
@@ -75,8 +108,28 @@ impl MapFrame {
             id: id.into(),
             up_axis: UpAxis::Z,
             meters_per_unit: 1.0,
+            convention: None,
             origin_description: origin_description.into(),
         }
+    }
+}
+
+fn named_map_up(convention: CoordinateConvention) -> Result<UpAxis, SceneError> {
+    use auki_registry::AxisDirection::Up;
+    if convention.handedness() != auki_registry::Handedness::Right {
+        return Err(SceneError::Invalid(
+            "left-handed map conventions require reflection-capable poses",
+        ));
+    }
+    let axes = convention.axes();
+    if axes.y == Up {
+        Ok(UpAxis::Y)
+    } else if axes.z == Up {
+        Ok(UpAxis::Z)
+    } else {
+        Err(SceneError::Invalid(
+            "map convention requires a positive Y or Z up axis",
+        ))
     }
 }
 
@@ -233,6 +286,14 @@ impl Scenegraph {
             q(&self.map.frame.id),
             q(&self.map.frame.origin_description)
         );
+        if let Some(convention) = self.map.frame.convention {
+            writeln!(
+                out,
+                "    custom token auki:coordinateConvention = {}",
+                q(convention.as_str())
+            )
+            .unwrap();
+        }
         if let Some(name) = &self.map.name {
             writeln!(out, "    custom string auki:name = {}", q(name)).unwrap();
         }

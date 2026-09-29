@@ -643,7 +643,7 @@ mod tests {
                 .configured_observable::<f64>(ConfiguredObservableSpec::new(
                     "level",
                     "level-1",
-                    "clock",
+                    fixture_clock("clock"),
                     PayloadContract::Gauge(GaugePayloadContract {
                         datatype: "float64".into(),
                         schema: "test.level/v1".into(),
@@ -705,3 +705,9 @@ mod tests {
         });
     }
 }
+
+#[path = "../../auki-components/tests/support/clock.rs"]
+#[cfg(test)]
+mod clock_fixture;
+#[cfg(test)]
+use clock_fixture::fixture_clock;

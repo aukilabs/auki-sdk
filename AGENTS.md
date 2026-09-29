@@ -28,6 +28,30 @@ and the affected crate or binding README. For identity or session changes, also 
   Changes must not leave background tasks, discovery registrations, or relay
   bookings alive beyond their intended lifecycle.
 
+## Spatial Frame Contracts
+
+- Every published map must declare its reference frame and coordinate convention.
+- Every reported pose or transform must carry explicit source and destination
+  frame references, either on the value or in a mandatory enclosing contract
+  (such as a pose-stream manifest). Never infer endpoints from a field name,
+  Domain membership, peer identity, or a default convention.
+- Validate frame compatibility before composition and before accepting a map
+  anchor. Missing or mismatched frames are errors, not invitations to relabel.
+- Coordinate conventions and physical frame identities are separate. Equal
+  conventions do not establish alignment. Time-varying relationships must be
+  associated with an observation time and clock.
+
+## Clock Contracts
+
+- Every reported timestamp must identify its clock, on the value or through a
+  mandatory enclosing manifest. Never infer a clock from a peer, field name,
+  process default, or numerical timestamp.
+- Component and Product clocks use full registry references (owner, ID, definition
+  hash), with boot/session and epoch retained in the referenced definition.
+- Preserve capture time and clock through processing and forwarding. Publication
+  time is a separate event. Compare clocks by full identity; converting between
+  clocks requires an explicit time transform.
+
 ## Identity & Security Boundaries
 
 - Distinguish local API User login, imported ZITADEL sessions, Auki App credentials,

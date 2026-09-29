@@ -104,13 +104,14 @@ impl QrDetectorComponent {
         product: &RetainedProduct<VideoFrame>,
     ) -> Result<(), QrDetectorError> {
         let camera = typed_camera_contract(product)?;
-        if product.producer.clock_id != self.detections.manifest().clock_id {
+        if product.producer.clock != self.detections.manifest().clock {
             return Err(QrDetectorError::ProductClockMismatch {
-                expected: self.detections.manifest().clock_id.clone(),
-                actual: product.producer.clock_id.clone(),
+                expected: Box::new(self.detections.manifest().clock.clone()),
+                actual: Box::new(product.producer.clock.clone()),
             });
         }
         let input = qr_product_input(
+            product.reference(),
             Arc::clone(&self.detector),
             self.detections.clone(),
             camera,
@@ -278,9 +279,20 @@ pub struct QrDetection {
     pub scanner_stage: u8,
 }
 
+/// Exact camera observation processed by a Component detector. Absent for legacy
+/// Sensor Log and standalone image APIs, which have no camera Product identity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QrSourceFrame {
+    pub camera_product: ProductReference,
+    pub sequence: u64,
+    pub timestamp_ns: u64,
+}
+
 /// All QR detections produced from one source frame.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QrDetections {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_frame: Option<QrSourceFrame>,
     /// Version of this payload schema.
     pub schema_version: u32,
     /// Decoded QR codes, in QR Lab acceptance order.
@@ -437,7 +449,7 @@ impl QrDetector {
         let mut output_spec = ConfiguredObservableSpec::new(
             "detections",
             output_id,
-            product.producer.clock_id.clone(),
+            product.producer.clock.clone(),
             PayloadContract::Structured(StructuredPayloadContract {
                 modality: "detection".into(),
                 datatype: QrDetections::DATATYPE.into(),
@@ -451,6 +463,7 @@ impl QrDetector {
         let detector = Arc::new(Mutex::new(self));
         let errors = Arc::new(Mutex::new(Vec::new()));
         let input_port = qr_product_input(
+            product.reference(),
             Arc::clone(&detector),
             detections.clone(),
             camera,
@@ -488,11 +501,13 @@ impl QrDetector {
                         })?;
                         let camera = typed_camera_contract(&product)
                             .map_err(|error| InvocationError::Rejected(error.to_string()))?;
-                        if product.producer.clock_id != operation_detections.manifest().clock_id {
+                        if product.producer.clock != operation_detections.manifest().clock {
                             return Err(InvocationError::Rejected(
                                 QrDetectorError::ProductClockMismatch {
-                                    expected: operation_detections.manifest().clock_id.clone(),
-                                    actual: product.producer.clock_id.clone(),
+                                    expected: Box::new(
+                                        operation_detections.manifest().clock.clone(),
+                                    ),
+                                    actual: Box::new(product.producer.clock.clone()),
                                 }
                                 .to_string(),
                             ));
@@ -502,6 +517,7 @@ impl QrDetector {
                         let changed = previous_product != instruction.product;
                         if changed {
                             let replacement_port = qr_product_input(
+                                product.reference(),
                                 Arc::clone(&operation_detector),
                                 operation_detections.clone(),
                                 camera,
@@ -744,6 +760,7 @@ fn typed_camera_contract(
 }
 
 fn qr_product_input(
+    camera_product: ProductReference,
     detector: Arc<Mutex<QrDetector>>,
     detections: ConfiguredObservable<QrDetections>,
     camera: CameraPayloadContract,
@@ -782,10 +799,17 @@ fn qr_product_input(
             }
         };
         match result {
-            Ok(result) => detections
-                .publish(observation.timestamp_ns, Arc::new(result))
-                .map(|_| ())
-                .map_err(|error| error.to_string()),
+            Ok(mut result) => {
+                result.source_frame = Some(QrSourceFrame {
+                    camera_product: camera_product.clone(),
+                    sequence: observation.sequence,
+                    timestamp_ns: observation.timestamp_ns,
+                });
+                detections
+                    .publish(observation.timestamp_ns, Arc::new(result))
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            }
             Err(error) => {
                 let error = error.to_string();
                 errors.lock().unwrap().push(error.clone());
@@ -848,6 +872,7 @@ fn pixel_corner([x, y]: [f64; 2]) -> PixelCorner {
 
 fn qr_detections(result: qr_lab::RobustDetections) -> QrDetections {
     QrDetections {
+        source_frame: None,
         schema_version: QR_DETECTION_SCHEMA_VERSION,
         codes: result
             .codes
@@ -904,8 +929,11 @@ pub enum QrDetectorError {
         actual_encoding: String,
     },
     /// A replacement Product uses a different clock from the detector Output.
-    #[error("replacement camera Product clock is {actual}, expected {expected}")]
-    ProductClockMismatch { expected: String, actual: String },
+    #[error("replacement camera Product clock is {actual:?}, expected {expected:?}")]
+    ProductClockMismatch {
+        expected: Box<auki_components::ClockReference>,
+        actual: Box<auki_components::ClockReference>,
+    },
     /// The camera registry does not expose a supported raw or JPEG image.
     #[error(
         "QR detector requires raw/luma8, raw/rgb8, raw/YUV_NV12, or jpeg camera frames, got {image_encoding}/{pixel_format}"
@@ -996,8 +1024,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn old_json_without_product_provenance_still_decodes() {
+        let decoded = QrDetections::decode(br#"{"schema_version":1,"codes":[]}"#).unwrap();
+        assert!(decoded.source_frame.is_none());
+        assert!(
+            !String::from_utf8(decoded.encode().unwrap())
+                .unwrap()
+                .contains("source_frame")
+        );
+    }
+
     fn sample() -> QrDetections {
         QrDetections {
+            source_frame: None,
             schema_version: QR_DETECTION_SCHEMA_VERSION,
             codes: vec![QrDetection {
                 payload: "auki://portal/01HXYZ".into(),
@@ -1095,7 +1135,7 @@ mod tests {
             .configured_observable::<VideoFrame>(ConfiguredObservableSpec::new(
                 "frames",
                 "webcam-jpeg-output-1",
-                "monotonic-ns",
+                fixture_clock("monotonic-ns"),
                 typed_jpeg_payload(width as u32, height as u32, 10),
             ))
             .unwrap();
@@ -1147,6 +1187,33 @@ mod tests {
             .latest_existing()
             .unwrap()
             .unwrap();
+        assert_eq!(
+            first_detection
+                .payload
+                .source_frame
+                .as_ref()
+                .unwrap()
+                .camera_product,
+            first_capture.product().reference()
+        );
+        assert_eq!(
+            first_detection
+                .payload
+                .source_frame
+                .as_ref()
+                .unwrap()
+                .sequence,
+            0
+        );
+        assert_eq!(
+            first_detection
+                .payload
+                .source_frame
+                .as_ref()
+                .unwrap()
+                .timestamp_ns,
+            1
+        );
         assert!(
             first_detection
                 .payload
@@ -1172,7 +1239,7 @@ mod tests {
                 ConfiguredObservableSpec::new(
                     "frames",
                     "webcam-jpeg-output-2",
-                    "monotonic-ns",
+                    fixture_clock("monotonic-ns"),
                     typed_jpeg_payload(width as u32, height as u32, 5),
                 ),
                 2,
@@ -1218,6 +1285,15 @@ mod tests {
             .latest_existing()
             .unwrap()
             .unwrap();
+        assert_eq!(
+            second_detection
+                .payload
+                .source_frame
+                .as_ref()
+                .unwrap()
+                .camera_product,
+            second_capture.product().reference()
+        );
         assert!(
             second_detection
                 .payload
@@ -1263,7 +1339,7 @@ mod tests {
             .configured_observable::<VideoFrame>(ConfiguredObservableSpec::new(
                 "frames",
                 "webcam-jpeg-output-1",
-                "monotonic-ns",
+                fixture_clock("monotonic-ns"),
                 typed_jpeg_payload(64, 64, 10),
             ))
             .unwrap();
@@ -1282,7 +1358,7 @@ mod tests {
                 ConfiguredObservableSpec::new(
                     "frames",
                     "webcam-jpeg-output-2",
-                    "monotonic-ns",
+                    fixture_clock("monotonic-ns"),
                     typed_jpeg_payload(64, 64, 5),
                 ),
                 2,
@@ -1680,3 +1756,9 @@ mod tests {
         ));
     }
 }
+
+#[path = "../../auki-components/tests/support/clock.rs"]
+#[cfg(test)]
+mod clock_fixture;
+#[cfg(test)]
+use clock_fixture::fixture_clock;

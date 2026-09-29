@@ -140,7 +140,7 @@ async fn catalog_products_and_operables_cross_two_authenticated_peers() {
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-1",
-            format!("{}.clock", server_peer.peer_id()),
+            fixture_clock(&format!("{}.clock", server_peer.peer_id())),
             gauge_payload(),
         ))
         .unwrap();
@@ -157,7 +157,7 @@ async fn catalog_products_and_operables_cross_two_authenticated_peers() {
         .configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "private-level-1",
-            format!("{}.clock", server_peer.peer_id()),
+            fixture_clock(&format!("{}.clock", server_peer.peer_id())),
             gauge_payload(),
         ))
         .unwrap();
@@ -476,7 +476,7 @@ impl TwoPeerFixture {
             .configured_observable::<f64>(ConfiguredObservableSpec::new(
                 "level",
                 "level-1",
-                "fixture.clock",
+                fixture_clock("fixture.clock"),
                 gauge_payload(),
             ))
             .unwrap();
@@ -936,7 +936,12 @@ async fn subscription_pushes_new_data_after_cancelled_wait_and_ends_without_migr
         .sensor
         .replace_configured_observable(
             &fixture.output,
-            ConfiguredObservableSpec::new("level", "level-2", "fixture.clock", gauge_payload()),
+            ConfiguredObservableSpec::new(
+                "level",
+                "level-2",
+                fixture_clock("fixture.clock"),
+                gauge_payload(),
+            ),
             30,
         )
         .unwrap();
@@ -1422,7 +1427,12 @@ async fn reconfiguration_terminates_remote_following() {
         .sensor
         .replace_configured_observable(
             &fixture.output,
-            ConfiguredObservableSpec::new("level", "level-2", "fixture.clock", gauge_payload()),
+            ConfiguredObservableSpec::new(
+                "level",
+                "level-2",
+                fixture_clock("fixture.clock"),
+                gauge_payload(),
+            ),
             20,
         )
         .unwrap();
@@ -1707,3 +1717,7 @@ async fn latest_sync_reports_skipped_history_then_accepts_the_terminal_notice_on
     assert_eq!(mirror.next_sequence(), 4);
     fixture.shutdown().await;
 }
+
+#[path = "../../auki-components/tests/support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

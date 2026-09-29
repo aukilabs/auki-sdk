@@ -163,6 +163,7 @@ pub struct VolumePeer {
     _microphone: Component,
     _meter: Component,
     pub runtime: ComponentRuntime,
+    pub clock_definition: auki_components::clock::ClockRegistryEntry,
     audio: ConfiguredObservable<AudioBlock>,
     pub audio_buffer: BufferProductCapture<AudioBlock>,
     pub level_buffer: BufferProductCapture<f64>,
@@ -187,7 +188,24 @@ impl VolumePeer {
             "microphone"
         };
         // A source-relative sample timeline, not UTC or another peer's clock.
-        let clock = format!("{peer_id}.audio-sample-clock");
+        let clock_definition = auki_components::clock::ClockRegistryEntry {
+            peer_id: peer_id.into(),
+            session_id: uuid::Uuid::new_v4().to_string(),
+            clock_id: "audio-sample-clock".into(),
+            body: auki_components::clock::ClockBody::MonotonicClock(
+                auki_components::clock::ClockMeta {
+                    unit: "nanoseconds".into(),
+                    monotonic: true,
+                    epoch: None,
+                    scope: auki_components::clock::Scope::DeviceLocal,
+                },
+            ),
+        };
+        let clock = auki_components::ClockReference {
+            peer_id: peer_id.into(),
+            id: clock_definition.clock_id.clone(),
+            hash: clock_definition.hash(),
+        };
         let microphone =
             runtime.component(ComponentSpec::new(source_name).observable(observable(
                 "audio",
@@ -197,7 +215,7 @@ impl VolumePeer {
         let audio = microphone.configured_observable(ConfiguredObservableSpec::new(
             "audio",
             "audio-1",
-            &clock,
+            clock.clone(),
             PayloadContract::Audio(AudioPayloadContract {
                 datatype: AudioBlock::DATATYPE.into(),
                 schema: AUDIO_SCHEMA.into(),
@@ -237,7 +255,7 @@ impl VolumePeer {
         let level = meter.configured_observable::<f64>(ConfiguredObservableSpec::new(
             "level",
             "level-1",
-            &clock,
+            clock.clone(),
             PayloadContract::Gauge(GaugePayloadContract {
                 datatype: "float64".into(),
                 schema: LEVEL_SCHEMA.into(),
@@ -291,6 +309,7 @@ impl VolumePeer {
             _microphone: microphone,
             _meter: meter,
             runtime,
+            clock_definition,
             audio,
             audio_buffer,
             level_buffer,

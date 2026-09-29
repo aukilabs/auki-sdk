@@ -25,3 +25,14 @@ This crate still includes the native recording integration through
 runtime features, so the complete QR crate does not currently compile for
 `wasm32-unknown-unknown`. The separate Component runtime and protocol adapter
 are checked for that target; this is not a browser-port of the QR integration.
+
+Component detections carry optional `source_frame` provenance: the exact camera
+Product, original frame sequence and source timestamp, including after input
+replacement. Legacy/standalone paths leave it absent. This is additive in v1 JSON;
+Rust `QrDetections` literals must now set the field. See the experimental
+[QR localizer](../auki-qr-localizer/README.md) for calibrated pose estimation.
+
+For Auki Portal detection with local-map size lookup and asynchronous database
+enrichment inside one addressable Component, see
+[Portal Detector](../auki-portal-detector/README.md). The generic detector remains
+independent of these Portal-specific responsibilities.

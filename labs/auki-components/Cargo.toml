@@ -10,6 +10,7 @@ description = "Typed, network-independent component dataflow primitives for the 
 readme = "README.md"
 
 [dependencies]
+auki-registry = { path = "../auki-registry" }
 auki-hash = { path = "../auki-hash" }
 auki-jcs = { path = "../auki-jcs" }
 crossbeam-channel = "0.5"

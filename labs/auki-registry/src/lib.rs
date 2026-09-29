@@ -820,7 +820,70 @@ pub enum LengthUnit {
     Centimeters,
 }
 
+/// Named axis conventions shared by geometry, scenegraphs and consumers.
+/// Units are declared separately; registry preset builders default to meters.
+/// A convention specifies axes, not physical alignment or a frame identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoordinateConvention {
+    /// Right-handed: X right, Y up, Z backward.
+    #[serde(rename = "opengl")]
+    OpenGl,
+    /// ROS REP-103 body axes: X forward, Y left, Z up.
+    Ros2Body,
+    /// ROS REP-103 optical axes: X right, Y down, Z forward.
+    Ros2Optical,
+    /// Left-handed: X right, Y up, Z forward.
+    Unity,
+    /// Explicit right-handed Z-up axes: X right, Y forward, Z up.
+    /// This is one possible USD-compatible convention, not a universal USD heading.
+    ZUpRightForward,
+}
+impl CoordinateConvention {
+    pub fn axes(self) -> AxisConvention {
+        use AxisDirection::*;
+        let (x, y, z) = match self {
+            Self::OpenGl => (Right, Up, Backward),
+            Self::Ros2Body => (Forward, Left, Up),
+            Self::Ros2Optical => (Right, Down, Forward),
+            Self::Unity => (Right, Up, Forward),
+            Self::ZUpRightForward => (Right, Forward, Up),
+        };
+        AxisConvention { x, y, z }
+    }
+    pub fn handedness(self) -> Handedness {
+        match self {
+            Self::Unity => Handedness::Left,
+            _ => Handedness::Right,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenGl => "opengl",
+            Self::Ros2Body => "ros2_body",
+            Self::Ros2Optical => "ros2_optical",
+            Self::Unity => "unity",
+            Self::ZUpRightForward => "z_up_right_forward",
+        }
+    }
+}
+
 impl FrameRegistryEntry {
+    /// Build a full, explicit registry declaration; named presets use meters.
+    pub fn in_convention(
+        peer_id: impl Into<String>,
+        frame_id: impl Into<String>,
+        convention: CoordinateConvention,
+    ) -> Self {
+        Self {
+            peer_id: peer_id.into(),
+            frame_id: frame_id.into(),
+            handedness: convention.handedness(),
+            axes: convention.axes(),
+            units: LengthUnit::Meters,
+        }
+    }
+
     pub fn canonical_bytes(&self) -> Vec<u8> {
         canonicalize(self)
     }
@@ -865,34 +928,14 @@ impl FrameRegistryEntry {
     /// Used for robot bases (`base_link`), sensor bodies, and any frame
     /// with a clear "forward direction of motion."
     pub fn ros_body(peer_id: impl Into<String>, frame_id: impl Into<String>) -> Self {
-        Self {
-            peer_id: peer_id.into(),
-            frame_id: frame_id.into(),
-            handedness: Handedness::Right,
-            axes: AxisConvention {
-                x: AxisDirection::Forward,
-                y: AxisDirection::Left,
-                z: AxisDirection::Up,
-            },
-            units: LengthUnit::Meters,
-        }
+        Self::in_convention(peer_id, frame_id, CoordinateConvention::Ros2Body)
     }
 
     /// REP-103 camera optical frame: right-handed, X right, Y down,
     /// Z forward, meters. Used for camera optical centers; pixel-space
     /// reasoning lines up with this directly.
     pub fn ros_optical(peer_id: impl Into<String>, frame_id: impl Into<String>) -> Self {
-        Self {
-            peer_id: peer_id.into(),
-            frame_id: frame_id.into(),
-            handedness: Handedness::Right,
-            axes: AxisConvention {
-                x: AxisDirection::Right,
-                y: AxisDirection::Down,
-                z: AxisDirection::Forward,
-            },
-            units: LengthUnit::Meters,
-        }
+        Self::in_convention(peer_id, frame_id, CoordinateConvention::Ros2Optical)
     }
 
     /// OpenGL / Three.js: right-handed, X right, Y up, Z backward, meters.
@@ -900,34 +943,14 @@ impl FrameRegistryEntry {
     /// "Z backward" because the camera in OpenGL convention looks down
     /// the negative-Z axis; +Z points away from the scene.
     pub fn opengl(peer_id: impl Into<String>, frame_id: impl Into<String>) -> Self {
-        Self {
-            peer_id: peer_id.into(),
-            frame_id: frame_id.into(),
-            handedness: Handedness::Right,
-            axes: AxisConvention {
-                x: AxisDirection::Right,
-                y: AxisDirection::Up,
-                z: AxisDirection::Backward,
-            },
-            units: LengthUnit::Meters,
-        }
+        Self::in_convention(peer_id, frame_id, CoordinateConvention::OpenGl)
     }
 
     /// Unity: left-handed, X right, Y up, Z forward, meters. Some
     /// pipelines still target Unity; included so producers in that
     /// ecosystem can declare without spelling fields out by hand.
     pub fn unity(peer_id: impl Into<String>, frame_id: impl Into<String>) -> Self {
-        Self {
-            peer_id: peer_id.into(),
-            frame_id: frame_id.into(),
-            handedness: Handedness::Left,
-            axes: AxisConvention {
-                x: AxisDirection::Right,
-                y: AxisDirection::Up,
-                z: AxisDirection::Forward,
-            },
-            units: LengthUnit::Meters,
-        }
+        Self::in_convention(peer_id, frame_id, CoordinateConvention::Unity)
     }
 }
 

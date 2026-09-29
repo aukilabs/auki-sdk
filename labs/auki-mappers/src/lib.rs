@@ -2,6 +2,7 @@
 //! produce MapUpdates; they deliberately have no robot or ROS dependency.
 
 mod camera;
+#[cfg(feature = "runtime")]
 mod persistence;
 
 use auki_datatypes::map::{ColorEvidenceDelta, MapUpdate, VoxelChunkUpdate, VoxelDelta};
@@ -15,20 +16,25 @@ use std::collections::BTreeMap;
 /// coordinate from turning into an effectively unbounded loop.
 const MAX_RAY_STEPS_PER_POINT: usize = 1_000_000;
 
+#[cfg(feature = "runtime")]
 mod discovery;
 mod frame_alias;
+#[cfg(feature = "runtime")]
 mod runner;
 
 pub use camera::{CameraCalibrationError, effective_camera_calibration};
+#[cfg(feature = "runtime")]
 pub use discovery::{
     VoxelMapperInputBindingError, VoxelMapperServiceConfig, VoxelMapperServiceError,
     VoxelMapperSourceQuery, VoxelMapperSourceSelectionError, VoxelMapperSources,
     run_sdk_voxel_mapper,
 };
+#[cfg(feature = "runtime")]
 pub use persistence::VoxelPersistenceConfig;
 
 pub use frame_alias::{FrameAliasError, ValidatedFrameAlias, VoxelMapperMapFrameBinding};
 
+#[cfg(feature = "runtime")]
 pub use runner::{
     LocalMapLogSink, MapSinkError, MapUpdateSink, MapperInput, MapperInputBindingError,
     MapperInputError, MapperStream, PoseAlignmentConfig, TimedSdkSample, VoxelMapperRunError,
@@ -145,28 +151,62 @@ impl Voxelizer {
                 return Err(VoxelizerError::NonFinitePoint);
             }
             let end = transform.transform_point(position);
-            let dx = end.x - origin.x;
-            let dy = end.y - origin.y;
-            let dz = end.z - origin.z;
-            let distance = dx.hypot(dy).hypot(dz);
-            let ray_steps = (distance / self.voxel_size_m).floor();
-            if !ray_steps.is_finite() || ray_steps > MAX_RAY_STEPS_PER_POINT as f64 {
+            // Walk crossed grid cells, rather than sampling at approximate metric
+            // intervals (which can skip cells and can clear the hit's own cell).
+            let start = [origin.x, origin.y, origin.z];
+            let finish = [end.x, end.y, end.z];
+            let mut cell = [
+                self.grid_index(start[0])?,
+                self.grid_index(start[1])?,
+                self.grid_index(start[2])?,
+            ];
+            let target = [
+                self.grid_index(finish[0])?,
+                self.grid_index(finish[1])?,
+                self.grid_index(finish[2])?,
+            ];
+            let maximum_steps: u64 = (0..3)
+                .map(|i| (i64::from(target[i]) - i64::from(cell[i])).unsigned_abs())
+                .sum();
+            if maximum_steps > MAX_RAY_STEPS_PER_POINT as u64 {
                 return Err(VoxelizerError::RayTooLong {
                     maximum: MAX_RAY_STEPS_PER_POINT,
                 });
             }
-            let steps = ray_steps as usize;
-            for step in 0..steps {
-                let f = step as f64 / steps.max(1) as f64;
+            let mut step = [0i32; 3];
+            let mut next = [f64::INFINITY; 3];
+            let mut delta = [f64::INFINITY; 3];
+            for i in 0..3 {
+                let direction = finish[i] - start[i];
+                if direction != 0. && cell[i] != target[i] {
+                    step[i] = if direction > 0. { 1 } else { -1 };
+                    let boundary = (f64::from(cell[i]) + if step[i] > 0 { 1. } else { 0. })
+                        * self.voxel_size_m;
+                    next[i] = (boundary - start[i]) / direction;
+                    delta[i] = self.voxel_size_m / direction.abs();
+                }
+            }
+            while cell != target {
                 all.push((
                     Vec3 {
-                        x: origin.x + dx * f,
-                        y: origin.y + dy * f,
-                        z: origin.z + dz * f,
+                        x: (f64::from(cell[0]) + 0.5) * self.voxel_size_m,
+                        y: (f64::from(cell[1]) + 0.5) * self.voxel_size_m,
+                        z: (f64::from(cell[2]) + 0.5) * self.voxel_size_m,
                     },
                     free_delta,
                     None,
                 ));
+                // Advance all axes at an exact edge/corner crossing together.
+                let crossing = next.iter().copied().fold(f64::INFINITY, f64::min);
+                for i in 0..3 {
+                    if next[i] <= crossing && cell[i] != target[i] {
+                        cell[i] += step[i];
+                        next[i] += delta[i];
+                    }
+                    if cell[i] == target[i] {
+                        next[i] = f64::INFINITY;
+                    }
+                }
             }
             all.push((end, occupied_delta, linear_rgb));
         }
@@ -748,5 +788,109 @@ mod tests {
                 maximum: MAX_RAY_STEPS_PER_POINT
             })
         );
+    }
+    #[test]
+    fn diagonal_ray_visits_crossed_cells_once_and_never_clears_the_endpoint() {
+        let mut pose = identity_pose();
+        pose.translation = Some(Vec3 {
+            x: 0.9,
+            y: 0.1,
+            z: 0.1,
+        });
+        let update = Voxelizer::new(1., 16)
+            .unwrap()
+            .map_sensor_rays(
+                [Vec3 {
+                    x: 1.2,
+                    y: 1.8,
+                    z: 0.,
+                }],
+                &pose,
+                -1.,
+                1.,
+            )
+            .unwrap();
+        let cells: Vec<_> = update
+            .voxel_chunks
+            .iter()
+            .flat_map(|c| c.voxels.iter().map(|v| (v.x, v.y, v.z, v.occupancy_delta)))
+            .collect();
+        assert_eq!(
+            cells,
+            vec![
+                (0, 0, 0, -1.),
+                (1, 0, 0, -1.),
+                (1, 1, 0, -1.),
+                (2, 1, 0, 1.)
+            ]
+        );
+        let same = Voxelizer::new(1., 16)
+            .unwrap()
+            .map_sensor_rays(
+                [Vec3 {
+                    x: 0.01,
+                    y: 0.01,
+                    z: 0.,
+                }],
+                &pose,
+                -1.,
+                1.,
+            )
+            .unwrap();
+        assert_eq!(same.voxel_chunks[0].voxels.len(), 1);
+        assert_eq!(same.voxel_chunks[0].voxels[0].occupancy_delta, 1.);
+    }
+    #[test]
+    fn ray_traversal_handles_negative_cells_and_exact_corner_crossings() {
+        let mut pose = identity_pose();
+        pose.translation = Some(Vec3 {
+            x: 0.1,
+            y: 0.1,
+            z: 0.1,
+        });
+        let voxelizer = Voxelizer::new(1., 16).unwrap();
+        let negative = voxelizer
+            .map_sensor_rays(
+                [Vec3 {
+                    x: -2.2,
+                    y: 0.,
+                    z: 0.,
+                }],
+                &pose,
+                -1.,
+                1.,
+            )
+            .unwrap();
+        let cells: BTreeMap<_, _> = negative
+            .voxel_chunks
+            .iter()
+            .flat_map(|c| {
+                c.voxels
+                    .iter()
+                    .map(move |v| (c.chunk_x * 16 + v.x as i32, v.occupancy_delta))
+            })
+            .collect();
+        assert_eq!(
+            cells,
+            BTreeMap::from([(-3, 1.), (-2, -1.), (-1, -1.), (0, -1.)])
+        );
+        let diagonal = voxelizer
+            .map_sensor_rays(
+                [Vec3 {
+                    x: 2.,
+                    y: 2.,
+                    z: 2.,
+                }],
+                &pose,
+                -1.,
+                1.,
+            )
+            .unwrap();
+        let cells: Vec<_> = diagonal
+            .voxel_chunks
+            .iter()
+            .flat_map(|c| c.voxels.iter().map(|v| (v.x, v.y, v.z, v.occupancy_delta)))
+            .collect();
+        assert_eq!(cells, vec![(0, 0, 0, -1.), (1, 1, 1, -1.), (2, 2, 2, 1.)]);
     }
 }

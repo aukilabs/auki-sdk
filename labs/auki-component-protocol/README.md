@@ -6,8 +6,8 @@ Standalone, portable application protocols that expose the network-independent
 The protocol family is intentionally separate from the manager-era
 `auki-protocols` crate:
 
-- `/aukilabs/components/catalog/1.0.0`
-- `/aukilabs/components/observations/2.0.0`
+- `/aukilabs/components/catalog/2.0.0`
+- `/aukilabs/components/observations/3.0.0`
 - `/aukilabs/components/observation-stream/1.0.0`
 - `/aukilabs/components/operations/1.0.0`
 
@@ -91,8 +91,8 @@ Reconfiguration ends it after retained data drains, never migrating it.
 Transport failure or unexport terminates it; reconnect/rebind is explicit.
 An idle producer needs no heartbeat or application-level timeout.
 
-Finite observations v2 and the other protocols are unchanged; both peers need
-the new stream ID for subscriptions. No fallback to polling is automatic.
+Catalog v2 and finite observations v3 carry full clock references; both peers
+need these versions and the stream ID for subscriptions. No fallback to polling is automatic.
 The source is still a Buffer, not an unretained Component output. See
 [the protocol guide](../../docs/reference/component-protocols.md) for the full
 lifecycle, resource bounds, host loop, and remaining media limitations.
@@ -134,3 +134,10 @@ These are local native tests, not live DDS/DMS relay or browser acceptance.
 An idle subscription has no heartbeat: a silent partition is not guaranteed
 to fail promptly. See [network lifetime](../../docs/reference/component-protocols.md#network-lifetime-is-not-producer-lifetime)
 for host deadlines and the distinction between retaining and processing data.
+
+Catalog Product entries may carry optional, schema-tagged `metadata` tied to an
+original observation sequence. This optional Catalog field passes through only
+for exported Products, follows Catalog revision invalidation, and does not alter
+Product Manifest hashes. Older readers may ignore it; missing metadata means
+unknown discovery information. The aggregate 1 MiB Catalog bound still applies;
+responses are never made to fit by truncating application membership lists.

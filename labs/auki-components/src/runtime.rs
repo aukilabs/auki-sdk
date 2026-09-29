@@ -85,7 +85,7 @@ impl ComponentSpec {
 pub struct ConfiguredObservableSpec {
     pub interface: String,
     pub output_id: String,
-    pub clock_id: String,
+    pub clock: crate::ClockReference,
     pub spatial_frame_id: Option<String>,
     pub payload: PayloadContract,
 }
@@ -94,13 +94,13 @@ impl ConfiguredObservableSpec {
     pub fn new(
         interface: impl Into<String>,
         output_id: impl Into<String>,
-        clock_id: impl Into<String>,
+        clock: crate::ClockReference,
         payload: PayloadContract,
     ) -> Self {
         Self {
             interface: interface.into(),
             output_id: output_id.into(),
-            clock_id: clock_id.into(),
+            clock,
             spatial_frame_id: None,
             payload,
         }
@@ -115,6 +115,7 @@ impl ConfiguredObservableSpec {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ComponentBuildError {
     EmptyComponentId,
+    InvalidClock(String),
     DuplicateInterface(String),
     LocalInterfaceInClusterManifest(String),
     UnknownObservable(String),
@@ -180,6 +181,7 @@ pub enum ComponentBuildError {
 impl fmt::Display for ComponentBuildError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidClock(reason) => write!(formatter, "invalid clock: {reason}"),
             Self::EmptyComponentId => formatter.write_str("Component ID must not be empty"),
             Self::DuplicateInterface(name) => write!(formatter, "duplicate interface {name}"),
             Self::LocalInterfaceInClusterManifest(name) => write!(
@@ -492,6 +494,10 @@ impl Component {
             .iter()
             .find(|contract| contract.name == name)
             .ok_or_else(|| ComponentBuildError::UnknownProductInput(name.to_owned()))?;
+        product
+            .producer
+            .validate()
+            .map_err(CatalogError::InvalidOutput)?;
         if product.producer.reference() != product.manifest.producer {
             return Err(ComponentBuildError::ProductProducerMismatch(
                 product.manifest.product_id.clone(),
@@ -592,6 +598,10 @@ impl Component {
                 product.manifest.product_id.clone(),
             ));
         }
+        product
+            .producer
+            .validate()
+            .map_err(CatalogError::InvalidOutput)?;
         if product.producer.reference() != product.manifest.producer {
             return Err(ComponentBuildError::ProductProducerMismatch(
                 product.manifest.product_id.clone(),
@@ -711,14 +721,15 @@ impl Component {
             });
         }
 
+        crate::clock::validate_clock(&spec.clock).map_err(ComponentBuildError::InvalidClock)?;
         let manifest = OutputManifest {
-            schema: "auki.component-output-manifest/v1".to_owned(),
+            schema: "auki.component-output-manifest/v2".to_owned(),
             peer_id: self.inner.reference.peer_id.clone(),
             component_id: self.inner.reference.component_id.clone(),
             component_manifest_hash: self.inner.reference.manifest_hash.clone(),
             slot: contract.name.clone(),
             output_id: spec.output_id,
-            clock_id: spec.clock_id,
+            clock: spec.clock,
             spatial_frame_id: spec.spatial_frame_id,
             payload: spec.payload,
         };
@@ -825,14 +836,15 @@ impl Component {
             ));
         }
 
+        crate::clock::validate_clock(&spec.clock).map_err(ComponentBuildError::InvalidClock)?;
         let manifest = OutputManifest {
-            schema: "auki.component-output-manifest/v1".to_owned(),
+            schema: "auki.component-output-manifest/v2".to_owned(),
             peer_id: self.inner.reference.peer_id.clone(),
             component_id: self.inner.reference.component_id.clone(),
             component_manifest_hash: self.inner.reference.manifest_hash.clone(),
             slot: contract.name.clone(),
             output_id: spec.output_id,
-            clock_id: spec.clock_id,
+            clock: spec.clock,
             spatial_frame_id: spec.spatial_frame_id,
             payload: spec.payload,
         };

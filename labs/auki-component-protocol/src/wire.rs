@@ -8,9 +8,9 @@ use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-pub const CATALOG_PROTOCOL_ID: &str = "/aukilabs/components/catalog/1.0.0";
-pub const OBSERVATIONS_PROTOCOL_ID: &str = "/aukilabs/components/observations/2.0.0";
-/// Additive continuing-observation protocol; finite observations v2 is unchanged.
+pub const CATALOG_PROTOCOL_ID: &str = "/aukilabs/components/catalog/2.0.0";
+pub const OBSERVATIONS_PROTOCOL_ID: &str = "/aukilabs/components/observations/3.0.0";
+/// Continuing observations pin Output identities; manifests come from observations v3.
 pub const OBSERVATION_STREAM_PROTOCOL_ID: &str = "/aukilabs/components/observation-stream/1.0.0";
 pub const OPERATIONS_PROTOCOL_ID: &str = "/aukilabs/components/operations/1.0.0";
 
@@ -318,10 +318,10 @@ mod tests {
 
     #[test]
     fn protocol_ids_are_exact_and_independent_of_manager_protocols() {
-        assert_eq!(CATALOG_PROTOCOL_ID, "/aukilabs/components/catalog/1.0.0");
+        assert_eq!(CATALOG_PROTOCOL_ID, "/aukilabs/components/catalog/2.0.0");
         assert_eq!(
             OBSERVATIONS_PROTOCOL_ID,
-            "/aukilabs/components/observations/2.0.0"
+            "/aukilabs/components/observations/3.0.0"
         );
         assert_eq!(
             OBSERVATION_STREAM_PROTOCOL_ID,

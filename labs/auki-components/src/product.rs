@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use crate::ComponentRuntime;
 use crate::buffer::{Buffer, BufferError, BufferLimits, BufferRange};
 use crate::component::{
-    CatalogError, Observation, ObservationAccess, ObservationDelivery, ObservationEnd,
-    ObservationError, ObservationEvent, ObservationHandle, OutputManifest, ProductForm,
-    ProductManifest, ProductReference, ProductState, SerializedInMemoryTransport,
+    CatalogError, CatalogProductMetadata, Observation, ObservationAccess, ObservationDelivery,
+    ObservationEnd, ObservationError, ObservationEvent, ObservationHandle, OutputManifest,
+    ProductForm, ProductManifest, ProductReference, ProductState, SerializedInMemoryTransport,
     observation_input,
 };
 use crate::episode::{Episode, EpisodeError, EpisodeState};
@@ -18,7 +18,7 @@ use crate::runtime::ConfiguredObservable;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TimeRangeRequest {
-    pub clock_id: String,
+    pub clock: crate::ClockReference,
     pub start_ns: u64,
     pub end_ns: u64,
 }
@@ -41,8 +41,14 @@ impl<T> FiniteObservations<T> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductAccessError {
     UnsupportedRequest(ObservationAccess),
-    InvalidTimeRange { start_ns: u64, end_ns: u64 },
-    ClockMismatch { expected: String, requested: String },
+    InvalidTimeRange {
+        start_ns: u64,
+        end_ns: u64,
+    },
+    ClockMismatch {
+        expected: Box<crate::ClockReference>,
+        requested: Box<crate::ClockReference>,
+    },
     Transport(String),
 }
 
@@ -63,7 +69,7 @@ impl fmt::Display for ProductAccessError {
                 requested,
             } => write!(
                 formatter,
-                "time range uses clock {requested}, but Product timestamps use {expected}"
+                "time range uses clock {requested:?}, but Product timestamps use {expected:?}"
             ),
             Self::Transport(error) => write!(formatter, "transport serialization failed: {error}"),
         }
@@ -122,6 +128,9 @@ impl<T> RetainedProduct<T> {
         limits: BufferLimits,
         retained_size: impl Fn(&T) -> usize + Send + Sync + 'static,
     ) -> Result<Self, ProductImportError> {
+        producer
+            .validate()
+            .map_err(ProductImportError::InvalidProducer)?;
         if manifest.form != ProductForm::Buffer {
             return Err(ProductImportError::NotBuffer(manifest.form));
         }
@@ -223,10 +232,10 @@ impl<T> RetainedProduct<T> {
                 end_ns: request.end_ns,
             });
         }
-        if request.clock_id != self.producer.clock_id {
+        if request.clock != self.producer.clock {
             return Err(ProductAccessError::ClockMismatch {
-                expected: self.producer.clock_id.clone(),
-                requested: request.clock_id,
+                expected: Box::new(self.producer.clock.clone()),
+                requested: Box::new(request.clock),
             });
         }
         Ok(FiniteObservations {
@@ -250,6 +259,7 @@ impl<T> RetainedProduct<T> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProductImportError {
+    InvalidProducer(String),
     NotBuffer(ProductForm),
     ManifestHashMismatch { expected: String, actual: String },
     ProducerMismatch,
@@ -261,6 +271,7 @@ pub enum ProductImportError {
 impl fmt::Display for ProductImportError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidProducer(reason) => write!(formatter, "invalid producer: {reason}"),
             Self::NotBuffer(form) => {
                 write!(formatter, "cannot mirror {form:?} as a Buffer Product")
             }
@@ -474,10 +485,10 @@ impl<T> EpisodeProduct<T> {
                 end_ns: request.end_ns,
             });
         }
-        if request.clock_id != self.producer.clock_id {
+        if request.clock != self.producer.clock {
             return Err(ProductAccessError::ClockMismatch {
-                expected: self.producer.clock_id.clone(),
-                requested: request.clock_id,
+                expected: Box::new(self.producer.clock.clone()),
+                requested: Box::new(request.clock),
             });
         }
         Ok(FiniteObservations {
@@ -552,6 +563,24 @@ impl ComponentRuntime {
         limits: BufferLimits,
         retained_size: impl Fn(&T) -> usize + Send + Sync + 'static,
     ) -> Result<BufferProductCapture<T>, ProductCaptureError> {
+        self.capture_buffer_with_metadata(product_id, output, limits, retained_size, |_| Ok(None))
+    }
+
+    /// Project bounded discovery metadata from every captured observation. Projection
+    /// runs inline before retention; errors reject capture and appear in `errors()`.
+    /// State and metadata then change together in one Catalog revision. Metadata
+    /// never changes the immutable Product Manifest or its reference.
+    pub fn capture_buffer_with_metadata<T: Send + Sync + 'static>(
+        &self,
+        product_id: impl Into<String>,
+        output: &ConfiguredObservable<T>,
+        limits: BufferLimits,
+        retained_size: impl Fn(&T) -> usize + Send + Sync + 'static,
+        metadata: impl Fn(&Observation<T>) -> Result<Option<CatalogProductMetadata>, String>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Result<BufferProductCapture<T>, ProductCaptureError> {
         if !output.owner_is_exposed() {
             return Err(ProductCaptureError::ProducerNotExposed);
         }
@@ -602,6 +631,24 @@ impl ComponentRuntime {
                             .push("observation producer does not match Product".to_owned());
                         return;
                     }
+                    let projected = match metadata(observation).and_then(|metadata| {
+                        if let Some(value) = &metadata {
+                            value.validate()?;
+                            if value.source_sequence != observation.sequence {
+                                return Err(
+                                    "Catalog metadata sequence does not match captured observation"
+                                        .into(),
+                                );
+                            }
+                        }
+                        Ok(metadata)
+                    }) {
+                        Ok(metadata) => metadata,
+                        Err(error) => {
+                            state.errors.push(error);
+                            return;
+                        }
+                    };
                     if let Err(error) = state.product.buffer.append_shared(Arc::new(Envelope::new(
                         observation.sequence,
                         observation.timestamp_ns,
@@ -612,13 +659,14 @@ impl ComponentRuntime {
                     }
                     let range = state.product.buffer.range();
                     let limit = state.product.buffer.limits().max_entries;
-                    catalog.update_product_state(
+                    catalog.update_product_capture(
                         &state.product.manifest.product_id,
                         ProductState::Buffer {
                             entries: range.entries,
                             at_entry_capacity: limit.is_some_and(|limit| range.entries == limit),
                             limits: Some(state.product.buffer.limits()),
                         },
+                        projected,
                     );
                 }
                 ObservationEvent::Ended(end) => {

@@ -5,6 +5,17 @@
 //! converts, composes, and eventually queries geometry over those
 //! values.
 
+/// Perspective-n-Point solvers, camera models, calibration and pose tools.
+///
+/// Enable the `pnp` feature. This re-exports the pinned `pnp-core` API without
+/// changing its types or conventions. Pixel coordinates are OpenCV (+Y down);
+/// object-pose solver results use OpenGL camera coordinates (+Y up, -Z forward).
+/// Use `pnp::pose_tools::from_opengl_to_opencv` when an optical camera frame
+/// is required. Square corners are ordered TL, TR, BR, BL, and translations
+/// use the same length unit as the input object geometry.
+#[cfg(feature = "pnp")]
+pub use pnp_core as pnp;
+
 use auki_datatypes::pose::{Quat, SpatialTransform, Vec3};
 use auki_registry::{AxisConvention, AxisDirection, FrameRegistryEntry, Handedness, LengthUnit};
 use std::{error, fmt};

@@ -5,15 +5,19 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = ["runtime"]
+runtime = ["dep:auki-session", "dep:auki-protocols", "dep:futures", "dep:tokio", "dep:parking_lot"]
+
 [dependencies]
 auki-datatypes = { path = "../auki-datatypes" }
 auki-registry = { path = "../auki-registry" }
-auki-session = { path = "../auki-session" }
-auki-protocols = { path = "../auki-protocols", features = ["catalog", "stream-endpoint"] }
+auki-session = { path = "../auki-session", optional = true }
+auki-protocols = { path = "../auki-protocols", features = ["catalog", "stream-endpoint"], optional = true }
 thiserror = "2"
-futures = "0.3"
-tokio = { version = "1", features = ["macros", "rt", "sync"] }
-parking_lot = "0.12"
+futures = { version = "0.3", optional = true }
+tokio = { version = "1", features = ["macros", "rt", "sync"], optional = true }
+parking_lot = { version = "0.12", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

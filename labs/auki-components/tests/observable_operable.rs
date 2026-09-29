@@ -27,6 +27,7 @@ fn resolution_change_replaces_output_not_component() {
         2,
         2,
         peer_a.catalog().clone(),
+        fixture_clock("peer-a.session-clock"),
         ["peer-b".to_owned()],
     )
     .unwrap();
@@ -43,6 +44,7 @@ fn resolution_change_replaces_output_not_component() {
                 width: 1,
                 height: 1,
                 effective_at_timestamp_ns: 20,
+                clock: fixture_clock("peer-a.session-clock"),
             },
         )
         .unwrap()
@@ -94,6 +96,7 @@ fn subscription_ends_at_reconfiguration_and_replacement_requires_resubscription(
         2,
         2,
         peer_a.catalog().clone(),
+        fixture_clock("peer-a.session-clock"),
         ["peer-b".to_owned()],
     )
     .unwrap();
@@ -123,6 +126,7 @@ fn subscription_ends_at_reconfiguration_and_replacement_requires_resubscription(
                 width: 1,
                 height: 1,
                 effective_at_timestamp_ns: 20,
+                clock: fixture_clock("peer-a.session-clock"),
             },
         )
         .unwrap()
@@ -197,6 +201,7 @@ fn buffer_subscription_ends_and_replacement_buffer_requires_explicit_attachment(
         2,
         2,
         peer_a.catalog().clone(),
+        fixture_clock("peer-a.session-clock"),
         ["peer-b".to_owned()],
     )
     .unwrap();
@@ -213,6 +218,7 @@ fn buffer_subscription_ends_and_replacement_buffer_requires_explicit_attachment(
                 width: 1,
                 height: 1,
                 effective_at_timestamp_ns: 20,
+                clock: fixture_clock("peer-a.session-clock"),
             },
         )
         .unwrap()
@@ -260,6 +266,7 @@ fn local_operable_is_not_discoverable_or_remotely_invocable() {
         2,
         2,
         peer_a.catalog().clone(),
+        fixture_clock("peer-a.session-clock"),
         ["peer-b".to_owned()],
     )
     .unwrap();
@@ -299,6 +306,7 @@ fn unauthorized_remote_caller_cannot_reconfigure_camera() {
         2,
         2,
         peer_a.catalog().clone(),
+        fixture_clock("peer-a.session-clock"),
         ["peer-b".to_owned()],
     )
     .unwrap();
@@ -311,6 +319,7 @@ fn unauthorized_remote_caller_cannot_reconfigure_camera() {
             width: 1,
             height: 1,
             effective_at_timestamp_ns: 20,
+            clock: fixture_clock("peer-a.session-clock"),
         },
     );
 
@@ -327,6 +336,7 @@ fn frame_payload_must_match_current_output_manifest() {
         2,
         2,
         peer_a.catalog().clone(),
+        fixture_clock("peer-a.session-clock"),
         ["peer-b".to_owned()],
     )
     .unwrap();
@@ -342,6 +352,7 @@ fn frame_payload_must_match_current_output_manifest() {
                 width: 1,
                 height: 1,
                 effective_at_timestamp_ns: 3,
+                clock: fixture_clock("peer-a.session-clock"),
             },
         )
         .unwrap();
@@ -359,6 +370,7 @@ fn setting_the_existing_resolution_does_not_create_a_new_output() {
         2,
         2,
         peer_a.catalog().clone(),
+        fixture_clock("peer-a.session-clock"),
         ["peer-b".to_owned()],
     )
     .unwrap();
@@ -372,6 +384,7 @@ fn setting_the_existing_resolution_does_not_create_a_new_output() {
                 width: 2,
                 height: 2,
                 effective_at_timestamp_ns: 10,
+                clock: fixture_clock("peer-a.session-clock"),
             },
         )
         .unwrap()
@@ -382,3 +395,7 @@ fn setting_the_existing_resolution_does_not_create_a_new_output() {
     assert_eq!(result.replacement_output, before);
     assert_eq!(camera.current_output_reference(), before);
 }
+
+#[path = "support/clock.rs"]
+mod clock_fixture;
+use clock_fixture::fixture_clock;

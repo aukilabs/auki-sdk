@@ -23,6 +23,10 @@ members = [
 
     # Experimental crates; application protocols remain optional.
     "labs/auki-components",
+    "labs/auki-scenegraph",
+    "labs/auki-voxel-map",
+    "labs/auki-qr-localizer",
+    "labs/auki-qr-mapper",
     "labs/auki-component-protocol",
     "labs/auki-datatypes",
     "labs/auki-geometry",
@@ -36,6 +40,7 @@ members = [
     "labs/auki-maps",
     "labs/auki-protocols",
     "labs/auki-qr-detector",
+    "labs/auki-portal-detector",
     "labs/auki-registry",
     "labs/auki-ros-adapter",
     "labs/auki-session",

@@ -1,0 +1,37 @@
+[package]
+name = "auki-portal-detector"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+auki-components = { path = "../auki-components" }
+auki-qr-detector = { path = "../auki-qr-detector" }
+auki-qr-mapper = { path = "../auki-qr-mapper" }
+auki-scenegraph = { path = "../auki-scenegraph" }
+futures.workspace = true
+serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+tokio-util.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+auki-voxel-map = { path = "../auki-voxel-map" }
+auki-registry = { path = "../auki-registry" }
+auki-component-protocol = { path = "../auki-component-protocol" }
+auki-sdk = { path = "../../core/auki-sdk" }
+auki-p2p = { path = "../../core/auki-p2p" }
+auki-geometry = { path = "../auki-geometry", features = ["pnp"] }
+auki-datatypes = { path = "../auki-datatypes" }
+chrono.workspace = true
+jsonwebtoken = "10.4"
+
+auki-qr-localizer = { path = "../auki-qr-localizer", features = ["qr-detector"] }
+auki-domain-client = { path = "../../core/auki-domain-client" }
+serde_json.workspace = true
+qrcode = { version = "0.14.1", default-features = false }
+
+[lints.rust]
+unsafe_code = "forbid"

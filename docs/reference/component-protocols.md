@@ -11,8 +11,8 @@ Products; and a read-only Catalog projects the live topology.
 
 | Protocol | Purpose |
 | --- | --- |
-| `/aukilabs/components/catalog/1.0.0` | Discover the exported Component/Product surface by revision |
-| `/aukilabs/components/observations/2.0.0` | Read observations and terminal source notices from one exact Buffer Product |
+| `/aukilabs/components/catalog/2.0.0` | Discover the exported Component/Product surface by revision |
+| `/aukilabs/components/observations/3.0.0` | Read observations and terminal source notices from one exact Buffer Product |
 | `/aukilabs/components/observation-stream/1.0.0` | Subscribe once to observations from one exact Buffer Product |
 | `/aukilabs/components/operations/1.0.0` | Invoke one typed Operable on one exact Component |
 
@@ -231,17 +231,16 @@ which callers each Operable authorizes.
 
 ## Compatibility and bounds
 
-The observations protocol changed from 1.0.0 to 2.0.0 to carry terminal notices.
-Provider and consumer must upgrade together; the endpoint registers only 2.0.0
-and the client never silently falls back to 1.0.0. Mixed versions fail protocol
-negotiation for observations. Catalog and Operations remain at 1.0.0. This is an
-experimental application-protocol change, not a change to `AukiPeer` transport,
-credential validation, discovery, or any backend service contract.
+Catalog uses protocol 2.0.0 and observations uses 3.0.0 for full clock registry
+references. Observations also carry terminal notices (introduced in v2).
+Provider and consumer must upgrade together: older protocol versions are not
+registered and clients never silently fall back. Operations remains at 1.0.0.
+This is an experimental application-protocol change; authentication, discovery,
+`AukiPeer` transport, and backend service contracts are unchanged.
 
-Continuing observation is an additive `observation-stream/1.0.0` protocol.
-Finite observations v2, Catalog, and Operations are unchanged. Both peers must
-support the new ID to subscribe. Older endpoints can still serve finite
-requests; the subscription client never silently falls back to polling.
+Continuing observations use `observation-stream/1.0.0` and exact Output identities.
+Clients obtain the clock-qualified manifests through observations v3. Both peers
+must support the stream ID to subscribe; there is no automatic polling fallback.
 
 - JSON control frames: 1 MiB maximum.
 - Typed payload frames: 32 MiB maximum.
@@ -285,3 +284,19 @@ These tests use fixture-signed credentials and no shared services. They do not
 prove browser behavior, silent-partition detection, or the combined live
 DDS/DMS relay-renewal path. Core relay tests provide separate lower-layer
 coverage; neither set substitutes for an authorized deployment test.
+
+### Clock identity migration
+
+Output Manifest v2 replaces `clock_id: string` with `clock: RegistryRef`
+(`peer_id`, `id`, `hash`). Time-range requests likewise carry a full `clock`.
+Catalog protocol v2 and observations protocol v3 deliberately reject negotiation
+with their old versions; update both peers together. The observation-stream
+protocol is unchanged: it carries exact Output references and uses the upgraded
+observations protocol to obtain validated manifests. Operation transport is
+unchanged; typed camera resolution instructions/results now require `clock`.
+No authentication, backend API, or stable core binding contract changes.
+
+Registry definitions remain host-managed. Peers must retain and serve the exact
+referenced clock entry before interpreting its epoch/session. The Component
+adapter checks reference syntax and equality; it does not synchronize clocks or
+fetch registry entries automatically.

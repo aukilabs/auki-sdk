@@ -13,11 +13,7 @@ pub use auki_sdk_web::{AukiDiscoveryMode, AukiPeer, AukiPeerReachabilityMode, Au
 use futures::{FutureExt, select_biased};
 use js_sys::{Function, Promise};
 use serde::{Deserialize, Serialize};
-use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
-    time::Duration,
-};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc, time::Duration};
 use tokio_util::sync::CancellationToken;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, future_to_promise};
@@ -38,8 +34,7 @@ struct State {
     client: ComponentProtocolClient,
     card: ConnectionCard,
     cancel: CancellationToken,
-    following: Cell<bool>,
-    follow: RefCell<Option<Promise>>,
+    follows: RefCell<BTreeMap<String, (CancellationToken, Promise)>>,
     closing: RefCell<Option<Promise>>,
 }
 #[wasm_bindgen]
@@ -78,8 +73,7 @@ impl AukiMapping {
                 client: ComponentProtocolClient::new(protocols),
                 card,
                 cancel: CancellationToken::new(),
-                following: Cell::new(false),
-                follow: RefCell::new(None),
+                follows: RefCell::new(BTreeMap::new()),
                 closing: RefCell::new(None),
             }),
         })
@@ -153,7 +147,7 @@ impl AukiMapping {
         self.state.model.borrow_mut().remove(&name).map_err(error)?;
         view(&self.state)
     }
-    /// One driven subscription; callers await this Promise during shutdown.
+    /// One independently driven subscription per peer; callers await this Promise during shutdown.
     /// Callbacks carry serialized view state and human-readable transport state.
     pub fn follow(
         &self,
@@ -163,9 +157,6 @@ impl AukiMapping {
     ) -> Result<Promise, JsValue> {
         if self.state.cancel.is_cancelled() {
             return Err(error("Map is closed"));
-        }
-        if self.state.following.get() {
-            return Err(error("Already following a peer"));
         }
         if card.len() > 8192 {
             return Err(error("Discovered map selection is too large"));
@@ -182,6 +173,12 @@ impl AukiMapping {
                 "Discovered map must belong to another peer in the same version, session and Domain",
             ));
         }
+        if self.state.follows.borrow().contains_key(&card.peer) {
+            return Err(error("Already following this peer"));
+        }
+        if self.state.follows.borrow().len() >= 15 {
+            return Err(error("Session supports at most 16 peers"));
+        }
         let peer: PeerId = card.peer.parse().map_err(error)?;
         let route = relay_route(&card.route)?;
         self.state
@@ -189,20 +186,41 @@ impl AukiMapping {
             .borrow_mut()
             .select_partner(card.product.clone())
             .map_err(error)?;
-        self.state.following.set(true);
+        let cancel = self.state.cancel.child_token();
+        let task_cancel = cancel.clone();
+        let key = card.peer.clone();
+        let task_key = key.clone();
         let state = Rc::clone(&self.state);
         let promise = future_to_promise(async move {
             let result = async {
                 select_biased! {
-                    _ = state.cancel.cancelled().fuse() => Ok(JsValue::UNDEFINED),
+                    _ = task_cancel.cancelled().fuse() => Ok(JsValue::UNDEFINED),
                     result = receive_loop(&state, card, peer, route, &changed, &status).fuse() => result,
                 }
             }.await;
-            state.following.set(false);
+            state.follows.borrow_mut().remove(&task_key);
+            state.model.borrow_mut().forget_peer(&task_key);
+            if !state.cancel.is_cancelled() {
+                call(&changed, &view(&state)?)?;
+            }
             result
         });
-        self.state.follow.replace(Some(promise.clone()));
+        self.state
+            .follows
+            .borrow_mut()
+            .insert(key, (cancel, promise.clone()));
         Ok(promise)
+    }
+    /// Cancel a departed or replaced publication and await its receive loop.
+    pub fn unfollow(&self, peer: String) -> Promise {
+        let entry = self.state.follows.borrow().get(&peer).cloned();
+        future_to_promise(async move {
+            if let Some((cancel, promise)) = entry {
+                cancel.cancel();
+                let _ = JsFuture::from(promise).await;
+            }
+            Ok(JsValue::UNDEFINED)
+        })
     }
     /// Idempotent close joins the receive task before unexporting; peer shutdown is owned by UI.
     pub fn close(&self) -> Promise {
@@ -212,8 +230,13 @@ impl AukiMapping {
         self.state.cancel.cancel();
         let state = Rc::clone(&self.state);
         let promise = future_to_promise(async move {
-            let task = state.follow.borrow().clone();
-            if let Some(task) = task {
+            let tasks: Vec<_> = state
+                .follows
+                .borrow()
+                .values()
+                .map(|(_, task)| task.clone())
+                .collect();
+            for task in tasks {
                 let _ = JsFuture::from(task).await;
             }
             let endpoint = state.endpoint.borrow_mut().take();
@@ -236,7 +259,7 @@ impl Drop for AukiMapping {
     }
 }
 fn view(state: &State) -> Result<String, JsValue> {
-    serde_json::to_string(&state.model.borrow_mut().view().map_err(error)?).map_err(error)
+    serde_json::to_string(&state.model.borrow_mut().session_view().map_err(error)?).map_err(error)
 }
 fn call(function: &Function, value: &str) -> Result<(), JsValue> {
     function
@@ -248,7 +271,7 @@ async fn verify_catalog(
     card: &ConnectionCard,
     peer: PeerId,
     route: &Multiaddr,
-) -> Result<(), JsValue> {
+) -> Result<Option<u64>, JsValue> {
     let catalog = state
         .client
         .catalog_exact(peer, route.clone(), None)
@@ -257,14 +280,17 @@ async fn verify_catalog(
     let CatalogResponse::Snapshot { snapshot } = catalog else {
         return Err(error("Partner Catalog unavailable"));
     };
-    if !snapshot.products.iter().any(|p| {
-        p.manifest.reference() == card.product && p.manifest_hash == card.product.manifest_hash
-    }) {
-        return Err(error(
-            "Selected map is no longer exported; refresh discovery",
-        ));
-    }
-    Ok(())
+    let entry = snapshot
+        .products
+        .iter()
+        .find(|p| {
+            p.manifest.reference() == card.product && p.manifest_hash == card.product.manifest_hash
+        })
+        .ok_or_else(|| error("Selected map is no longer exported; refreshing discovery"))?;
+    Ok(entry
+        .metadata
+        .as_ref()
+        .map(|metadata| metadata.source_sequence))
 }
 async fn receive_loop(
     state: &State,
@@ -322,7 +348,13 @@ async fn receive_loop(
                     event = subscription.next().fuse() => event.map_err(error)?,
                     _ = futures_timer::Delay::new(Duration::from_secs(15)).fuse() => {
                         // A bounded Catalog probe detects silent partitions without timing out idle maps.
-                        verify_catalog(state, &card, peer, &route).await?;
+                        let advertised = verify_catalog(state, &card, peer, &route).await?;
+                        if advertised.is_some_and(|sequence| sequence >= subscription.next_sequence()) {
+                            // A healthy Catalog alone does not prove that the observation stream is live.
+                            let _ = subscription.close().await;
+                            return Err(error("Map stream fell behind its Catalog; reopening latest snapshot"));
+                        }
+                        call(status, "Live · up to date")?;
                         continue;
                     }
                 };
@@ -355,6 +387,15 @@ async fn receive_loop(
             }
         }
         .await;
+        if let Err(ref failure) = result {
+            state.model.borrow_mut().clear_evidence(&card.peer);
+            call(changed, &view(state)?)?;
+            let message = js_sys::Reflect::get(failure, &JsValue::from_str("message"))
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_else(|| "Connection interrupted".into());
+            call(status, &format!("Reconnecting: {message}"))?;
+        }
         if attempt == 2 {
             return result;
         }

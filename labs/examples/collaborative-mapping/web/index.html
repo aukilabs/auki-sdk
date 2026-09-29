@@ -8,269 +8,189 @@
   <body>
     <header>
       <a class="brand" href="./"
-        ><span class="brand-mark">a</span> auki
-        <span class="divider">/</span> labs</a
-      ><span class="eyebrow">COLLABORATIVE MAPPING · EXPERIMENT 01</span
-      ><span id="runtime" class="pill">Loading WASM…</span>
+        ><span class="brand-mark">a</span> Common ground
+        <span class="tag">LABS</span></a
+      ><span id="runtime" class="runtime">Loading WASM…</span>
     </header>
-    <main>
-      <section class="intro">
-        <div>
-          <div class="eyebrow">TWO PEERS. ONE SHARED PLACE.</div>
-          <h1>Common ground<span>.</span></h1>
-          <p>
-            Build your own map. Find a shared portal. Watch two perspectives
-            line up.
-          </p>
-        </div>
-        <div class="steps">
-          <span>01 <b>Connect</b></span
-          ><span>02 <b>Place portals</b></span
-          ><span>03 <b>Find common ground</b></span>
-        </div>
-      </section>
-      <div class="workspace">
-        <aside>
-          <section class="panel">
-            <div class="panel-heading">
-              <h2>Your connection</h2>
-              <span class="tag">WASM + WSS</span>
-            </div>
-            <form id="login">
+    <main class="workspace">
+      <aside>
+        <section class="panel connection-panel">
+          <div class="section-heading">
+            <h1>Your session</h1>
+            <span id="session-count" class="pill">Not connected</span>
+          </div>
+          <p class="intro">A shared place, from every perspective.</p>
+          <form id="login">
+            <label
+              >Environment<select id="environment">
+                <option value="dev">Shared development services</option>
+                <option value="custom">Custom environment</option>
+              </select></label
+            >
+            <div id="custom-environment" hidden>
               <label
-                >Environment<select id="environment">
-                  <option value="dev">Shared development services</option>
-                  <option value="custom">Custom environment</option>
-                </select></label
-              >
-              <div id="custom-environment" hidden>
-                <label
-                  >API URL<input
-                    id="api"
-                    type="url"
-                    placeholder="https://…" /></label
-                ><label
-                  >DDS URL<input
-                    id="dds"
-                    type="url"
-                    placeholder="https://…" /></label
-                ><label
-                  >DMS URL<input id="dms" type="url" placeholder="https://…"
-                /></label>
-              </div>
-              <label
-                >Email<input
-                  id="email"
-                  type="email"
-                  autocomplete="username"
-                  required /></label
+                >API URL<input
+                  id="api"
+                  type="url"
+                  placeholder="https://…" /></label
               ><label
-                >Password<input
-                  id="password"
-                  type="password"
-                  autocomplete="current-password"
-                  required /></label
-              ><button id="login-button" disabled>Sign in</button>
-            </form>
-            <form id="start" hidden>
-              <label>Domain<select id="domain" required></select></label
+                >DDS URL<input
+                  id="dds"
+                  type="url"
+                  placeholder="https://…" /></label
               ><label
-                >Demo session<input
-                  id="session"
-                  value="mapping-demo"
-                  maxlength="64"
-                  required
-                  pattern="[A-Za-z0-9 _\-]+"
+                >DMS URL<input id="dms" type="url" placeholder="https://…"
               /></label>
-              <p class="hint">
-                Use the same Domain and session in both browsers. Each start
-                creates a new peer and an empty map.
-              </p>
-              <button id="start-button">Start relay peer</button>
-            </form>
-            <div id="running" hidden>
-              <div class="hint">YOUR PEER</div>
-              <code id="peer-id"></code>
-              <p class="hint">
-                Peers in the same Domain and demo session find each other
-                automatically. Both maps synchronize over relays.
-              </p>
-              <div id="partner-picker" hidden>
-                <label
-                  >Several matching peers: choose your partner<select
-                    id="peer-choice"
-                  ></select
-                ></label>
-              </div>
-              <button
-                id="retry-discovery"
-                type="button"
-                class="secondary"
-                disabled
-              >
-                Retry discovery
-              </button>
-              <button id="stop-button" type="button" class="secondary danger">
-                Stop peer & reset map
-              </button>
             </div>
-            <button id="logout-button" type="button" class="text-button" hidden>
-              Sign out
-            </button>
-          </section>
-          <section class="panel">
-            <div class="panel-heading">
-              <h2>Place a portal</h2>
-              <span class="tag">1 CELL = 1 M</span>
-            </div>
-            <form id="place">
-              <fieldset id="editor" disabled>
-                <label
-                  >Portal name<input
-                    id="portal-name"
-                    placeholder="e.g. bridge"
-                    maxlength="64"
-                    required
-                    pattern="[A-Za-z0-9 _\-]+"
-                /></label>
-                <div class="coordinate-inputs">
-                  <label
-                    >X<input
-                      id="x"
-                      type="number"
-                      value="0"
-                      min="-10000"
-                      max="10000"
-                      step="1"
-                      required /></label
-                  ><label
-                    >Y<input
-                      id="y"
-                      type="number"
-                      value="0"
-                      min="-10000"
-                      max="10000"
-                      step="1"
-                      required
-                  /></label>
-                </div>
-                <button>Place / move portal</button>
-              </fieldset>
-            </form>
+            <label
+              >Email<input
+                id="email"
+                type="email"
+                autocomplete="username"
+                required
+            /></label>
+            <label
+              >Password<input
+                id="password"
+                type="password"
+                autocomplete="current-password"
+                required
+            /></label>
+            <button id="login-button" disabled>Sign in</button>
+          </form>
+          <form id="start" hidden>
+            <label>Domain<select id="domain" required></select></label
+            ><label
+              >Session name<input
+                id="session"
+                value="mapping-demo"
+                maxlength="64"
+                required
+                pattern="[A-Za-z0-9 _\-]+"
+            /></label>
             <p class="hint">
-              Enter a name and click your local grid, or use local coordinates. Reusing your
-              own name moves that portal.
+              Start on your own. Anyone using this Domain and session can join
+              you.
             </p>
-          </section>
-        </aside>
-        <section class="mapping">
-          <div class="map-header">
-            <div>
-              <span class="eyebrow">LIVE WORKSPACE</span>
-              <h2 id="map-title">Your local map</h2>
-            </div>
-            <span id="alignment" class="pill">Waiting for a peer</span>
+            <button id="start-button">Start / join session</button>
+          </form>
+          <div id="running" hidden>
+            <strong id="session-name"></strong>
+            <p id="transport" class="hint">Session open</p>
+            <details>
+              <summary>Connection details</summary>
+              <code id="peer-id"></code>
+              <p>Browser WASM · authenticated WSS relay</p>
+            </details>
+            <button id="stop-button" type="button" class="secondary">
+              Leave session & reset map
+            </button>
           </div>
-          <div class="board-shell">
-            <svg
-              id="grid"
-              role="img"
-              aria-label="Editable portal map"
-              viewBox="-12 -12 24 24"
-            ></svg>
-            <div class="board-top">
-              <span id="map-caption">Your coordinates · editable</span
-              ><button id="fit" type="button" class="secondary">Fit map</button>
-            </div>
-            <div id="empty" class="empty">
-              <div class="empty-icon">＋</div>
-              <h3>A place to meet</h3>
-              <p>
-                Start your relay peer, then give<br />your first portal a name.
-              </p>
-            </div>
-            <div class="board-bottom">
-              <span>XY PLANE · Z UP · METERS</span
-              ><span id="portal-count">0 portals</span>
-            </div>
+          <button id="logout-button" type="button" class="text-button" hidden>
+            Sign out
+          </button>
+        </section>
+        <section class="panel">
+          <div class="section-heading">
+            <h2>Map layers</h2>
+            <span class="tag">LIVE</span>
           </div>
-          <div class="map-footer">
-            <span
-              ><i class="dot peer-a"></i>Peer A <i class="dot peer-b"></i>Peer B
-              <i class="dot shared"></i>Shared portal</span
-            ><span id="frame-caption">No frame yet</span>
-          </div>
-          <section id="remote-panel" class="panel source-panel">
-            <div>
-              <div class="eyebrow">PARTNER’S LOCAL MAP</div>
-              <h3>Partner’s local map</h3>
-              <code id="remote-frame">No partner frame yet</code>
-              <p class="hint">
-                Original partner coordinates · read only. These origins remain independent even when the maps align.
-              </p>
-            </div>
-            <svg
-              id="remote-grid"
-              role="img"
-              aria-label="Partner map in its own frame"
-              viewBox="-12 -12 24 24"
-            ></svg>
-          </section>
-          <section class="panel source-panel">
-            <div>
-              <div class="eyebrow">COMBINED MAP</div>
-              <h3>Our common ground</h3>
-              <code id="combined-frame">No aligned frame yet</code>
-              <p id="combined-status" class="hint">Place a shared portal to align the maps.</p>
-            </div>
-            <svg id="combined-grid" role="img" aria-label="Combined map in its aligned frame" viewBox="-12 -12 24 24" hidden></svg>
-          </section>
-          <section class="panel" id="portal-panel">
-            <h2>Your portals</h2>
-            <p id="conflict-summary" class="hint">Remove a portal from your map here. Your partner’s original map is preserved.</p>
-            <div id="portal-list"></div>
-          </section>
-          <section class="panel inspector">
-            <div>
-              <span class="eyebrow">CONNECTION</span>
-              <p id="transport">Not connected</p>
-            </div>
-            <div>
-              <span class="eyebrow">ALIGNMENT EVIDENCE</span>
-              <p id="evidence">No shared portals yet</p>
-            </div>
-            <div>
-              <span class="eyebrow">SNAPSHOTS</span>
-              <p id="sequences">Local — · Partner —</p>
-            </div>
-          </section>
-          <p id="notice" role="status" aria-live="polite"></p>
+          <p class="hint">
+            Toggle aligned maps. Inspect an unaligned map in its own
+            coordinates.
+          </p>
+          <div id="layers"></div>
+        </section>
+        <section id="conflict-panel" class="panel conflicts" hidden>
+          <h2>Resolve alignment</h2>
+          <p id="conflict-summary"></p>
           <details>
-            <summary>How this experiment works</summary>
-            <p>
-              Both maps live in your browsers. Authenticated snapshots travel
-              through WSS relays. Names are exact and case-sensitive simulated
-              Portal identities scoped to this demo session. All portals have
-              the same fixed heading and size, so one shared portal establishes
-              translation. This is not a claim that real-world names establish
-              spatial alignment.
-            </p>
-            <p>
-              The combined map uses the frame of the lexicographically smaller
-              Peer ID. Each peer keeps ownership of its original placements.
-              Conflicting shared portals separate the views until you correct
-              their positions or remove a conflicting portal from your own map. Synthetic map snapshots are readable by
-              authenticated peers admitted in this Domain. Session matching
-              selects a partner; it does not create a private read ACL.
-            </p>
-            <p>
-              Use Stop before closing a tab to await relay cleanup. Reloading
-              starts a new map; no map is saved to a Domain Server.
-            </p>
+            <summary>Conflicting evidence</summary>
+            <div id="conflict-list"></div>
           </details>
         </section>
-      </div>
+        <details class="panel" id="portal-panel">
+          <summary>My portals</summary>
+          <div id="portal-list"></div>
+        </details>
+        <p id="notice" role="status" aria-live="polite">
+          Sign in to start a session.
+        </p>
+      </aside>
+      <section class="map-area" aria-label="Mapping workspace">
+        <div class="map-toolbar">
+          <label class="frame-control"
+            ><span class="sr-only">Coordinate view</span
+            ><select id="coordinate-frame">
+              <option value="combined">Combined · aligned layers</option>
+            </select></label
+          ><button id="add-pin" disabled>＋ Drop portal</button>
+        </div>
+        <div class="board-shell">
+          <svg
+            id="grid"
+            role="img"
+            aria-label="Interactive portal map. Drag to pan, scroll to zoom, double-click or press Enter to place a portal."
+            tabindex="0"
+            viewBox="-12 -12 24 24"
+          ></svg>
+          <div class="zoom-controls">
+            <button id="zoom-in" class="secondary" aria-label="Zoom in">
+              ＋</button
+            ><button id="zoom-out" class="secondary" aria-label="Zoom out">
+              −</button
+            ><button id="fit" class="secondary">Fit</button>
+          </div>
+          <span class="map-badge" id="portal-count">0 portals</span>
+          <div class="map-bottom">
+            <span id="map-help"
+              >Drag to pan · scroll to zoom · double-click to drop a
+              portal</span
+            ><span id="frame-caption">Start a session to place portals</span>
+          </div>
+        </div>
+      </section>
     </main>
+    <dialog id="pin-dialog" aria-labelledby="pin-title">
+      <form id="place">
+        <div class="section-heading">
+          <h2 id="pin-title">Drop a portal</h2>
+          <button
+            id="cancel-pin"
+            type="button"
+            class="icon-button"
+            aria-label="Close portal editor"
+          >
+            ×
+          </button>
+        </div>
+        <p id="pin-context" class="hint"></p>
+        <label
+          >Name<input
+            id="portal-name"
+            maxlength="64"
+            required
+            pattern="[A-Za-z0-9 _\-]+"
+            placeholder="e.g. North entrance"
+            autocomplete="off"
+        /></label>
+        <div class="coordinate-inputs">
+          <label>X<input id="x" type="number" step="1" required /></label
+          ><label>Y<input id="y" type="number" step="1" required /></label>
+        </div>
+        <p id="pin-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button
+            id="remove-pin"
+            type="button"
+            class="text-button danger"
+            hidden
+          >
+            Remove mine</button
+          ><button id="save-pin">Save portal</button>
+        </div>
+      </form>
+    </dialog>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

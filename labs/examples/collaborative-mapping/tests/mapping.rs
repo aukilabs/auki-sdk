@@ -351,3 +351,113 @@ fn removal_requires_owner_and_current_snapshot_and_updates_catalog() {
     a.close();
     assert!(a.remove("cafe").is_err());
 }
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn multi_peer_layers_align_transitively_and_withdraw_on_departure() {
+    let (mut a, mut b, mut c) = (map("a"), map("b"), map("c"));
+    place(&mut a, "ab", 0., 0.);
+    place(&mut b, "ab", 10., 20.);
+    place(&mut b, "bc", 12., 23.);
+    place(&mut c, "bc", 102., 203.);
+    place(&mut c, "c-only", 105., 206.);
+    for (receiver, others) in [(&mut a, vec![b.publication(), c.publication()])] {
+        for other in others {
+            receiver
+                .select_partner(other.reference.product.clone())
+                .unwrap();
+            receiver.receive(other).unwrap();
+        }
+    }
+    for other in [a.publication(), c.publication()] {
+        b.select_partner(other.reference.product.clone()).unwrap();
+        b.receive(other).unwrap();
+    }
+    for other in [a.publication(), b.publication()] {
+        c.select_partner(other.reference.product.clone()).unwrap();
+        c.receive(other).unwrap();
+    }
+    let av = a.session_view().unwrap();
+    assert_eq!(av.layers.len(), 3);
+    assert!(av.layers.iter().all(|l| l.to_display.is_some()));
+    assert_eq!(av.portals, b.session_view().unwrap().portals);
+    assert_eq!(av.portals, c.session_view().unwrap().portals);
+    let p = av.portals.iter().find(|p| p.name == "c-only").unwrap();
+    assert_eq!((p.x, p.y), (5., 6.));
+    // Drop in canonical coordinates, preserving the source frame on C.
+    c.place("new", 7., 8., &av.display_frame).unwrap();
+    let cp = c
+        .session_view()
+        .unwrap()
+        .layers
+        .into_iter()
+        .find(|l| l.peer == "c")
+        .unwrap();
+    let p = cp.portals.iter().find(|p| p.name == "new").unwrap();
+    assert_eq!((p.x, p.y), (107., 208.));
+    // The bridge disappears: C is still inspectable but cannot be overlaid in A.
+    a.forget_peer("b");
+    let disconnected = a.session_view().unwrap();
+    assert_eq!(disconnected.layers.len(), 2);
+    assert!(
+        disconnected
+            .layers
+            .iter()
+            .find(|l| l.peer == "c")
+            .unwrap()
+            .aligned_portals
+            .is_none()
+    );
+    assert_eq!(disconnected.portals.len(), 1);
+    // A new publication of B can join without restarting A.
+    let mut restarted = map("b");
+    place(&mut restarted, "ab", 10., 20.);
+    place(&mut restarted, "bc", 12., 23.);
+    a.select_partner(restarted.publication().reference.product)
+        .unwrap();
+    a.receive(restarted.publication()).unwrap();
+    assert!(
+        a.session_view()
+            .unwrap()
+            .layers
+            .iter()
+            .all(|l| l.to_display.is_some())
+    );
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn remote_conflicts_and_stale_evidence_do_not_create_false_overlays() {
+    let (mut a, mut b, mut c) = (map("a"), map("b"), map("c"));
+    place(&mut a, "bridge", 0., 0.);
+    place(&mut b, "bridge", 1., 1.);
+    place(&mut b, "bad", 2., 2.);
+    place(&mut c, "bridge", 10., 10.);
+    place(&mut c, "bad", 50., 50.);
+    for other in [b.publication(), c.publication()] {
+        a.select_partner(other.reference.product.clone()).unwrap();
+        a.receive(other).unwrap();
+    }
+    let view = a.session_view().unwrap();
+    assert!(view.conflicts.iter().any(|c| c.peers == ["b", "c"]));
+    assert!(
+        view.layers
+            .iter()
+            .filter(|l| l.peer != "a")
+            .all(|l| l.to_display.is_none())
+    );
+    a.clear_evidence("c");
+    assert_eq!(a.session_view().unwrap().layers.len(), 2);
+    assert!(
+        a.session_view()
+            .unwrap()
+            .layers
+            .iter()
+            .all(|l| l.to_display.is_some())
+    );
+    // Reconnected stream remains authorized for its selected Product.
+    c.remove("bad").unwrap();
+    a.receive(c.publication()).unwrap();
+    assert_eq!(a.session_view().unwrap().layers.len(), 3);
+    assert!(a.session_view().unwrap().conflicts.is_empty());
+}

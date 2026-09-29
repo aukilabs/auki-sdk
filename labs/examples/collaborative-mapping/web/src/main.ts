@@ -5,7 +5,7 @@ import init, {
   AukiPeerReachabilityMode,
   AukiUserSession,
 } from "../pkg-web/auki_collaborative_mapping_web.js";
-import { Grid, type View } from "./grid";
+import { Grid, type View, type Portal } from "./grid";
 import { MapViews } from "./map-views";
 import { DomainDiscovery } from "./discovery";
 import "./styles.css";
@@ -26,65 +26,143 @@ let latest: View | undefined,
   stopping: Promise<void> | undefined;
 let discovery: DomainDiscovery | undefined;
 let busy = false;
-const board = new Grid(get<SVGSVGElement>("grid"), (x, y) => {
-  if (!mapping || busy || stopping) return;
-  input("x").value = String(x);
-  input("y").value = String(y);
-  if (input("portal-name").reportValidity()) place();
-});
-const maps = new MapViews(board, (name) => {
-  if (!mapping || busy || stopping) return;
-  try {
-    render(mapping.remove(name));
-    notice(`Removed ${name} from your map.`);
-  } catch (error) { notice(error); }
-});
-board.render([], []);
+const dialog = get<HTMLDialogElement>("pin-dialog");
+let pinFrame = "",
+  originalName: string | undefined;
+const board = new Grid(
+  get<SVGSVGElement>("grid"),
+  dropPin,
+  inspectPin,
+  beginMove,
+);
+const maps = new MapViews(board, inspectPin);
+board.render([]);
 
 function render(json: string): void {
   latest = JSON.parse(json) as View;
-  const view = latest;
-  maps.render(view);
-  get("alignment").textContent =
-    (
-      {
-        waiting: "Waiting for partner",
-        separate: "Not aligned yet",
-        aligned: "Maps aligned",
-        conflict: "Alignment conflict",
-        pending: "Checking alignment",
-      } as Record<string, string>
-    )[view.state] ?? view.state;
-  get("sequences").textContent =
-    `Local ${view.local_reference.sequence} · Partner ${view.remote_reference?.sequence ?? "—"}`;
-  get("evidence").textContent =
-    view.reason ??
-    (view.shared_names.length
-      ? view.shared_names.join(", ")
-      : "No shared portals yet");
-  if (view.reason) notice(view.reason);
+  maps.render(latest);
 }
-function place(): void {
-  if (!mapping || !latest || stopping) return;
+function beginMove(
+  portal: Portal,
+): ((x: number, y: number) => void) | undefined {
+  if (
+    !mapping ||
+    !latest ||
+    busy ||
+    stopping ||
+    dialog.open ||
+    !maps.editable ||
+    !portal.contributors.includes(latest.local_peer)
+  )
+    return;
+  const own = latest.layers
+    .find((l) => l.peer === latest!.local_peer)
+    ?.portals.find((p) => p.id === portal.id);
+  if (!own) return;
+  const current = mapping,
+    frame = maps.placementFrame;
+  return (x, y) => {
+    if (mapping !== current || stopping || maps.placementFrame !== frame)
+      return;
+    const now = latest?.layers
+      .find((l) => l.peer === latest!.local_peer)
+      ?.portals.find((p) => p.id === own.id);
+    if (!now || now.x !== own.x || now.y !== own.y) {
+      notice("Portal changed while dragging. Try again.");
+      return;
+    }
+    try {
+      render(current.place(own.name, x, y, frame));
+      notice(`Moved ${own.name}.`);
+    } catch (error) {
+      render(current.view());
+      notice(error);
+    }
+  };
+}
+function dropPin(x: number, y: number): void {
+  if (!mapping || busy || stopping || !maps.editable || dialog.open) return;
+  pinFrame = maps.placementFrame;
+  originalName = undefined;
+  input("portal-name").value = "";
+  input("portal-name").readOnly = false;
+  input("x").value = String(x);
+  input("y").value = String(y);
+  input("x").readOnly = input("y").readOnly = false;
+  button("save-pin").hidden = false;
+  button("remove-pin").hidden = true;
+  get("pin-title").textContent = "Drop a portal";
+  get("pin-context").textContent =
+    "Give this place a name. Matching names connect maps.";
+  get("pin-error").textContent = "";
+  board.setDraft({ x, y });
+  dialog.showModal();
+  input("portal-name").focus();
+}
+function inspectPin(portal: Portal): void {
+  if (!mapping || !latest || stopping || dialog.open) return;
+  const own = latest.layers
+    .find((l) => l.peer === latest!.local_peer)!
+    .portals.find((p) => p.id === portal.id);
+  originalName = own?.name;
+  const point = own ?? portal;
+  pinFrame = own
+    ? latest.layers.find((l) => l.peer === latest!.local_peer)!.frame
+    : maps.placementFrame;
+  input("portal-name").value = point.name;
+  input("portal-name").readOnly = true;
+  input("x").value = String(point.x);
+  input("y").value = String(point.y);
+  input("x").readOnly = input("y").readOnly = !own;
+  button("save-pin").hidden = !own;
+  button("remove-pin").hidden = !own;
+  get("pin-title").textContent = own ? "Edit your portal" : "Peer portal";
+  get("pin-context").textContent = own
+    ? "Coordinates in your original frame. Changes update your map only."
+    : "Read only. This placement belongs to another peer.";
+  get("pin-error").textContent = "";
+  dialog.showModal();
+}
+function closePin(): void {
+  dialog.close();
+  board.setDraft();
+  get<SVGSVGElement>("grid").focus();
+}
+button("cancel-pin").onclick = closePin;
+dialog.addEventListener("close", () => board.setDraft());
+get<HTMLFormElement>("place").onsubmit = (event) => {
+  event.preventDefault();
+  if (!mapping || stopping) return;
   try {
     render(
       mapping.place(
         input("portal-name").value,
         Number(input("x").value),
         Number(input("y").value),
-        latest.local_frame,
+        pinFrame,
       ),
     );
+    closePin();
     notice("Portal saved to your map.");
   } catch (error) {
-    notice(error);
+    get("pin-error").textContent =
+      error instanceof Error ? error.message : String(error);
   }
-}
-get<HTMLFormElement>("place").onsubmit = (event) => {
-  event.preventDefault();
-  place();
 };
-button("fit").onclick = () => { if (latest) maps.render(latest); };
+button("remove-pin").onclick = () => {
+  if (!mapping || !originalName || stopping) return;
+  try {
+    render(mapping.remove(originalName));
+    closePin();
+    notice("Removed your placement. Peer maps are unchanged.");
+  } catch (error) {
+    get("pin-error").textContent = String(error);
+  }
+};
+button("add-pin").onclick = () => board.dropAtCenter();
+button("fit").onclick = () => board.fit();
+button("zoom-in").onclick = () => board.zoom(0.8);
+button("zoom-out").onclick = () => board.zoom(1.25);
 get<HTMLSelectElement>("environment").onchange = () => {
   const custom = get<HTMLSelectElement>("environment").value === "custom";
   get("custom-environment").hidden = !custom;
@@ -171,7 +249,7 @@ async function start(): Promise<void> {
     get("start").hidden = true;
     get("running").hidden = false;
     get("peer-id").textContent = peer.peerId;
-    get<HTMLFieldSetElement>("editor").disabled = false;
+    get("session-name").textContent = input("session").value;
     render(mapping.view());
     get("transport").textContent = "Relay ready · discovering matching peers";
     notice(
@@ -215,7 +293,7 @@ function startDiscovery(): void {
   if (!peer || !mapping || discoveryTask || stopping) return;
   const running = peer,
     current = mapping;
-  button("retry-discovery").disabled = true;
+
   const controller = new DomainDiscovery({
     localPeer: running.peerId,
     async discover() {
@@ -233,36 +311,27 @@ function startDiscovery(): void {
       });
     },
     inspect: (peerId, route) => current.inspectPeer(peerId, route),
-    async follow(selection) {
-      get<HTMLSelectElement>("peer-choice").disabled = true;
+    async follow(selection, peerId) {
       try {
-        const task = current.follow(
+        await current.follow(
           selection,
           (json: string) => {
             if (mapping === current && !stopping) render(json);
           },
           (status: string) => {
-            if (mapping === current && !stopping)
-              get("transport").textContent = status;
+            if (mapping === current && !stopping) {
+              maps.statuses.set(peerId, status);
+              render(current.view());
+            }
           },
         );
-        render(current.view());
-        await task;
       } finally {
-        get<HTMLSelectElement>("peer-choice").disabled = false;
+        maps.statuses.delete(peerId);
+        if (mapping === current && !stopping) render(current.view());
       }
     },
-    matches(matches) {
-      if (mapping !== current || stopping) return;
-      get("partner-picker").hidden = matches.length <= 1;
-      const select = get<HTMLSelectElement>("peer-choice"),
-        previous = select.value;
-      select.replaceChildren(
-        new Option("Choose a partner", ""),
-        ...matches.map((match) => new Option(match.peerId, match.peerId)),
-      );
-      if (matches.some((match) => match.peerId === previous))
-        select.value = previous;
+    unfollow: async (peerId) => {
+      await current.unfollow(peerId);
     },
     status(message) {
       if (mapping === current && !stopping)
@@ -274,7 +343,7 @@ function startDiscovery(): void {
     .run()
     .catch((error) => {
       if (mapping === current && !stopping) {
-        get("transport").textContent = "Discovery paused · retry to reconnect";
+        get("transport").textContent = "Session discovery stopped";
         notice(error);
       }
     })
@@ -283,13 +352,8 @@ function startDiscovery(): void {
         discovery = undefined;
         discoveryTask = undefined;
       }
-      if (mapping === current && !stopping)
-        button("retry-discovery").disabled = false;
     });
 }
-button("retry-discovery").onclick = startDiscovery;
-get<HTMLSelectElement>("peer-choice").onchange = () =>
-  discovery?.choose(get<HTMLSelectElement>("peer-choice").value);
 button("stop-button").onclick = () => {
   void stop().catch(notice);
 };
@@ -302,8 +366,8 @@ function stop(): Promise<void> {
     discovery?.cancel();
     mapping = undefined;
     peer = undefined;
-    get<HTMLFieldSetElement>("editor").disabled = true;
-    button("stop-button").disabled = button("retry-discovery").disabled = true;
+    closePin();
+    button("add-pin").disabled = button("stop-button").disabled = true;
     let failure: unknown;
     try {
       if (current) await current.close();
@@ -322,18 +386,8 @@ function stop(): Promise<void> {
     maps.clear();
     get("running").hidden = true;
     get("start").hidden = !session;
-    get("empty").hidden = false;
-    get("map-title").textContent = "Your local map";
-    get("alignment").textContent = "Peer stopped";
     get("transport").textContent = "Not connected";
-    get("evidence").textContent = "No shared portals yet";
-    get("sequences").textContent = "Local — · Partner —";
-    get("portal-count").textContent = "0 portals";
-    get("frame-caption").textContent = "No frame yet";
-    get("map-caption").textContent = "Your coordinates · editable";
-    get("partner-picker").hidden = true;
-    get<HTMLSelectElement>("peer-choice").replaceChildren();
-    button("stop-button").disabled = button("retry-discovery").disabled = false;
+    button("stop-button").disabled = false;
     if (failure) throw failure;
     notice(
       "Peer stopped; relay cleanup completed. Start again for a fresh map.",

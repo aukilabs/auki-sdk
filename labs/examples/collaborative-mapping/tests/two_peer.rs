@@ -159,3 +159,102 @@ async fn authenticated_exchange_resubscription_and_idle_shutdown() {
     .await
     .expect("Exchange and cleanup exceeded deadline");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn three_peers_exchange_live_edits_and_continue_after_one_leaves() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let domain = Uuid::new_v4();
+        let mut peers = vec![];
+        let mut authorities = vec![];
+        let mut maps = vec![];
+        let mut endpoints = vec![];
+        for index in 0..3 {
+            let identity = Identity::generate();
+            let (peer, authority) = AukiPeer::start_external(
+                identity.clone(),
+                support::authority(&identity, domain),
+                support::direct_config(),
+            )
+            .await
+            .unwrap();
+            let mut map = DemoMap::new(
+                peer.peer_id().to_string(),
+                domain.to_string(),
+                "demo".into(),
+            )
+            .unwrap();
+            place(&mut map, "bridge", index as f64 * 10., 0.);
+            let endpoint =
+                ComponentProtocolEndpoint::mount(peer.protocols(), map.runtime.clone()).unwrap();
+            endpoint.export_product(&map.map.product()).unwrap();
+            peers.push(peer);
+            authorities.push(authority);
+            maps.push(map);
+            endpoints.push(endpoint);
+        }
+        let mut streams = vec![];
+        for receiver in 0..3 {
+            for source in 0..3 {
+                if receiver == source {
+                    continue;
+                }
+                let subscription =
+                    subscribe(&peers[receiver], &peers[source], &mut maps[receiver]).await;
+                streams.push((receiver, source, subscription));
+            }
+        }
+        for (receiver, _, stream) in &mut streams {
+            receive(stream, &mut maps[*receiver]).await;
+        }
+        for (index, map) in maps.iter_mut().enumerate() {
+            let frame = map.session_view().unwrap().display_frame;
+            map.place(&format!("pin-{index}"), index as f64, 2., &frame)
+                .unwrap();
+        }
+        for (receiver, _, stream) in &mut streams {
+            receive(stream, &mut maps[*receiver]).await;
+        }
+        let expected = maps[0].session_view().unwrap().portals;
+        assert_eq!(expected.len(), 4);
+        for map in &mut maps {
+            assert_eq!(map.session_view().unwrap().portals, expected);
+        }
+        // Graceful departure withdraws evidence; remaining peers continue their existing streams.
+        for (receiver, source, stream) in &mut streams {
+            if *receiver == 2 || *source == 2 {
+                stream.close().await.unwrap();
+            }
+        }
+        let departing = peers[2].peer_id().to_string();
+        maps[0].forget_peer(&departing);
+        maps[1].forget_peer(&departing);
+        endpoints.pop().unwrap().close().await.unwrap();
+        maps.pop().unwrap().close();
+        peers.pop().unwrap().shutdown().await.unwrap();
+        let frame = maps[0].session_view().unwrap().display_frame;
+        maps[0].place("after-departure", 5., 6., &frame).unwrap();
+        for (receiver, source, stream) in &mut streams {
+            if *receiver == 1 && *source == 0 {
+                receive(stream, &mut maps[1]).await;
+            }
+        }
+        assert_eq!(
+            maps[0].session_view().unwrap().portals,
+            maps[1].session_view().unwrap().portals
+        );
+        for (_, _, stream) in &mut streams {
+            stream.close().await.unwrap();
+        }
+        for endpoint in endpoints {
+            endpoint.close().await.unwrap();
+        }
+        for mut map in maps {
+            map.close();
+        }
+        for peer in peers {
+            peer.shutdown().await.unwrap();
+        }
+    })
+    .await
+    .expect("Three-peer exchange exceeded deadline");
+}

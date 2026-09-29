@@ -1,7 +1,7 @@
-// Local UI checks only. No login, relay booking, or app offline mode.
+// Local fixtures only: real WASM load, controller tests, then test-only UI port fixture.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { once } from "node:events";
 import { chromium } from "playwright";
 import { checkDiscovery } from "./discovery-checks.mjs";
@@ -18,141 +18,190 @@ const server = spawn(
   ],
   { stdio: "pipe" },
 );
-let output = "";
-server.stderr.on("data", (data) => {
-  output += data;
-});
 let browser;
 try {
-  let ready = false;
   for (let i = 0; i < 100; i++) {
-    if (server.exitCode !== null) throw Error(output);
     try {
-      ready = (await fetch(`http://127.0.0.1:${port}`)).ok;
-    } catch {
-      /* Server starting. */
-    }
-    if (ready) break;
-    await new Promise((resolve) => setTimeout(resolve, 100));
+      if ((await fetch(`http://127.0.0.1:${port}`)).ok) break;
+    } catch {}
+    await new Promise((r) => setTimeout(r, 100));
   }
-  assert.ok(ready, "Vite did not start");
   browser = await chromium.launch({ channel: "chrome", headless: true });
   const page = await browser.newPage({
-    viewport: { width: 1440, height: 1100 },
-    deviceScaleFactor: 1,
-  });
-  const errors = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  await page.route("**/*", (route) => {
-    const url = new URL(route.request().url());
-    return url.hostname === "127.0.0.1" ? route.continue() : route.abort();
-  });
+      viewport: { width: 1440, height: 960 },
+    }),
+    errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.route("**/*", (route) =>
+    new URL(route.request().url()).hostname === "127.0.0.1"
+      ? route.continue()
+      : route.abort(),
+  );
   await page.goto(`http://127.0.0.1:${port}`);
   await page
     .getByText("Browser runtime ready", { exact: true })
     .waitFor({ timeout: 60000 });
-  assert.equal(await page.locator("#login-button").isEnabled(), true);
-  assert.equal(await page.locator("#portal-name").isDisabled(), true);
-  assert.equal(await page.locator("#running").isVisible(), false);
-  await page.selectOption("#environment", "custom");
-  assert.equal(await page.locator("#api").isVisible(), true);
-  assert.equal(await page.locator("#api").getAttribute("required"), "");
-  await page.selectOption("#environment", "dev");
-  await mkdir("test-results", { recursive: true });
-  await page.waitForTimeout(200);
-  assert.equal(
-    await page
-      .locator("#login-button")
-      .evaluate((el) => getComputedStyle(el).backgroundColor),
-    "rgb(121, 96, 205)",
+  assert.equal(await page.locator("#add-pin").isDisabled(), true);
+  await checkDiscovery(page);
+  // Fixture replaces only the WASM-facing ports on this test page. Production has no offline path.
+  const fixture = await readFile(
+    new URL("./ui-fixture.mjs", import.meta.url),
+    "utf8",
   );
-  await page.screenshot({
-    path: "test-results/initial-desktop.png",
-    fullPage: true,
+  await page.route("**/pkg-web/auki_collaborative_mapping_web.js", (r) =>
+    r.fulfill({ contentType: "application/javascript", body: fixture }),
+  );
+  await page.reload();
+  await page.fill("#email", "test@example.test");
+  await page.fill("#password", "fixture-only");
+  await page.click("#login-button");
+  await page.click("#start-button");
+  await page.getByText("1 peer", { exact: true }).waitFor();
+  assert.equal(await page.locator("#add-pin").isEnabled(), true);
+  const grid = page.locator("#grid"),
+    box = await grid.boundingBox();
+  const before = await grid.getAttribute("viewBox");
+  await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.65, box.y + box.height * 0.6, {
+    steps: 8,
   });
-  // Test the shared renderer in isolation. No replacement WASM API or simulated transport.
-  const result = await page.evaluate(async () => {
-    const { Grid } = await import("/src/grid.ts");
-    const root = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    root.id = "test-grid";
-    root.style.width = "600px";
-    root.style.height = "600px";
-    document.body.append(root);
-    let clicked;
-    const grid = new Grid(root, (x, y) => {
-      clicked = [x, y];
+  await page.mouse.up();
+  assert.notEqual(await grid.getAttribute("viewBox"), before);
+  assert.equal(await page.locator("#pin-dialog").isVisible(), false);
+  await grid.dblclick({
+    position: { x: box.width * 0.5, y: box.height * 0.5 },
+  });
+  await page.locator("#pin-dialog").waitFor({ state: "visible" });
+  await page.fill("#portal-name", "bridge");
+  await page.click("#save-pin");
+  assert.equal(await grid.locator('[data-portal="bridge"]').count(), 1);
+  const savedCamera = await grid.getAttribute("viewBox");
+  // Add aligned and unaligned peers through the same renderer used by the app.
+  await page.evaluate(async () => {
+    const d = window.fixture.data;
+    const portal = (name, x, y, peer) => ({
+      id: name,
+      name,
+      x,
+      y,
+      contributors: [peer],
     });
-    grid.render(
-      [
-        { id: "1", name: "apple", x: 1, y: 2, contributors: ["a"] },
-        { id: "2", name: "banana", x: -6, y: -15, contributors: ["b"] },
-        { id: "3", name: "bridge", x: 0, y: 0, contributors: ["a", "b"] },
-      ],
-      ["b", "a"],
+    d.layers.push({
+      peer: "peer-b",
+      frame: "frame-b",
+      sequence: 3,
+      state: "aligned",
+      portals: [portal("cafe", 11, 22, "peer-b")],
+      aligned_portals: [portal("cafe", 1, 2, "peer-b")],
+      to_display: {
+        from_frame_id: "frame-b",
+        to_frame_id: "local-frame",
+        translation: [-10, -20, 0],
+      },
+    });
+    d.layers.push({
+      peer: "peer-c",
+      frame: "frame-c",
+      sequence: 1,
+      state: "separate",
+      portals: [portal("park", 4, 5, "peer-c")],
+      aligned_portals: null,
+      to_display: null,
+    });
+    // Re-render via the existing app by performing a local edit after this injected snapshot.
+  });
+  await page.click("#add-pin");
+  await page.fill("#portal-name", "home");
+  await page.fill("#x", "6");
+  await page.fill("#y", "-4");
+  await page.click("#save-pin");
+  assert.equal(await grid.getAttribute("viewBox"), savedCamera);
+  assert.equal(await grid.locator('[data-portal="cafe"]').count(), 1);
+  assert.equal(await grid.locator('[data-portal="park"]').count(), 0);
+  const b = page.locator(".layer-row").filter({ hasText: "Peer peer-b" });
+  await b.locator('input[type="checkbox"]').uncheck();
+  assert.equal(await grid.locator('[data-portal="cafe"]').count(), 0);
+  await b.locator('input[type="checkbox"]').check();
+  await page.selectOption("#coordinate-frame", "peer-c");
+  assert.equal(await page.locator("#add-pin").isDisabled(), true);
+  assert.equal(await grid.locator('[data-portal="park"]').count(), 1);
+  assert.equal(await grid.locator('[data-portal="bridge"]').count(), 0);
+  await page.selectOption("#coordinate-frame", "combined");
+  await page.click("#zoom-in");
+  assert.notEqual(await grid.getAttribute("viewBox"), savedCamera);
+  await page.click("#fit");
+  await mkdir("test-results", { recursive: true });
+  await page.screenshot({ path: "test-results/layers-desktop.png" });
+  async function dragPin(name, { command = true, cancel = false } = {}) {
+    const marker = grid.locator(`[data-portal="${name}"] path`);
+    const bounds = await marker.boundingBox();
+    const scale = await grid.evaluate((el) => ({
+      x: el.getScreenCTM().a,
+      y: el.getScreenCTM().d,
+    }));
+    if (command) await page.keyboard.down("Meta");
+    await page.mouse.move(
+      bounds.x + bounds.width / 2,
+      bounds.y + bounds.height / 2,
     );
-    const point = new DOMPoint(3, -4).matrixTransform(root.getScreenCTM());
-    root.dispatchEvent(
-      new MouseEvent("click", { clientX: point.x, clientY: point.y }),
+    await page.mouse.down();
+    await page.mouse.move(
+      bounds.x + bounds.width / 2 + scale.x * 2,
+      bounds.y + bounds.height / 2 - scale.y * 3,
+      { steps: 8 },
     );
-    const result = {
-      count: root.querySelectorAll("[data-portal]").length,
-      clicked,
-      bridge: root
-        .querySelector('[data-portal="bridge"] circle:last-of-type')
-        ?.getAttribute("fill"),
-      banana: root
-        .querySelector('[data-portal="banana"]')
-        ?.getAttribute("transform"),
-    };
-    root.remove();
-    return result;
-  });
-  assert.deepEqual(result, {
-    count: 3,
-    clicked: [3, 4],
-    bridge: "#52a897",
-    banana: "translate(-6 15)",
-  });
-  const views = await page.evaluate(async () => {
-    const { MapViews } = await import("/src/map-views.ts");
-    const { Grid } = await import("/src/grid.ts");
-    const removed = [];
-    const maps = new MapViews(new Grid(document.getElementById("grid")), name => removed.push(name));
-    const portal = (name, x, y, peer) => ({ id: name, name, x, y, contributors: [peer] });
-    const view = {
-      state: "aligned", reason: null, local_peer: "b", remote_peer: "a",
-      local_frame: "frame-b", remote_frame: "frame-a", display_frame: "frame-a",
-      conflicts: [], local_portals: [portal("bridge", 10, 20, "b")],
-      remote_portals: [portal("bridge", 0, 0, "a"), portal("partner-only", 2, 3, "a")],
-      portals: [portal("bridge", 0, 0, "a"), portal("partner-only", 2, 3, "a")],
-    };
-    maps.render(view);
-    const aligned = {
-      local: document.querySelector('#grid [data-portal="bridge"]').getAttribute("transform"),
-      remote: document.querySelector('#remote-grid [data-portal="bridge"]').getAttribute("transform"),
-      combined: document.querySelectorAll('#combined-grid [data-portal]').length,
-      buttons: document.querySelectorAll('#portal-list button').length,
-    };
-    view.state = "conflict";
-    view.local_portals.push(portal("bad", 4, 5, "b"));
-    view.remote_portals.push(portal("bad", 9, 9, "a"));
-    view.conflicts = [{ name: "bad", disagrees_with: ["bridge"] }, { name: "bridge", disagrees_with: ["bad"] }];
-    maps.render(view);
-    const conflict = {
-      combinedHidden: document.getElementById("combined-grid").hasAttribute("hidden"),
-      combinedCount: document.querySelectorAll('#combined-grid [data-portal]').length,
-      highlighted: document.querySelectorAll('[data-conflict="true"]').length,
-      evidence: document.getElementById("portal-list").textContent.includes("Incompatible with: bridge"),
-    };
-    document.querySelector('[aria-label="Remove bad from my map"]').click();
-    return { aligned, conflict, removed };
-  });
-  assert.deepEqual(views, {
-    aligned: { local: "translate(10 -20)", remote: "translate(0 0)", combined: 2, buttons: 1 },
-    conflict: { combinedHidden: true, combinedCount: 0, highlighted: 4, evidence: true },
-    removed: ["bad"],
-  });
-  await page.screenshot({ path: "test-results/conflict-desktop.png", fullPage: true });
+    if (cancel) await page.keyboard.press("Escape");
+    await page.mouse.up();
+    if (command) await page.keyboard.up("Meta");
+  }
+  const homeBefore = await page.evaluate(() =>
+    window.fixture.local.portals.find((p) => p.name === "home"),
+  );
+  const cameraBeforeMove = await grid.getAttribute("viewBox");
+  await dragPin("home");
+  const moved = await page.evaluate(() =>
+    window.fixture.local.portals.find((p) => p.name === "home"),
+  );
+  assert.equal(moved.x, homeBefore.x + 2);
+  assert.equal(moved.y, homeBefore.y + 3);
+  assert.equal(await grid.getAttribute("viewBox"), cameraBeforeMove);
+  assert.equal(await page.locator("#pin-dialog").isVisible(), false);
+  await dragPin("home", { cancel: true });
+  assert.deepEqual(
+    await page.evaluate(() =>
+      window.fixture.local.portals.find((p) => p.name === "home"),
+    ),
+    moved,
+  );
+  await dragPin("cafe");
+  assert.equal(await grid.getAttribute("viewBox"), cameraBeforeMove);
+  assert.equal(await page.locator("#pin-dialog").isVisible(), false);
+  assert.equal(
+    await page.evaluate(() =>
+      window.fixture.local.portals.some((p) => p.name === "cafe"),
+    ),
+    false,
+  );
+  await dragPin("home", { command: false });
+  assert.notEqual(await grid.getAttribute("viewBox"), cameraBeforeMove);
+  assert.deepEqual(
+    await page.evaluate(() =>
+      window.fixture.local.portals.find((p) => p.name === "home"),
+    ),
+    moved,
+  );
+  await page.click("#fit");
+  // Inspect and remove an owned portal through the actual map click / pointer capture path.
+  await grid.locator('[data-portal="bridge"] path').click();
+  await page.locator("#pin-dialog").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#remove-pin").isVisible(), true);
+  await page.click("#remove-pin");
+  assert.equal(await grid.locator('[data-portal="bridge"]').count(), 0);
+  await page.click("#add-pin");
+  await page.fill("#portal-name", "canceled");
+  await page.keyboard.press("Escape");
+  assert.equal(await grid.locator('[data-portal="canceled"]').count(), 0);
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(
     await page.evaluate(
@@ -160,18 +209,13 @@ try {
     ),
     false,
   );
-  await page.screenshot({
-    path: "test-results/initial-mobile.png",
-    fullPage: true,
-  });
-  await page.locator("#portal-panel").scrollIntoViewIfNeeded();
-  await page.screenshot({ path: "test-results/conflict-mobile.png" });
-  assert.equal(await page.locator("#remote-card").count(), 0);
-  assert.equal(await page.locator("#local-card").count(), 0);
-  await checkDiscovery(page);
+  await page.screenshot({ path: "test-results/layers-mobile.png" });
+  await page.click("#stop-button");
+  assert.equal(await page.locator("#add-pin").isDisabled(), true);
+  assert.equal(await grid.locator("[data-portal]").count(), 0);
   assert.deepEqual(errors, []);
   console.log(
-    "Passed: real WASM load, relay-only controls, environment form, grid geometry/colors, click conversion, mobile overflow.",
+    "Passed: real WASM load; solo session; drag/zoom; named drop; cancel; layer toggles; frame isolation; ownership; removal; camera persistence; mobile layout; stop cleanup.",
   );
 } finally {
   await browser?.close();

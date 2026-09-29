@@ -1,39 +1,36 @@
-/** Domain discovery is a candidate source; inspect authenticates routes and matches session metadata. */
+/** Bounded per-peer subscriptions; Domain discovery stays active for the session lifetime. */
 export interface Candidate {
   peerId: string;
   routes: string[];
   expiresAt: string;
 }
-export interface Match {
-  peerId: string;
-  selection: string;
-}
 export interface DiscoveryPorts {
   localPeer: string;
   discover(): Promise<Candidate[]>;
   inspect(peer: string, route: string): Promise<string | undefined>;
-  follow(selection: string): Promise<void>;
-  matches(matches: Match[]): void;
+  follow(selection: string, peer: string): Promise<void>;
+  unfollow(peer: string): Promise<void>;
   status(message: string): void;
 }
 export class DomainDiscovery {
   private readonly controller = new AbortController();
-  private selected: string | undefined;
+  private active = new Map<
+    string,
+    { selection: string; task: Promise<void> }
+  >();
+  private retries = new Map<string, { failures: number; after: number }>();
   constructor(
     private readonly ports: DiscoveryPorts,
     private readonly intervalMs = 5000,
-    private readonly maxRounds = Number.POSITIVE_INFINITY,
+    private readonly maxRounds = Infinity,
   ) {}
-  choose(peer: string): void {
-    this.selected = peer || undefined;
-  }
   cancel(): void {
     this.controller.abort();
   }
   private get canceled(): boolean {
     return this.controller.signal.aborted;
   }
-  private wait(): Promise<void> {
+  private wait(ms: number): Promise<void> {
     if (this.canceled) return Promise.resolve();
     return new Promise((resolve) => {
       const done = () => {
@@ -41,116 +38,127 @@ export class DomainDiscovery {
         this.controller.signal.removeEventListener("abort", done);
         resolve();
       };
-      const timer = setTimeout(done, this.intervalMs);
+      const timer = setTimeout(done, ms);
       this.controller.signal.addEventListener("abort", done, { once: true });
     });
   }
   async run(): Promise<void> {
     let failures = 0;
-    for (let round = 0; round < this.maxRounds && !this.canceled; round++) {
-      try {
-        this.ports.status(
-          round
-            ? "Refreshing Domain discovery · waiting for a matching session"
-            : "Finding peers in this Domain and demo session…",
-        );
-        const discovered = await this.ports.discover();
-        if (this.canceled) return;
-        // Deduplicate advertisements; never auto-select from a silently truncated candidate list.
-        const candidates = new Map<string, Set<string>>();
-        for (const candidate of discovered) {
-          if (
-            candidate.peerId === this.ports.localPeer ||
-            !(Date.parse(candidate.expiresAt) > Date.now())
-          )
-            continue;
-          const routes = candidates.get(candidate.peerId) ?? new Set<string>();
-          for (const route of candidate.routes) {
+    try {
+      for (let round = 0; round < this.maxRounds && !this.canceled; round++) {
+        try {
+          const discovered = await this.ports.discover();
+          if (this.canceled) break;
+          const candidates = new Map<string, Set<string>>();
+          for (const candidate of discovered) {
             if (
-              (route.includes("/wss/") || route.includes("/tls/ws/")) &&
-              route.includes("/p2p-circuit/")
+              candidate.peerId === this.ports.localPeer ||
+              !(Date.parse(candidate.expiresAt) > Date.now())
             )
-              routes.add(route);
+              continue;
+            const routes =
+              candidates.get(candidate.peerId) ?? new Set<string>();
+            for (const route of candidate.routes) {
+              if (
+                (route.includes("/wss/") || route.includes("/tls/ws/")) &&
+                route.includes("/p2p-circuit/")
+              )
+                routes.add(route);
+            }
+            if (routes.size) candidates.set(candidate.peerId, routes);
           }
-          if (routes.size) candidates.set(candidate.peerId, routes);
-        }
-        if (candidates.size > 16)
-          throw new Error(
-            "Too many component peers in this Domain to inspect safely (limit 16).",
-          );
-        const matches: Match[] = [];
-        let unavailable = 0;
-        // Bound concurrent Catalog requests to four. One stale advertisement must not block the rest.
-        const entries = [...candidates.entries()];
-        for (
-          let index = 0;
-          index < entries.length && !this.canceled;
-          index += 4
-        ) {
-          await Promise.all(
-            entries.slice(index, index + 4).map(async ([peerId, routes]) => {
-              let inspected = false;
-              for (const route of [...routes].slice(0, 2)) {
-                if (this.canceled) return;
-                try {
-                  const selection = await this.ports.inspect(peerId, route);
-                  inspected = true;
-                  if (!this.canceled && selection)
-                    matches.push({ peerId, selection });
-                  break;
-                } catch {
-                  /* Try the candidate's next WSS route. */
+          if (candidates.size > 16)
+            throw Error("Domain exceeds the 16 candidate inspection limit");
+          // A missing discovery advertisement is not proof of disconnection. Active streams
+          // perform their own bounded liveness/sequence probes, including during DDS outages.
+          for (const peer of this.retries.keys()) {
+            if (!candidates.has(peer) && !this.active.has(peer))
+              this.retries.delete(peer);
+          }
+          const entries = [...candidates.entries()];
+          for (
+            let index = 0;
+            index < entries.length && !this.canceled;
+            index += 4
+          ) {
+            await Promise.all(
+              entries.slice(index, index + 4).map(async ([peer, routes]) => {
+                if ((this.retries.get(peer)?.after ?? 0) > Date.now()) return;
+                for (const route of [...routes].slice(0, 2)) {
+                  if (this.canceled) return;
+                  try {
+                    const selection = await this.ports.inspect(peer, route);
+                    if (this.canceled) return;
+                    const current = this.active.get(peer);
+                    if (current?.selection === selection) return;
+                    if (current) {
+                      await this.ports.unfollow(peer);
+                      await current.task;
+                    }
+                    if (!selection || this.canceled) return;
+                    if (this.active.size >= 15)
+                      throw Error("Session is full (16 peers)");
+                    const record = { selection, task: Promise.resolve() };
+                    this.active.set(peer, record);
+                    record.task = this.ports
+                      .follow(selection, peer)
+                      .catch(() => {
+                        // The transport callback reports the concrete failure per peer.
+                      })
+                      .finally(() => {
+                        if (this.active.get(peer) === record)
+                          this.active.delete(peer);
+                        const previous = this.retries.get(peer);
+                        const count = Math.min(
+                          4,
+                          (previous?.failures ?? 0) + 1,
+                        );
+                        this.retries.set(peer, {
+                          failures: count,
+                          after:
+                            Date.now() + this.intervalMs * 2 ** (count - 1),
+                        });
+                      });
+                    return;
+                  } catch {
+                    /* Try the next route; one unavailable peer does not block others. */
+                  }
                 }
-              }
-              if (!inspected) unavailable++;
-            }),
-          );
+                const count = Math.min(
+                  4,
+                  (this.retries.get(peer)?.failures ?? 0) + 1,
+                );
+                this.retries.set(peer, {
+                  failures: count,
+                  after: Date.now() + this.intervalMs * 2 ** (count - 1),
+                });
+              }),
+            );
+          }
+          failures = 0;
+          if (!this.canceled)
+            this.ports.status(
+              this.active.size
+                ? `${this.active.size} peer connection${this.active.size === 1 ? "" : "s"} · looking for new arrivals`
+                : "Session open · you can map while others join",
+            );
+        } catch {
+          failures = Math.min(4, failures + 1);
+          if (!this.canceled)
+            this.ports.status(
+              "Discovery unavailable · retrying automatically; your map stays open",
+            );
         }
-        if (this.canceled) return;
-        matches.sort((a, b) => a.peerId.localeCompare(b.peerId));
-        this.ports.matches(matches);
-        const selected = this.selected
-          ? matches.find((match) => match.peerId === this.selected)
-          : matches.length === 1
-            ? matches[0]
-            : undefined;
-        if (selected) {
-          this.ports.status("Matching peer found · connecting both map views");
-          await this.ports.follow(selected.selection);
-          if (this.canceled) return;
-          throw new Error("Partner subscription ended.");
-        }
-        if (!matches.length && unavailable) {
-          throw new Error(
-            "Matching sessions could not be checked because some peers are unreachable.",
-          );
-        }
-        failures = 0;
-        this.ports.status(
-          matches.length > 1
-            ? "Several peers share this session · choose your partner below"
-            : unavailable
-              ? "Some peers are unreachable · retrying Domain discovery"
-              : this.selected
-                ? "Selected partner unavailable · waiting for it to return"
-                : "Waiting for another peer in this Domain and demo session",
-        );
-      } catch (error) {
-        if (this.canceled) return;
-        failures++;
-        this.ports.status(
-          `Discovery / connection failed · remote map may be stale (${failures}/3): ${error instanceof Error ? error.message : String(error)}`,
-        );
-        if (failures >= 3)
-          throw new Error(
-            "Automatic connection paused after three failures. Click Retry discovery.",
-          );
+        await this.wait(this.intervalMs * 2 ** failures);
       }
-      await this.wait();
-    }
-    if (!this.canceled)
-      throw new Error(
-        "Discovery search stopped. Check the Domain and session, then retry discovery.",
+    } finally {
+      await Promise.all(
+        [...this.active.entries()].map(async ([peer, record]) => {
+          await this.ports.unfollow(peer);
+          await record.task;
+        }),
       );
+      this.active.clear();
+    }
   }
 }

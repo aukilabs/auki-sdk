@@ -1,14 +1,15 @@
-# Collaborative mapping in two browsers
+# Collaborative mapping in browsers
 
-A relay-only web experiment: each peer places named, simulated Portals on its
-own grid. A shared name aligns the maps, and both browsers show the same union
-in the same explicitly selected frame. All mapping code runs in browser WASM;
-there is no application server or native mapping process.
+A relay-only web experiment with one pannable map and toggleable peer layers.
+Each browser owns its original map. Shared simulated Portal identities align
+maps, including through another peer, without republishing a derived union.
+All SDK and mapping code runs in browser WASM; there is no application server,
+Rust host process, or offline app mode.
 
-## Run
+## Run and use
 
 Requires Rust 1.89+, `wasm32-unknown-unknown`, wasm-pack 0.13.1, Node 20.19+
-(on 20.x) or 22.12+, and a current Chromium browser. From the repository root:
+(on 20.x) or 22.12+, and current Chromium. From the repository root:
 
 ```sh
 cd labs/examples/collaborative-mapping/web
@@ -16,122 +17,139 @@ npm ci
 npm run dev
 ```
 
-Open the printed URL in two tabs or browsers. The app has no offline mode.
-Starting the local Vite server does not make the backend local. Before signing
-in against shared services, obtain approval for the environment, User account,
-Domain, relay bookings, DDS discovery advertisement/lookups, P2P map publication/read operations, and cleanup, following
+Starting Vite does not make backend services local. Before signing in against
+shared services, approve the environment, User account, Domain, relay bookings,
+DDS discovery advertisement/lookups, P2P map publication/reads, and cleanup using
 [the first-peer tutorial](../../../docs/tutorials/first-peer.md). This example
-never writes Domain Server records, provisions nodes, or submits DMS tasks.
+never writes Domain Server data, provisions nodes, or submits DMS tasks.
 
-1. Select **Shared development services**, or choose **Custom environment** and
-   enter matching API, DDS, and DMS base URLs. Sign in with a User account.
-2. Select the same Domain and demo session in both tabs. Click **Start relay peer**
-   in each. Both peers book inbound WSS relay routes and enable DDS
-   **DiscoverAndAdvertise** against the session's configured DDS environment.
-3. Each browser automatically discovers same-Domain component peers, authenticates
-   their exact WSS relay routes, and checks Catalog metadata for the same demo
-   session. With two matching peers, both subscribe to the other's map without
-   exchanging cards or clicking Connect. Empty maps are discoverable too.
-   If several peers share the session, choose your partner in the displayed picker
-   (or use a unique session for your pair). The demo still supports two peers.
-4. In A, place `apple` at `(1, 2)`. In B, place `banana` at `(4, 5)`.
-   The local and partner views always show their original, independent coordinates.
-5. In A, place `bridge` at `(0, 0)`. In B, place `bridge` at `(10, 20)`.
-   The third, combined view now shows three Portals, including one shared `bridge`. Its display frame
-   belongs to the lexicographically smaller Peer ID, so its exact coordinates
-   depend on which browser owns that ID. Both browsers agree on them.
-6. Add more Portals by clicking **Your local map** or entering local coordinates.
-   Reusing your own name moves that Portal. Shared names are case-sensitive.
-   The partner and combined views are read only. Each view labels its frame.
-7. Contradictory shared placements hide the combined view. Both source maps
-   highlight the conflicting names in red; **Your portals** lists which shared
-   names imply incompatible offsets. No placement is automatically judged wrong.
-   Use **Remove mine** to delete only your own placement, or move it. The updated
-   snapshot is sent to your partner and alignment is checked again.
-8. Click **Stop peer & reset map** in both tabs before closing them. This awaits
-   subscription cancellation, endpoint closure and peer shutdown to release
-   relay bookings and removes the discovery registration. **Sign out** also closes the User session.
+1. Select shared development services or matching custom API/DDS/DMS endpoints.
+   Sign in, choose a Domain and session name, then **Start / join session**.
+   You can map alone immediately once your relay peer is ready.
+2. Other browsers use the same Domain and session. Each browser continuously
+   discovers and subscribes to matching peers, up to 16 session participants
+   including itself. There is no host browser or partner-selection step.
+3. Drag the map to pan; scroll or use +/− to zoom. **Fit** frames visible portals.
+   Double-click to drop a temporary pin, enter a name, and Save. Escape cancels
+   without publishing. **Drop portal** and Enter on the focused map drop at its
+   center; arrow keys pan. Touch users can pan and use the visible controls.
+4. In A, place `bridge` at local `(0, 0)`; in B, place `bridge` at local `(10, 20)`.
+   Their maps align. **Combined** uses the lexicographically smallest reachable
+   peer's frame, so browsers with the same current evidence render the same union.
+5. Toggle peer layers to compare placements. The coordinate selector also shows
+   each map's original frame. Unaligned maps cannot be overlaid as if their
+   origins were shared; **Unaligned · view** opens that original coordinate space.
+   Placement is disabled in an unaligned remote frame. Incoming updates preserve
+   pan/zoom; a changed coordinate frame fits the view again.
+6. Hold **⌘ Command** and drag your own pin to move it. Release to publish the
+   snapped grid position; Escape cancels. Ordinary dragging still pans, and
+   another peer's pin cannot be moved.
+   Click a portal to inspect it. Your own portal can be moved by editing its
+   coordinates or deleted with **Remove mine**. Other peers' portals are read only.
+   Reusing a name when dropping a new portal moves your existing placement.
+7. Conflicting shared placements appear red. **Resolve alignment** names the
+   contradictory Portal pairs and peers. Neither side is automatically judged
+   correct. Move/remove your own evidence to restore alignment. Contradictory
+   connected components fail closed; unrelated unaligned maps remain inspectable.
+8. Peers can leave and join without stopping the others. **Leave session & reset
+   map** cancels all receive tasks, closes the endpoint, and awaits peer shutdown,
+   removing DDS registration and releasing relay bookings. Sign out also closes
+   the User session. Restart creates a fresh peer and empty publication.
 
-Maps are in memory only. Restarting gives a fresh peer and Product, which is
-rediscovered and validated against the same Domain/session. Closing a browser abruptly cannot promise awaited cleanup. There is no
-persistence or remote edit permission in this example.
+Maps are memory-only. Leave before reloading or closing. Abrupt browser closure
+cannot promise awaited cleanup. Development HMR is disabled to preserve active
+maps; manually reload after leaving to load new code.
 
 ## Components and spatial contract
 
-- `DemoMap` owns a `ComponentRuntime` and an existing
-  [`MapComponent`](../../auki-scenegraph/README.md). Local edits invoke its
-  authorized `upsert_qr` and `remove_qr` operations with the exact current snapshot reference.
-- The WASM adapter mounts [`ComponentProtocolEndpoint`](../../auki-component-protocol/README.md),
-  exports only the snapshot Product, checks the remote Catalog and subscribes
-  with `LatestExisting`. It exports no remote editing Operables.
-- `MapAlignmentChecker` consumes validated, exact snapshot references. The
-  host derives a union for rendering, preserving source placements and
-  contributors. Derived views are never republished as new evidence.
-- Every source map declares an independent XY frame: right-handed, Z-up, meters.
-  Every anchor and map alignment carries explicit source/destination frame IDs.
-- These are **simulated** Portal identities, not DDS Portal records. An exact
-  name and demo session deterministically derive a UUIDv8 from SHA-256. Portal
-  frames are fixed-heading, +X right, +Y up, +Z out of the grid, with 0.25 m side
-  length. Therefore one shared Portal determines translation; there is no
-  rotation estimation or claim that arbitrary real-world names establish alignment.
-- Multiple shared Portals must agree. Contradictory placements withdraw alignment
-  and restore separate views, retaining the source maps for correction.
-- At most 128 Portals per peer; names/session names use 1–64 ASCII letters,
-  digits, spaces, underscores or hyphens without leading/trailing spaces.
-  Positions are integer cells within ±10,000 m in each source frame.
-- Publication timestamps use a named, monotonic per-publication logical clock.
-  These synthetic placements do not represent time-varying physical observations.
+- `DemoMap` uses `ComponentRuntime`, the existing
+  [`MapComponent`](../../auki-scenegraph/README.md), and
+  `MapAlignmentChecker`. Local edits call authorized `upsert_qr` / `remove_qr`
+  with exact snapshot references.
+- The WASM adapter mounts
+  [`ComponentProtocolEndpoint`](../../auki-component-protocol/README.md),
+  exports the snapshot Product only, validates Catalog identity and schema, and
+  subscribes independently to each exact peer Product using `LatestExisting`.
+  No remote editing Operables are exported.
+- Source layers retain explicit independent frame IDs, right-handed XY, Z-up,
+  meters. Every alignment carries source/destination frame IDs. The canvas
+  applies validated transforms only; missing alignment never means equal origins.
+- Session+name deterministically derives synthetic Portal UUIDv8 identity using
+  SHA-256. Names are exact and case-sensitive, 1–64 ASCII letters/digits/spaces/
+  underscores/hyphens, without leading/trailing spaces. These are not DDS records.
+- Portals have fixed +X heading and 0.25 m sides. A shared Portal therefore
+  determines translation, with no rotation estimation. This demo does not claim
+  arbitrary real-world names establish physical alignment. Integer source
+  coordinates are bounded to ±10,000 m, with at most 128 Portals per peer.
+- Conflict diagnostics compare shared-Portal offsets pairwise across every map
+  pair. Different integer offsets exceed the checker's 2 cm tolerance. Diagnostics
+  do not choose a supposedly correct outlier or relax frame/geometry validation.
+- The canonical aligned subset includes the local map. Maps outside that subset
+  remain separate layers. Each view exposes originals, optional transformed
+  placements, exact snapshot sequences, and explicit transform endpoints.
+- Derived layers/unions are never republished as evidence. Publication timestamps
+  use a named, monotonic per-publication logical clock; these are synthetic,
+  static placements rather than time-varying physical observations.
 
-Domain discovery plus session metadata selects the partner this app consumes.
-A session name is not a secret or a Product read ACL: exported synthetic snapshots are readable by authenticated peers
-admitted to the selected Domain. Do not use this demo to publish sensitive maps.
-P2P admission never grants map mutation or Domain Server write authority.
+Domain discovery and session metadata determine relevance, not read permission.
+A session name is not a secret. Published synthetic snapshots are readable by
+P2P peers admitted to the selected Domain. Do not publish sensitive maps here.
+Transport admission does not grant map edits or Domain Server writes.
 
-## Recovery and compatibility
+## Connection recovery
 
-Each browser searches every five seconds while waiting for a partner. Normal
-empty discovery results keep waiting until Stop, so the other person may join
-later. Expired advertisements and self entries are ignored. Candidate inspection
-uses up to four concurrent Catalog requests, two WSS routes per peer, and at most
-16 peers per round; exceeding that limit fails explicitly instead of silently
-selecting from an incomplete list.
+Discovery continues every five seconds even while streams are connected. One
+unreachable peer cannot suspend another peer's updates. Each round inspects at
+most 16 candidate peers, four concurrently, trying up to two WSS relay routes.
+A larger candidate set reports a discovery error rather than silently taking
+an incomplete sample. Active streams remain alive during discovery outages.
 
-A subscription makes at most three connection attempts with 1 s / 2 s backoff.
-On exhaustion the host refreshes discovery and can select the matching peer's new
-publication or relay route. Three failed discovery/connection rounds pause the
-host until **Retry discovery**. Transport loss marks remote evidence stale.
-An idle subscription probes the Catalog every 15 seconds using bounded protocol
-deadlines. Stop cancels inspection/subscription work and retry waits, awaits DDS
-lookup cancellation through peer shutdown, and joins the discovery task before
-freeing WASM handles. Explicit selection among multiple matches stays pinned to
-that Peer ID; restart with a unique session to resume automatic pair selection.
+A receive task makes three bounded connection attempts with 1 s / 2 s backoff.
+On transport failure its map evidence is withdrawn, so stale geometry cannot
+remain a live combined layer. Discovery retries failed peers with exponential
+backoff capped at 40 seconds, and retries DDS failures capped at 80 seconds,
+for the lifetime of the user-started session. Stop cancels all timers and tasks.
+Fresh publications/routes are inspected again and replace old subscriptions
+only after their receive tasks have been canceled and joined.
 
-Live reload is disabled in the development server because it would discard
-in-memory maps and skip awaited relay cleanup. Stop the peer before manually
-reloading after a code update.
+Idle streams probe the Catalog every 15 seconds using protocol deadlines.
+The probe checks both exact Product identity and published `source_sequence`.
+If Catalog metadata proves the observation stream has fallen behind, the adapter
+reopens it with `LatestExisting`. A successful Catalog request alone no longer
+counts as proof of fresh map data. Layer rows show per-peer status and received
+snapshot sequence. Disconnection detection is bounded by the idle interval plus
+protocol deadlines; abrupt disconnects are not reported instantly.
 
-Both browsers must run the same demo contract `auki.collaborative-grid/v1`.
-Both browsers need this discovery-enabled example build for automatic two-way
-connection. Existing Catalog v1, observation-stream v1, and scenegraph snapshot v2 contracts
-are reused. There are no API/DDS/DMS contract or deployment changes. The SDK and
-experimental adapter are compiled into one WASM module, using the
+A missing DDS advertisement alone does not invalidate a healthy authenticated
+stream. Stream/catalog failure removes its evidence; a later matching peer may
+join without resetting the local map. Retry state for absent, inactive peers is
+pruned. Shutdown closes the mapper first, shuts down the SDK peer to cancel DDS
+work, then awaits discovery before freeing WASM handles.
+
+## Compatibility
+
+Existing Catalog v1, observation-stream v1, and scenegraph snapshot v2 contracts
+are unchanged. No API/DDS/DMS deployment or auth-profile changes are required.
+All browsers should run this multi-peer build for symmetric multi-peer behavior.
+The example's WASM view JSON now contains `layers`, `display_frame`, and pairwise
+`conflicts`; UI and WASM must be rebuilt together. `follow` allows independent
+subscriptions and `unfollow(peer)` cancels/joins one. These are demo binding
+changes, not stable SDK binding changes.
+
+The adapter follows the
 [Portable Echo pattern](../../../core/examples/portable-echo/web/README.md);
-stable core crates acquire no dependency on labs.
-
-One shared-crate fix is required: WASM buffers use `web_time::Instant` instead of
-panicking on `std::time::Instant::now`. Native behavior is unchanged. WASM Rust
-callers supplying `Buffer::append_shared_at` timestamps must use
-`web_time::Instant`. No serialized or backend contract changes result.
+stable core crates acquire no dependency on labs. The earlier WASM buffer fix
+uses `web_time::Instant` for WASM only; native behavior is unchanged.
 
 ## Validation
 
 From the repository root:
 
 ```sh
-cargo test --locked -p auki-components -p auki-scenegraph -p auki-component-protocol -p auki-collaborative-mapping -p auki-collaborative-mapping-web
+cargo test --locked -p auki-collaborative-mapping
 cargo check --locked -p auki-collaborative-mapping-web --target wasm32-unknown-unknown
-cargo clippy --locked -p auki-components -p auki-collaborative-mapping -p auki-collaborative-mapping-web --all-targets --no-deps -- -D warnings
-cargo clippy --locked -p auki-components -p auki-collaborative-mapping -p auki-collaborative-mapping-web --target wasm32-unknown-unknown --lib --no-deps -- -D warnings
+cargo clippy --locked -p auki-collaborative-mapping -p auki-collaborative-mapping-web --all-targets --no-deps -- -D warnings
+cargo clippy --locked -p auki-collaborative-mapping -p auki-collaborative-mapping-web --target wasm32-unknown-unknown --lib --no-deps -- -D warnings
 cargo fmt --all -- --check
 ```
 
@@ -141,24 +159,20 @@ From `labs/examples/collaborative-mapping/web`:
 npm ci
 npm run build
 npm run test:ui
-# Set this to a wasm-bindgen-test-runner executable matching Cargo.lock (0.2.121).
 WASM_BINDGEN_TEST_RUNNER=/path/to/wasm-bindgen-test-runner npm run test:wasm
 ```
 
-Tests use local fixtures only; they do not create an offline app mode.
-The native integration test uses isolated signed loopback peers and verifies
-Catalog/subscription exchange, convergence, resubscription and idle shutdown.
-The eleven mapping/discovery regression tests also run in actual Chromium WASM, including
-session/Domain/peer filtering, bidirectional empty-map discovery, invalid
-geometry/identity, stale publication and conflict cases. UI tests load
-the real generated WASM module, verify the relay-only setup, grid rendering,
-click conversion, three independent views, conflict highlighting, local removal controls and mobile layout, without signing in. Injected test discovery
-ports cover staggered starts, automatic subscriptions in both directions, expired
-candidates, route fallback, multiple matches, cancellation, restart, and bounded
-failures. These test fixtures are not an app mode. Chrome must be installed;
-UI artifacts are written under ignored `web/test-results/`.
+Use wasm-bindgen-test-runner 0.2.121 matching Cargo.lock. Thirteen mapping tests
+run natively and in Chromium WASM. Isolated authenticated loopback tests cover
+two- and three-peer streams, edits, conflict removal, resubscription and departure.
+Browser controller tests cover solo startup, full-mesh joins, discovery during
+active subscriptions, failure recovery and cancellation. UI tests first load
+real generated WASM, then use a test-only intercepted WASM port fixture to drive
+session controls, layer/frame selection, pan/zoom, named drops, cancellation,
+inspection/removal, viewport preservation, mobile layout and Stop. The fixture
+is never imported by production and creates no offline application mode.
+Screenshots are saved under ignored `web/test-results/`.
 
-These checks do **not** prove deployed authentication, DDS advertisement/discovery, WSS relay booking/renewal,
-or real two-browser relay cleanup. Run the approved live sequence above before
-claiming shared-environment compatibility. Python, Swift and Expo bindings are
-unchanged and are not included in this example's validation.
+These checks do not prove deployed DDS discovery, WSS relay liveness/recovery,
+authentication or shared-service cleanup. Live multi-browser relay validation is
+still required in an approved environment. Python, Swift and Expo are unchanged.

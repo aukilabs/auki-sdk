@@ -144,8 +144,8 @@ pub struct DemoMap {
     peer: String,
     domain: String,
     session: String,
-    selected: Option<ProductReference>,
-    remote: Option<PublishedMap>,
+    selected: BTreeMap<String, ProductReference>,
+    remotes: BTreeMap<String, PublishedMap>,
     checker: MapAlignmentChecker,
     closed: bool,
 }
@@ -182,8 +182,8 @@ impl DemoMap {
             peer,
             domain,
             session,
-            selected: None,
-            remote: None,
+            selected: BTreeMap::new(),
+            remotes: BTreeMap::new(),
             checker: MapAlignmentChecker::new(AlignmentOptions::default())
                 .map_err(|e| e.to_string())?,
             closed: false,
@@ -208,18 +208,22 @@ impl DemoMap {
         if product.peer_id == self.peer || product.peer_id.is_empty() {
             return Err("Select a different peer".into());
         }
-        // Explicit selection starts a new relationship; retries preserve the existing evidence.
-        if self.selected.as_ref() != Some(&product) {
-            self.checker.remove("remote");
-            self.remote = None;
-            self.selected = Some(product);
+        if !self.selected.contains_key(&product.peer_id) && self.selected.len() >= 15 {
+            return Err("Session supports at most 16 peers including you".into());
+        }
+        if self.selected.get(&product.peer_id) != Some(&product) {
+            self.checker.remove(&product.peer_id);
+            self.remotes.remove(&product.peer_id);
+            self.selected.insert(product.peer_id.clone(), product);
         }
         Ok(())
     }
 
     pub fn receive(&mut self, incoming: PublishedMap) -> Result<()> {
         self.ensure_open()?;
-        if self.selected.as_ref() != Some(&incoming.reference.product) {
+        if self.selected.get(&incoming.reference.product.peer_id)
+            != Some(&incoming.reference.product)
+        {
             return Err("Snapshot is not from the selected exact Product".into());
         }
         incoming.snapshot.validate().map_err(|e| e.to_string())?;
@@ -256,12 +260,13 @@ impl DemoMap {
         }
         self.checker
             .receive_snapshot(
-                "remote",
+                &incoming.reference.product.peer_id,
                 incoming.reference.clone(),
                 incoming.snapshot.clone(),
             )
             .map_err(|e| e.to_string())?;
-        self.remote = Some(incoming);
+        self.remotes
+            .insert(incoming.reference.product.peer_id.clone(), incoming);
         Ok(())
     }
 
@@ -269,16 +274,28 @@ impl DemoMap {
     pub fn place(&mut self, name: &str, x: f64, y: f64, frame: &str) -> Result<()> {
         self.ensure_open()?;
         validate_name(name)?;
-        let view = self.view()?;
-        if view.display_frame != frame && view.local_frame != frame {
-            return Err("Display frame changed; place the Portal again".into());
-        }
-        let pose = &view.local_to_display;
-        // The demo validates every input as XY, fixed-heading: only translation is possible.
-        let offset = if frame == view.local_frame {
+        let local_frame = self.publication().snapshot.scenegraph.map.frame.id;
+        let offset = if frame == local_frame {
             [0.; 3]
         } else {
-            pose.translation
+            let peer = self
+                .remotes
+                .iter()
+                .find(|(_, map)| map.snapshot.scenegraph.map.frame.id == frame)
+                .map(|(peer, _)| peer.clone())
+                .ok_or("Display frame changed; place the Portal again")?;
+            self.checker
+                .receive_snapshot(
+                    "local",
+                    self.publication().reference,
+                    self.publication().snapshot,
+                )
+                .map_err(|e| e.to_string())?;
+            let AlignmentResult::Available { transform, .. } = self.checker.check("local", &peer)
+            else {
+                return Err("Display frame is not aligned to your map".into());
+            };
+            transform.translation
         };
         let x = x - offset[0];
         let y = y - offset[1];
@@ -337,7 +354,23 @@ impl DemoMap {
         Ok(())
     }
 
+    pub fn clear_evidence(&mut self, peer: &str) {
+        self.checker.remove(peer);
+        self.remotes.remove(peer);
+    }
+
+    pub fn forget_peer(&mut self, peer: &str) {
+        self.checker.remove(peer);
+        self.remotes.remove(peer);
+        self.selected.remove(peer);
+    }
+
     pub fn view(&mut self) -> Result<View> {
+        let peer = self.remotes.keys().next().cloned();
+        self.view_for(peer.as_deref())
+    }
+
+    fn view_for(&mut self, peer: Option<&str>) -> Result<View> {
         let local = self.publication();
         self.checker
             .receive_snapshot("local", local.reference.clone(), local.snapshot.clone())
@@ -349,7 +382,8 @@ impl DemoMap {
         let mut reason = None;
         let mut shared_names = vec![];
         let mut offsets = vec![];
-        if let Some(remote) = &self.remote {
+        let remote = peer.and_then(|p| self.remotes.get(p));
+        if let Some(remote) = remote {
             for (id, anchor) in &local.snapshot.scenegraph.anchors {
                 if let Some(other) = remote.snapshot.scenegraph.anchors.get(id) {
                     shared_names.push(anchor.payload.clone());
@@ -363,14 +397,18 @@ impl DemoMap {
                 }
             }
             state = "separate".into();
-            match self.checker.check("remote", "local") {
+            match self
+                .checker
+                .check(&remote.reference.product.peer_id, "local")
+            {
                 AlignmentResult::Available { transform, .. } => {
                     state = "aligned".into();
                     if self.peer < remote.reference.product.peer_id {
                         remote_to_display = Some(transform);
                     } else {
-                        let AlignmentResult::Available { transform, .. } =
-                            self.checker.check("local", "remote")
+                        let AlignmentResult::Available { transform, .. } = self
+                            .checker
+                            .check("local", &remote.reference.product.peer_id)
                         else {
                             return Err("Inverse alignment unavailable".into());
                         };
@@ -393,17 +431,13 @@ impl DemoMap {
             }
         }
         let local_portals = portals(&local, [0., 0., 0.]);
-        let remote_portals = self
-            .remote
-            .as_ref()
-            .map(|r| portals(r, [0., 0., 0.]))
-            .unwrap_or_default();
+        let remote_portals = remote.map(|r| portals(r, [0., 0., 0.])).unwrap_or_default();
         let mut combined: BTreeMap<String, PortalView> =
             portals(&local, local_to_display.translation)
                 .into_iter()
                 .map(|p| (p.id.clone(), p))
                 .collect();
-        if let (Some(remote), Some(transform)) = (&self.remote, remote_to_display) {
+        if let (Some(remote), Some(transform)) = (remote, remote_to_display) {
             for portal in portals(remote, transform.translation) {
                 match combined.entry(portal.id.clone()) {
                     std::collections::btree_map::Entry::Vacant(e) => {
@@ -444,26 +478,149 @@ impl DemoMap {
             state,
             reason,
             local_peer: self.peer.clone(),
-            remote_peer: self
-                .remote
-                .as_ref()
-                .map(|r| r.reference.product.peer_id.clone()),
+            remote_peer: remote.map(|r| r.reference.product.peer_id.clone()),
             local_frame: frame.clone(),
-            remote_frame: self
-                .remote
-                .as_ref()
-                .map(|r| r.snapshot.scenegraph.map.frame.id.clone()),
+            remote_frame: remote.map(|r| r.snapshot.scenegraph.map.frame.id.clone()),
             conflicts,
             display_frame: local_to_display.to_frame_id.clone(),
             local_to_display,
             local_reference: local.reference,
-            remote_reference: self.remote.as_ref().map(|r| r.reference.clone()),
+            remote_reference: remote.map(|r| r.reference.clone()),
             shared_names,
             portals: combined.into_values().collect(),
             local_portals,
             remote_portals,
         })
     }
+    pub fn session_view(&mut self) -> Result<SessionView> {
+        let local = self.publication();
+        self.checker
+            .receive_snapshot("local", local.reference.clone(), local.snapshot.clone())
+            .map_err(|e| e.to_string())?;
+        let mut target = "local".to_owned();
+        let mut canonical_peer = self.peer.clone();
+        for peer in self.remotes.keys() {
+            if peer < &canonical_peer
+                && matches!(
+                    self.checker.check("local", peer),
+                    AlignmentResult::Available { .. }
+                )
+            {
+                target = peer.clone();
+                canonical_peer = peer.clone();
+            }
+        }
+        let frame = if target == "local" {
+            local.snapshot.scenegraph.map.frame.id.clone()
+        } else {
+            self.remotes[&target]
+                .snapshot
+                .scenegraph
+                .map
+                .frame
+                .id
+                .clone()
+        };
+        let mut layers = vec![];
+        let mut combined: BTreeMap<String, PortalView> = BTreeMap::new();
+        let mut maps = vec![("local".to_owned(), local.clone())];
+        maps.extend(
+            self.remotes
+                .iter()
+                .map(|(peer, map)| (peer.clone(), map.clone())),
+        );
+        // Canonical publisher wins shared-coordinate deduplication deterministically.
+        maps.sort_by(|a, b| {
+            a.1.reference
+                .product
+                .peer_id
+                .cmp(&b.1.reference.product.peer_id)
+        });
+        for (key, map) in maps {
+            let (state, transform) = if key == target {
+                ("aligned", Some(RigidTransform::identity(&frame, &frame)))
+            } else {
+                match self.checker.check(&key, &target) {
+                    AlignmentResult::Available { transform, .. } => ("aligned", Some(transform)),
+                    AlignmentResult::Conflict { .. } => ("conflict", None),
+                    _ => ("separate", None),
+                }
+            };
+            let transformed = transform.as_ref().map(|t| portals(&map, t.translation));
+            if let Some(visible) = &transformed {
+                for portal in visible {
+                    combined
+                        .entry(portal.id.clone())
+                        .and_modify(|p| {
+                            p.contributors.extend(portal.contributors.clone());
+                            p.contributors.sort();
+                        })
+                        .or_insert_with(|| portal.clone());
+                }
+            }
+            layers.push(MapLayer {
+                peer: map.reference.product.peer_id.clone(),
+                frame: map.snapshot.scenegraph.map.frame.id.clone(),
+                sequence: map.reference.sequence,
+                state: state.into(),
+                portals: portals(&map, [0.; 3]),
+                aligned_portals: transformed,
+                to_display: transform,
+            });
+        }
+        let mut conflicts = vec![];
+        // Pairwise evidence includes conflicts between remote maps, not just with us.
+        let mut originals = vec![local];
+        originals.extend(self.remotes.values().cloned());
+        for (i, a) in originals.iter().enumerate() {
+            for b in originals.iter().skip(i + 1) {
+                let offsets: Vec<_> = a
+                    .snapshot
+                    .scenegraph
+                    .anchors
+                    .iter()
+                    .filter_map(|(id, anchor)| {
+                        b.snapshot.scenegraph.anchors.get(id).map(|other| {
+                            (
+                                anchor.payload.clone(),
+                                [
+                                    anchor.pose_in_map.translation[0]
+                                        - other.pose_in_map.translation[0],
+                                    anchor.pose_in_map.translation[1]
+                                        - other.pose_in_map.translation[1],
+                                ],
+                            )
+                        })
+                    })
+                    .collect();
+                for (name, offset) in &offsets {
+                    let disagrees_with: Vec<_> = offsets
+                        .iter()
+                        .filter(|(_, other)| other != offset)
+                        .map(|(name, _)| name.clone())
+                        .collect();
+                    if !disagrees_with.is_empty() {
+                        conflicts.push(SessionConflict {
+                            name: name.clone(),
+                            disagrees_with,
+                            peers: [
+                                a.reference.product.peer_id.clone(),
+                                b.reference.product.peer_id.clone(),
+                            ],
+                        });
+                    }
+                }
+            }
+        }
+        Ok(SessionView {
+            local_peer: self.peer.clone(),
+            display_frame: frame,
+            layers,
+            portals: combined.into_values().collect(),
+            conflicts,
+        })
+    }
+
     pub fn close(&mut self) {
         self.closed = true;
         self.map.close();
@@ -498,4 +655,29 @@ fn portals(map: &PublishedMap, offset: [f64; 3]) -> Vec<PortalView> {
             contributors: vec![map.reference.product.peer_id.clone()],
         })
         .collect()
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct MapLayer {
+    pub peer: String,
+    pub frame: String,
+    pub sequence: u64,
+    pub state: String,
+    pub portals: Vec<PortalView>,
+    pub aligned_portals: Option<Vec<PortalView>>,
+    pub to_display: Option<RigidTransform>,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct SessionConflict {
+    pub name: String,
+    pub disagrees_with: Vec<String>,
+    pub peers: [String; 2],
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct SessionView {
+    pub local_peer: String,
+    pub display_frame: String,
+    pub layers: Vec<MapLayer>,
+    pub portals: Vec<PortalView>,
+    pub conflicts: Vec<SessionConflict>,
 }

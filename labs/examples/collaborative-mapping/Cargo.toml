@@ -7,6 +7,9 @@ license.workspace = true
 publish = false
 
 [dependencies]
+auki-geometry = { path = "../../auki-geometry" }
+auki-registry = { path = "../../auki-registry" }
+auki-datatypes = { path = "../../auki-datatypes" }
 auki-components = { path = "../../auki-components" }
 auki-scenegraph = { path = "../../auki-scenegraph" }
 serde = { workspace = true, features = ["derive"] }

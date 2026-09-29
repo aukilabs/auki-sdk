@@ -1,8 +1,8 @@
+import { transformPoint } from "../pkg-web/auki_collaborative_mapping_web.js";
 import {
   conventions,
   toCanvas,
   fromCanvas,
-  inversePoint,
   type Convention,
 } from "./conventions";
 import { Grid, peerColor, type View, type Portal } from "./grid";
@@ -91,6 +91,7 @@ export class MapViews {
     );
     coordinate.value = this.coordinate;
     const union = new Map<string, Portal>();
+    const previews: Portal[] = [];
     const rows = view.layers.map((layer) => {
       const own = layer.peer === view.local_peer;
       const compatible =
@@ -102,7 +103,6 @@ export class MapViews {
         checkbox = document.createElement("input");
       checkbox.type = "checkbox";
       checkbox.checked = !this.hidden.has(layer.peer);
-      checkbox.disabled = !compatible;
       checkbox.onchange = () => {
         if (checkbox.checked) this.hidden.delete(layer.peer);
         else this.hidden.add(layer.peer);
@@ -130,13 +130,33 @@ export class MapViews {
         };
         row.append(inspect);
       }
+      if (!compatible && !this.hidden.has(layer.peer)) {
+        // Deliberate numeric overlay only: retain the actual source frame and never
+        // feed these previews into the aligned union or infer a shared origin.
+        previews.push(
+          ...layer.portals.map((p) => ({
+            ...p,
+            preview: {
+              frame: layer.frame,
+              convention: layer.convention,
+              peer: layer.peer,
+            },
+          })),
+        );
+      }
       if (compatible && !this.hidden.has(layer.peer)) {
         const portals =
           layer.frame === frame
             ? layer.portals
             : (layer.aligned_portals ?? []).map((p) => {
                 const [x, y] = selected?.to_display
-                  ? inversePoint(selected.to_display, p.x, p.y)
+                  ? transformPoint(
+                      JSON.stringify(selected.to_display),
+                      view.display_frame,
+                      frame,
+                      p.x,
+                      p.y,
+                    )
                   : [p.x, p.y];
                 return { ...p, x, y };
               });
@@ -166,7 +186,7 @@ export class MapViews {
     get("layers").replaceChildren(...rows);
     const conflicts = view.conflicts.map((c) => c.name);
     this.board.render(
-      [...union.values()].map((p) => {
+      [...previews, ...union.values()].map((p) => {
         const [x, y] = toCanvas(this.convention, p.x, p.y);
         return { ...p, x, y, coordinates: [p.x, p.y] };
       }),
@@ -177,7 +197,8 @@ export class MapViews {
     get("frame-caption").textContent =
       `${selected?.peer === view.local_peer ? "My coordinates" : selected ? "Peer coordinates" : "Shared frame"} ${frame.slice(-8)} · ${axes.label} · meters`;
     get("frame-caption").title = frame;
-    get("portal-count").textContent = `${union.size} visible portals`;
+    get("portal-count").textContent =
+      `${union.size} aligned/local · ${previews.length} unaligned previews`;
     get("session-count").textContent =
       `${view.layers.length} peer${view.layers.length === 1 ? "" : "s"}`;
     get("map-help").textContent = this.editable

@@ -6,6 +6,7 @@ export interface Portal {
   y: number;
   contributors: string[];
   coordinates?: [number, number];
+  preview?: { frame: string; convention: Convention; peer: string };
 }
 export interface Layer {
   convention: Convention;
@@ -335,9 +336,9 @@ export class Grid {
       text.textContent = label;
       this.root.append(text);
     }
-    const display = [
+    const display: Portal[] = [
       ...this.portals.map((p) =>
-        this.move?.portal.id === p.id
+        this.move?.portal.id === p.id && !p.preview
           ? { ...p, x: this.move.x, y: this.move.y }
           : p,
       ),
@@ -358,6 +359,9 @@ export class Grid {
       const group = svg("g", {
         transform: `translate(${portal.x} ${-portal.y})`,
         "data-portal": portal.name,
+        "data-unaligned": String(!!portal.preview),
+        "data-source-frame": portal.preview?.frame ?? "",
+        opacity: portal.preview ? 0.35 : 1,
         "data-index": index,
         "data-conflict": String(conflict),
         "data-x": portal.x,
@@ -365,7 +369,7 @@ export class Grid {
       });
       if (draft) group.removeAttribute("data-index");
       const title = svg("title");
-      title.textContent = `${portal.name} · (${(portal.coordinates ?? [portal.x, portal.y]).join(", ")})`;
+      title.textContent = `${portal.name} · (${(portal.coordinates ?? [portal.x, portal.y]).join(", ")})${portal.preview ? ` · Unaligned preview · source frame ${portal.preview.frame}` : ""}`;
       const pin = svg("path", {
         d: "M 0 0 C -.12 -.22 -.5 -.55 -.5 -.9 A .5 .5 0 1 1 .5 -.9 C .5 -.55 .12 -.22 0 0 Z",
         transform: `scale(${unit})`,
@@ -383,7 +387,7 @@ export class Grid {
         stroke: "#fafcfb",
         "stroke-width": 0.14 * unit,
       });
-      label.textContent = portal.name;
+      label.textContent = `${portal.name}${portal.preview ? " · unaligned" : ""}`;
       group.append(title, pin, label);
       this.root.append(group);
     });

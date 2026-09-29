@@ -414,7 +414,10 @@ version = "0.1.0"
 dependencies = [
  "auki-component-protocol",
  "auki-components",
+ "auki-datatypes",
+ "auki-geometry",
  "auki-p2p",
+ "auki-registry",
  "auki-scenegraph",
  "auki-sdk",
  "chrono",

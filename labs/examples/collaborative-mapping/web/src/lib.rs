@@ -21,6 +21,31 @@ use tokio_util::sync::CancellationToken;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, future_to_promise};
 
+/// Convention-only conversion, never a physical alignment between map origins.
+#[wasm_bindgen(js_name = convertConventionPoint)]
+pub fn convert_convention_point(from: &str, to: &str, x: f64, y: f64) -> Result<Vec<f64>, JsValue> {
+    Convention::parse(from)
+        .map_err(error)?
+        .convert_point(Convention::parse(to).map_err(error)?, x, y)
+        .map(|p| p.to_vec())
+        .map_err(error)
+}
+
+/// Frame-checked point projection backed by the SDK geometry implementation.
+#[wasm_bindgen(js_name = transformPoint)]
+pub fn transform_point(
+    json: &str,
+    from: &str,
+    to: &str,
+    x: f64,
+    y: f64,
+) -> Result<Vec<f64>, JsValue> {
+    let transform = serde_json::from_str(json).map_err(error)?;
+    auki_collaborative_mapping::transform_point(&transform, from, to, x, y)
+        .map(|p| p.to_vec())
+        .map_err(error)
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConnectionCard {

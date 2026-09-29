@@ -3,6 +3,12 @@
 use auki_components::{
     CatalogSnapshot, ComponentRuntime, InMemoryTransport, InvocationContext, ProductReference,
 };
+use auki_datatypes::pose::{Quat, SpatialTransform, Vec3};
+use auki_geometry::{
+    compose_spatial_transforms, convert_point_convention, convert_transform_target_convention,
+    inverse_spatial_transform,
+};
+use auki_registry::{AxisConvention, AxisDirection, FrameRegistryEntry, Handedness, LengthUnit};
 use auki_scenegraph::{
     MapDefinition, MapFrame, MapSnapshot, QrAnchor, RigidTransform,
     alignment::{AlignmentOptions, AlignmentResult, MapAlignmentChecker},
@@ -112,22 +118,63 @@ impl Convention {
             _ => Err("Unknown coordinate convention".into()),
         }
     }
-    pub fn to_plane(self, x: f64, y: f64) -> [f64; 2] {
-        match self {
-            Self::XRight => [x, y],
-            Self::XUp => [-y, x],
-            Self::XLeft => [-x, -y],
-            Self::XDown => [y, -x],
+    /// Explicit convention declaration; semantic directions describe the screen plane,
+    /// not a physical alignment or a shared origin between peer maps.
+    pub fn frame(self, peer: &str, frame_id: &str) -> FrameRegistryEntry {
+        use AxisDirection::*;
+        let (x, y) = match self {
+            Self::XRight => (Right, Up),
+            Self::XUp => (Up, Left),
+            Self::XLeft => (Left, Down),
+            Self::XDown => (Down, Right),
+        };
+        FrameRegistryEntry {
+            peer_id: peer.into(),
+            frame_id: frame_id.into(),
+            handedness: Handedness::Right,
+            axes: AxisConvention { x, y, z: Backward },
+            units: LengthUnit::Meters,
         }
     }
-    pub fn portal_rotation(self) -> [f64; 4] {
-        let q = std::f64::consts::FRAC_1_SQRT_2;
-        match self {
-            Self::XRight => [1., 0., 0., 0.],
-            Self::XUp => [q, 0., 0., -q],
-            Self::XLeft => [0., 0., 0., 1.],
-            Self::XDown => [q, 0., 0., q],
+    pub fn convert_point(self, to: Self, x: f64, y: f64) -> Result<[f64; 2]> {
+        if !x.is_finite() || !y.is_finite() {
+            return Err("Non-finite convention coordinates".into());
         }
+        let point = convert_point_convention(
+            Vec3 { x, y, z: 0. },
+            &self.frame("", "source-convention"),
+            &to.frame("", "target-convention"),
+        )
+        .map_err(|e| e.to_string())?;
+        Ok([point.x, point.y])
+    }
+    pub fn to_plane(self, x: f64, y: f64) -> [f64; 2] {
+        self.convert_point(Self::XRight, x, y)
+            .expect("validated planar coordinates")
+    }
+    pub fn portal_rotation(self) -> [f64; 4] {
+        let pose = convert_transform_target_convention(
+            &SpatialTransform {
+                translation: None,
+                orientation: None,
+            },
+            &Self::XRight.frame("", "printed-portal-convention"),
+            &self.frame("", "map-convention"),
+        )
+        .expect("right-handed meter presets");
+        let q = pose.orientation.expect("geometry returns rotation");
+        // Preserve the existing preset wire values despite matrix-to-quaternion
+        // roundoff. The rotation itself is calculated by SDK geometry above.
+        [q.w, q.x, q.y, q.z].map(|v| {
+            let half = std::f64::consts::FRAC_1_SQRT_2;
+            if v.abs() < 1e-12 {
+                0.
+            } else if (v.abs() - half).abs() < 1e-12 {
+                v.signum() * half
+            } else {
+                v
+            }
+        })
     }
 }
 
@@ -369,7 +416,7 @@ impl DemoMap {
             else {
                 return Err("Display frame is not aligned to your map".into());
             };
-            inverse_point(&transform, x, y)
+            transform_point(&transform, frame, &local_frame, x, y)?
         };
         validate_position(x, y)?;
         let current = self.publication();
@@ -713,23 +760,61 @@ fn validate_position(x: f64, y: f64) -> Result<()> {
     }
     Ok(())
 }
-// Presets and accepted Portal orientations allow only quarter turns. Round floating-point
-// quaternion noise back to exact integer cells, without accepting arbitrary remote rotations.
-fn rotate(q: [f64; 4], x: f64, y: f64) -> [f64; 2] {
-    let [w, _, _, z] = q;
-    [
-        (1. - 2. * z * z) * x - 2. * w * z * y,
-        2. * w * z * x + (1. - 2. * z * z) * y,
-    ]
-}
-fn inverse_point(t: &RigidTransform, x: f64, y: f64) -> [f64; 2] {
+/// Apply an established alignment in either direction. Both endpoints are mandatory;
+/// convention conversion alone must never be supplied as evidence of alignment.
+pub fn transform_point(
+    t: &RigidTransform,
+    from: &str,
+    to: &str,
+    x: f64,
+    y: f64,
+) -> Result<[f64; 2]> {
+    if from.is_empty()
+        || to.is_empty()
+        || !x.is_finite()
+        || !y.is_finite()
+        || t.translation
+            .iter()
+            .chain(t.rotation_wxyz.iter())
+            .any(|v| !v.is_finite())
+    {
+        return Err("Invalid frame transform or point".into());
+    }
+    let [tx, ty, tz] = t.translation;
     let [w, qx, qy, qz] = t.rotation_wxyz;
-    let [x, y] = rotate(
-        [w, -qx, -qy, -qz],
-        x - t.translation[0],
-        y - t.translation[1],
-    );
-    [snap(x), snap(y)]
+    let mut pose = SpatialTransform {
+        translation: Some(Vec3 {
+            x: tx,
+            y: ty,
+            z: tz,
+        }),
+        orientation: Some(Quat {
+            w,
+            x: qx,
+            y: qy,
+            z: qz,
+        }),
+    };
+    if from == t.from_frame_id && to == t.to_frame_id {
+        // The alignment already has the requested direction.
+    } else if from == t.to_frame_id && to == t.from_frame_id {
+        pose = inverse_spatial_transform(&pose).map_err(|e| e.to_string())?;
+    } else {
+        return Err("Point frames do not match alignment endpoints".into());
+    }
+    let result = compose_spatial_transforms(
+        &SpatialTransform {
+            translation: Some(Vec3 { x, y, z: 0. }),
+            orientation: None,
+        },
+        &pose,
+    )
+    .map_err(|e| e.to_string())?;
+    let p = result.translation.expect("geometry returns translation");
+    if p.z.abs() > 1e-8 {
+        return Err("Transformed point is outside the demo map plane".into());
+    }
+    Ok([snap(p.x), snap(p.y)])
 }
 fn snap(v: f64) -> f64 {
     if (v - v.round()).abs() < 1e-8 {
@@ -752,8 +837,14 @@ fn portals(map: &PublishedMap, transform: Option<&RigidTransform>) -> Vec<Portal
             let [x, y, _] = anchor.pose_in_map.translation;
             let [x, y] = transform
                 .map(|t| {
-                    let [x, y] = rotate(t.rotation_wxyz, x, y);
-                    [snap(x + t.translation[0]), snap(y + t.translation[1])]
+                    transform_point(
+                        t,
+                        &map.snapshot.scenegraph.map.frame.id,
+                        &t.to_frame_id,
+                        x,
+                        y,
+                    )
+                    .expect("validated planar alignment")
                 })
                 .unwrap_or([x, y]);
             PortalView {

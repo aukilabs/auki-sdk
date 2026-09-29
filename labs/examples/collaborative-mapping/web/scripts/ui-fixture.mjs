@@ -1,7 +1,10 @@
 // Served only by the Playwright test route. Never imported by the application/build.
 export const AukiDiscoveryMode = { DiscoverAndAdvertise: 1 };
 export const AukiPeerReachabilityMode = { RelayBacked: 1 };
-export default async function init() {}
+// Keep spatial math real even when network/session state is mocked.
+import initGeometry from "/pkg-web/auki_collaborative_mapping_web.js?geometry";
+export { transformPoint, convertConventionPoint } from "/pkg-web/auki_collaborative_mapping_web.js?geometry";
+export default async function init() { await initGeometry(); }
 export class AukiUserSession {
   static async loginDev() {
     return new this();

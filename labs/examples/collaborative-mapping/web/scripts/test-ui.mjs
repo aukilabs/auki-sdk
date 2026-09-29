@@ -122,7 +122,19 @@ try {
   await page.click("#save-pin");
   assert.equal(await grid.getAttribute("viewBox"), savedCamera);
   assert.equal(await grid.locator('[data-portal="cafe"]').count(), 1);
+  assert.equal(await grid.locator('[data-portal="park"]').count(), 1);
+  assert.equal(
+    await grid.locator('[data-portal="park"]').getAttribute("opacity"),
+    "0.35",
+  );
+  const c = page.locator(".layer-row").filter({ hasText: "Peer peer-c" });
+  await c.locator('input[type="checkbox"]').uncheck();
   assert.equal(await grid.locator('[data-portal="park"]').count(), 0);
+  await c.locator('input[type="checkbox"]').check();
+  await grid.locator('[data-portal="park"] path').click();
+  assert.equal(await page.locator("#save-pin").isVisible(), false);
+  assert.equal(await page.locator("#remove-pin").isVisible(), false);
+  await page.click("#cancel-pin");
   const b = page.locator(".layer-row").filter({ hasText: "Peer peer-b" });
   await b.locator('input[type="checkbox"]').uncheck();
   assert.equal(await grid.locator('[data-portal="cafe"]').count(), 0);
@@ -130,7 +142,10 @@ try {
   await page.selectOption("#coordinate-frame", "peer-c");
   assert.equal(await page.locator("#add-pin").isDisabled(), true);
   assert.equal(await grid.locator('[data-portal="park"]').count(), 1);
-  assert.equal(await grid.locator('[data-portal="bridge"]').count(), 0);
+  assert.equal(
+    await grid.locator('[data-portal="bridge"]').getAttribute("data-unaligned"),
+    "true",
+  );
   await page.selectOption("#coordinate-frame", "combined");
   await page.click("#zoom-in");
   assert.notEqual(await grid.getAttribute("viewBox"), savedCamera);
@@ -325,6 +340,70 @@ try {
     (await page.locator("#frame-caption").innerText()).includes(
       "+X up · +Y left",
     ),
+  );
+  // Loss of alignment keeps a distinct preview even for a locally owned name.
+  await page.evaluate(() => {
+    const f = window.fixture;
+    f.data.display_frame = "local-frame";
+    f.local.to_display = {
+      from_frame_id: "local-frame",
+      to_frame_id: "local-frame",
+      translation: [0, 0, 0],
+      rotation_wxyz: [1, 0, 0, 0],
+    };
+    const remote = f.data.layers.find((l) => l.peer === "rotated-remote");
+    remote.to_display = null;
+    remote.aligned_portals = null;
+    remote.state = "separate";
+    remote.portals.push({
+      id: "rotated",
+      name: "rotated",
+      x: 8,
+      y: 9,
+      contributors: [remote.peer],
+    });
+  });
+  await page.click("#add-pin");
+  await page.fill("#portal-name", "preview-refresh");
+  await page.click("#save-pin");
+  assert.equal(await grid.locator('[data-portal="rotated"]').count(), 2);
+  const preview = grid.locator(
+    '[data-portal="rotated"][data-unaligned="true"]',
+  );
+  assert.equal(
+    await preview.getAttribute("data-source-frame"),
+    "rotated-frame",
+  );
+  await preview.locator("path").click();
+  assert.equal(await page.locator("#save-pin").isVisible(), false);
+  assert.equal(await page.locator("#remove-pin").isVisible(), false);
+  await page.click("#cancel-pin");
+  // Successful alignment replaces the faded source coordinates with transformed pins.
+  await page.evaluate(() => {
+    const remote = window.fixture.data.layers.find(
+      (l) => l.peer === "rotated-remote",
+    );
+    remote.to_display = {
+      from_frame_id: "rotated-frame",
+      to_frame_id: "local-frame",
+      translation: [10, 20, 0],
+      rotation_wxyz: [0, 0, 0, 1],
+    };
+    remote.state = "aligned";
+    remote.aligned_portals = remote.portals.map((p) => ({
+      ...p,
+      x: 10 - p.x,
+      y: 20 - p.y,
+    }));
+  });
+  await page.click("#add-pin");
+  await page.fill("#portal-name", "alignment-refresh");
+  await page.click("#save-pin");
+  assert.equal(await grid.locator('[data-unaligned="true"]').count(), 0);
+  assert.equal(await grid.locator('[data-portal="rotated"]').count(), 1);
+  assert.equal(
+    await grid.locator('[data-portal="remote"]').getAttribute("opacity"),
+    "1",
   );
   await page.screenshot({ path: "test-results/coordinate-conventions.png" });
   await page.click("#stop-button");

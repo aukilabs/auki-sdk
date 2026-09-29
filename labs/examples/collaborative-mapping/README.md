@@ -44,8 +44,13 @@ never writes Domain Server data, provisions nodes, or submits DMS tasks.
    The optional **Shared canonical frame** uses the lexicographically smallest
    reachable peer's frame for comparing identical numeric coordinates.
 5. Toggle peer layers to compare placements. The coordinate selector also shows
-   each map's original frame. Unaligned maps cannot be overlaid as if their
-   origins were shared; **Unaligned · view** opens that original coordinate space.
+   each map's original frame. Unaligned layers appear as faded, labelled previews:
+   their raw source X/Y values are plotted against the current axes without claiming
+   an alignment. They may look completely misplaced. Previews retain source-frame
+   metadata, stay separate even when names match, and are read only; they never
+   enter the aligned union or alignment evidence. Layer toggles also hide/show
+   previews. Once alignment is established, full-opacity transformed pins replace
+   them. **Unaligned · view** opens the original coordinate space.
    Placement is disabled in an unaligned remote frame. Incoming updates preserve
    pan/zoom; a changed coordinate frame fits the view again.
 6. Hold **⌘ Command** and drag your own pin to move it. Release to publish the
@@ -84,6 +89,14 @@ maps; manually reload after leaving to load new code.
   convention in the origin description; discovery validates the complete known
   definition rather than guessing a convention from a peer or Domain. Every alignment carries source/destination frame IDs. The canvas
   applies validated transforms only; missing alignment never means equal origins.
+- Convention presets build explicit `auki-registry::FrameRegistryEntry` values.
+  `auki-geometry` handles point convention conversion, Portal orientation, and
+  alignment application/inversion. The demo adapter checks transform endpoints
+  and rejects projections outside its 2D plane. Browser conversion calls these
+  helpers through WASM; TypeScript keeps only display labels and canvas projection.
+  Convention descriptors are mathematical declarations, never evidence of shared
+  physical origins. The scenegraph checker still requires equal up-axis and units;
+  arbitrary 3D or mixed-unit maps are outside this demo's contract.
 - Session+name deterministically derives synthetic Portal UUIDv8 identity using
   SHA-256. Names are exact and case-sensitive, 1–64 ASCII letters/digits/spaces/
   underscores/hyphens, without leading/trailing spaces. These are not DDS records.
@@ -152,7 +165,8 @@ changes are required.
 The example's WASM view JSON now contains `layers`, `display_frame`, and pairwise
 `conflicts`; each layer now declares `convention`, and transforms include
 rotation as well as translation. `mount(peer, session, convention)` requires a
-validated preset string. UI and WASM must be rebuilt together. `follow` allows independent
+validated preset string. The additive `convertConventionPoint` and `transformPoint` exports use SDK geometry;
+`transformPoint` requires explicit matching frame endpoints. UI and WASM must be rebuilt together. `follow` allows independent
 subscriptions and `unfollow(peer)` cancels/joins one. These are demo binding
 changes, not stable SDK binding changes.
 
@@ -182,7 +196,7 @@ npm run test:ui
 WASM_BINDGEN_TEST_RUNNER=/path/to/wasm-bindgen-test-runner npm run test:wasm
 ```
 
-Use wasm-bindgen-test-runner 0.2.121 matching Cargo.lock. Fifteen mapping tests
+Use wasm-bindgen-test-runner 0.2.121 matching Cargo.lock. Seventeen mapping tests
 run natively and in Chromium WASM. Isolated authenticated loopback tests cover
 two- and three-peer streams (including mixed axis presets), edits, conflict
 removal, resubscription and departure. Preset tests cover all 16 pairings, inverse

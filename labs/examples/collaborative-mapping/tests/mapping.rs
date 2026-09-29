@@ -566,3 +566,71 @@ fn convention_contract_rejects_unknown_axes_and_mismatched_portal_orientation() 
             .is_none()
     );
 }
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn sdk_projection_requires_matching_frames_and_preserves_fractional_points() {
+    use auki_collaborative_mapping::transform_point;
+    use auki_scenegraph::RigidTransform;
+    let q = std::f64::consts::FRAC_1_SQRT_2;
+    let mut t = RigidTransform {
+        from_frame_id: "a".into(),
+        to_frame_id: "b".into(),
+        translation: [10., 20., 0.],
+        rotation_wxyz: [q, 0., 0., q],
+    };
+    assert_eq!(transform_point(&t, "a", "b", 2., 3.).unwrap(), [7., 22.]);
+    let p = transform_point(&t, "b", "a", 7.5, 22.25).unwrap();
+    assert!((p[0] - 2.25).abs() < 1e-10 && (p[1] - 2.5).abs() < 1e-10);
+    assert!(transform_point(&t, "wrong", "a", 0., 0.).is_err());
+    assert!(transform_point(&t, "a", "wrong", 0., 0.).is_err());
+    assert!(transform_point(&t, "", "", 0., 0.).is_err());
+    assert!(transform_point(&t, "a", "b", f64::NAN, 0.).is_err());
+    t.translation[2] = 1.;
+    assert!(transform_point(&t, "a", "b", 0., 0.).is_err());
+    t.translation[2] = 0.;
+    t.rotation_wxyz = [0.; 4];
+    assert!(transform_point(&t, "a", "b", 0., 0.).is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn sdk_conventions_preserve_existing_publications_and_numeric_contract() {
+    use auki_collaborative_mapping::Convention;
+    let points = [[3., 4.], [4., -3.], [-3., -4.], [-4., 3.]];
+    let q = std::f64::consts::FRAC_1_SQRT_2;
+    let old_rotations = [
+        [1., 0., 0., 0.],
+        [q, 0., 0., -q],
+        [0., 0., 0., 1.],
+        [q, 0., 0., q],
+    ];
+    for (i, from) in Convention::ALL.into_iter().enumerate() {
+        assert_eq!(from.portal_rotation(), old_rotations[i]);
+        for (j, to) in Convention::ALL.into_iter().enumerate() {
+            assert_eq!(
+                from.convert_point(to, points[i][0], points[i][1]).unwrap(),
+                points[j]
+            );
+        }
+        let mut a = map("a");
+        let mut b =
+            DemoMap::with_convention("b".into(), "domain".into(), "demo".into(), from).unwrap();
+        place(&mut b, "bridge", 1., 2.);
+        pair(&mut a, &mut b);
+        let legacy = rebuild(b.publication(), |s| {
+            s.anchors
+                .values_mut()
+                .next()
+                .unwrap()
+                .pose_in_map
+                .rotation_wxyz = old_rotations[i];
+        });
+        a.receive(legacy).unwrap();
+    }
+    assert!(
+        Convention::XUp
+            .convert_point(Convention::XRight, f64::INFINITY, 0.)
+            .is_err()
+    );
+}

@@ -46,6 +46,7 @@ function beginMove(
   portal: Portal,
 ): ((x: number, y: number) => void) | undefined {
   if (
+    portal.preview ||
     !mapping ||
     !latest ||
     busy ||
@@ -103,9 +104,11 @@ function dropPin(x: number, y: number): void {
 }
 function inspectPin(portal: Portal): void {
   if (!mapping || !latest || stopping || dialog.open) return;
-  const own = latest.layers
-    .find((l) => l.peer === latest!.local_peer)!
-    .portals.find((p) => p.id === portal.id);
+  const own = portal.preview
+    ? undefined
+    : latest.layers
+        .find((l) => l.peer === latest!.local_peer)!
+        .portals.find((p) => p.id === portal.id);
   originalName = own?.name;
   const point = own ?? {
     ...portal,
@@ -122,10 +125,16 @@ function inspectPin(portal: Portal): void {
   input("x").readOnly = input("y").readOnly = !own;
   button("save-pin").hidden = !own;
   button("remove-pin").hidden = !own;
-  get("pin-title").textContent = own ? "Edit your portal" : "Peer portal";
-  get("pin-context").textContent = own
-    ? "Coordinates in your original frame. Changes update your map only."
-    : "Read only. This placement belongs to another peer.";
+  get("pin-title").textContent = portal.preview
+    ? "Unaligned preview"
+    : own
+      ? "Edit your portal"
+      : "Peer portal";
+  get("pin-context").textContent = portal.preview
+    ? `Unaligned: these are source coordinates in ${portal.preview.frame}. This faded position is only a numeric preview, not an aligned location.`
+    : own
+      ? "Coordinates in your original frame. Changes update your map only."
+      : "Read only. This placement belongs to another peer.";
   get("pin-error").textContent = "";
   dialog.showModal();
 }

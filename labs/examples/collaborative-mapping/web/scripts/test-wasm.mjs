@@ -90,7 +90,7 @@ try {
   );
   const result = await page.locator("body").innerText();
   console.log(result);
-  assert.match(result, /test result: ok\. 15 passed; 0 failed/);
+  assert.match(result, /test result: ok\. 17 passed; 0 failed/);
 } finally {
   await browser?.close();
   if (server.exitCode === null) {

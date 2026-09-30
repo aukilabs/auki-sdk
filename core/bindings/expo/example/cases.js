@@ -2,7 +2,8 @@ import Auki, { importZitadelSession, closeSession } from '@aukilabs/auki-sdk-exp
 import { AppState, Platform } from 'react-native';
 import { durable } from './storage';
 
-export const base = 'http://127.0.0.1:18111';
+const loopbackHost = '127.0.0.1';
+export const base = `http://${loopbackHost}:18111`;
 const environment = { apiBaseUrl: base, ddsBaseUrl: base, dmsBaseUrl: base };
 const credentials = () => ({ accessToken: 'access-0', refreshToken: 'refresh-0', clientId: 'bindings-client', issuer: base, accessTokenExpiresAt: '2020-01-01T00:00:00.123456789Z' });
 const extract = c => ({ accessToken: c.exposeAccessToken(), refreshToken: c.exposeRefreshToken(), clientId: c.clientId, issuer: c.issuer, accessTokenExpiresAt: c.accessTokenExpiresAt });

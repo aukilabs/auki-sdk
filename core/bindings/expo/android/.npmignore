@@ -1,0 +1,6 @@
+# The package `files` entry includes this directory, and a root .npmignore
+# cannot drop paths inside that entry. Keep sources and jniLibs.
+/build/
+/.gradle/
+/.cxx/
+/local.properties

@@ -202,6 +202,40 @@ impl AukiPeerProtocols {
         self.open_validated(expected_peer, route, protocol).await
     }
 
+    /// Authenticate a replacement circuit while the previous stream remains
+    /// usable. Switch at an application-acknowledged boundary, then close the old
+    /// stream. This does not make arbitrary byte streams transparently reliable.
+    pub fn prepare_replacement(
+        &self,
+        previous: &AuthenticatedRouteStream,
+        protocol_id: impl Into<String>,
+    ) -> impl Future<Output = Result<AuthenticatedRouteStream, AukiProtocolError>> + Send + 'static
+    {
+        let protocol = ApplicationProtocol::new(protocol_id.into());
+        let requirements =
+            SessionRequirements::new(self.inner.domain_id.to_string()).map(|requirements| {
+                requirements.with_expected_remote_peer_id(previous.remote_peer().peer_id)
+            });
+        let prepare = match (protocol, requirements) {
+            (Ok(protocol), Ok(requirements)) => {
+                Ok(self
+                    .inner
+                    .node
+                    .prepare_route_replacement(previous, protocol, requirements))
+            }
+            (Err(error), _) | (_, Err(error)) => Err(error),
+        };
+        let inner = self.inner.clone();
+        async move {
+            let prepare = prepare.map_err(AukiProtocolError::P2p)?;
+            tokio::select! {
+                biased;
+                _ = inner.lifecycle.cancelled() => Err(AukiProtocolError::Stopped),
+                result = prepare => result.map_err(AukiProtocolError::P2p),
+            }
+        }
+    }
+
     async fn open_validated(
         &self,
         expected_peer: PeerId,

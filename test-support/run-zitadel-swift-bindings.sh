@@ -4,16 +4,16 @@
 set -euo pipefail
 z08_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$z08_root"
-z08_crate="$z08_root/core/bindings/swift/auki-sdk-swift"
+z08_crate="$z08_root/core/bindings/uniffi/auki-sdk-uniffi"
 z08_headers="$z08_crate/target-xcframework/bindings"
 test -f "$z08_headers/module.modulemap"
-test -f "$z08_crate/Sources/AukiSDK/Generated/auki_sdk_swift.swift"
-cargo build -p auki-sdk-swift --release --features standard-protocols --locked
+test -f "$z08_crate/Sources/AukiSDK/Generated/auki_sdk_uniffi.swift"
+cargo build -p auki-sdk-uniffi --release --features standard-protocols --locked
 mkdir -p target/zitadel-swift-host
 swiftc -parse-as-library -target "$(uname -m)-apple-macos$(sw_vers -productVersion)" \
   -I "$z08_headers" -Xcc "-fmodule-map-file=$z08_headers/module.modulemap" \
   "$z08_crate"/Sources/AukiSDK/Generated/*.swift test-support/zitadel-swift-host.swift \
-  target/release/libauki_sdk_swift.a -framework SystemConfiguration -framework CoreFoundation -liconv \
+  target/release/libauki_sdk_uniffi.a -framework SystemConfiguration -framework CoreFoundation -liconv \
   -o target/zitadel-swift-host/host
 node -e 'const s=require("node:net").createServer();s.once("error",()=>process.exit(1));s.listen(18111,"127.0.0.1",()=>s.close());'
 z08_fixture_pid=""

@@ -13,13 +13,17 @@ protocol crates, and bindings.
 | Rust | `AukiPeerBootstrap`, `AukiPeer` | Saved file or new key | Rust handler |
 | Python | `auki_sdk.AukiSession`, `AukiPeer` | Saved file | Rust adapter in the same Python extension |
 | Web | `AukiUserSession`, `AukiPeer` | New key | Rust adapter in the same Wasm module |
-| Swift/iOS | `AukiUserSession`, `AukiPeer` | App can save identity bytes | Rust adapter in the same framework |
-| Expo Web/iOS | `@aukilabs/auki-sdk-expo` | Managed by the platform bridge | Use operations exported by the bridge |
-| Expo Android | Not implemented | — | — |
+| iOS and Android | `AukiSession`, `AukiPeer` | App can save identity bytes | Rust adapter in the same UniFFI library |
+| Expo Web/iOS/Android | `@aukilabs/auki-sdk-expo` | Managed by the platform bridge | Use operations exported by the bridge |
 
 All supported platforms expose User-password login. Trusted Rust and Python
-services can use App access keys and secrets. Rust, Web, Swift, and Expo
-Web/iOS also support importing a ZITADEL session.
+services can use App access keys and secrets. Rust, Web, iOS, Android, and Expo
+also support importing a ZITADEL session.
+
+iOS and Android share one UniFFI crate, [`auki-sdk-uniffi`](../../core/bindings/uniffi/auki-sdk-uniffi/README.md).
+Its library is `libauki_sdk_uniffi`: Swift on iOS, Kotlin on Android. Web is a
+separate crate, [`auki-sdk-web`](../../core/bindings/web/auki-sdk-web/README.md),
+because that binding is Wasm rather than UniFFI.
 
 ### Rust
 
@@ -48,9 +52,9 @@ Open `target/doc/auki_sdk/index.html`.
 | Platform | Build requirements and instructions |
 | --- | --- |
 | Python | Python 3.8+, Rust, Maturin; [build the binding](../../core/bindings/python/auki-sdk-py/README.md) |
-| Web | Rust, `wasm32-unknown-unknown`, wasm-pack 0.13.1, Node 20.19+ on 20.x or 22.12+; [run the Web example](../../core/examples/portable-echo/web/README.md) |
-| Swift | Swift 6, Xcode, iOS 17+, Apple Rust targets; [run the Swift example](../../core/examples/portable-echo/swift/README.md) |
-| Expo | Web/iOS toolchains above and Expo; [build the package](../../core/bindings/expo/README.md) |
+| Web | Rust, `wasm32-unknown-unknown`, wasm-pack 0.13.1, Node 20.19+ on 20.x or 22.12+; [Wasm binding](../../core/bindings/web/auki-sdk-web/README.md) |
+| iOS and Android | Rust and the [UniFFI facade](../../core/bindings/uniffi/auki-sdk-uniffi/README.md). iOS also needs Swift 6, Xcode, and iOS 17+. Android also needs NDK r27+ and JDK 17 or 21 |
+| Expo | Those toolchains and Expo; [build the package](../../core/bindings/expo/README.md). Web uses the Wasm package, iOS and Android use `libauki_sdk_uniffi` |
 
 ## Public Rust entry points
 

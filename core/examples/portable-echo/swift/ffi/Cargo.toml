@@ -19,7 +19,7 @@ cli = ["uniffi/cli"]
 
 [dependencies]
 auki-echo-protocol = { package = "auki-portable-echo", path = "../.." }
-auki-sdk-binding = { package = "auki-sdk-swift", path = "../../../../bindings/swift/auki-sdk-swift" }
+auki-sdk-binding = { package = "auki-sdk-uniffi", path = "../../../../bindings/uniffi/auki-sdk-uniffi" }
 auki-sdk-rs = { package = "auki-sdk", path = "../../../../auki-sdk" }
 parking_lot.workspace = true
 thiserror.workspace = true

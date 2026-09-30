@@ -1,0 +1,22 @@
+[package]
+name = "auki-raster-py"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "PyO3 bindings for auki-raster (Y-slice occupancy PNG + map.yaml)."
+
+[lib]
+name = "auki_raster"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+auki-raster-rs = { package = "auki-raster", path = "../../../auki-raster" }
+auki-geometry = { path = "../../../auki-geometry" }
+pyo3 = { version = "0.22", features = ["abi3-py38"] }

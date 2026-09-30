@@ -1072,6 +1072,268 @@ async fn managed_protocol_server_preserves_registration_and_shutdown_barriers() 
     compute.shutdown().await.unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn managed_handler_completion_preserves_inflight_authentication() {
+    managed_accept_scenario(ManagedAcceptScenario::HandlerCompletes).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn managed_inflight_authentication_survives_without_handler_completion() {
+    managed_accept_scenario(ManagedAcceptScenario::HandlerStays).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn managed_shutdown_cancels_inflight_authentication() {
+    managed_accept_scenario(ManagedAcceptScenario::Shutdown).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn managed_authentication_waits_for_handler_capacity() {
+    managed_accept_scenario(ManagedAcceptScenario::AtCapacity).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn managed_slow_authentication_does_not_block_other_peers() {
+    managed_accept_scenario(ManagedAcceptScenario::SlowAuthentication).await;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ManagedAcceptScenario {
+    HandlerCompletes,
+    HandlerStays,
+    Shutdown,
+    AtCapacity,
+    SlowAuthentication,
+}
+
+// Use a raw localhost libp2p peer to pause after receiving the server's token.
+// That wire observation proves Node::serve has accepted the second stream and
+// is inside authentication, without adding hooks to production code.
+async fn managed_accept_scenario(scenario: ManagedAcceptScenario) {
+    use futures::StreamExt;
+    use libp2p::{noise, swarm::SwarmEvent, tcp, yamux, StreamProtocol, SwarmBuilder};
+
+    let domain_id = Uuid::new_v4().to_string();
+    let receiver = listening_node();
+    let first = listening_node();
+    install_current_token(&receiver, PeerRole::Robot, vec![domain_id.clone()]).await;
+    install_current_token(&first, PeerRole::Compute, vec![domain_id.clone()]).await;
+    let address = listen_address(&receiver).await;
+    let protocol_name = "/auki-p2p/managed-accept-cancellation/1";
+    let protocol = ApplicationProtocol::new(protocol_name).unwrap();
+    let release_first = CancellationToken::new();
+    let first_started = Arc::new(tokio::sync::Notify::new());
+    let first_finished = Arc::new(tokio::sync::Notify::new());
+    let first_id = first.peer_id();
+    let max_concurrency = if scenario == ManagedAcceptScenario::AtCapacity {
+        1
+    } else {
+        16
+    };
+    let server = receiver
+        .serve(
+            ApplicationProtocolSpec::new(protocol.clone(), max_concurrency, 1_024).unwrap(),
+            SessionRequirements::new(&domain_id).unwrap(),
+            &CancellationToken::new(),
+            {
+                let release_first = release_first.clone();
+                let first_started = Arc::clone(&first_started);
+                let first_finished = Arc::clone(&first_finished);
+                move |mut stream| {
+                    let release_first = release_first.clone();
+                    let first_started = Arc::clone(&first_started);
+                    let first_finished = Arc::clone(&first_finished);
+                    async move {
+                        if stream.remote_peer().peer_id == first_id {
+                            first_started.notify_one();
+                            release_first.cancelled().await;
+                            first_finished.notify_one();
+                        } else {
+                            stream.write_all(b"ok").await.unwrap();
+                            stream.flush().await.unwrap();
+                        }
+                    }
+                }
+            },
+        )
+        .unwrap();
+    let first_stream = first
+        .open_exact_route(
+            receiver.peer_id(),
+            ExactRoute::Direct(address.clone()),
+            protocol,
+            SessionRequirements::new(&domain_id).unwrap(),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), first_started.notified())
+        .await
+        .unwrap();
+
+    let mut burst_peers = Vec::new();
+    if scenario == ManagedAcceptScenario::SlowAuthentication {
+        for _ in 0..9 {
+            let peer = listening_node();
+            install_current_token(&peer, PeerRole::Compute, vec![domain_id.clone()]).await;
+            burst_peers.push(peer);
+        }
+    }
+    let mut burst_tasks = tokio::task::JoinSet::new();
+    let burst_domain = domain_id.clone();
+    let burst_address = address.clone();
+    let identity = libp2p::identity::Keypair::generate_ed25519();
+    let raw_peer_id = identity.public().to_peer_id();
+    let token = sign(&claims(
+        raw_peer_id,
+        PeerRole::Compute,
+        vec![domain_id],
+        unix_time(),
+    ));
+    let mut swarm = SwarmBuilder::with_existing_identity(identity)
+        .with_tokio()
+        .with_tcp(
+            tcp::Config::default().nodelay(true),
+            noise::Config::new,
+            yamux::Config::default,
+        )
+        .unwrap()
+        .with_behaviour(|_| libp2p_stream::Behaviour::new())
+        .unwrap()
+        .build();
+    let mut control = swarm.behaviour().new_control();
+    swarm.dial(address).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let SwarmEvent::ConnectionEstablished { .. } = swarm.select_next_some().await {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let swarm_task = tokio::spawn(async move {
+        loop {
+            swarm.select_next_some().await;
+        }
+    });
+
+    let mut server = Some(server);
+    let outcome = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut stream = control
+            .open_stream(receiver.peer_id(), StreamProtocol::new(protocol_name))
+            .await
+            .unwrap();
+        let mut length = [0; 4];
+        if scenario == ManagedAcceptScenario::AtCapacity {
+            assert!(
+                tokio::time::timeout(Duration::from_secs(1), stream.read_exact(&mut length))
+                    .await
+                    .is_err(),
+                "second authentication started before a handler slot was available"
+            );
+            release_first.cancel();
+            first_finished.notified().await;
+        }
+        stream.read_exact(&mut length).await?;
+        let length = u32::from_be_bytes(length) as usize;
+        assert!(length > 0 && length <= 16_384);
+        let mut server_token = vec![0; length];
+        stream.read_exact(&mut server_token).await?;
+        verifier()
+            .verify(std::str::from_utf8(&server_token).unwrap())
+            .unwrap();
+
+        if scenario == ManagedAcceptScenario::SlowAuthentication {
+            for peer in &burst_peers {
+                let peer = peer.clone();
+                let address = burst_address.clone();
+                let requirements = SessionRequirements::new(&burst_domain).unwrap();
+                let target = receiver.peer_id();
+                burst_tasks.spawn(async move {
+                    let mut stream = peer
+                        .open_exact_route(
+                            target,
+                            ExactRoute::Direct(address),
+                            ApplicationProtocol::new(protocol_name).unwrap(),
+                            requirements,
+                        )
+                        .await?;
+                    let mut response = [0; 2];
+                    stream.read_exact(&mut response).await?;
+                    assert_eq!(&response, b"ok");
+                    stream.close().await
+                });
+            }
+            // B is still withholding its credential. Other valid peers must
+            // authenticate without waiting for B's ten-second phase timeout.
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while let Some(result) = burst_tasks.join_next().await {
+                    result.unwrap().map_err(std::io::Error::other)?;
+                }
+                Ok::<_, std::io::Error>(())
+            })
+            .await
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::TimedOut))??;
+        }
+        if scenario == ManagedAcceptScenario::Shutdown {
+            server.take().unwrap().shutdown().await.unwrap();
+            let error = stream.read_exact(&mut [0]).await.unwrap_err();
+            assert!(matches!(
+                error.kind(),
+                std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+            ));
+            return Ok(());
+        }
+        if scenario == ManagedAcceptScenario::HandlerCompletes {
+            release_first.cancel();
+            first_finished.notified().await;
+        }
+        // Hold the valid client's token for one second (below the 10s auth
+        // deadline). The server must neither reply nor close during this pause.
+        // An early EOF/reset is the failure, not how quickly a task is scheduled.
+        let mut status = [0];
+        if let Ok(result) =
+            tokio::time::timeout(Duration::from_secs(1), stream.read_exact(&mut status)).await
+        {
+            result?;
+            panic!("server replied before the client sent its credential");
+        }
+        stream
+            .write_all(&(token.len() as u32).to_be_bytes())
+            .await?;
+        stream.write_all(token.as_bytes()).await?;
+        stream.write_all(&[1]).await?;
+        stream.flush().await?;
+        stream.read_exact(&mut status).await?;
+        assert_eq!(status, [1]);
+        let mut response = [0; 2];
+        stream.read_exact(&mut response).await?;
+        assert_eq!(&response, b"ok");
+        Ok::<_, std::io::Error>(())
+    })
+    .await;
+
+    burst_tasks.abort_all();
+    while burst_tasks.join_next().await.is_some() {}
+    for peer in burst_peers {
+        peer.shutdown().await.unwrap();
+    }
+    release_first.cancel();
+    if let Some(server) = server {
+        server.shutdown().await.unwrap();
+    }
+    first_stream.close().await.unwrap();
+    first.shutdown().await.unwrap();
+    receiver.shutdown().await.unwrap();
+    swarm_task.abort();
+    assert!(swarm_task.await.unwrap_err().is_cancelled());
+    let outcome = outcome.expect("paused authentication did not finish");
+    assert!(
+        outcome.is_ok(),
+        "paused authentication failed ({scenario:?}): {outcome:?}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn wrong_domain_is_rejected_before_application_bytes() {
     let robot_domain = Uuid::new_v4().to_string();
@@ -1081,6 +1343,136 @@ async fn wrong_domain_is_rejected_before_application_bytes() {
 
     assert!(matches!(robot_error, Error::RemoteDomainMismatch(_)));
     assert!(matches!(compute_error, Error::RemoteDomainMismatch(_)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn inbound_burst_queue_is_bounded_and_preserves_accepted_streams() {
+    inbound_queue_at_capacity(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dropping_inbound_registration_closes_queued_streams_and_allows_remount() {
+    inbound_queue_at_capacity(true).await;
+}
+
+async fn inbound_queue_at_capacity(drop_registration: bool) {
+    use futures::StreamExt;
+    use libp2p::{noise, swarm::SwarmEvent, tcp, yamux, StreamProtocol, SwarmBuilder};
+    let domain = Uuid::new_v4().to_string();
+    let receiver = listening_node();
+    install_current_token(&receiver, PeerRole::Robot, vec![domain.clone()]).await;
+    let address = listen_address(&receiver).await;
+    let protocol_name = "/auki-p2p/inbound-queue-bound/1";
+    let protocol = ApplicationProtocol::new(protocol_name).unwrap();
+    let requirements = SessionRequirements::new(&domain).unwrap();
+    let mut incoming = Some(
+        receiver
+            .accept(protocol.clone(), requirements.clone())
+            .unwrap(),
+    );
+    // One raw TCP connection carries the burst, avoiding per-peer connection
+    // limits and OS file-descriptor limits unrelated to the inbound queue.
+    let identity = libp2p::identity::Keypair::generate_ed25519();
+    let token = sign(&claims(
+        identity.public().to_peer_id(),
+        PeerRole::Compute,
+        vec![domain],
+        unix_time(),
+    ));
+    let mut swarm = SwarmBuilder::with_existing_identity(identity)
+        .with_tokio()
+        .with_tcp(
+            tcp::Config::default().nodelay(true),
+            noise::Config::new,
+            yamux::Config::default,
+        )
+        .unwrap()
+        .with_behaviour(|_| libp2p_stream::Behaviour::new())
+        .unwrap()
+        .build();
+    let control = swarm.behaviour().new_control();
+    swarm.dial(address).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let SwarmEvent::ConnectionEstablished { .. } = swarm.select_next_some().await {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let swarm_task = tokio::spawn(async move {
+        loop {
+            swarm.select_next_some().await;
+        }
+    });
+    let mut opens = tokio::task::JoinSet::new();
+    for _ in 0..65 {
+        let mut control = control.clone();
+        let target = receiver.peer_id();
+        let token = token.clone();
+        opens.spawn(async move {
+            let mut stream = control
+                .open_stream(target, StreamProtocol::new(protocol_name))
+                .await
+                .map_err(std::io::Error::other)?;
+            stream
+                .write_all(&(token.len() as u32).to_be_bytes())
+                .await?;
+            stream.write_all(token.as_bytes()).await?;
+            stream.write_all(&[1]).await?;
+            stream.flush().await?;
+            let mut length = [0; 4];
+            stream.read_exact(&mut length).await?;
+            let length = u32::from_be_bytes(length) as usize;
+            assert!(length > 0 && length <= 16_384);
+            let mut server_token = vec![0; length];
+            stream.read_exact(&mut server_token).await?;
+            verifier()
+                .verify(std::str::from_utf8(&server_token).unwrap())
+                .unwrap();
+            let mut response = [0; 2];
+            stream.read_exact(&mut response).await?;
+            assert_eq!(response, [1, 1]); // Authentication acceptance, then application byte.
+            stream.close().await
+        });
+    }
+    let result = tokio::time::timeout(Duration::from_secs(8), async {
+        // No authentication is consumed. The 65th stream must be rejected,
+        // proving the 64-slot queue is full before proceeding.
+        let overflow = opens.join_next().await.unwrap().unwrap();
+        assert!(
+            overflow.is_err(),
+            "unexpected overflow result: {overflow:?}"
+        );
+        if drop_registration {
+            drop(incoming.take());
+            let remounted = receiver.accept(protocol, requirements).unwrap();
+            drop(remounted);
+        } else {
+            for _ in 0..64 {
+                let mut stream = incoming.as_mut().unwrap().accept().await.unwrap().unwrap();
+                stream.write_all(&[1]).await.unwrap();
+                stream.flush().await.unwrap();
+            }
+        }
+        while let Some(result) = opens.join_next().await {
+            let result = result.unwrap();
+            if drop_registration {
+                assert!(result.is_err(), "queued stream survived registration drop");
+            } else {
+                result.unwrap();
+            }
+        }
+    })
+    .await;
+    opens.abort_all();
+    while opens.join_next().await.is_some() {}
+    drop(incoming);
+    receiver.shutdown().await.unwrap();
+    swarm_task.abort();
+    assert!(swarm_task.await.unwrap_err().is_cancelled());
+    result.expect("inbound queue overflow or cleanup did not complete before the auth timeout");
 }
 
 #[tokio::test(flavor = "multi_thread")]

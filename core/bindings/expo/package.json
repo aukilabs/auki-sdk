@@ -1,7 +1,7 @@
 {
   "name": "@aukilabs/auki-sdk-expo",
   "version": "0.1.0",
-  "description": "Expo module for authenticated Auki peers (Wasm web, Swift iOS, Android stub)",
+  "description": "Expo module for authenticated Auki peers (Wasm web, Swift iOS, Kotlin Android)",
   "main": "build/index.js",
   "types": "build/index.d.ts",
   "sideEffects": false,
@@ -9,8 +9,8 @@
     "android",
     "build",
     "ios",
-    "src/web/generated",
     "expo-module.config.json",
+    "LICENSE",
     "README.md"
   ],
   "scripts": {
@@ -36,7 +36,10 @@
     "url": "git+https://github.com/aukilabs/auki-sdk.git",
     "directory": "core/bindings/expo"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "peerDependencies": {
     "expo": "*",
     "react": "*",

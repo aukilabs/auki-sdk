@@ -5,6 +5,10 @@ import { randomUUID } from 'node:crypto';
 
 const port = Number(process.argv[2] ?? 18114);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('invalid port');
+const dataPort = Number(process.env.AUKI_DOMAIN_DATA_SERVER_PORT ?? 0);
+if (!Number.isInteger(dataPort) || dataPort < 0 || dataPort > 65535 || dataPort === port) {
+  throw new Error('invalid data port');
+}
 
 export const DOMAIN_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 export const OTHER_DOMAIN_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
@@ -511,11 +515,12 @@ async function dataHandler(request, response) {
 
 const dataServer = http.createServer(dataHandler);
 const primaryServer = http.createServer(primaryHandler);
-dataServer.listen(0, '127.0.0.1', () => {
+dataServer.listen(dataPort, '127.0.0.1', () => {
   const address = dataServer.address();
   dataBase = `http://127.0.0.1:${address.port}`;
   primaryServer.listen(port, '127.0.0.1', () => {
     console.log(`DOMAIN_DATA_FIXTURE_URL=${primaryBase}`);
+    console.log(`DOMAIN_DATA_SERVER_URL=${dataBase}`);
   });
 });
 

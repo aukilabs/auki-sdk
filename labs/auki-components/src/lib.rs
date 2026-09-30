@@ -45,7 +45,7 @@ mod runtime;
 pub use buffer::{
     Buffer, BufferCursor, BufferError, BufferLimits, BufferNext, BufferRange, BufferReader,
     BufferReaderStats, BufferTimePolicy, CursorRead, CursorStart, DurationTimeBasis, Gap,
-    SourceTimestampPolicy, connect_buffer,
+    SourceTimestampPolicy, TimeBracket, connect_buffer,
 };
 pub use camera::{
     AppliedResolution, CameraBufferCapture, CameraBufferError, CameraComponent, CameraError,

@@ -94,6 +94,7 @@ pub enum CursorRead<T> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BufferError {
+    AmbiguousTimeOrdering,
     MissingHardLimit,
     ZeroEntryLimit,
     ZeroByteLimit,
@@ -117,6 +118,7 @@ pub enum BufferError {
 impl fmt::Display for BufferError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::AmbiguousTimeOrdering => formatter.write_str("bracketing requires strictly increasing timestamps"),
             Self::MissingHardLimit => {
                 formatter.write_str("Buffer requires max_entries or max_bytes")
             }
@@ -397,6 +399,28 @@ impl<T> Buffer<T> {
             .filter(|entry| (start_ns..=end_ns).contains(&entry.envelope.timestamp_ns))
             .map(|entry| Arc::clone(&entry.envelope))
             .collect()
+    }
+
+    /// Select adjacent retained samples atomically. Exact matches occupy both sides.
+    /// The enclosing Product/Output contract supplies the clock; raw Buffers do
+    /// not infer clock identity. Unordered or duplicate-time buffers are rejected.
+    pub fn bracket_time_ns(&self, timestamp_ns: u64) -> Result<TimeBracket<T>, BufferError> {
+        if self.inner.time_policy.source_timestamps != SourceTimestampPolicy::StrictlyIncreasing {
+            return Err(BufferError::AmbiguousTimeOrdering);
+        }
+        let state = self.inner.state.lock().unwrap();
+        let before = state
+            .entries
+            .iter()
+            .rev()
+            .find(|e| e.envelope.timestamp_ns <= timestamp_ns)
+            .map(|e| Arc::clone(&e.envelope));
+        let after = state
+            .entries
+            .iter()
+            .find(|e| e.envelope.timestamp_ns >= timestamp_ns)
+            .map(|e| Arc::clone(&e.envelope));
+        Ok(TimeBracket { before, after })
     }
 
     pub fn subscribe(&self, start: CursorStart) -> BufferCursor<T> {
@@ -904,4 +928,11 @@ mod async_tests {
             Poll::Ready(CursorRead::Closed)
         ));
     }
+}
+
+/// Shared leases on adjacent samples, without copying the retained history.
+#[derive(Debug)]
+pub struct TimeBracket<T> {
+    pub before: Option<Arc<Envelope<T>>>,
+    pub after: Option<Arc<Envelope<T>>>,
 }

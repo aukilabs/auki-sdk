@@ -56,3 +56,10 @@ Migration: pass a registered `ClockReference` to `ConfiguredObservableSpec::new`
 and `CameraComponent::new`, replacing string clock names. Camera resolution
 instructions/results also carry `clock`. There is no implicit conversion from a
 legacy clock ID. Coordinate frames remain explicit in pose/map contracts.
+
+`Buffer::bracket_time_ns` atomically returns shared leases on the nearest retained
+samples before/after a timestamp. Exact matches occupy both sides; missing bounds
+stay `None`. It rejects unordered and duplicate-permitting timestamp policies.
+The enclosing Product supplies the clock. For explicitly framed pose publication
+and checked interpolation over these standard Buffer Products, see
+[auki-odometry](../auki-odometry/README.md).

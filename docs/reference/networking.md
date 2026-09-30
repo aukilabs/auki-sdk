@@ -132,6 +132,7 @@ for local development.
 | Invalid address / all addresses fail | Verify the Peer ID, current address, TCP/WSS support, and protocol ID; check that the peer is reachable |
 | Duplicate protocol | Close the previous registration before registering the same ID |
 | `AuthorityUnavailable` / `RelayUnavailable` | Pause new network requests and watch status for recovery or failure |
+| `RelayReservationClosed` while reopening through a previously reserved relay | Wait for the source reservation to be confirmed again before retrying; a fresh destination address alone does not establish source readiness |
 | `Failed`, `Stopping`, `Stopped` | Stop sending requests and finish cleanup; inspect the stop result |
 | ZITADEL `authentication_required` | Sign in again |
 | ZITADEL `configuration` / `authorization_denied` | Check session/service settings and access to the selected Domain |
@@ -140,3 +141,10 @@ for local development.
 
 Finding a peer does not grant it permission to call your app's operations.
 Check the authenticated peer in your handler.
+
+Native and browser transports fence new source circuits during reservation
+recovery, including after local teardown completes. The fence prevents a newly
+opened connection from using old provider authority that is about to be revoked.
+It does not replay interrupted data or guarantee that an existing stream survives
+connection loss. Applications requiring complete delivery still need acknowledgements
+and replay/deduplication.

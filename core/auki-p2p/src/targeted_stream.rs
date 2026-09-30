@@ -4,7 +4,9 @@
 //! stronger invariant: after dialing a particular circuit, the application
 //! stream must use the resulting [`ConnectionId`] even when another connection
 //! to the same peer is healthy. This behaviour never dials and never falls back
-//! to a different connection.
+//! to a different connection. SDK transports opt into retiring a direct relay
+//! connection after sustained source-admission negotiation timeouts; reservation
+//! lifecycle events then drive recovery.
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -14,6 +16,7 @@ use std::{
         Arc,
     },
     task::{Context, Poll},
+    time::Duration,
 };
 
 use async_channel::{Receiver, Sender};
@@ -26,14 +29,63 @@ use libp2p::{
     },
     swarm::{
         handler::{ConnectionEvent, DialUpgradeError, FullyNegotiatedOutbound},
-        ConnectionClosed, ConnectionDenied, ConnectionHandler, ConnectionHandlerEvent,
-        ConnectionId, FromSwarm, NetworkBehaviour, NotifyHandler, StreamUpgradeError,
-        SubstreamProtocol, THandler, THandlerInEvent, THandlerOutEvent, ToSwarm,
+        CloseConnection, ConnectionClosed, ConnectionDenied, ConnectionHandler,
+        ConnectionHandlerEvent, ConnectionId, FromSwarm, NetworkBehaviour, NotifyHandler,
+        StreamUpgradeError, SubstreamProtocol, THandler, THandlerInEvent, THandlerOutEvent,
+        ToSwarm,
     },
     Multiaddr, PeerId, Stream, StreamProtocol,
 };
 
+use web_time::Instant;
+
 const COMMAND_CAPACITY: usize = 64;
+const RELAY_TIMEOUT_THRESHOLD: u8 = 3;
+const RELAY_TIMEOUT_WINDOW: Duration = Duration::from_secs(20);
+const RELAY_TIMEOUT_IDLE_RESET: Duration = Duration::from_secs(60);
+
+#[derive(Default)]
+struct RelayProgress {
+    last_success: Option<Instant>,
+    first_timeout: Option<Instant>,
+    last_timeout: Option<Instant>,
+    timeouts: u8,
+    closing: bool,
+}
+
+impl RelayProgress {
+    fn succeeded(&mut self, now: Instant) {
+        self.last_success = Some(now);
+        self.first_timeout = None;
+        self.last_timeout = None;
+        self.timeouts = 0;
+    }
+
+    fn timed_out(&mut self, started: Instant, now: Instant) -> bool {
+        // Older pending requests cannot contradict more recent progress.
+        if self.closing || self.last_success.is_some_and(|success| started <= success) {
+            return false;
+        }
+        if self
+            .last_timeout
+            .is_some_and(|last| now.duration_since(last) > RELAY_TIMEOUT_IDLE_RESET)
+        {
+            self.first_timeout = None;
+            self.timeouts = 0;
+        }
+        self.last_timeout = Some(now);
+        self.timeouts = self.timeouts.saturating_add(1);
+        let first = *self.first_timeout.get_or_insert(now);
+        // Concurrent callers must not turn one stall into an immediate teardown.
+        if self.timeouts >= RELAY_TIMEOUT_THRESHOLD
+            && now.duration_since(first) >= RELAY_TIMEOUT_WINDOW
+        {
+            self.closing = true;
+            return true;
+        }
+        false
+    }
+}
 
 /// Failure to open an application stream on the caller-selected connection.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -155,6 +207,9 @@ pub struct TargetedStreamBehaviour {
     next_request_id: Arc<AtomicU64>,
     connections: HashMap<ConnectionId, PeerId>,
     pending: HashMap<RequestId, PendingOpen>,
+    relay_recovery: bool,
+    relay_progress: HashMap<ConnectionId, RelayProgress>,
+    pending_closes: VecDeque<(PeerId, ConnectionId)>,
 }
 
 impl TargetedStreamBehaviour {
@@ -166,6 +221,16 @@ impl TargetedStreamBehaviour {
             next_request_id: Arc::new(AtomicU64::new(1)),
             connections: HashMap::new(),
             pending: HashMap::new(),
+            relay_recovery: false,
+            relay_progress: HashMap::new(),
+            pending_closes: VecDeque::new(),
+        }
+    }
+
+    pub(crate) fn with_relay_recovery() -> Self {
+        Self {
+            relay_recovery: true,
+            ..Self::new()
         }
     }
 
@@ -181,7 +246,17 @@ impl TargetedStreamBehaviour {
             return None;
         }
 
-        match self.connections.get(&command.connection_id).copied() {
+        let selected = self
+            .connections
+            .get(&command.connection_id)
+            .copied()
+            .filter(|_| {
+                !self
+                    .relay_progress
+                    .get(&command.connection_id)
+                    .is_some_and(|state| state.closing)
+            });
+        match selected {
             None => {
                 let _ = command
                     .response
@@ -215,6 +290,7 @@ impl TargetedStreamBehaviour {
                 connection_id: command.connection_id,
                 protocol: command.protocol,
                 response: command.response,
+                started: Instant::now(),
             },
         );
         debug_assert!(old.is_none(), "targeted-stream request ID reused");
@@ -228,6 +304,9 @@ impl TargetedStreamBehaviour {
 
     fn connection_closed(&mut self, connection_id: ConnectionId) {
         self.connections.remove(&connection_id);
+        self.relay_progress.remove(&connection_id);
+        self.pending_closes
+            .retain(|(_, queued)| *queued != connection_id);
         let failed = self
             .pending
             .iter()
@@ -314,6 +393,31 @@ impl NetworkBehaviour for TargetedStreamBehaviour {
             return;
         }
 
+        // Count handler outcomes even if an outer deadline canceled the caller.
+        // Opens canceled before dispatch are discarded by handle_open instead.
+        if self.relay_recovery {
+            let now = Instant::now();
+            if event.result.is_ok() {
+                self.relay_progress
+                    .entry(connection_id)
+                    .or_default()
+                    .succeeded(now);
+            } else if pending.protocol == crate::source_admission::PROTOCOL
+                && matches!(&event.result, Err(HandlerFailure::Timeout))
+                && self
+                    .relay_progress
+                    .entry(connection_id)
+                    .or_default()
+                    .timed_out(pending.started, now)
+            {
+                tracing::warn!(target: "auki_p2p::relay_recovery",
+                    remote_peer_id = %peer_id, connection_id = %connection_id,
+                    reason = "relay_negotiation_stalled",
+                    "retiring stalled direct relay connection");
+                self.pending_closes.push_back((peer_id, connection_id));
+            }
+        }
+
         let result = match event.result {
             Ok(stream) => Ok(stream),
             Err(HandlerFailure::Timeout) => Err(TargetedStreamError::NegotiationTimeout {
@@ -342,6 +446,12 @@ impl NetworkBehaviour for TargetedStreamBehaviour {
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
+        if let Some((peer_id, connection_id)) = self.pending_closes.pop_front() {
+            return Poll::Ready(ToSwarm::CloseConnection {
+                peer_id,
+                connection: CloseConnection::One(connection_id),
+            });
+        }
         loop {
             match self.commands.as_mut().poll_next(cx) {
                 Poll::Ready(Some(command)) => {
@@ -374,6 +484,7 @@ struct PendingOpen {
     connection_id: ConnectionId,
     protocol: StreamProtocol,
     response: oneshot::Sender<Result<Stream, TargetedStreamError>>,
+    started: Instant,
 }
 
 /// Monotonic correlation key carried as `OutboundOpenInfo`.
@@ -492,6 +603,164 @@ mod tests {
 
     use super::*;
 
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    fn recovery_requires_sustained_timeouts_and_coalesces_concurrent_failures() {
+        let now = Instant::now();
+        let mut state = RelayProgress::default();
+        for _ in 0..100 {
+            assert!(!state.timed_out(now, now));
+        }
+        assert!(!state.timed_out(now, now + Duration::from_secs(19)));
+        assert!(state.timed_out(now, now + RELAY_TIMEOUT_WINDOW));
+        assert!(!state.timed_out(now, now + Duration::from_secs(60)));
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    fn successful_progress_resets_budget_and_fences_older_pending_failures() {
+        let now = Instant::now();
+        let mut state = RelayProgress::default();
+        assert!(!state.timed_out(now, now));
+        assert!(!state.timed_out(now, now + Duration::from_secs(10)));
+        let success = now + Duration::from_secs(15);
+        state.succeeded(success);
+        for _ in 0..10 {
+            assert!(!state.timed_out(now, now + Duration::from_secs(30)));
+        }
+        assert_eq!(state.timeouts, 0);
+        assert!(!state.timed_out(
+            success + Duration::from_secs(1),
+            now + Duration::from_secs(30)
+        ));
+        assert!(!state.timed_out(
+            success + Duration::from_secs(2),
+            now + Duration::from_secs(40)
+        ));
+        assert!(state.timed_out(
+            success + Duration::from_secs(3),
+            now + Duration::from_secs(50)
+        ));
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    fn isolated_timeouts_do_not_accumulate_across_idle_periods() {
+        let now = Instant::now();
+        let mut state = RelayProgress::default();
+        for round in 0..10 {
+            let at = now + Duration::from_secs(round * 61);
+            assert!(!state.timed_out(at, at));
+        }
+        assert_eq!(state.timeouts, 1);
+    }
+
+    fn inject_timeout(
+        behaviour: &mut TargetedStreamBehaviour,
+        peer: PeerId,
+        connection: ConnectionId,
+        protocol: StreamProtocol,
+        canceled: bool,
+    ) {
+        let (response, receiver) = oneshot::channel();
+        let id = RequestId(behaviour.next_request_id.fetch_add(1, Ordering::Relaxed));
+        let request = behaviour
+            .handle_open(OpenCommand {
+                request_id: id,
+                peer_id: peer,
+                connection_id: connection,
+                protocol,
+                response,
+            })
+            .expect("request dispatched");
+        let receiver = Some(receiver);
+        let _retained = if canceled {
+            drop(receiver);
+            None
+        } else {
+            receiver
+        };
+        behaviour.on_connection_handler_event(
+            peer,
+            connection,
+            HandlerEvent {
+                request_id: request.request_id,
+                result: Err(HandlerFailure::Timeout),
+            },
+        );
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), tokio::test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    async fn canceled_waiters_still_retire_only_the_stalled_connection_once() {
+        let peer = PeerId::random();
+        let bad = ConnectionId::new_unchecked(1);
+        let sibling = ConnectionId::new_unchecked(2);
+        let mut behaviour = TargetedStreamBehaviour::with_relay_recovery();
+        behaviour.connection_established(peer, bad);
+        behaviour.connection_established(peer, sibling);
+        for _ in 0..2 {
+            inject_timeout(
+                &mut behaviour,
+                peer,
+                bad,
+                crate::source_admission::PROTOCOL,
+                true,
+            );
+        }
+        // performance.now() begins at page creation: allow a real browser
+        // window instead of subtracting an instant older than the page.
+        #[cfg(target_arch = "wasm32")]
+        futures_timer::Delay::new(RELAY_TIMEOUT_WINDOW).await;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            behaviour
+                .relay_progress
+                .get_mut(&bad)
+                .unwrap()
+                .first_timeout = Some(Instant::now() - RELAY_TIMEOUT_WINDOW);
+        }
+        inject_timeout(
+            &mut behaviour,
+            peer,
+            bad,
+            crate::source_admission::PROTOCOL,
+            true,
+        );
+        let mut cx = Context::from_waker(noop_waker_ref());
+        assert!(
+            matches!(behaviour.poll(&mut cx), Poll::Ready(ToSwarm::CloseConnection {
+            peer_id, connection: CloseConnection::One(id),
+        }) if peer_id == peer && id == bad)
+        );
+        assert!(behaviour.poll(&mut cx).is_pending());
+        assert_eq!(behaviour.connections.get(&sibling), Some(&peer));
+        behaviour.connection_closed(bad);
+        assert!(!behaviour.relay_progress.contains_key(&bad));
+        assert_eq!(behaviour.connections.get(&sibling), Some(&peer));
+        assert!(behaviour.pending.is_empty());
+    }
+
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    fn application_protocol_timeouts_do_not_retire_relay_connections() {
+        let peer = PeerId::random();
+        let connection = ConnectionId::new_unchecked(1);
+        let mut behaviour = TargetedStreamBehaviour::with_relay_recovery();
+        behaviour.connection_established(peer, connection);
+        for _ in 0..10 {
+            inject_timeout(
+                &mut behaviour,
+                peer,
+                connection,
+                StreamProtocol::new("/app/slow/1"),
+                false,
+            );
+        }
+        assert!(behaviour.relay_progress.is_empty());
+        assert!(behaviour.pending_closes.is_empty());
+    }
+
     fn context() -> Context<'static> {
         Context::from_waker(noop_waker_ref())
     }
@@ -539,7 +808,8 @@ mod tests {
         }));
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     fn command_queue_keeps_its_declared_strict_bound() {
         let behaviour = TargetedStreamBehaviour::new();
         let remote = peer();
@@ -577,7 +847,8 @@ mod tests {
         );
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     fn idle_behaviour_is_woken_when_a_command_arrives() {
         struct WakeFlag(AtomicBool);
 
@@ -619,7 +890,8 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     fn open_notifies_only_the_selected_connection_and_never_falls_back() {
         let mut behaviour = TargetedStreamBehaviour::new();
         let control = behaviour.new_control();
@@ -690,7 +962,8 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     fn concurrent_results_are_correlated_by_request_id() {
         let mut behaviour = TargetedStreamBehaviour::new();
         let control = behaviour.new_control();
@@ -751,7 +1024,8 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     fn wrong_peer_for_connection_fails_without_notifying_a_handler() {
         let mut behaviour = TargetedStreamBehaviour::new();
         let control = behaviour.new_control();
@@ -780,7 +1054,8 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
     fn handler_denies_inbound_and_carries_request_ids_as_open_info() {
         let mut handler = TargetedStreamHandler::default();
         let inbound = handler.listen_protocol().into_upgrade().0;

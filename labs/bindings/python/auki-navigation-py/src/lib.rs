@@ -343,6 +343,19 @@ impl PyNavMesh {
     fn agent_radius(&self) -> f32 {
         self.inner.agent_radius()
     }
+
+    /// Inset walkable polygons: a list of polygons, each a list of `{x,y,z}`.
+    fn walkable_polygons(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let list = PyList::empty_bound(py);
+        for poly in self.inner.walkable_polygons() {
+            let pts = PyList::empty_bound(py);
+            for v in poly {
+                pts.append(vec3_to_py(py, *v)?)?;
+            }
+            list.append(pts)?;
+        }
+        Ok(list.into())
+    }
 }
 
 #[pymodule]

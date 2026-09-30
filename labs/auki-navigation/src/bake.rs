@@ -101,6 +101,8 @@ pub(crate) fn landmass_to_yup(v: landmass::Vec3) -> Vec3 {
 pub(crate) struct BakedNav {
     pub archipelago_mesh: Arc<ValidNavigationMesh<XYZ>>,
     pub agent_radius: f32,
+    /// Inset walkable polygons in Y-up metres. Same surface `find_path` searches.
+    pub walkable_polygons: Vec<Vec<Vec3>>,
 }
 
 pub(crate) fn bake_navmesh(
@@ -201,6 +203,7 @@ pub(crate) fn bake_navmesh(
         return Err(NavError::EmptyNavMesh);
     }
 
+    let walkable_polygons = yup_polygons(&poly_mesh);
     let nav = poly_mesh_to_landmass(&poly_mesh)?;
     let validated = nav
         .validate()
@@ -209,7 +212,42 @@ pub(crate) fn bake_navmesh(
     Ok(BakedNav {
         archipelago_mesh: Arc::new(validated),
         agent_radius: profile.walkable_radius.max(0.05),
+        walkable_polygons,
     })
+}
+
+/// Y-up metres, before the landmass Z-up conversion.
+fn yup_polygons(poly: &PolygonNavmesh) -> Vec<Vec<Vec3>> {
+    let cs = poly.cell_size;
+    let ch = poly.cell_height;
+    let orig = poly.aabb.min;
+    let vertices: Vec<Vec3> = poly
+        .vertices
+        .iter()
+        .map(|v| {
+            Vec3::new(
+                orig.x + v.x as f32 * cs,
+                orig.y + v.y as f32 * ch,
+                orig.z + v.z as f32 * cs,
+            )
+        })
+        .collect();
+
+    let nvp = poly.max_vertices_per_polygon as usize;
+    let mut out = Vec::new();
+    for chunk in poly.polygons.chunks_exact(nvp) {
+        let mut pts = Vec::new();
+        for &idx in chunk {
+            if idx == PolygonNavmesh::NO_INDEX {
+                break;
+            }
+            pts.push(vertices[idx as usize]);
+        }
+        if pts.len() >= 3 {
+            out.push(pts);
+        }
+    }
+    out
 }
 
 fn poly_mesh_to_landmass(poly: &PolygonNavmesh) -> Result<NavigationMesh<XYZ>, NavError> {

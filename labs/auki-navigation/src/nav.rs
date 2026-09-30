@@ -18,6 +18,7 @@ use std::collections::HashMap;
 pub struct NavMesh {
     archipelago: Archipelago<XYZ>,
     agent_radius: f32,
+    walkable_polygons: Vec<Vec<Vec3>>,
 }
 
 impl NavMesh {
@@ -25,6 +26,7 @@ impl NavMesh {
         let BakedNav {
             archipelago_mesh,
             agent_radius,
+            walkable_polygons,
         } = bake_navmesh(mesh, profile)?;
 
         let mut archipelago =
@@ -35,6 +37,7 @@ impl NavMesh {
         Ok(Self {
             archipelago,
             agent_radius,
+            walkable_polygons,
         })
     }
 
@@ -238,5 +241,10 @@ impl NavMesh {
 
     pub fn agent_radius(&self) -> f32 {
         self.agent_radius
+    }
+
+    /// Inset walkable polygons in Y-up metres.
+    pub fn walkable_polygons(&self) -> &[Vec<Vec3>] {
+        &self.walkable_polygons
     }
 }

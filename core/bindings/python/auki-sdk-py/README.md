@@ -19,6 +19,12 @@ This build includes networking, Domain data, and tasks. Omit
 Rust protocols must be compiled into the same extension; see
 [custom protocols](../../../../docs/how-to/protocols.md).
 
+When embedding this crate in a larger Python extension that supplies its own
+`auki_sdk` module, enable the `embedded` Cargo feature and call `register_sdk`.
+This omits the facade's `PyInit_auki_sdk` entry point, avoiding duplicate symbols
+when linking the host extension on Linux. Ordinary standalone builds retain
+their existing entry point.
+
 ## Use the binding
 
 | Task | API | Guide or example |

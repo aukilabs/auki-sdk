@@ -32,7 +32,10 @@ fn output<T: ContractType + Send + Sync + 'static>(
                 fixture_clock("clock"),
                 payload,
             )
-            .in_spatial_frame(frame),
+            .in_registered_frame(auki_components::FrameRegistryEntry::ros_optical(
+                "camera-peer",
+                frame,
+            )),
         )
         .unwrap();
     c.expose().unwrap();

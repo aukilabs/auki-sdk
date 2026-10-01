@@ -165,7 +165,7 @@ impl OdometryComponent {
                     unit: None,
                 }),
             )
-            .in_spatial_frame(contract.to_frame.frame_id.clone()),
+            .in_registered_frame(contract.to_frame.clone()),
         )?;
         component.expose()?;
         Ok(Self {
@@ -280,8 +280,12 @@ pub fn pose_at(
 ) -> Result<PoseAtTime, PoseError> {
     query.contract.validate()?;
     if product.producer.clock != query.contract.clock
-        || product.producer.spatial_frame_id.as_deref()
-            != Some(query.contract.to_frame.frame_id.as_str())
+        || product
+            .producer
+            .spatial_frame
+            .as_ref()
+            .map(|f| &f.definition)
+            != Some(&query.contract.to_frame)
         || product.producer.payload.datatype() != PoseUpdate::DATATYPE
         || product.producer.payload.schema() != POSE_SCHEMA
     {

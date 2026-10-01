@@ -1807,7 +1807,7 @@ async fn odometry_catalog_history_and_updates_cross_authenticated_peers() {
         timestamp_ns: 150,
         max_gap_ns: 100,
     };
-    let interpolated = pose_at(&received, &query).unwrap();
+    let interpolated = pose_at(received, &query).unwrap();
     assert_eq!(interpolated.pose.translation, [2., 0., 0.]);
     assert_eq!(interpolated.product, advertised);
     odom.publish(300, pose(5.)).unwrap();

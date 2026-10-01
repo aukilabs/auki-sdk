@@ -210,7 +210,9 @@ impl CameraRig {
                         observes: "fixture portals".into(),
                     }),
                 )
-                .in_spatial_frame(&frame),
+                .in_registered_frame(
+                    auki_components::FrameRegistryEntry::ros_optical("camera-peer", &frame),
+                ),
             )
             .unwrap();
         camera.expose().unwrap();
@@ -510,7 +512,10 @@ async fn voxel_experiment(
                     unit: Some("meters".into()),
                 }),
             )
-            .in_spatial_frame(&rig.frame),
+            .in_registered_frame(auki_components::FrameRegistryEntry::ros_optical(
+                "camera-peer",
+                &rig.frame,
+            )),
         )
         .unwrap();
     component.expose().unwrap();

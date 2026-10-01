@@ -801,7 +801,9 @@ mod tests {
                         unit: None,
                     }),
                 )
-                .in_spatial_frame("optical"),
+                .in_registered_frame(
+                    auki_components::FrameRegistryEntry::ros_optical("camera-peer", "optical"),
+                ),
             )
             .unwrap();
         c.expose().unwrap();

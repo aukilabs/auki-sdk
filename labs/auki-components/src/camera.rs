@@ -122,16 +122,18 @@ impl ActiveCameraOutput {
         width: u32,
         height: u32,
         clock: crate::ClockReference,
+        frame: crate::RegisteredFrame,
     ) -> Self {
         let manifest = OutputManifest {
-            schema: "auki.component-output-manifest/v2".to_owned(),
+            schema: "auki.component-output-manifest/v3".to_owned(),
             peer_id: component.peer_id.clone(),
             component_id: component.component_id.clone(),
             component_manifest_hash: component.manifest_hash.clone(),
             slot: FRAMES_SLOT.to_owned(),
             output_id: format!("frames-{generation}"),
             clock,
-            spatial_frame_id: Some(format!("{}.optical-frame", component.component_id)),
+            spatial_frame_id: Some(frame.reference.id.clone()),
+            spatial_frame: Some(frame),
             payload: PayloadContract::Camera(CameraPayloadContract {
                 datatype: "video_frame".to_owned(),
                 schema: "auki.video-frame/v1".to_owned(),
@@ -201,6 +203,7 @@ impl fmt::Debug for CameraComponent {
 }
 
 impl CameraComponent {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         peer_id: impl Into<String>,
         component_id: impl Into<String>,
@@ -209,6 +212,7 @@ impl CameraComponent {
         catalog: Catalog,
         clock: crate::ClockReference,
         allowed_remote_peers: impl IntoIterator<Item = String>,
+        frame: crate::FrameRegistryEntry,
     ) -> Result<Self, CameraError> {
         if width == 0 || height == 0 {
             return Err(CameraError::InvalidResolution);
@@ -235,7 +239,14 @@ impl CameraComponent {
             }],
         };
         let component_reference = component_manifest.reference();
-        let active = ActiveCameraOutput::new(&component_reference, 1, width, height, clock);
+        let active = ActiveCameraOutput::new(
+            &component_reference,
+            1,
+            width,
+            height,
+            clock,
+            crate::RegisteredFrame::new(frame),
+        );
 
         active
             .manifest
@@ -419,6 +430,12 @@ fn apply_resolution(
         instruction.width,
         instruction.height,
         state.active.manifest.clock.clone(),
+        state
+            .active
+            .manifest
+            .spatial_frame
+            .clone()
+            .expect("validated camera frame"),
     );
     inner
         .catalog

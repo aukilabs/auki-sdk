@@ -88,3 +88,6 @@ pub use runtime::{
 /// Registry identity of a clock, including owner and the hash of its boot-specific definition.
 pub use auki_registry::RegistryRef as ClockReference;
 pub mod clock;
+
+pub mod frame;
+pub use frame::{FrameRegistryEntry, RegisteredFrame};

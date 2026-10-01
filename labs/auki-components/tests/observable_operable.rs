@@ -29,6 +29,7 @@ fn resolution_change_replaces_output_not_component() {
         peer_a.catalog().clone(),
         fixture_clock("peer-a.session-clock"),
         ["peer-b".to_owned()],
+        auki_components::FrameRegistryEntry::ros_optical("camera-peer", "camera.optical"),
     )
     .unwrap();
 
@@ -98,6 +99,7 @@ fn subscription_ends_at_reconfiguration_and_replacement_requires_resubscription(
         peer_a.catalog().clone(),
         fixture_clock("peer-a.session-clock"),
         ["peer-b".to_owned()],
+        auki_components::FrameRegistryEntry::ros_optical("camera-peer", "camera.optical"),
     )
     .unwrap();
     let output_before = camera.current_output_reference();
@@ -203,6 +205,7 @@ fn buffer_subscription_ends_and_replacement_buffer_requires_explicit_attachment(
         peer_a.catalog().clone(),
         fixture_clock("peer-a.session-clock"),
         ["peer-b".to_owned()],
+        auki_components::FrameRegistryEntry::ros_optical("camera-peer", "camera.optical"),
     )
     .unwrap();
     let old_capture = CameraBufferCapture::attach(&camera, 8).unwrap();
@@ -268,6 +271,7 @@ fn local_operable_is_not_discoverable_or_remotely_invocable() {
         peer_a.catalog().clone(),
         fixture_clock("peer-a.session-clock"),
         ["peer-b".to_owned()],
+        auki_components::FrameRegistryEntry::ros_optical("camera-peer", "camera.optical"),
     )
     .unwrap();
 
@@ -308,6 +312,7 @@ fn unauthorized_remote_caller_cannot_reconfigure_camera() {
         peer_a.catalog().clone(),
         fixture_clock("peer-a.session-clock"),
         ["peer-b".to_owned()],
+        auki_components::FrameRegistryEntry::ros_optical("camera-peer", "camera.optical"),
     )
     .unwrap();
     let before = camera.current_output_reference();
@@ -338,6 +343,7 @@ fn frame_payload_must_match_current_output_manifest() {
         peer_a.catalog().clone(),
         fixture_clock("peer-a.session-clock"),
         ["peer-b".to_owned()],
+        auki_components::FrameRegistryEntry::ros_optical("camera-peer", "camera.optical"),
     )
     .unwrap();
 
@@ -372,6 +378,7 @@ fn setting_the_existing_resolution_does_not_create_a_new_output() {
         peer_a.catalog().clone(),
         fixture_clock("peer-a.session-clock"),
         ["peer-b".to_owned()],
+        auki_components::FrameRegistryEntry::ros_optical("camera-peer", "camera.optical"),
     )
     .unwrap();
     let before = camera.current_output_reference();

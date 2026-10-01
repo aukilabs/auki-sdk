@@ -11,9 +11,9 @@ Products; and a read-only Catalog projects the live topology.
 
 | Protocol | Purpose |
 | --- | --- |
-| `/aukilabs/components/catalog/2.0.0` | Discover the exported Component/Product surface by revision |
-| `/aukilabs/components/observations/3.0.0` | Read observations and terminal source notices from one exact Buffer Product |
-| `/aukilabs/components/observation-stream/1.0.0` | Subscribe once to observations from one exact Buffer Product |
+| `/aukilabs/components/catalog/3.0.0` | Discover the exported Component/Product surface by revision |
+| `/aukilabs/components/observations/4.0.0` | Read observations and terminal source notices from one exact Buffer Product |
+| `/aukilabs/components/observation-stream/2.0.0` | Subscribe once to observations from one exact Buffer Product |
 | `/aukilabs/components/operations/1.0.0` | Invoke one typed Operable on one exact Component |
 
 ## Layering
@@ -231,15 +231,15 @@ which callers each Operable authorizes.
 
 ## Compatibility and bounds
 
-Catalog uses protocol 2.0.0 and observations uses 3.0.0 for full clock registry
-references. Observations also carry terminal notices (introduced in v2).
+Catalog uses protocol 3.0.0 and observations uses 4.0.0 for full clock registry
+references and verified frame registry definitions. Observations also carry terminal notices (introduced in v2).
 Provider and consumer must upgrade together: older protocol versions are not
 registered and clients never silently fall back. Operations remains at 1.0.0.
 This is an experimental application-protocol change; authentication, discovery,
 `AukiPeer` transport, and backend service contracts are unchanged.
 
-Continuing observations use `observation-stream/1.0.0` and exact Output identities.
-Clients obtain the clock-qualified manifests through observations v3. Both peers
+Continuing observations use `observation-stream/2.0.0` and exact Output identities.
+Clients obtain the clock-qualified manifests through observations v4. Both peers
 must support the stream ID to subscribe; there is no automatic polling fallback.
 
 - JSON control frames: 1 MiB maximum.
@@ -300,3 +300,11 @@ Registry definitions remain host-managed. Peers must retain and serve the exact
 referenced clock entry before interpreting its epoch/session. The Component
 adapter checks reference syntax and equality; it does not synchronize clocks or
 fetch registry entries automatically.
+
+Camera Outputs use Output Manifest v3. `spatial_frame.reference` is the existing
+frame registry owner/ID/hash, and `spatial_frame.definition` is its canonical
+`FrameRegistryEntry`. Receivers validate both together; changed owner, ID, hash,
+axes or a conflicting `spatial_frame_id` alias are rejected. The definition is
+included in the immutable Output Manifest, so Catalog discovery and subscription
+bootstrap both supply it. Forwarding preserves the original registry identity.
+Camera outputs cannot fall back to an unqualified string frame ID.

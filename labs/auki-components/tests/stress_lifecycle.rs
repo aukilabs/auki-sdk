@@ -182,6 +182,7 @@ fn observer_errors_and_panics_become_failed_handles_without_harming_healthy_obse
         peer.catalog().clone(),
         fixture_clock("peer-a.session-clock"),
         Vec::<String>::new(),
+        auki_components::FrameRegistryEntry::ros_optical("camera-peer", "camera.optical"),
     )
     .unwrap();
     let observable = camera.current_output();
@@ -247,6 +248,7 @@ fn producer_failure_is_terminal_and_closes_its_buffer_product() {
         peer.catalog().clone(),
         fixture_clock("peer-a.session-clock"),
         Vec::<String>::new(),
+        auki_components::FrameRegistryEntry::ros_optical("camera-peer", "camera.optical"),
     )
     .unwrap();
     let products = CameraBufferCapture::attach(&camera, 4).unwrap();
@@ -367,6 +369,7 @@ fn camera_buffer_local_detector_and_serialized_remote_have_explicit_copy_boundar
         peer.catalog().clone(),
         fixture_clock("peer-a.session-clock"),
         Vec::<String>::new(),
+        auki_components::FrameRegistryEntry::ros_optical("camera-peer", "camera.optical"),
     )
     .unwrap();
     let products = CameraBufferCapture::attach(&camera, 8).unwrap();

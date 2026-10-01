@@ -494,7 +494,7 @@ impl VoxelMapComponent {
                         unit: None,
                     }),
                 )
-                .in_spatial_frame(definition.frame.frame_id.clone()),
+                .in_registered_frame(definition.frame.clone()),
             )
             .map_err(error)?;
         require(

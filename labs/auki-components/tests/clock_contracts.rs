@@ -7,7 +7,17 @@ mod clock_fixture;
 use clock_fixture::fixture_clock;
 
 fn camera(clock: ClockReference) -> CameraComponent {
-    CameraComponent::new("camera-peer", "camera", 1, 1, Catalog::default(), clock, []).unwrap()
+    CameraComponent::new(
+        "camera-peer",
+        "camera",
+        1,
+        1,
+        Catalog::default(),
+        clock,
+        [],
+        auki_components::FrameRegistryEntry::ros_optical("camera-peer", "camera.optical"),
+    )
+    .unwrap()
 }
 
 #[test]
@@ -99,7 +109,19 @@ fn camera_refuses_invalid_clock_before_registering_component() {
     let catalog = Catalog::default();
     let mut clock = fixture_clock("capture");
     clock.peer_id.clear();
-    assert!(CameraComponent::new("peer", "camera", 1, 1, catalog.clone(), clock, []).is_err());
+    assert!(
+        CameraComponent::new(
+            "peer",
+            "camera",
+            1,
+            1,
+            catalog.clone(),
+            clock,
+            [],
+            auki_components::FrameRegistryEntry::ros_optical("camera-peer", "camera.optical")
+        )
+        .is_err()
+    );
     assert!(catalog.snapshot().components.is_empty());
 }
 

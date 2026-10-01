@@ -63,3 +63,25 @@ stay `None`. It rejects unordered and duplicate-permitting timestamp policies.
 The enclosing Product supplies the clock. For explicitly framed pose publication
 and checked interpolation over these standard Buffer Products, see
 [auki-odometry](../auki-odometry/README.md).
+
+## Registered spatial frames
+
+Output Manifest v3 carries `spatial_frame: {reference, definition}`. The reference
+is the existing registry `{peer_id, id, hash}` and the definition is the existing
+`FrameRegistryEntry`, with axes, handedness and units. `RegisteredFrame::validate`
+checks owner, identity, canonical registry hash and valid axes. This is transport
+of registry entries, not a new convention system. Catalog and observation headers
+carry the definition so receivers can resolve it without guessing or another fetch.
+
+Use `ConfiguredObservableSpec::in_registered_frame(entry)`. Camera Outputs require
+it; `CameraComponent::new` also requires an explicit frame entry. The legacy
+`spatial_frame_id` field is only a readable alias when a registered frame is
+present and must match its reference. Existing non-camera schemas may still carry
+a bare ID and define their frames in their payload (for example scenegraphs);
+that is not a resolvable registry reference. Odometry and voxel Outputs now attach
+their existing registry definitions, and derived detector Outputs preserve them.
+
+Changing a frame definition changes its registry hash and Output identity.
+Forwarding preserves the original owner and hash. A frame definition does not
+establish camera-to-robot or robot-to-map alignment; those require explicit
+transforms with source/destination frames and observation clocks.

@@ -161,7 +161,15 @@ impl PortalDetector {
                         unit: None,
                     }),
                 )
-                .in_spatial_frame(camera.producer.spatial_frame_id.clone().unwrap()),
+                .in_registered_frame(
+                    camera
+                        .producer
+                        .spatial_frame
+                        .as_ref()
+                        .ok_or("camera frame registry missing")?
+                        .definition
+                        .clone(),
+                ),
             )
             .map_err(|e| e.to_string())?;
         let portals = component
@@ -178,7 +186,15 @@ impl PortalDetector {
                         unit: None,
                     }),
                 )
-                .in_spatial_frame(camera.producer.spatial_frame_id.clone().unwrap()),
+                .in_registered_frame(
+                    camera
+                        .producer
+                        .spatial_frame
+                        .as_ref()
+                        .ok_or("camera frame registry missing")?
+                        .definition
+                        .clone(),
+                ),
             )
             .map_err(|e| e.to_string())?;
         let last_error = Arc::new(Mutex::new(None));

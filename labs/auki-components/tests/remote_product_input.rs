@@ -30,14 +30,17 @@ fn imported_remote_product_binds_through_the_normal_typed_input_api() {
         }],
     };
     let producer = OutputManifest {
-        schema: "auki.component-output-manifest/v2".to_owned(),
+        schema: "auki.component-output-manifest/v3".to_owned(),
         peer_id: "remote-peer".to_owned(),
         component_id: "camera".to_owned(),
         component_manifest_hash: remote_component.hash(),
         slot: "frames".to_owned(),
         output_id: "frames-1".to_owned(),
         clock: fixture_clock("remote-peer.clock"),
-        spatial_frame_id: None,
+        spatial_frame_id: Some("camera.optical".into()),
+        spatial_frame: Some(auki_components::RegisteredFrame::new(
+            auki_components::FrameRegistryEntry::ros_optical("camera-peer", "camera.optical"),
+        )),
         payload: PayloadContract::Camera(CameraPayloadContract {
             datatype: "video_frame".to_owned(),
             schema: "test.frame/v1".to_owned(),

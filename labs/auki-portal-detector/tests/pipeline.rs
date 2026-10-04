@@ -164,7 +164,10 @@ fn fixture_payload(source: Metadata, payload: &str) -> Fixture {
                     observes: "fixture".into(),
                 }),
             )
-            .in_spatial_frame("camera-optical"),
+            .in_registered_frame(auki_components::FrameRegistryEntry::ros_optical(
+                "camera-peer",
+                "camera-optical",
+            )),
         )
         .unwrap();
     component.expose().unwrap();

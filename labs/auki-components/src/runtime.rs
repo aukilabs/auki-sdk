@@ -87,6 +87,7 @@ pub struct ConfiguredObservableSpec {
     pub output_id: String,
     pub clock: crate::ClockReference,
     pub spatial_frame_id: Option<String>,
+    pub spatial_frame: Option<crate::RegisteredFrame>,
     pub payload: PayloadContract,
 }
 
@@ -102,8 +103,15 @@ impl ConfiguredObservableSpec {
             output_id: output_id.into(),
             clock,
             spatial_frame_id: None,
+            spatial_frame: None,
             payload,
         }
+    }
+
+    pub fn in_registered_frame(mut self, definition: crate::FrameRegistryEntry) -> Self {
+        self.spatial_frame_id = Some(definition.frame_id.clone());
+        self.spatial_frame = Some(crate::RegisteredFrame::new(definition));
+        self
     }
 
     pub fn in_spatial_frame(mut self, spatial_frame_id: impl Into<String>) -> Self {
@@ -116,6 +124,7 @@ impl ConfiguredObservableSpec {
 pub enum ComponentBuildError {
     EmptyComponentId,
     InvalidClock(String),
+    InvalidOutput(String),
     DuplicateInterface(String),
     LocalInterfaceInClusterManifest(String),
     UnknownObservable(String),
@@ -181,6 +190,7 @@ pub enum ComponentBuildError {
 impl fmt::Display for ComponentBuildError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidOutput(reason) => write!(formatter, "invalid output: {reason}"),
             Self::InvalidClock(reason) => write!(formatter, "invalid clock: {reason}"),
             Self::EmptyComponentId => formatter.write_str("Component ID must not be empty"),
             Self::DuplicateInterface(name) => write!(formatter, "duplicate interface {name}"),
@@ -723,7 +733,7 @@ impl Component {
 
         crate::clock::validate_clock(&spec.clock).map_err(ComponentBuildError::InvalidClock)?;
         let manifest = OutputManifest {
-            schema: "auki.component-output-manifest/v2".to_owned(),
+            schema: "auki.component-output-manifest/v3".to_owned(),
             peer_id: self.inner.reference.peer_id.clone(),
             component_id: self.inner.reference.component_id.clone(),
             component_manifest_hash: self.inner.reference.manifest_hash.clone(),
@@ -731,8 +741,12 @@ impl Component {
             output_id: spec.output_id,
             clock: spec.clock,
             spatial_frame_id: spec.spatial_frame_id,
+            spatial_frame: spec.spatial_frame,
             payload: spec.payload,
         };
+        manifest
+            .validate()
+            .map_err(ComponentBuildError::InvalidOutput)?;
         let reference = manifest.reference();
         let (observable, emitter) = output_observable(reference.clone(), contract.access.clone());
         let liveness = Arc::new(());
@@ -838,7 +852,7 @@ impl Component {
 
         crate::clock::validate_clock(&spec.clock).map_err(ComponentBuildError::InvalidClock)?;
         let manifest = OutputManifest {
-            schema: "auki.component-output-manifest/v2".to_owned(),
+            schema: "auki.component-output-manifest/v3".to_owned(),
             peer_id: self.inner.reference.peer_id.clone(),
             component_id: self.inner.reference.component_id.clone(),
             component_manifest_hash: self.inner.reference.manifest_hash.clone(),
@@ -846,8 +860,12 @@ impl Component {
             output_id: spec.output_id,
             clock: spec.clock,
             spatial_frame_id: spec.spatial_frame_id,
+            spatial_frame: spec.spatial_frame,
             payload: spec.payload,
         };
+        manifest
+            .validate()
+            .map_err(ComponentBuildError::InvalidOutput)?;
         let reference = manifest.reference();
         let (observable, emitter) = output_observable(reference.clone(), contract.access.clone());
         let liveness = Arc::new(());

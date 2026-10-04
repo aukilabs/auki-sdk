@@ -6,9 +6,9 @@ Standalone, portable application protocols that expose the network-independent
 The protocol family is intentionally separate from the manager-era
 `auki-protocols` crate:
 
-- `/aukilabs/components/catalog/2.0.0`
-- `/aukilabs/components/observations/3.0.0`
-- `/aukilabs/components/observation-stream/1.0.0`
+- `/aukilabs/components/catalog/3.0.0`
+- `/aukilabs/components/observations/4.0.0`
+- `/aukilabs/components/observation-stream/2.0.0`
 - `/aukilabs/components/operations/1.0.0`
 
 The authenticated stream supplies the caller peer identity. Wire messages may
@@ -69,16 +69,13 @@ the reason. Reconfiguration never migrates a mirror to the replacement Product;
 that requires explicit discovery and a new mirror. Ended Products remain
 fetchable while exported, and their manifests do not change.
 
-The observations protocol is now **2.0.0**: both peers must upgrade together.
-There is no fallback to 1.0.0, whose response cannot convey terminal notices.
-Catalog and Operations remain 1.0.0. No core networking or authentication
-contract changes are required. A source end arrives on the next successful
-poll, not asynchronously. Local mirror cancellation closes its readers but is
-not a new terminal source reason on the wire.
+Output Manifest v3 adds verified frame registry definitions. Catalog v3, finite
+observations v4, and observation-stream v2 require both peers to upgrade. There
+is no automatic fallback to older protocols. Operations remains v1.
 
 For continuing observation, use `subscribe_product_exact` (or native
 `subscribe_product`) with `ObservationStart::{FromSequence, LatestExisting,
-NewOnly}`. It sends one request on the additive `observation-stream/1.0.0`
+NewOnly}`. It sends one request on the additive `observation-stream/2.0.0`
 protocol, then the host awaits `subscription.next()` in its async task. Buffer
 changes wake the provider without polling or a per-subscriber worker thread.
 `subscription.product()` is a normal local retained Product for typed inputs.
@@ -91,7 +88,7 @@ Reconfiguration ends it after retained data drains, never migrating it.
 Transport failure or unexport terminates it; reconnect/rebind is explicit.
 An idle producer needs no heartbeat or application-level timeout.
 
-Catalog v2 and finite observations v3 carry full clock references; both peers
+Catalog v3 and finite observations v4 carry full clock references and verified frame definitions; both peers
 need these versions and the stream ID for subscriptions. No fallback to polling is automatic.
 The source is still a Buffer, not an unretained Component output. See
 [the protocol guide](../../docs/reference/component-protocols.md) for the full

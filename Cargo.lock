@@ -414,7 +414,9 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "auki-components",
+ "auki-odometry",
  "auki-p2p",
+ "auki-registry",
  "auki-sdk",
  "chrono",
  "futures",
@@ -708,6 +710,18 @@ version = "0.0.0"
 dependencies = [
  "auki-datatypes",
  "auki-registry",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "auki-odometry"
+version = "0.1.0"
+dependencies = [
+ "auki-components",
+ "auki-geometry",
+ "auki-registry",
+ "serde",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 

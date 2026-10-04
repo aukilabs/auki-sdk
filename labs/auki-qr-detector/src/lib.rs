@@ -459,6 +459,7 @@ impl QrDetector {
             }),
         );
         output_spec.spatial_frame_id = product.producer.spatial_frame_id.clone();
+        output_spec.spatial_frame = product.producer.spatial_frame.clone();
         let detections = component.configured_observable::<QrDetections>(output_spec)?;
         let detector = Arc::new(Mutex::new(self));
         let errors = Arc::new(Mutex::new(Vec::new()));
@@ -1132,12 +1133,17 @@ mod tests {
             .unwrap();
         let (first_jpeg, width, height) = rendered_qr_jpeg("auki://typed-product/alpha");
         let first_output = camera
-            .configured_observable::<VideoFrame>(ConfiguredObservableSpec::new(
-                "frames",
-                "webcam-jpeg-output-1",
-                fixture_clock("monotonic-ns"),
-                typed_jpeg_payload(width as u32, height as u32, 10),
-            ))
+            .configured_observable::<VideoFrame>(
+                ConfiguredObservableSpec::new(
+                    "frames",
+                    "webcam-jpeg-output-1",
+                    fixture_clock("monotonic-ns"),
+                    typed_jpeg_payload(width as u32, height as u32, 10),
+                )
+                .in_registered_frame(
+                    auki_components::FrameRegistryEntry::ros_optical("peer-a", "camera.optical"),
+                ),
+            )
             .unwrap();
         camera.expose().unwrap();
         let first_capture = runtime
@@ -1241,6 +1247,9 @@ mod tests {
                     "webcam-jpeg-output-2",
                     fixture_clock("monotonic-ns"),
                     typed_jpeg_payload(width as u32, height as u32, 5),
+                )
+                .in_registered_frame(
+                    auki_components::FrameRegistryEntry::ros_optical("peer-a", "camera.optical"),
                 ),
                 2,
             )
@@ -1336,12 +1345,17 @@ mod tests {
             )
             .unwrap();
         let first_output = camera
-            .configured_observable::<VideoFrame>(ConfiguredObservableSpec::new(
-                "frames",
-                "webcam-jpeg-output-1",
-                fixture_clock("monotonic-ns"),
-                typed_jpeg_payload(64, 64, 10),
-            ))
+            .configured_observable::<VideoFrame>(
+                ConfiguredObservableSpec::new(
+                    "frames",
+                    "webcam-jpeg-output-1",
+                    fixture_clock("monotonic-ns"),
+                    typed_jpeg_payload(64, 64, 10),
+                )
+                .in_registered_frame(
+                    auki_components::FrameRegistryEntry::ros_optical("peer-a", "camera.optical"),
+                ),
+            )
             .unwrap();
         camera.expose().unwrap();
         let first_capture = runtime
@@ -1360,6 +1374,9 @@ mod tests {
                     "webcam-jpeg-output-2",
                     fixture_clock("monotonic-ns"),
                     typed_jpeg_payload(64, 64, 5),
+                )
+                .in_registered_frame(
+                    auki_components::FrameRegistryEntry::ros_optical("peer-a", "camera.optical"),
                 ),
                 2,
             )

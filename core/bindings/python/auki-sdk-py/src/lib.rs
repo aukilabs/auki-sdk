@@ -65,6 +65,7 @@ pub fn register_sdk(module: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
+#[cfg(not(feature = "embedded"))]
 #[pymodule]
 fn auki_sdk(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     register_sdk(module)

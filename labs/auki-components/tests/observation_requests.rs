@@ -24,6 +24,7 @@ fn camera() -> (ComponentRuntime, CameraComponent) {
         peer.catalog().clone(),
         fixture_clock("peer-a.session-clock"),
         ["peer-b".to_owned()],
+        auki_components::FrameRegistryEntry::ros_optical("camera-peer", "camera.optical"),
     )
     .unwrap();
     (peer, camera)

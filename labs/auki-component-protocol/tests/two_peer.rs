@@ -1721,3 +1721,109 @@ async fn latest_sync_reports_skipped_history_then_accepts_the_terminal_notice_on
 #[path = "../../auki-components/tests/support/clock.rs"]
 mod clock_fixture;
 use clock_fixture::fixture_clock;
+
+/// Peyote-facing contract: discover the actual Product, fetch history, then
+/// receive another pose from the same publisher over authenticated P2P.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn odometry_catalog_history_and_updates_cross_authenticated_peers() {
+    use auki_odometry::*;
+    use auki_registry::{CoordinateConvention, FrameRegistryEntry};
+    let domain = Uuid::new_v4();
+    let a = Identity::generate();
+    let b = Identity::generate();
+    let (server, _sa) = AukiPeer::start_external(a.clone(), authority(&a, domain), direct_config())
+        .await
+        .unwrap();
+    let (viewer, _va) = AukiPeer::start_external(b.clone(), authority(&b, domain), direct_config())
+        .await
+        .unwrap();
+    let route = server.listen_addresses()[0].clone();
+    let rt = ComponentRuntime::new(server.peer_id().to_string());
+    let contract = PoseContract {
+        from_frame: FrameRegistryEntry::in_convention(
+            server.peer_id().to_string(),
+            "robot.base",
+            CoordinateConvention::Ros2Body,
+        ),
+        to_frame: FrameRegistryEntry::in_convention(
+            server.peer_id().to_string(),
+            "robot.odom.boot1",
+            CoordinateConvention::Ros2Body,
+        ),
+        clock: fixture_clock("robot.measurement"),
+        session_id: "boot1".into(),
+    };
+    let mut odom = OdometryComponent::new(&rt, "odometry", contract.clone()).unwrap();
+    let capture =
+        capture_pose_history(&rt, "robot-trajectory", &odom, BufferLimits::entries(8)).unwrap();
+    let endpoint = ComponentProtocolEndpoint::mount(server.protocols(), rt).unwrap();
+    endpoint.export_product(&capture.product()).unwrap();
+    let pose = |x| Tracking::Valid {
+        pose: Pose {
+            translation: [x, 0., 0.],
+            rotation_xyzw: [0., 0., 0., 1.],
+        },
+    };
+    odom.publish(100, pose(1.)).unwrap();
+    odom.publish(200, pose(3.)).unwrap();
+    let client = ComponentProtocolClient::new(viewer.protocols());
+    let CatalogResponse::Snapshot { snapshot } = client
+        .catalog_exact(server.peer_id(), route.clone(), None)
+        .await
+        .unwrap()
+    else {
+        panic!("missing catalog")
+    };
+    let entry = snapshot
+        .products
+        .iter()
+        .find(|p| {
+            p.metadata
+                .as_ref()
+                .is_some_and(|m| m.schema == METADATA_SCHEMA)
+        })
+        .unwrap();
+    let declaration: PoseContract =
+        serde_json::from_value(entry.metadata.as_ref().unwrap().value.clone()).unwrap();
+    assert_eq!(declaration, contract);
+    let advertised = entry.manifest.reference();
+    assert_eq!(advertised, capture.product().reference());
+    let mut remote = client
+        .mirror_product_exact::<PoseUpdate>(
+            server.peer_id(),
+            route,
+            advertised.clone(),
+            BufferLimits::entries(8),
+            |_| 1024,
+        )
+        .await
+        .unwrap();
+    assert_eq!(remote.sync_once().await.unwrap().accepted, 1);
+    let received = remote.product();
+    assert_eq!(received.producer.clock, contract.clock);
+    assert_eq!(received.buffer().range().entries, 2);
+    let query = PoseQuery {
+        contract: declaration,
+        timestamp_ns: 150,
+        max_gap_ns: 100,
+    };
+    let interpolated = pose_at(received, &query).unwrap();
+    assert_eq!(interpolated.pose.translation, [2., 0., 0.]);
+    assert_eq!(interpolated.product, advertised);
+    odom.publish(300, pose(5.)).unwrap();
+    assert_eq!(remote.sync_once().await.unwrap().accepted, 1);
+    let latest = remote.product().latest_existing().unwrap().unwrap();
+    assert_eq!(latest.timestamp_ns, 300);
+    assert_eq!(latest.payload.tracking, pose(5.));
+    assert_eq!(latest.payload.contract, contract);
+    odom.end(
+        300,
+        auki_components::ObservationEndReason::Reconfigured { replacement: None },
+    )
+    .unwrap();
+    remote.sync_once().await.unwrap();
+    assert!(remote.product().end_notice().is_some());
+    endpoint.close().await.unwrap();
+    viewer.shutdown().await.unwrap();
+    server.shutdown().await.unwrap();
+}

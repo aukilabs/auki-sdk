@@ -23,6 +23,7 @@ members = [
 
     # Experimental crates; application protocols remain optional.
     "labs/auki-components",
+    "labs/auki-odometry",
     "labs/auki-scenegraph",
     "labs/auki-voxel-map",
     "labs/auki-qr-localizer",

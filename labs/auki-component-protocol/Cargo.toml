@@ -20,6 +20,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+auki-odometry = { path = "../auki-odometry" }
+auki-registry = { path = "../auki-registry" }
 auki-p2p = { path = "../../core/auki-p2p" }
 chrono = { workspace = true }
 futures = { workspace = true, features = ["executor"] }

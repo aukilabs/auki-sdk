@@ -17,6 +17,8 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = ["standard-protocols"]
 extension-module = ["pyo3/extension-module"]
+# Larger Python extensions call register_sdk and provide their own PyInit symbol.
+embedded = []
 info = [
   "dep:auki-protocols",
   "auki-protocols/info-endpoint",

@@ -45,7 +45,7 @@ mod runtime;
 pub use buffer::{
     Buffer, BufferCursor, BufferError, BufferLimits, BufferNext, BufferRange, BufferReader,
     BufferReaderStats, BufferTimePolicy, CursorRead, CursorStart, DurationTimeBasis, Gap,
-    SourceTimestampPolicy, connect_buffer,
+    SourceTimestampPolicy, TimeBracket, connect_buffer,
 };
 pub use camera::{
     AppliedResolution, CameraBufferCapture, CameraBufferError, CameraComponent, CameraError,
@@ -88,3 +88,6 @@ pub use runtime::{
 /// Registry identity of a clock, including owner and the hash of its boot-specific definition.
 pub use auki_registry::RegistryRef as ClockReference;
 pub mod clock;
+
+pub mod frame;
+pub use frame::{FrameRegistryEntry, RegisteredFrame};

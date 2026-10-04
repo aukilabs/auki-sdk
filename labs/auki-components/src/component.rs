@@ -233,16 +233,27 @@ pub struct OutputManifest {
     pub slot: String,
     pub output_id: String,
     pub clock: crate::ClockReference,
+    /// Legacy readable identity. When registered, must exactly match the registry reference.
     pub spatial_frame_id: Option<String>,
+    pub spatial_frame: Option<crate::RegisteredFrame>,
     pub payload: PayloadContract,
 }
 
 impl OutputManifest {
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema != "auki.component-output-manifest/v2" {
+        if self.schema != "auki.component-output-manifest/v3" {
             return Err("unsupported output manifest schema".into());
         }
-        crate::clock::validate_clock(&self.clock)
+        crate::clock::validate_clock(&self.clock)?;
+        if let Some(frame) = &self.spatial_frame {
+            frame.validate()?;
+            if self.spatial_frame_id.as_deref() != Some(frame.reference.id.as_str()) {
+                return Err("frame id disagrees with registry reference".into());
+            }
+        } else if matches!(self.payload, PayloadContract::Camera(_)) {
+            return Err("camera output requires an exact registered frame".into());
+        }
+        Ok(())
     }
 
     pub fn hash(&self) -> ManifestHash {

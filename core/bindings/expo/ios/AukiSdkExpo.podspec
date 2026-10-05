@@ -1,8 +1,8 @@
 Pod::Spec.new do |s|
   s.name           = 'AukiSdkExpo'
   s.version        = '0.1.0'
-  s.summary        = 'Expo module wrapping auki-sdk-swift'
-  s.description    = 'Authenticated Auki peer surface for Expo iOS (UniFFI AukiSDK).'
+  s.summary        = 'Expo module wrapping auki-sdk-uniffi'
+  s.description    = 'Expo iOS module for auki-sdk-uniffi, the UniFFI library shared with Android.'
   s.author         = 'Auki Labs'
   s.homepage       = 'https://github.com/aukilabs/auki-sdk'
   # Match peyote / Expo default floor so use_expo_modules! does not skip the pod.
@@ -14,7 +14,7 @@ Pod::Spec.new do |s|
   s.dependency 'ExpoModulesCore'
 
   # Same layout as ExpoPnp: xcframework at pod ios/ root so CocoaPods generates
-  # [CP] Copy XCFrameworks and -l auki_sdk_swift on the app target.
+  # [CP] Copy XCFrameworks and -l auki_sdk_uniffi on the app target.
   s.vendored_frameworks = 'AukiSDK.xcframework'
 
   s.pod_target_xcconfig = {

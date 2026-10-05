@@ -25,7 +25,7 @@ use auki_registry_rs::{AxisConvention, FrameRegistryEntry};
 use pyo3::create_exception;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyList, PyModule, PySequence};
+use pyo3::types::{PyAny, PyDict, PyList, PyModule, PySequence};
 use serde::de::DeserializeOwned;
 
 // ─── GeometryError exception class ─────────────────────────────────
@@ -350,6 +350,174 @@ fn relative_spatial_transform(
     spatial_transform_to_pylist(py, &relative)
 }
 
+// ─── Triangle mesh ingest ──────────────────────────────────────────
+
+#[pyclass(name = "TriangleMesh")]
+struct PyTriangleMesh {
+    inner: geometry::TriangleMesh,
+}
+
+#[pymethods]
+impl PyTriangleMesh {
+    /// Verts `[{x,y,z}|[x,y,z], …]` + tris `[[i,j,k], …]`. Optional groups
+    /// `[{name, start, end}, …]`.
+    #[staticmethod]
+    #[pyo3(signature = (vertices, indices, groups=None))]
+    fn from_indexed(
+        vertices: &Bound<'_, PyAny>,
+        indices: &Bound<'_, PyAny>,
+        groups: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let inner = py_build_mesh(vertices, indices, groups)?;
+        Ok(Self { inner })
+    }
+
+    #[getter]
+    fn vertex_count(&self) -> usize {
+        self.inner.vertices.len()
+    }
+
+    #[getter]
+    fn triangle_count(&self) -> usize {
+        self.inner.indices.len()
+    }
+
+    #[getter]
+    fn group_count(&self) -> usize {
+        self.inner.groups.len()
+    }
+
+    #[getter]
+    fn vertices(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let list = PyList::empty_bound(py);
+        for v in &self.inner.vertices {
+            let d = PyDict::new_bound(py);
+            d.set_item("x", v.x)?;
+            d.set_item("y", v.y)?;
+            d.set_item("z", v.z)?;
+            list.append(d)?;
+        }
+        Ok(list.into())
+    }
+
+    #[getter]
+    fn indices(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let list = PyList::empty_bound(py);
+        for &[a, b, c] in &self.inner.indices {
+            list.append(vec![a, b, c])?;
+        }
+        Ok(list.into())
+    }
+
+    #[getter]
+    fn groups(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let list = PyList::empty_bound(py);
+        for g in &self.inner.groups {
+            let d = PyDict::new_bound(py);
+            d.set_item("name", &g.name)?;
+            d.set_item("start", g.triangle_range.start)?;
+            d.set_item("end", g.triangle_range.end)?;
+            list.append(d)?;
+        }
+        Ok(list.into())
+    }
+
+    fn raycast(
+        &self,
+        py: Python<'_>,
+        origin: &Bound<'_, PyAny>,
+        direction: &Bound<'_, PyAny>,
+    ) -> PyResult<PyObject> {
+        let o = py_to_mesh_vec3(origin)?;
+        let d = py_to_mesh_vec3(direction)?;
+        let hits = self.inner.raycast(o, d);
+        let list = PyList::empty_bound(py);
+        for h in hits {
+            let hd = PyDict::new_bound(py);
+            let pt = PyDict::new_bound(py);
+            pt.set_item("x", h.point.x)?;
+            pt.set_item("y", h.point.y)?;
+            pt.set_item("z", h.point.z)?;
+            let n = PyDict::new_bound(py);
+            n.set_item("x", h.normal.x)?;
+            n.set_item("y", h.normal.y)?;
+            n.set_item("z", h.normal.z)?;
+            hd.set_item("point", pt)?;
+            hd.set_item("distance", h.distance)?;
+            hd.set_item("normal", n)?;
+            list.append(hd)?;
+        }
+        Ok(list.into())
+    }
+}
+
+fn py_to_mesh_vec3(obj: &Bound<'_, PyAny>) -> PyResult<geometry::mesh::Vec3> {
+    if let Ok(seq) = obj.extract::<Vec<f32>>() {
+        if seq.len() != 3 {
+            return Err(PyValueError::new_err("point sequence must have 3 floats"));
+        }
+        return Ok(geometry::mesh::Vec3::new(seq[0], seq[1], seq[2]));
+    }
+    Ok(geometry::mesh::Vec3::new(
+        obj.get_item("x")?.extract()?,
+        obj.get_item("y")?.extract()?,
+        obj.get_item("z")?.extract()?,
+    ))
+}
+
+fn py_build_mesh(
+    vertices: &Bound<'_, PyAny>,
+    indices: &Bound<'_, PyAny>,
+    groups: Option<&Bound<'_, PyAny>>,
+) -> PyResult<geometry::TriangleMesh> {
+    let mut verts = Vec::new();
+    for item in vertices.iter()? {
+        let p = item?;
+        if let Ok(seq) = p.extract::<Vec<f32>>() {
+            if seq.len() != 3 {
+                return Err(PyValueError::new_err("point sequence must have 3 floats"));
+            }
+            verts.push(geometry::mesh::Vec3::new(seq[0], seq[1], seq[2]));
+        } else {
+            verts.push(geometry::mesh::Vec3::new(
+                p.get_item("x")?.extract()?,
+                p.get_item("y")?.extract()?,
+                p.get_item("z")?.extract()?,
+            ));
+        }
+    }
+    let mut tris = Vec::new();
+    for item in indices.iter()? {
+        let face: Vec<u32> = item?.extract()?;
+        if face.len() != 3 {
+            return Err(PyValueError::new_err("each triangle needs 3 indices"));
+        }
+        tris.push([face[0], face[1], face[2]]);
+    }
+    let mut mesh_groups = Vec::new();
+    if let Some(groups) = groups {
+        if !groups.is_none() {
+            for item in groups.iter()? {
+                let g = item?;
+                let name: String = g.get_item("name")?.extract()?;
+                let start: usize = g.get_item("start")?.extract()?;
+                let end: usize = g.get_item("end")?.extract()?;
+                mesh_groups.push(geometry::MeshGroup {
+                    name,
+                    triangle_range: start..end,
+                });
+            }
+        }
+    }
+    geometry::TriangleMesh::from_indexed(verts, tris, mesh_groups).map_err(err_to_py)
+}
+
+#[pyfunction]
+fn parse_obj(text: &str) -> PyResult<PyTriangleMesh> {
+    let inner = geometry::parse_obj(text).map_err(err_to_py)?;
+    Ok(PyTriangleMesh { inner })
+}
+
 // ─── 4x4 ↔ 7-array bridge ──────────────────────────────────────────
 
 #[pyfunction]
@@ -383,6 +551,8 @@ fn auki_geometry(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(relative_spatial_transform, m)?)?;
     m.add_function(wrap_pyfunction!(spatial_transform_to_matrix4, m)?)?;
     m.add_function(wrap_pyfunction!(spatial_transform_from_matrix4, m)?)?;
+    m.add_class::<PyTriangleMesh>()?;
+    m.add_function(wrap_pyfunction!(parse_obj, m)?)?;
     Ok(())
 }
 

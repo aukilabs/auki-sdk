@@ -1,12 +1,12 @@
 import ExpoModulesCore
-#if canImport(auki_sdk_swiftFFI)
-import auki_sdk_swiftFFI
+#if canImport(auki_sdk_uniffiFFI)
+import auki_sdk_uniffiFFI
 #endif
 
 public class AukiSdkExpoModule: Module {
   // UniFFI Swift (ios/AukiSDK) is compiled into this pod; FFI comes from
-  // Frameworks/AukiSDK.xcframework. canImport(auki_sdk_swiftFFI) gates the API.
-  #if canImport(auki_sdk_swiftFFI)
+  // Frameworks/AukiSDK.xcframework. canImport(auki_sdk_uniffiFFI) gates the API.
+  #if canImport(auki_sdk_uniffiFFI)
   private let sessions = ExpoSessionRegistry()
   private let domainData = ExpoDomainDataRegistry()
   private let fleet = ExpoFleetRegistry()
@@ -23,7 +23,7 @@ public class AukiSdkExpoModule: Module {
     Events("onZitadelSaveRequested")
 
     AsyncFunction("_importZitadel") { (credentialsJson: String, environmentJson: String?) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let id = self.newId("session")
       let store = ExpoZitadelStore { [weak self] requestId in
         self?.sendEvent("onZitadelSaveRequested", ["sessionId": id, "requestId": requestId])
@@ -37,7 +37,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("_zitadelCredentials") { (sessionId: String, requestId: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       return try await self.sessions.store(sessionId).credentialsJson(requestId: requestId)
       #else
       throw unsupported("AukiSDK XCFramework missing")
@@ -45,7 +45,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("_ackZitadelSave") { (sessionId: String, requestId: String, success: Bool) -> Bool in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       return try await self.sessions.store(sessionId).acknowledge(requestId: requestId, success: success)
       #else
       throw unsupported("AukiSDK XCFramework missing")
@@ -53,7 +53,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("_closeSession") { (sessionId: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       await self.sessions.close(sessionId)
       #else
       throw unsupported("AukiSDK XCFramework missing")
@@ -61,7 +61,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("loginDev") { (email: String, password: String, clientId: String?) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let session = try await withAuthErrors {
         try await AukiSession.loginDev(email: email, password: password, clientId: clientId)
       }
@@ -82,7 +82,7 @@ public class AukiSdkExpoModule: Module {
         password: String,
         clientId: String?
       ) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let session = try await withAuthErrors {
         try await AukiSession.loginWithEnvironment(
           apiBaseUrl: apiBaseUrl,
@@ -102,7 +102,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("accessibleDomains") { (sessionId: String) -> [[String: Any?]] in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let session = try self.sessions.session(sessionId)
       let domains = try await withAuthErrors { try await session.accessibleDomains() }
       return domains.map { domain in
@@ -120,7 +120,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("domainsForPortalPage") {
       (sessionId: String, portal: String, organization: String, limit: UInt32, cursor: String?, operationId: String) -> [String: Any] in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.domainData.beginOperation(operationId)
       defer { self.domainData.finishOperation(operationId) }
       let page = try await withDataErrors { try await self.sessions.session(sessionId).domains().forPortalPage(portal: portal, limit: limit, cursor: cursor, organization: organization, cancellation: cancellation) }
@@ -131,7 +131,7 @@ public class AukiSdkExpoModule: Module {
     }
     AsyncFunction("domainsPortalsPage") {
       (sessionId: String, domainId: String, limit: UInt32, cursor: String?, operationId: String) -> [String: Any] in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.domainData.beginOperation(operationId)
       defer { self.domainData.finishOperation(operationId) }
       let page = try await withDataErrors { try await self.sessions.session(sessionId).domains().portalsPage(domainId: domainId, limit: limit, cursor: cursor, cancellation: cancellation) }
@@ -143,7 +143,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("domainsList") {
       (sessionId: String, queryJson: String, operationId: String) -> [String: Any] in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.domainData.beginOperation(operationId)
       defer { self.domainData.finishOperation(operationId) }
       let query = try Self.domainListQuery(queryJson)
@@ -166,7 +166,7 @@ public class AukiSdkExpoModule: Module {
         organization: String?,
         operationId: String
       ) -> [[String: Any]] in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.domainData.beginOperation(operationId)
       defer { self.domainData.finishOperation(operationId) }
       let values = try await withDataErrors {
@@ -184,7 +184,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("domainsPortals") {
       (sessionId: String, domainId: String, operationId: String) -> [[String: Any]] in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.domainData.beginOperation(operationId)
       defer { self.domainData.finishOperation(operationId) }
       let values = try await withDataErrors {
@@ -206,7 +206,7 @@ public class AukiSdkExpoModule: Module {
         portal: String,
         operationId: String
       ) -> [String: Any] in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.domainData.beginOperation(operationId)
       defer { self.domainData.finishOperation(operationId) }
       let value = try await withDataErrors {
@@ -223,7 +223,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("domainDataOpen") { (sessionId: String, domainId: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let client = try await withDataErrors {
         try self.sessions.session(sessionId).data(domainId: domainId)
       }
@@ -237,7 +237,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("domainDataList") {
       (clientId: String, queryJson: String, operationId: String) -> [[String: Any]] in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.domainData.beginOperation(operationId)
       defer { self.domainData.finishOperation(operationId) }
       let query = try Self.dataListQuery(queryJson)
@@ -255,7 +255,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("domainDataGet") {
       (clientId: String, dataId: String, operationId: String) -> [String: Any] in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.domainData.beginOperation(operationId)
       defer { self.domainData.finishOperation(operationId) }
       let value = try await withDataErrors {
@@ -272,7 +272,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("domainDataRead") {
       (clientId: String, dataId: String, operationId: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.domainData.beginOperation(operationId)
       defer { self.domainData.finishOperation(operationId) }
       let bytes = try await withDataErrors {
@@ -294,7 +294,7 @@ public class AukiSdkExpoModule: Module {
         bytesBase64: String,
         operationId: String
       ) -> [String: Any] in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       guard let bytes = Data(base64Encoded: bytesBase64) else {
         throw ExpoDataFailure(kind: "input", status: nil, message: "Data bytes are not base64")
       }
@@ -316,7 +316,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("domainDataDelete") {
       (clientId: String, dataId: String, operationId: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.domainData.beginOperation(operationId)
       defer { self.domainData.finishOperation(operationId) }
       try await withDataErrors {
@@ -332,7 +332,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("domainDataPoses") {
       (clientId: String, operationId: String) -> [[String: Any]] in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.domainData.beginOperation(operationId)
       defer { self.domainData.finishOperation(operationId) }
       let values = try await withDataErrors {
@@ -346,7 +346,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("domainDataPose") {
       (clientId: String, portal: String, operationId: String) -> [String: Any] in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.domainData.beginOperation(operationId)
       defer { self.domainData.finishOperation(operationId) }
       let value = try await withDataErrors {
@@ -362,7 +362,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("domainDataClose") { (clientId: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       guard let client = self.domainData.removeClient(clientId) else { return }
       try await withDataErrors { try await client.close() }
       #else
@@ -371,7 +371,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("dataOperationCancel") { (operationId: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       self.domainData.cancelOperation(operationId)
       #else
       throw unsupported("AukiSDK XCFramework missing")
@@ -385,7 +385,7 @@ public class AukiSdkExpoModule: Module {
         optionsJson: String,
         operationId: String
       ) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.domainData.beginOperation(operationId)
       do {
         let transfer = try await withDataErrors {
@@ -408,7 +408,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("dataDownloadNext") { (downloadId: String) -> String? in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let bytes = try await withDataErrors {
         try await self.domainData.download(downloadId).next()
       }
@@ -419,7 +419,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("dataDownloadCancel") { (downloadId: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       try await withDataErrors { try self.domainData.download(downloadId).cancel() }
       #else
       throw unsupported("AukiSDK XCFramework missing")
@@ -427,7 +427,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("dataDownloadClose") { (downloadId: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       guard let transfer = self.domainData.removeDownload(downloadId) else { return }
       try await withDataErrors { try await transfer.close() }
       #else
@@ -443,7 +443,7 @@ public class AukiSdkExpoModule: Module {
         optionsJson: String,
         operationId: String
       ) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       guard size.isFinite, size.rounded(.towardZero) == size,
         size >= 1, size <= 9_007_199_254_740_991
       else {
@@ -472,7 +472,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("dataUploadNextMaximum") { (uploadId: String) -> Double? in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       return try await withDataErrors {
         try await self.domainData.upload(uploadId).nextMaximum().map { Double($0) }
       }
@@ -482,7 +482,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("dataUploadPush") { (uploadId: String, bytesBase64: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       guard let bytes = Data(base64Encoded: bytesBase64) else {
         throw ExpoDataFailure(kind: "input", status: nil, message: "Upload chunk is not base64")
       }
@@ -493,7 +493,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("dataUploadResult") { (uploadId: String) -> [String: Any] in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let value = try await withDataErrors {
         try await self.domainData.upload(uploadId).result()
       }
@@ -504,7 +504,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("dataUploadCancel") { (uploadId: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       try await withDataErrors { try self.domainData.upload(uploadId).cancel() }
       #else
       throw unsupported("AukiSDK XCFramework missing")
@@ -512,7 +512,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("dataUploadClose") { (uploadId: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       guard let transfer = self.domainData.removeUpload(uploadId) else { return }
       try await withDataErrors { try await transfer.close() }
       #else
@@ -521,7 +521,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("fleetOpen") { (sessionId: String, domainId: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let client = try await withFleetErrors { try self.sessions.session(sessionId).fleet(domainId: domainId) }
       let id = self.newId("fleet")
       self.fleet.insert(client, id: id)
@@ -533,7 +533,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("fleetList") {
       (clientId: String, queryJson: String, operationId: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.fleet.beginOperation(operationId)
       defer { self.fleet.finishOperation(operationId) }
       return try await withFleetErrors {
@@ -546,7 +546,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("fleetComputePool") {
       (clientId: String, queryJson: String, operationId: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.fleet.beginOperation(operationId)
       defer { self.fleet.finishOperation(operationId) }
       return try await withFleetErrors {
@@ -558,7 +558,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("fleetOperationCancel") { (operationId: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       self.fleet.cancelOperation(operationId)
       #else
       throw unsupported("AukiSDK XCFramework missing")
@@ -566,7 +566,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("fleetClose") { (clientId: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       guard let client = self.fleet.existing(clientId) else { return }
       try await withFleetErrors { try await client.close() }
       self.fleet.remove(clientId)
@@ -576,7 +576,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("jobsOpen") { (sessionId: String, domainId: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let client = try await withJobsErrors { try self.sessions.session(sessionId).jobs(domainId: domainId) }
       let id = self.newId("jobs")
       self.jobs.insert(client, id: id)
@@ -588,7 +588,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("jobsEstimate") {
       (clientId: String, specJson: String, operationId: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.jobs.beginOperation(operationId)
       defer { self.jobs.finishOperation(operationId) }
       return try await withJobsErrors {
@@ -601,7 +601,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("jobsSubmit") {
       (clientId: String, specJson: String, operationId: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.jobs.beginOperation(operationId)
       defer { self.jobs.finishOperation(operationId) }
       return try await withJobsErrors {
@@ -614,7 +614,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("jobsSubmitWithKey") {
       (clientId: String, specJson: String, idempotencyKey: String, operationId: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.jobs.beginOperation(operationId)
       defer { self.jobs.finishOperation(operationId) }
       return try await withJobsErrors {
@@ -628,7 +628,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("jobsList") {
       (clientId: String, queryJson: String, operationId: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.jobs.beginOperation(operationId)
       defer { self.jobs.finishOperation(operationId) }
       return try await withJobsErrors {
@@ -641,7 +641,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("jobsGet") {
       (clientId: String, jobId: String, operationId: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.jobs.beginOperation(operationId)
       defer { self.jobs.finishOperation(operationId) }
       return try await withJobsErrors {
@@ -654,7 +654,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("jobsCancel") {
       (clientId: String, jobId: String, operationId: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let cancellation = self.jobs.beginOperation(operationId)
       defer { self.jobs.finishOperation(operationId) }
       return try await withJobsErrors {
@@ -666,7 +666,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("jobsOperationCancel") { (operationId: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       self.jobs.cancelOperation(operationId)
       #else
       throw unsupported("AukiSDK XCFramework missing")
@@ -674,7 +674,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("jobsClose") { (clientId: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       guard let client = self.jobs.remove(clientId) else { return }
       try await withJobsErrors { try await client.close() }
       #else
@@ -683,7 +683,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("startPeer") { (sessionId: String, domainId: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       return try await withAuthErrors { try await self.startPeer(sessionId: sessionId, domainId: domainId, mode: nil) }
       #else
       throw unsupported("AukiSDK XCFramework missing")
@@ -692,7 +692,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("startPeerWithDiscovery") {
       (sessionId: String, domainId: String, mode: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let discovery: AukiDiscoveryMode =
         mode == "DiscoverAndAdvertise" ? .discoverAndAdvertise : .discoverOnly
       return try await withAuthErrors { try await self.startPeer(sessionId: sessionId, domainId: domainId, mode: discovery) }
@@ -702,7 +702,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("peerId") { (peerHandle: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       return try self.requirePeer(peerHandle).peerId()
       #else
       throw unsupported("AukiSDK XCFramework missing")
@@ -710,7 +710,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("domainId") { (peerHandle: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       return try self.requirePeer(peerHandle).domainId()
       #else
       throw unsupported("AukiSDK XCFramework missing")
@@ -718,7 +718,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("discover") { (peerHandle: String) -> [[String: Any]] in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let candidates = try await self.requirePeer(peerHandle).discover()
       return candidates.map(Self.mapCandidate)
       #else
@@ -728,7 +728,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("discoverProtocol") {
       (peerHandle: String, protocolId: String) -> [[String: Any]] in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let candidates = try await self.requirePeer(peerHandle).discoverProtocol(
         protocolId: protocolId
       )
@@ -740,7 +740,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("infoFetchExact") {
       (peerHandle: String, target: [String: String]) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let peer = try self.requirePeer(peerHandle)
       let exact = try Self.exactTarget(target, domainId: peer.domainId())
       let json = try await AukiInfoClient(peer: peer).fetchExact(target: exact)
@@ -752,7 +752,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("catalogFetchResourcesExact") {
       (peerHandle: String, target: [String: String], variants: [String]) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let peer = try self.requirePeer(peerHandle)
       let exact = try Self.exactTarget(target, domainId: peer.domainId())
       let json = try await AukiCatalogClient(peer: peer).fetchResourcesExact(
@@ -768,7 +768,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("registryListExact") {
       (peerHandle: String, target: [String: String], kind: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let peer = try self.requirePeer(peerHandle)
       let exact = try Self.exactTarget(target, domainId: peer.domainId())
       let registryKind = try Self.registryKind(kind)
@@ -793,7 +793,7 @@ public class AukiSdkExpoModule: Module {
         id: String,
         hash: String
       ) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let peer = try self.requirePeer(peerHandle)
       let exact = try Self.exactTarget(target, domainId: peer.domainId())
       let registryKind = try Self.registryKind(kind)
@@ -810,7 +810,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("blobFetchExact") {
       (peerHandle: String, target: [String: String], sha256: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let peer = try self.requirePeer(peerHandle)
       let exact = try Self.exactTarget(target, domainId: peer.domainId())
       let receipt = try await AukiBlobClient(peer: peer).fetchExact(
@@ -835,7 +835,7 @@ public class AukiSdkExpoModule: Module {
         payloadKind: String,
         requestJson: String
       ) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let peer = try self.requirePeer(peerHandle)
       let exact = try Self.exactTarget(target, domainId: peer.domainId())
       let kind = try Self.streamPayloadKind(payloadKind)
@@ -857,7 +857,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("streamNext") { (subscriptionId: String) -> String? in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       guard let subscription = self.streams[subscriptionId] else {
         throw unsupported("unknown stream subscription: \(subscriptionId)")
       }
@@ -871,7 +871,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("streamCancel") { (subscriptionId: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       guard let subscription = self.streams.removeValue(forKey: subscriptionId) else {
         return
       }
@@ -883,7 +883,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("messageOpenExact") {
       (peerHandle: String, target: [String: String], channelJson: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let peer = try self.requirePeer(peerHandle)
       let exact = try Self.exactTarget(target, domainId: peer.domainId())
       let channel = try Self.messageChannel(channelJson)
@@ -901,7 +901,7 @@ public class AukiSdkExpoModule: Module {
 
     AsyncFunction("messageSend") {
       (senderHandle: String, type: String, timestampNs: String, payloadBase64: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       guard let entry = self.messageSenders[senderHandle] else {
         throw unsupported("unknown message sender: \(senderHandle)")
       }
@@ -927,7 +927,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("messageClose") { (senderHandle: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       guard let entry = self.messageSenders.removeValue(forKey: senderHandle) else {
         return
       }
@@ -938,7 +938,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("urdfModelFromXml") { (xml: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let model = try AukiUrdfModel.fromXml(xml: xml)
       let id = self.newId("urdf")
       self.urdfModels[id] = model
@@ -949,7 +949,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("urdfJointCount") { (handle: String) -> Int in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       return Int(try self.requireUrdf(handle).jointCount())
       #else
       throw unsupported("AukiSDK XCFramework missing")
@@ -957,7 +957,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("urdfResolve") { (handle: String, angles: [Double]) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let floats = angles.map { Float($0) }
       let links = try self.requireUrdf(handle).resolve(angles: floats)
       return try Self.encodeUrdfLinks(links)
@@ -967,7 +967,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("urdfResolveIdentity") { (handle: String) -> String in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let links = try self.requireUrdf(handle).resolveIdentityPose()
       return try Self.encodeUrdfLinks(links)
       #else
@@ -976,7 +976,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("urdfModelFree") { (handle: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       self.urdfModels.removeValue(forKey: handle)
       #else
       throw unsupported("AukiSDK XCFramework missing")
@@ -984,7 +984,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("shutdown") { (peerHandle: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       let owned = self.messageSenders.filter { $0.value.peerHandle == peerHandle }
       for (id, entry) in owned {
         self.messageSenders.removeValue(forKey: id)
@@ -999,7 +999,7 @@ public class AukiSdkExpoModule: Module {
     }
 
     AsyncFunction("waitStopped") { (peerHandle: String) in
-      #if canImport(auki_sdk_swiftFFI)
+      #if canImport(auki_sdk_uniffiFFI)
       try await withAuthErrors { try await self.requirePeer(peerHandle).waitStopped() }
       #else
       throw unsupported("AukiSDK XCFramework missing")
@@ -1007,7 +1007,7 @@ public class AukiSdkExpoModule: Module {
     }
   }
 
-  #if canImport(auki_sdk_swiftFFI)
+  #if canImport(auki_sdk_uniffiFFI)
   private func startPeer(
     sessionId: String,
     domainId: String,
@@ -1360,7 +1360,7 @@ public class AukiSdkExpoModule: Module {
   }
 }
 
-#if canImport(auki_sdk_swiftFFI)
+#if canImport(auki_sdk_uniffiFFI)
 private struct ExpoDomainListQueryPayload: Decodable {
   let organization: String?
   let domainServerId: String?

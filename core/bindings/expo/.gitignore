@@ -5,5 +5,7 @@ src/web/generated/*
 ios/AukiSDK.xcframework/
 ios/AukiSDK/
 ios/Frameworks/*.xcframework
+android/src/main/jniLibs/
+android/src/main/java/uniffi/
 .DS_Store
 *.log

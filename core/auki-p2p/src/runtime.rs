@@ -193,6 +193,47 @@ impl Drop for RelayRouteGuard {
 }
 
 impl Node {
+    /// Prepare an authenticated replacement on a fresh circuit while `previous`
+    /// remains usable. The returned future owns its inputs, allowing writes on
+    /// the old stream during preparation. Concurrent preparations of the same
+    /// generation share the new hop; at most two generations are retained.
+    ///
+    /// The application must establish its own acknowledged message boundary,
+    /// switch to the new stream, and close the old stream. This method does not
+    /// replay bytes or guarantee delivery. Failed/cancelled preparation releases
+    /// the candidate and keeps old owners alive. No relay reservation is created.
+    pub fn prepare_route_replacement(
+        &self,
+        previous: &AuthenticatedRouteStream,
+        protocol: ApplicationProtocol,
+        requirements: SessionRequirements,
+    ) -> impl Future<Output = Result<AuthenticatedRouteStream>> + Send + 'static {
+        let node = self.clone();
+        let previous = previous.relay.as_ref().map(|relay| relay.route().clone());
+        async move {
+            let previous = previous
+                .ok_or_else(|| Error::Dial("replacement requires a relay circuit".into()))?;
+            let route = node
+                .connect_relayed_replacement(&previous, &requirements)
+                .await?;
+            let mut guard = RelayRouteGuard::new(node.clone(), route);
+            match node
+                .open_relayed(guard.route(), protocol, requirements)
+                .await
+            {
+                Ok(stream) => Ok(AuthenticatedRouteStream::relayed(
+                    node,
+                    stream,
+                    guard.take(),
+                )),
+                Err(error) => {
+                    guard.close().await?;
+                    Err(error)
+                }
+            }
+        }
+    }
+
     /// Open one authenticated application stream over exactly the supplied
     /// route. Circuit routes retain an RAII hop ref and never fall back to a
     /// direct or sibling-relay connection. Overlapping circuit opens share one
@@ -263,6 +304,7 @@ impl Drop for ApplicationProtocolServer {
 
 impl Node {
     /// Register and supervise one authenticated inbound application protocol.
+    /// Pending handshakes and running handlers share the spec concurrency limit.
     pub fn serve<H, F>(
         &self,
         spec: ApplicationProtocolSpec,
@@ -291,17 +333,20 @@ impl Node {
                             tracing::warn!(%error, "authenticated application protocol handler failed");
                         }
                     }
-                    accepted = incoming.accept(), if handlers.len() < max_concurrency => {
-                        let Some(accepted) = accepted else { break; };
-                        let stream = match accepted {
-                            Ok(stream) => stream,
-                            Err(error) => {
-                                tracing::warn!(%error, "authenticated application protocol session was rejected");
-                                continue;
-                            }
-                        };
+                    accepted = incoming.next_authentication(), if handlers.len() < max_concurrency => {
+                        let Some(authenticate) = accepted else { break; };
                         let handler = Arc::clone(&handler);
+                        // Own the handshake in the supervised task. Reaping
+                        // another task cannot cancel it, and a slow handshake
+                        // cannot stall the underlying inbound stream queue.
                         handlers.spawn(async move {
+                            let stream = match authenticate.await {
+                                Ok(stream) => stream,
+                                Err(error) => {
+                                    tracing::warn!(%error, "authenticated application protocol session was rejected");
+                                    return;
+                                }
+                            };
                             handler(AuthenticatedApplicationStream::new(stream, max_frame_bytes))
                                 .await
                         });

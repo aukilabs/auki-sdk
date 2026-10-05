@@ -1,0 +1,15 @@
+# npm pack uses this file instead of .gitignore, so the package JavaScript
+# `build/` is included. Do not ignore:
+#   build/
+#   ios/AukiSDK.xcframework/
+#   ios/AukiSDK/
+#   android/src/main/jniLibs/
+#   android/src/main/java/uniffi/
+# Gradle and Xcode output is excluded by android/.npmignore and ios/.npmignore.
+# A pattern here cannot drop those directories while `android` and `ios` are
+# listed in package.json `files`.
+node_modules/
+example/
+*.tgz
+.DS_Store
+*.log

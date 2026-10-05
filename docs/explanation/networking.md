@@ -17,8 +17,8 @@ your app decides which requests to allow.
 Get a peer's ID and address from your own discovery service, configuration,
 or Auki's DDS service. DDS discovery is off by default.
 
-An address is called a **route** in the API. Native peers use TCP, directly or
-through a relay; browsers use WSS relay addresses. A relay accepts connections
+An address is called a **route** in the API. Native peers use TCP by default, directly or through a relay, and can
+select WSS for relay connections; browsers use WSS relay addresses. A relay accepts connections
 on your behalf, so you do not need a public port. The SDK books it through DMS.
 
 Relay use and discovery are separate choices. You can use a relay and share

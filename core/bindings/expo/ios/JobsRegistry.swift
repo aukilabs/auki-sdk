@@ -1,7 +1,7 @@
 import Foundation
 import ExpoModulesCore
 
-#if canImport(auki_sdk_swiftFFI)
+#if canImport(auki_sdk_uniffiFFI)
 final class ExpoJobsRegistry {
   private let lock = NSLock()
   private var clients: [String: AukiDomainJobs] = [:]

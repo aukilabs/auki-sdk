@@ -23,11 +23,14 @@ mod browser_route;
 mod browser_transport;
 mod candidate_route;
 mod circuit_hop;
+mod connection_diagnostics;
 mod error;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod identity;
 #[cfg(not(target_arch = "wasm32"))]
 mod identity_store;
+#[cfg(not(target_arch = "wasm32"))]
+mod inbound_stream;
 #[allow(dead_code)]
 mod local_authority;
 #[cfg(not(target_arch = "wasm32"))]

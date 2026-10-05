@@ -10,14 +10,14 @@ base_url="http://127.0.0.1:$port"
 
 cd "$repo_root"
 test -f "$headers/module.modulemap"
-test -f "$swift_crate/Sources/AukiSDK/Generated/auki_sdk_swift.swift"
+test -f "$swift_crate/Sources/AukiSDK/Generated/auki_sdk_uniffi.swift"
 
-cargo build -p auki-sdk-swift --release --features standard-protocols --locked
+cargo build -p auki-sdk-uniffi --release --features standard-protocols --locked
 mkdir -p target/domain-data-swift-host
 swiftc -parse-as-library -target "$(uname -m)-apple-macos$(sw_vers -productVersion)" \
   -I "$headers" -Xcc "-fmodule-map-file=$headers/module.modulemap" \
   "$swift_crate"/Sources/AukiSDK/Generated/*.swift "$swift_crate/tests/domain-data-host.swift" \
-  target/release/libauki_sdk_swift.a -framework SystemConfiguration -framework CoreFoundation -liconv \
+  target/release/libauki_sdk_uniffi.a -framework SystemConfiguration -framework CoreFoundation -liconv \
   -o target/domain-data-swift-host/host
 
 node -e 'const s=require("node:net").createServer();s.once("error",()=>process.exit(1));s.listen(Number(process.argv[1]),"127.0.0.1",()=>s.close());' "$port"

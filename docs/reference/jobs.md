@@ -156,9 +156,8 @@ Backend changes and live-test approval remain separate from this SDK implementat
 Each binding exposes jobs from its existing session with explicit Domain selection:
 [Python](../../core/bindings/python/auki-sdk-py/README.md),
 [Web](../../core/bindings/web/auki-sdk-web/README.md),
-[Swift](../../core/bindings/swift/auki-sdk-swift/README.md), and
-[Expo Web/iOS](../../core/bindings/expo/README.md). Android is not implemented by the
-existing Expo binding. See [Submit and monitor Domain jobs](../how-to/submit-jobs.md)
+[iOS and Android](../../core/bindings/uniffi/auki-sdk-uniffi/README.md), and
+[Expo](../../core/bindings/expo/README.md) on Web, iOS, and Android. See [Submit and monitor Domain jobs](../how-to/submit-jobs.md)
 for Rust examples.
 
 The keyed methods are `submit_with_key(spec, idempotency_key)` in Rust/Python,

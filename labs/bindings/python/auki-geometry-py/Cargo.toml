@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "PyO3 bindings for auki-geometry's convention helpers, spatial transform composition, and 4x4 transformation matrix bridge — flat-array surface for Python robotics consumers."
+description = "PyO3 bindings for auki-geometry: conventions, pose ops, and triangle-mesh ingest."
 
 [lib]
 name = "auki_geometry"

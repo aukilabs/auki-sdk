@@ -5,7 +5,8 @@ import Auki, {
   importZitadelSession,
 } from '@aukilabs/auki-sdk-expo';
 
-export const domainDataBase = 'http://127.0.0.1:18114';
+const loopbackHost = '127.0.0.1';
+export const domainDataBase = `http://${loopbackHost}:18114`;
 export const domainFixture = async (path, value) => {
   const response = await fetch(domainDataBase + path, value === undefined ? {} : {
     method: 'POST',

@@ -156,6 +156,30 @@ impl AukiPeerProtocols {
         }
     }
 
+    /// Prepare an authenticated replacement while the old stream remains usable.
+    /// The application must acknowledge its boundary, switch, and close the old
+    /// stream. Bytes are not automatically replayed or migrated.
+    pub fn prepare_replacement<'a>(
+        &'a self,
+        previous: &BrowserAuthenticatedRouteStream,
+        protocol_id: impl Into<String>,
+    ) -> impl Future<Output = Result<BrowserAuthenticatedRouteStream, AukiProtocolError>> + 'a {
+        let prepare = ApplicationProtocol::new(protocol_id.into()).map(|protocol| {
+            self.inner
+                .node
+                .prepare_route_replacement(previous, protocol)
+        });
+        async move {
+            let opening = prepare.map_err(AukiProtocolError::P2p)?.fuse();
+            let cancelled = self.inner.lifecycle.cancelled().fuse();
+            pin_mut!(opening, cancelled);
+            futures::select_biased! {
+                () = cancelled => Err(AukiProtocolError::Stopped),
+                result = opening => result.map_err(AukiProtocolError::P2p),
+            }
+        }
+    }
+
     pub(crate) async fn shutdown_all(&self) -> Result<(), AukiProtocolError> {
         self.begin_shutdown();
         let servers = {

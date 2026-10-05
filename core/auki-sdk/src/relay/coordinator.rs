@@ -224,11 +224,28 @@ fn reservation_failure_is_retryable(error: &PeerRelayError) -> bool {
     )
 }
 
+#[cfg(test)]
 pub(crate) fn relay_provider(
     peer_id: &str,
     bases: &[String],
     duration_seconds: u32,
     data_bytes_per_direction: u64,
+) -> Result<RelayProvider, auki_p2p::RelayReservationError> {
+    relay_provider_for_transport(
+        peer_id,
+        bases,
+        duration_seconds,
+        data_bytes_per_direction,
+        RelayBaseTransport::Tcp,
+    )
+}
+
+fn relay_provider_for_transport(
+    peer_id: &str,
+    bases: &[String],
+    duration_seconds: u32,
+    data_bytes_per_direction: u64,
+    transport: RelayBaseTransport,
 ) -> Result<RelayProvider, auki_p2p::RelayReservationError> {
     let peer_id =
         peer_id
@@ -241,7 +258,7 @@ pub(crate) fn relay_provider(
         Duration::from_secs(u64::from(duration_seconds)),
         data_bytes_per_direction,
     )?;
-    RelayProvider::new_dual_transport(peer_id, bases, RelayBaseTransport::Tcp, limits)
+    RelayProvider::new_dual_transport(peer_id, bases, transport, limits)
 }
 
 pub(crate) fn confirmed_route(snapshot: &RelayReservationSnapshot) -> Option<Multiaddr> {
@@ -464,6 +481,7 @@ impl RelayRouteRegistry for auki_p2p::RouteCatalog {
 
 #[derive(Clone, Debug)]
 pub(crate) struct RelayCoordinatorConfig {
+    pub(crate) transport: RelayBaseTransport,
     pub(crate) idempotency_key: RelayIdempotencyKey,
     pub(crate) mode: RelayBookingMode,
     pub(crate) requested_duration_seconds: u64,
@@ -1168,11 +1186,12 @@ impl CoordinatorActor {
                 }
             }
 
-            let provider = match relay_provider(
+            let provider = match relay_provider_for_transport(
                 &peer,
                 &bases,
                 limits.duration_seconds,
                 limits.data_bytes_per_direction,
+                self.config.transport,
             ) {
                 Ok(provider) => provider,
                 Err(error) => {
@@ -1391,19 +1410,24 @@ impl CoordinatorActor {
                 ));
             }
         };
-        let provider = relay_provider(
+        let provider = relay_provider_for_transport(
             &relay_peer_id.to_string(),
             &local.provider_base_addresses,
             local.limits.duration_seconds(),
             local.limits.data_bytes_per_direction(),
+            self.config.transport,
         )
         .map_err(|error| RelayCoordinatorError::RouteRegistry(error.to_string()))?;
         let routes = provider
             .circuit_routes(target_peer_id)
             .map_err(|error| RelayCoordinatorError::RouteRegistry(error.to_string()))?;
-        if routes.tcp() != &route {
+        if provider
+            .circuit_route_for_transport(self.config.transport, target_peer_id)
+            .as_ref()
+            != Ok(&route)
+        {
             return Err(RelayCoordinatorError::RouteRegistry(
-                "confirmed TCP route differs from the current DMS provider metadata".to_string(),
+                "confirmed relay route differs from the current DMS provider metadata".to_string(),
             ));
         }
         let published = PublishedRelayRoute {

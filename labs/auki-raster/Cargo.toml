@@ -1,0 +1,13 @@
+[package]
+name = "auki-raster"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Y-plane occupancy slice of a TriangleMesh → PNG + map.yaml."
+
+[dependencies]
+auki-geometry = { path = "../auki-geometry" }
+image = { version = "0.25", default-features = false, features = ["png"] }

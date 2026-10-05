@@ -335,7 +335,7 @@ impl BrowserNode {
 
         let stream_behaviour = StreamBehaviour::new();
         let streams = stream_behaviour.new_control();
-        let targeted_behaviour = TargetedStreamBehaviour::new();
+        let targeted_behaviour = TargetedStreamBehaviour::with_relay_recovery();
         let targeted_streams = targeted_behaviour.new_control();
         let swarm = build_swarm(identity.keypair(), stream_behaviour, targeted_behaviour)
             .map_err(|error| Error::TransportBuild(error.to_string()))?;
@@ -483,7 +483,7 @@ impl BrowserNode {
         expected_peer_id: PeerId,
         route: Multiaddr,
     ) -> Result<BrowserRelayRoute> {
-        self.connect_relayed_inner(expected_peer_id, route, false)
+        self.connect_relayed_inner(expected_peer_id, route, false, None)
             .await
     }
 
@@ -492,7 +492,7 @@ impl BrowserNode {
         expected_peer_id: PeerId,
         route: Multiaddr,
     ) -> Result<BrowserRelayRoute> {
-        self.connect_relayed_inner(expected_peer_id, route, true)
+        self.connect_relayed_inner(expected_peer_id, route, true, None)
             .await
     }
 
@@ -501,6 +501,7 @@ impl BrowserNode {
         expected_peer_id: PeerId,
         route: Multiaddr,
         reuse_admission: bool,
+        replacement_of: Option<ConnectionId>,
     ) -> Result<BrowserRelayRoute> {
         // The expected terminal Peer ID is checked before source admission so
         // a mismatched route never receives this peer's DDS credential.
@@ -533,6 +534,7 @@ impl BrowserNode {
                 parsed.target_peer_id,
                 parsed.circuit_dial_address.clone(),
                 parsed.relay_peer_id,
+                replacement_of,
             )
             .await;
         let (connection_id, hop_owner) = match first_connection {
@@ -617,6 +619,42 @@ impl BrowserNode {
                 Ok(()) => Err(open_error),
                 Err(close_error) => Err(close_error),
             },
+        }
+    }
+
+    /// Prepare a fresh authenticated WSS circuit without closing the old stream.
+    /// At most two generations are retained. The caller owns the application
+    /// drain/checkpoint, switch, and old stream close; bytes are never replayed.
+    pub fn prepare_route_replacement<'a>(
+        &'a self,
+        previous: &BrowserAuthenticatedRouteStream,
+        protocol: ApplicationProtocol,
+    ) -> impl std::future::Future<Output = Result<BrowserAuthenticatedRouteStream>> + 'a {
+        let previous = previous.route.clone();
+        async move {
+            let previous = previous.ok_or(Error::ForeignRelayRoute)?;
+            if previous.node_instance_id != self.node_instance_id {
+                return Err(Error::ForeignRelayRoute);
+            }
+            let route = self
+                .connect_relayed_inner(
+                    previous.target_peer_id,
+                    previous.route,
+                    true,
+                    Some(previous.connection_id),
+                )
+                .await?;
+            let mut pending = BrowserAuthenticatedRouteStream::pending(route, self.route_control());
+            match self.open_relayed(pending.route(), protocol).await {
+                Ok(stream) => {
+                    pending.authenticate(stream);
+                    Ok(pending)
+                }
+                Err(error) => {
+                    pending.close().await?;
+                    Err(error)
+                }
+            }
         }
     }
 
@@ -729,6 +767,7 @@ impl BrowserNode {
         peer_id: PeerId,
         address: Multiaddr,
         relay_peer_id: PeerId,
+        replacement_of: Option<ConnectionId>,
     ) -> Result<(ConnectionId, CircuitHopOwner)> {
         let permit = self.relay_circuit_dials.acquire().await;
         let (response, receiver) = oneshot::channel();
@@ -737,6 +776,7 @@ impl BrowserNode {
             address,
             relay_peer_id,
             permit,
+            replacement_of,
             response,
         })
         .await?;
@@ -863,6 +903,7 @@ enum Command {
         address: Multiaddr,
         relay_peer_id: PeerId,
         permit: RelayCircuitDialPermit,
+        replacement_of: Option<ConnectionId>,
         response: oneshot::Sender<Result<(ConnectionId, CircuitHopOwner)>>,
     },
     CloseConnection {
@@ -943,8 +984,17 @@ impl BrowserRuntime {
                 address,
                 relay_peer_id,
                 permit,
+                replacement_of,
                 response,
-            } => self.dial_circuit(swarm, peer_id, address, relay_peer_id, permit, response),
+            } => self.dial_circuit(
+                swarm,
+                peer_id,
+                address,
+                relay_peer_id,
+                permit,
+                replacement_of,
+                response,
+            ),
             Command::CloseConnection {
                 connection_id,
                 hop_owner,
@@ -968,6 +1018,12 @@ impl BrowserRuntime {
         response: oneshot::Sender<Result<ConnectionId>>,
     ) {
         if response.is_canceled() {
+            return;
+        }
+        if !self.reservations.source_circuit_allowed(peer_id) {
+            let _ = response.send(Err(Error::RelayReservationClosed(
+                "source relay reservation is not confirmed".into(),
+            )));
             return;
         }
         if let Some(existing) = self.direct_connections.get(&peer_id) {
@@ -1234,6 +1290,7 @@ impl BrowserRuntime {
         self.reservation_waiter = Some((handle, response));
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn dial_circuit(
         &mut self,
         swarm: &mut Swarm<BrowserBehaviour>,
@@ -1241,9 +1298,16 @@ impl BrowserRuntime {
         address: Multiaddr,
         relay_peer_id: PeerId,
         permit: RelayCircuitDialPermit,
+        replacement_of: Option<ConnectionId>,
         response: oneshot::Sender<Result<(ConnectionId, CircuitHopOwner)>>,
     ) {
         if response.is_canceled() {
+            return;
+        }
+        if !self.reservations.source_circuit_allowed(relay_peer_id) {
+            let _ = response.send(Err(Error::RelayReservationClosed(
+                "source relay reservation is not confirmed".into(),
+            )));
             return;
         }
         if swarm.behaviour().relay.has_pending_dispatch(relay_peer_id) {
@@ -1256,6 +1320,12 @@ impl BrowserRuntime {
             target_peer_id: peer_id,
             circuit_address: address.clone(),
         };
+        if let Some(old) = replacement_of {
+            if let Err(reason) = self.circuit_hops.prepare_replacement(&key, old) {
+                let _ = response.send(Err(Error::Dial(reason.into())));
+                return;
+            }
+        }
         match self.circuit_hops.acquire(&key) {
             CircuitAcquire::Live {
                 connection_id,
@@ -1309,6 +1379,7 @@ impl BrowserRuntime {
                 );
             }
             Err(error) => {
+                self.circuit_hops.fail_pending(&key);
                 let _ = response.send(Err(Error::Dial(error.to_string())));
             }
         }
@@ -1361,8 +1432,16 @@ impl BrowserRuntime {
                 peer_id,
                 connection_id,
                 endpoint,
+                cause,
                 ..
             } => {
+                crate::connection_diagnostics::log_connection_closed(
+                    swarm.local_peer_id(),
+                    &peer_id,
+                    connection_id,
+                    &endpoint,
+                    cause.as_ref(),
+                );
                 if endpoint.is_relayed() {
                     self.circuit_hops.invalidate(connection_id);
                 }

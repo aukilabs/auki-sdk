@@ -13,6 +13,9 @@ use crate::relay::{
 
 use super::*;
 
+#[path = "tests/stalled_connection.rs"]
+mod stalled_connection;
+
 type ApiResult<T> = Result<T, RelayBookingClientError>;
 
 fn principal_http_error(

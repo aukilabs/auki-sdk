@@ -1,99 +1,10 @@
 //! Opt-in, loopback-only native experiment. The Go process mocks admission;
 //! peers still perform the SDK's mutual DDS authentication with fixture keys.
 use super::*;
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
 use tokio::time::Instant;
 
 const PAYLOAD: usize = 3200;
-
-struct GoRelay {
-    child: Child,
-    input: ChildStdin,
-    output: std::sync::mpsc::Receiver<serde_json::Value>,
-    reader: Option<thread::JoinHandle<()>>,
-    provider: RelayProvider,
-}
-
-impl GoRelay {
-    fn start(seconds: u64) -> Self {
-        let binary = std::env::var("AUKI_HANDOVER_GO_RELAY")
-            .expect("set AUKI_HANDOVER_GO_RELAY to the locally built Go fixture");
-        let mut child = Command::new(binary)
-            .args(["-duration", &format!("{seconds}s")])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .unwrap();
-        let input = child.stdin.take().unwrap();
-        let output = child.stdout.take().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel::<serde_json::Value>();
-        let reader = thread::spawn(move || {
-            for line in BufReader::new(output).lines() {
-                let Ok(line) = line else { break };
-                let Ok(value) = serde_json::from_str(&line) else {
-                    break;
-                };
-                if tx.send(value).is_err() {
-                    break;
-                }
-            }
-        });
-        let ready = rx.recv_timeout(Duration::from_secs(10)).unwrap();
-        let peer = ready["peer_id"]
-            .as_str()
-            .unwrap()
-            .parse::<PeerId>()
-            .unwrap();
-        let port = ready["port"].as_str().unwrap();
-        let provider = RelayProvider::new(
-            peer,
-            [format!(
-                "/dns4/handover.relay.auki-p2p.dev/tcp/{port}/p2p/{peer}"
-            )],
-            ExpectedRelayLimits::new(Duration::from_secs(seconds), 64 * 1024 * 1024).unwrap(),
-        )
-        .unwrap();
-        Self {
-            child,
-            input,
-            output: rx,
-            reader: Some(reader),
-            provider,
-        }
-    }
-
-    fn command(&mut self, command: &str) -> serde_json::Value {
-        writeln!(self.input, "{command}").unwrap();
-        self.input.flush().unwrap();
-        self.output.recv_timeout(Duration::from_secs(3)).unwrap()
-    }
-
-    async fn wait_active(&mut self, expected: u64) -> serde_json::Value {
-        timeout(async {
-            loop {
-                let stats = self.command("stats");
-                if stats["active"].as_u64() == Some(expected) {
-                    break stats;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-    }
-}
-
-impl Drop for GoRelay {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
-        }
-    }
-}
 
 #[derive(Default)]
 struct Received {
@@ -121,8 +32,7 @@ impl Peers {
         let domain = Uuid::new_v4().to_string();
         install_current_token(&source, PeerRole::Compute, vec![domain.clone()]).await;
         install_current_token(&target, PeerRole::Robot, vec![domain.clone()]).await;
-        let reservation =
-            must_succeed(target.start_relay_reservation(relay.provider.clone())).await;
+        let reservation = must_succeed(target.start_relay_reservation(relay.provider())).await;
         let snapshot = must_succeed(target.wait_relay_reservation(reservation)).await;
         let route = snapshot.publishable_route().unwrap().clone();
         let protocol = ApplicationProtocol::new("/auki-p2p/handover-experiment/1").unwrap();

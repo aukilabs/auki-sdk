@@ -48,6 +48,16 @@ jobs:
             -p auki-auth -p auki-domain-client -p auki-dms -p auki-fleet \
             -p auki-p2p -p auki-relay-booking -p auki-tasks -p auki-sdk \
             2>&1 | tee output/ci/native-tests.log
+      - name: Lint the Component experiment and synthetic volume demo
+        run: |
+          cargo clippy --locked -p auki-components -p auki-component-protocol \
+            -p auki-component-volume-monitor --all-targets --no-deps -- -D warnings
+      - name: Test Components and authenticated loopback volume exchange
+        run: |
+          # Default features: no microphone access, audio drivers, or shared services.
+          cargo test --locked -p auki-components -p auki-component-protocol \
+            -p auki-qr-detector -p auki-component-volume-monitor \
+            2>&1 | tee output/ci/component-tests.log
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:

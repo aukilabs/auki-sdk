@@ -8,7 +8,7 @@ use auki_p2p::{PeerId, PeerIdentityProof};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use crate::{AukiComputeCredential, AukiRobotCredential, Result};
+use crate::{AukiComputeCredential, AukiRobotCredential, Result, TaskError};
 
 /// Keep a serialized token-manager refresh alive if its caller is cancelled.
 /// Shutdown cancels it and awaits the active guard before releasing credentials.
@@ -105,6 +105,12 @@ impl MachineCredential {
         match self {
             Self::Compute(c) => c.failed(),
             Self::Robot(r) => r.failed(),
+        }
+    }
+    pub(crate) fn authentication_error(&self) -> TaskError {
+        match self {
+            Self::Compute(c) => c.authentication_error(),
+            Self::Robot(r) => r.authentication_error(),
         }
     }
     pub async fn close(&self) {

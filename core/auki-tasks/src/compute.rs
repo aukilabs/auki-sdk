@@ -141,6 +141,8 @@ struct Owner {
     registrar: Mutex<Option<JoinHandle<()>>>,
     runtime_attached: AtomicBool,
     failed: Arc<AtomicBool>,
+    /// Set only when a registration refresh is rejected. A timeout or 5xx leaves this empty.
+    stop: Arc<std::sync::Mutex<Option<TaskError>>>,
     authentication: Arc<tokio::sync::RwLock<()>>,
 }
 
@@ -184,6 +186,7 @@ impl AukiComputeCredential {
             registrar: Mutex::new(None),
             runtime_attached: AtomicBool::new(false),
             failed: Arc::new(AtomicBool::new(false)),
+            stop: Arc::new(std::sync::Mutex::new(None)),
             authentication: Arc::new(tokio::sync::RwLock::new(())),
         })))
     }
@@ -213,6 +216,25 @@ impl AukiComputeCredential {
         self.0.failed.load(Ordering::Acquire)
     }
 
+    /// The rejection recorded when registration cancelled this credential.
+    pub(crate) fn authentication_error(&self) -> TaskError {
+        self.0
+            .stop
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(|| TaskError::authentication("registration", None))
+    }
+
+    fn reject(&self) {
+        *self
+            .0
+            .stop
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some(TaskError::authentication("registration", None));
+        self.0.failed.store(true, Ordering::Release);
+    }
+
     pub(crate) async fn start(
         &self,
         capabilities: &[String],
@@ -229,7 +251,16 @@ impl AukiComputeCredential {
                     ))
                 };
             }
-            register(&self.0.config, capabilities).await?;
+            match register(&self.0.config, capabilities).await {
+                RegistrationRefresh::Registered => {}
+                RegistrationRefresh::Rejected => {
+                    self.reject();
+                    return Err(self.authentication_error());
+                }
+                RegistrationRefresh::Transient => {
+                    return Err(TaskError::authentication("registration", None));
+                }
+            }
             self.bearer()
                 .await
                 .map_err(|_| TaskError::authentication("", None))?;
@@ -237,6 +268,7 @@ impl AukiComputeCredential {
             let caps = capabilities.to_vec();
             let closed = self.0.closed.clone();
             let failed = self.0.failed.clone();
+            let stop = self.0.stop.clone();
             let mut registrar = self.0.registrar.lock().await;
             // Store the handle before returning; close() can always await it.
             *registrar = Some(tokio::spawn(async move {
@@ -249,8 +281,14 @@ impl AukiComputeCredential {
                     tokio::select! {
                         biased;
                         _ = closed.cancelled() => return,
-                        result = register(&config, &caps) => {
-                            if result.is_err() { failed.store(true, Ordering::Release); closed.cancel(); return; }
+                        result = register_attempt(&config, &caps) => {
+                            if result == RegistrationRefresh::Rejected {
+                                *stop.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                                    Some(TaskError::authentication("registration", None));
+                                failed.store(true, Ordering::Release);
+                                closed.cancel();
+                                return;
+                            }
                         }
                     }
                 }
@@ -295,31 +333,64 @@ impl TokenProvider for AukiComputeCredential {
     }
 }
 
-async fn register(config: &ComputeConfig, capabilities: &[String]) -> Result<()> {
-    let key = registration::crypto::load_secp256k1_privhex(config.wallet_key.expose_secret())
-        .map_err(|_| TaskError::authentication("", None))?;
-    let http = reqwest::Client::builder()
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RegistrationRefresh {
+    Registered,
+    /// Timeout, dropped connection, or HTTP 408/429/5xx. The next interval tries again.
+    Transient,
+    /// HTTP 401/403, a conflict, or a credential that cannot be used.
+    Rejected,
+}
+
+fn classify_registration(kind: RegistrationAttemptKind) -> RegistrationRefresh {
+    match kind {
+        RegistrationAttemptKind::Registered => RegistrationRefresh::Registered,
+        RegistrationAttemptKind::RetryableFailure => RegistrationRefresh::Transient,
+        RegistrationAttemptKind::Conflict | RegistrationAttemptKind::SlowRetryFailure => {
+            RegistrationRefresh::Rejected
+        }
+    }
+}
+
+async fn register_attempt(config: &ComputeConfig, capabilities: &[String]) -> RegistrationRefresh {
+    let key = match registration::crypto::load_secp256k1_privhex(config.wallet_key.expose_secret())
+    {
+        Ok(key) => key,
+        Err(_) => return RegistrationRefresh::Rejected,
+    };
+    let http = match reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(config.request_timeout)
         .build()
-        .map_err(|_| TaskError::authentication("", None))?;
+    {
+        Ok(http) => http,
+        Err(_) => return RegistrationRefresh::Rejected,
+    };
+    let result = registration::register_once(
+        config.dds_url.as_str(),
+        &config.version,
+        config.registration.expose_secret(),
+        &key,
+        &http,
+        capabilities,
+    )
+    .await;
+    classify_registration(result.kind())
+}
+
+async fn register(config: &ComputeConfig, capabilities: &[String]) -> RegistrationRefresh {
     for attempt in 0..3 {
-        let result = registration::register_once(
-            config.dds_url.as_str(),
-            &config.version,
-            config.registration.expose_secret(),
-            &key,
-            &http,
-            capabilities,
-        )
-        .await;
-        match result.kind() {
-            RegistrationAttemptKind::Registered => return Ok(()),
-            RegistrationAttemptKind::RetryableFailure if attempt < 2 => {
+        match register_attempt(config, capabilities).await {
+            RegistrationRefresh::Registered => return RegistrationRefresh::Registered,
+            RegistrationRefresh::Transient if attempt < 2 => {
                 tokio::time::sleep(Duration::from_secs(1 << attempt)).await
             }
-            _ => return Err(TaskError::authentication("", None)),
+            outcome => return outcome,
         }
     }
-    Err(TaskError::authentication("", None))
+    RegistrationRefresh::Transient
 }
+
+#[cfg(test)]
+#[path = "compute_tests.rs"]
+mod tests;

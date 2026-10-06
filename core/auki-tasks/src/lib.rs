@@ -35,8 +35,8 @@ pub enum TaskError {
     LeaseLost,
     #[error("invalid task authority: {0}")]
     Authority(&'static str),
-    /// DDS rejected a robot presence post or access-token refresh, or a compute
-    /// registration failed. `source` is `presence`, `token`, or empty.
+    /// DDS rejected a machine refresh. `source` is `presence`, `token`,
+    /// `registration`, or empty when the failing call is not one of those.
     #[error(transparent)]
     Authentication(AuthenticationFailure),
     /// DDS rejected the robot peer-token exchange. A transport blip uses
@@ -60,7 +60,7 @@ pub enum TaskError {
 
 pub type Result<T> = std::result::Result<T, TaskError>;
 
-/// Which robot refresh DDS rejected, plus the HTTP status when the response had one.
+/// Which machine refresh DDS rejected, plus the HTTP status when the response had one.
 #[derive(Debug, Clone, Copy)]
 pub struct AuthenticationFailure {
     pub source: &'static str,

@@ -2,11 +2,14 @@
 
 use async_trait::async_trait;
 use auki_auth::{
-    DomainAccessProvider,
+    DomainAccessProvider, SecretString,
     machine::token_manager::{TokenProvider, TokenProviderResult},
 };
 use auki_dms::{client::DmsClient, types::CompleteTaskRequest};
-use auki_tasks::{AukiDmsTasks, TaskContext, TaskError, TaskHandler, TaskResult, TasksConfig};
+use auki_tasks::{
+    AukiDmsTasks, AukiRobotCredential, RobotConfig, TaskContext, TaskError, TaskHandler,
+    TaskResult, TasksConfig,
+};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{Duration as ChronoDuration, Utc};
 use httpmock::prelude::*;
@@ -882,5 +885,134 @@ async fn a_dms_cancelled_task_does_not_stop_the_claim_loop() {
     running.await.unwrap().unwrap();
     // A cancelled task gets no receipt; DMS already recorded the cancel.
     first_complete.assert_calls(0);
+    runtime.close().await.unwrap();
+}
+
+/// Web "Stop teleop" cancels the DMS job. If that lands before the heartbeat
+/// reads `cancel: true`, DMS answers 409 because the task is already canceled.
+/// A normal lease end is `/tasks/{id}/complete` and the loop stays up; this
+/// conflict must do the same for a robot.
+#[tokio::test]
+async fn a_robot_keeps_claiming_after_a_canceled_task_conflicts() {
+    let server = MockServer::start();
+    let domain = Uuid::new_v4();
+    let node = Uuid::new_v4();
+    let org = Uuid::new_v4();
+    let now = Utc::now();
+    let expires = now + ChronoDuration::hours(1);
+    let audience = format!("{}/robots", server.base_url());
+    let claims = json!({
+        "iss": "dds", "aud": [audience.clone()],
+        "node_type": "robot", "node_mode": "dedicated", "sub": node, "node_id": node,
+        "organization_id": org, "assigned_domain_id": domain,
+        "iat": now.timestamp(), "exp": expires.timestamp()
+    });
+    let token = format!(
+        "e30.{}.fixture",
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
+    );
+    server.mock(|when, then| {
+        when.method(POST).path("/internal/v1/robots/register");
+        then.status(200).json_body(json!({
+            "robot_id": node,
+            "access_token": token,
+            "access_expires_at": expires,
+        }));
+    });
+
+    let first = Uuid::new_v4();
+    let second = Uuid::new_v4();
+    let first_grant = grant(&server, first, domain);
+    let second_grant = grant(&server, second, domain);
+    let mut claim_first = server.mock(|when, then| {
+        when.method(GET)
+            .path("/tasks")
+            .query_param("capability", "/example/v1");
+        then.json_body(first_grant.clone());
+    });
+    let conflict = server.mock(|when, then| {
+        when.method(POST).path(format!("/tasks/{first}/heartbeat"));
+        then.status(409);
+    });
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/tasks/{second}/heartbeat"));
+        then.json_body(second_grant.clone());
+    });
+    let second_complete = server.mock(|when, then| {
+        when.method(POST).path(format!("/tasks/{second}/complete"));
+        then.status(200);
+    });
+
+    let started = Arc::new(AtomicUsize::new(0));
+    let seen = started.clone();
+    let handler = Handler(move |task: TaskContext| {
+        let seen = seen.clone();
+        async move {
+            seen.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(task.task.id, second);
+            Ok(TaskResult::default())
+        }
+    });
+    let mut handlers: BTreeMap<String, Arc<dyn TaskHandler>> = BTreeMap::new();
+    handlers.insert("/example/v1".into(), Arc::new(handler));
+
+    let robot = AukiRobotCredential::new(
+        RobotConfig::new(
+            server.base_url().as_str(),
+            server.base_url().as_str(),
+            SecretString::new("fixture-registration"),
+            "1.0.0",
+            "robot-fixture",
+            Some(&audience),
+            vec!["/example/v1".into()],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let runtime = AukiDmsTasks::new(
+        robot,
+        vec!["/example/v1".into()],
+        TasksConfig {
+            poll_interval: Duration::from_millis(10),
+            heartbeat_interval: Duration::from_millis(20),
+            request_timeout: Duration::from_secs(2),
+        },
+    )
+    .unwrap();
+
+    let cancel = CancellationToken::new();
+    let child = cancel.clone();
+    let owner = runtime.clone();
+    let running = tokio::spawn(async move { owner.run(&handlers, &child).await });
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while conflict.calls() < 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the canceled task's heartbeat never conflicted");
+    claim_first.delete();
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/tasks")
+            .query_param("capability", "/example/v1");
+        then.json_body(second_grant.clone());
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while started.load(Ordering::SeqCst) < 1 || second_complete.calls() < 1 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the robot stopped claiming after the canceled task conflicted");
+    assert!(
+        !running.is_finished(),
+        "run returned after one task was canceled"
+    );
+
+    cancel.cancel();
+    running.await.unwrap().unwrap();
     runtime.close().await.unwrap();
 }

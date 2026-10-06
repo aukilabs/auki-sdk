@@ -22,6 +22,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tracing = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
 url = "2.5"
 uuid.workspace = true

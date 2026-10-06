@@ -18,6 +18,7 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 
 use crate::{
     MachineCredential, Result, TaskAccessToken, TaskCredential, TaskError, TaskPeerFactory,
@@ -363,6 +364,25 @@ impl AukiDmsTasks {
         self.0.closed.cancel();
     }
 
+    /// Transient claim failures must not flip an idle robot to `stopped`.
+    /// A credential DDS has rejected (`failed`) or a closed runtime still ends
+    /// the loop.
+    fn keeps_robot_claiming(&self, error: &TaskError) -> bool {
+        let Some(MachineCredential::Robot(robot)) = self.0.machine.as_ref() else {
+            return false;
+        };
+        if robot.failed() || self.0.closed.is_cancelled() {
+            return false;
+        }
+        match error {
+            TaskError::Authentication(_) | TaskError::Service(_) => true,
+            TaskError::HttpStatus { status, .. } => {
+                matches!(*status, 401 | 408 | 429) || (500..600).contains(status)
+            }
+            _ => false,
+        }
+    }
+
     fn stopped_error(&self) -> TaskError {
         if let Some(error) = self.0.robot_peer.as_ref().and_then(|peer| peer.failure()) {
             return error;
@@ -373,7 +393,10 @@ impl AukiDmsTasks {
             .as_ref()
             .is_some_and(MachineCredential::failed)
         {
-            TaskError::Authentication
+            if let Some(MachineCredential::Robot(robot)) = &self.0.machine {
+                return robot.authentication_error();
+            }
+            TaskError::authentication("", None)
         } else {
             TaskError::Closed
         }
@@ -549,10 +572,15 @@ impl AukiDmsTasks {
                     // fault in this runtime. `execute_managed` has already
                     // sent the receipt by the time `Handler` gets here, so
                     // there is nothing left to report and nothing to retry --
-                    // a robot that fails one job claims the next one. Every
-                    // other variant says something about the runtime's own
-                    // health and still ends the loop.
+                    // a robot that fails one job claims the next one.
                     Err(TaskError::Handler) => {}
+                    // An idle robot keeps claiming. A timed-out or refused
+                    // claim, or a token refresh that has not been rejected,
+                    // waits for the next poll. A rejected credential still
+                    // ends the loop through `stopped()`.
+                    Err(error) if self.keeps_robot_claiming(&error) => {
+                        debug!(error = %error, "robot claim failed; polling again");
+                    }
                     Err(error) => return Err(error),
                     Ok(_) => {}
                 }

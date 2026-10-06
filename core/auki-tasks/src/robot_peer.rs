@@ -5,6 +5,7 @@ use chrono::Utc;
 use parking_lot::Mutex;
 use tokio::{sync::watch, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 use crate::{AukiRobotCredential, Result, TaskError, TaskPeerFactory, TaskPeerSession};
 
@@ -108,6 +109,18 @@ impl RobotPeer {
     }
 }
 
+/// Transport and upstream blips keep the current grant. A rejection, a domain
+/// mismatch, or a credential DDS has already failed still stop the peer.
+fn peer_renewal_retries(robot: &AukiRobotCredential, error: &TaskError) -> bool {
+    if robot.failed() {
+        return false;
+    }
+    matches!(
+        error,
+        TaskError::Authority("robot P2P exchange unavailable") | TaskError::Authentication(_)
+    )
+}
+
 async fn drive(state: Arc<State>, robot: AukiRobotCredential, factory: Arc<dyn TaskPeerFactory>) {
     let result = async {
         let Some(domain) = robot.assigned_domain_id(&state.closed).await? else {
@@ -159,11 +172,31 @@ async fn drive(state: Arc<State>, robot: AukiRobotCredential, factory: Arc<dyn T
                 peer.update(updated.clone()).await?;
                 Ok(updated)
             };
-            grant = tokio::select! { biased;
+            let renewed = tokio::select! { biased;
                 _ = state.closed.cancelled() => return Ok(()),
-                result = tokio::time::timeout(timeout, refresh) => result
-                    .map_err(|_| TaskError::Authority("robot peer renewal timed out"))??,
+                result = tokio::time::timeout(timeout, refresh) => result,
             };
+            match renewed {
+                Ok(Ok(updated)) => grant = updated,
+                // A slow or dropped renewal while the grant is still valid is
+                // the same class of blip as a token refresh: retry on the next
+                // interval. A rejected exchange still stops the peer.
+                Err(_) if robot.failed() => return Err(robot.authentication_error()),
+                Err(_) if grant.expires_at > Utc::now() => {
+                    warn!("robot peer renewal timed out; retrying while the grant is valid");
+                }
+                Ok(Err(_)) if robot.failed() => return Err(robot.authentication_error()),
+                Ok(Err(error))
+                    if grant.expires_at > Utc::now() && peer_renewal_retries(&robot, &error) =>
+                {
+                    warn!(
+                        error = %error,
+                        "robot peer renewal failed; retrying while the grant is valid"
+                    );
+                }
+                Ok(Err(error)) => return Err(error),
+                Err(_) => return Err(TaskError::Authority("robot peer authority expired")),
+            }
         }
     }
     .await;

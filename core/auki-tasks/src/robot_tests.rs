@@ -1,5 +1,10 @@
 use super::*;
+use auki_auth::machine::SiweError;
+use auki_auth::machine::token_manager::TokenProvider;
+use httpmock::prelude::*;
+use reqwest::StatusCode;
 use serde_json::json;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 fn config(dds: &str, audience: Option<&str>) -> Result<RobotConfig> {
     RobotConfig::new(
@@ -128,5 +133,115 @@ async fn default_robot_audience_still_rejects_wrong_or_mixed_token_profiles() {
             Err(TaskError::Authority(_))
         ));
     }
+    robot.close().await;
+}
+
+#[test]
+fn presence_refresh_retries_transport_failures_and_stops_on_rejection() {
+    assert!(transient_auth_error(&SiweError::UpstreamStatus(
+        StatusCode::SERVICE_UNAVAILABLE
+    )));
+    assert!(transient_auth_error(&SiweError::UpstreamStatus(
+        StatusCode::TOO_MANY_REQUESTS
+    )));
+    assert!(!transient_auth_error(&SiweError::UpstreamStatus(
+        StatusCode::FORBIDDEN
+    )));
+    assert!(!transient_auth_error(&SiweError::UpstreamStatus(
+        StatusCode::UNAUTHORIZED
+    )));
+    assert!(!transient_auth_error(&SiweError::MissingField(
+        "valid robot authority"
+    )));
+    assert!(transient_auth_error(&SiweError::MissingField(
+        "access_token"
+    )));
+}
+
+fn presence_fixture(
+    server: &MockServer,
+    later_status: u16,
+) -> (AukiRobotCredential, Arc<AtomicUsize>, httpmock::Mock<'_>) {
+    let node = Uuid::new_v4();
+    let now = Utc::now();
+    let expires = now + chrono::Duration::seconds(120);
+    let audience = format!("{}/robots", server.base_url());
+    let claims = json!({
+        "iss": "dds", "aud": [audience.clone()],
+        "node_type": "robot", "node_mode": "dedicated", "sub": node, "node_id": node,
+        "organization_id": Uuid::new_v4(), "assigned_domain_id": Uuid::new_v4(),
+        "iat": now.timestamp(), "exp": expires.timestamp()
+    });
+    let token = format!(
+        "e30.{}.fixture",
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
+    );
+    let body = json!({"robot_id": node, "access_token": token, "access_expires_at": expires});
+    let phase = Arc::new(AtomicUsize::new(0));
+    let first = phase.clone();
+    server.mock(|when, then| {
+        when.method(POST)
+            .path("/internal/v1/robots/register")
+            .is_true(move |_| first.load(AtomicOrdering::Acquire) == 0);
+        then.status(200).json_body(body);
+    });
+    let later = phase.clone();
+    let down = server.mock(|when, then| {
+        when.method(POST)
+            .path("/internal/v1/robots/register")
+            .is_true(move |_| later.load(AtomicOrdering::Acquire) >= 1);
+        then.status(later_status);
+    });
+    let mut cfg = config(&server.base_url(), Some(&audience)).unwrap();
+    cfg.registration_interval = Duration::from_millis(100);
+    (AukiRobotCredential::new(cfg).unwrap(), phase, down)
+}
+
+#[tokio::test]
+async fn a_transient_presence_failure_keeps_the_robot_credential_open() {
+    let server = MockServer::start();
+    let (robot, phase, down) = presence_fixture(&server, 503);
+    robot.start(&CancellationToken::new()).await.unwrap();
+    phase.store(1, AtomicOrdering::Release);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(down.calls() >= 1);
+    assert!(!robot.failed());
+    assert!(!robot.cancellation().is_cancelled());
+    robot.close().await;
+}
+
+#[tokio::test]
+async fn a_rejected_presence_refresh_still_stops_the_robot_credential() {
+    let server = MockServer::start();
+    let (robot, phase, down) = presence_fixture(&server, 403);
+    robot.start(&CancellationToken::new()).await.unwrap();
+    phase.store(1, AtomicOrdering::Release);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(down.calls() >= 1);
+    assert!(robot.failed());
+    assert!(robot.cancellation().is_cancelled());
+    assert_eq!(
+        robot.authentication_error().to_string(),
+        "machine authentication or registration failed: presence refresh was rejected (HTTP 403)"
+    );
+    robot.close().await;
+}
+
+#[tokio::test]
+async fn a_rejected_token_refresh_records_the_verify_failure() {
+    let server = MockServer::start();
+    let (robot, _phase, _down) = presence_fixture(&server, 200);
+    server.mock(|when, then| {
+        when.method(POST).path("/internal/v1/auth/robot/verify");
+        then.status(403);
+    });
+    robot.start(&CancellationToken::new()).await.unwrap();
+    robot.on_unauthorized().await;
+    assert!(robot.bearer().await.is_err());
+    assert!(robot.failed());
+    assert_eq!(
+        robot.authentication_error().to_string(),
+        "machine authentication or registration failed: token refresh was rejected (HTTP 403)"
+    );
     robot.close().await;
 }

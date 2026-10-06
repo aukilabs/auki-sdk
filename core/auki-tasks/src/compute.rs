@@ -230,7 +230,9 @@ impl AukiComputeCredential {
                 };
             }
             register(&self.0.config, capabilities).await?;
-            self.bearer().await.map_err(|_| TaskError::Authentication)?;
+            self.bearer()
+                .await
+                .map_err(|_| TaskError::authentication("", None))?;
             let config = self.0.config.clone();
             let caps = capabilities.to_vec();
             let closed = self.0.closed.clone();
@@ -295,12 +297,12 @@ impl TokenProvider for AukiComputeCredential {
 
 async fn register(config: &ComputeConfig, capabilities: &[String]) -> Result<()> {
     let key = registration::crypto::load_secp256k1_privhex(config.wallet_key.expose_secret())
-        .map_err(|_| TaskError::Authentication)?;
+        .map_err(|_| TaskError::authentication("", None))?;
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(config.request_timeout)
         .build()
-        .map_err(|_| TaskError::Authentication)?;
+        .map_err(|_| TaskError::authentication("", None))?;
     for attempt in 0..3 {
         let result = registration::register_once(
             config.dds_url.as_str(),
@@ -316,8 +318,8 @@ async fn register(config: &ComputeConfig, capabilities: &[String]) -> Result<()>
             RegistrationAttemptKind::RetryableFailure if attempt < 2 => {
                 tokio::time::sleep(Duration::from_secs(1 << attempt)).await
             }
-            _ => return Err(TaskError::Authentication),
+            _ => return Err(TaskError::authentication("", None)),
         }
     }
-    Err(TaskError::Authentication)
+    Err(TaskError::authentication("", None))
 }

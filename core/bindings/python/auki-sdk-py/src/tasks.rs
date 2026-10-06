@@ -33,7 +33,8 @@ fn error(error: TaskError) -> PyErr {
             TaskError::Cancelled => "cancelled",
             TaskError::LeaseLost => "lease_lost",
             TaskError::Authority(_) => "authority",
-            TaskError::Authentication => "authentication",
+            TaskError::Authentication(_) => "authentication",
+            TaskError::PeerExchangeRejected { .. } => "authority",
             TaskError::Service(_) => "service",
             TaskError::HttpStatus { .. } => "http",
             TaskError::Handler => "handler",
@@ -44,6 +45,8 @@ fn error(error: TaskError) -> PyErr {
         let _ = result.value_bound(py).setattr("kind", kind);
         let status = match error {
             TaskError::HttpStatus { status, .. } => Some(status),
+            TaskError::Authentication(failure) => failure.status,
+            TaskError::PeerExchangeRejected { status } => Some(status),
             _ => None,
         };
         let _ = result.value_bound(py).setattr("status", status);

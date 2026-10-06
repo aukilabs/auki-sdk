@@ -1,6 +1,6 @@
 use auki_geometry::mesh::Vec3 as MeshVec3;
 use auki_geometry::{TriangleMesh, parse_obj};
-use auki_navigation::{BakeProfile, NavError, NavMesh, Vec3};
+use auki_navigation::{BakeProfile, Extents, NavError, NavMesh, Vec3};
 
 fn floor_mesh() -> TriangleMesh {
     parse_obj(include_str!("../fixtures/floor.obj")).unwrap()
@@ -106,6 +106,50 @@ fn box_mesh(min: MeshVec3, max: MeshVec3) -> TriangleMesh {
         indices.push([face[0], face[2], face[3]]);
     }
     TriangleMesh::from_indexed(corners.to_vec(), indices, vec![]).unwrap()
+}
+
+fn ribbon(width: f32) -> TriangleMesh {
+    let half = width / 2.0;
+    TriangleMesh::from_indexed(
+        vec![
+            MeshVec3::new(-6.0, 0.0, -half),
+            MeshVec3::new(6.0, 0.0, -half),
+            MeshVec3::new(6.0, 0.0, half),
+            MeshVec3::new(-6.0, 0.0, half),
+        ],
+        vec![[0, 1, 2], [0, 2, 3]],
+        vec![],
+    )
+    .unwrap()
+}
+
+#[test]
+fn body_clearance_erosion_deletes_a_skinny_authored_corridor() {
+    // navmesh_v1 is the drawn walkable ribbon, not an open floor. Booster
+    // bakes it with biped(0.35), which erodes 0.35 m off each side.
+    let corridor = ribbon(0.5);
+    assert!(
+        matches!(
+            NavMesh::bake(&corridor, &BakeProfile::biped(0.35)),
+            Err(NavError::EmptyNavMesh)
+        ),
+        "0.35 m erosion should wipe a 0.5 m corridor"
+    );
+    let open = NavMesh::bake(&corridor, &BakeProfile::biped(0.0)).unwrap();
+    let hit = open.find_closest_point(Vec3::new(0.0, 0.0, 0.0), Extents::default());
+    assert!(!hit.is_off_mesh, "zero erosion keeps the corridor walkable");
+}
+
+#[test]
+fn zero_erosion_still_lets_a_shelf_block_the_corridor() {
+    let floor = corridor_floor();
+    let shelf = box_mesh(MeshVec3::new(-0.4, 0.0, -1.6), MeshVec3::new(0.4, 1.5, 1.6));
+    let nav = NavMesh::bake_with_obstacles(&floor, &shelf, &BakeProfile::biped(0.0)).unwrap();
+    let result = nav.find_path(&[Vec3::new(-4.0, 0.0, 0.0), Vec3::new(4.0, 0.0, 0.0)]);
+    assert!(
+        matches!(result, Err(NavError::NoPath) | Err(NavError::OffMesh)),
+        "shelf footprint should stay blocked without erosion, got {result:?}"
+    );
 }
 
 #[test]

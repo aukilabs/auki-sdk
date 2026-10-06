@@ -3,6 +3,7 @@ import { NativeModule, requireNativeModule } from "expo";
 import type {
   AukiDiscoveryCandidateInfo,
   AukiDiscoveryModeName,
+  AukiPeerReachabilityModeName,
   AukiDomainInfo,
   AukiExactTarget,
   AukiSdkExpoModuleEvents,
@@ -98,11 +99,16 @@ declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents
   jobsCancel(clientId: string, jobId: string, operationId: string): Promise<string>;
   jobsOperationCancel(operationId: string): Promise<void>;
   jobsClose(clientId: string): Promise<void>;
-  startPeer(sessionId: string, domainId: string): Promise<string>;
+  startPeer(
+    sessionId: string,
+    domainId: string,
+    reachability?: AukiPeerReachabilityModeName | null,
+  ): Promise<string>;
   startPeerWithDiscovery(
     sessionId: string,
     domainId: string,
     mode: AukiDiscoveryModeName,
+    reachability?: AukiPeerReachabilityModeName | null,
   ): Promise<string>;
   peerId(peerHandle: string): Promise<string>;
   domainId(peerHandle: string): Promise<string>;

@@ -3,6 +3,7 @@ import { NativeModule, registerWebModule } from "expo";
 import type {
   AukiDiscoveryCandidateInfo,
   AukiDiscoveryModeName,
+  AukiPeerReachabilityModeName,
   AukiDomainInfo,
   AukiExactTarget,
   AukiSdkExpoModuleEvents,
@@ -51,6 +52,16 @@ type WebUpload = {
 
 function newId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`;
+}
+
+function peerReachability(
+  sdk: AukiSdkWasm,
+  name?: AukiPeerReachabilityModeName | null,
+) {
+  if (name == null) return undefined;
+  if (name === "OutboundOnly") return sdk.AukiPeerReachabilityMode.OutboundOnly;
+  if (name === "RelayBacked") return sdk.AukiPeerReachabilityMode.RelayBacked;
+  throw new Error(`unknown peer reachability: ${name}`);
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -689,8 +700,16 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     }
   }
 
-  async startPeer(sessionId: string, domainId: string): Promise<string> {
-    const peer = await this.session(sessionId).startPeer(domainId);
+  async startPeer(
+    sessionId: string,
+    domainId: string,
+    reachability?: AukiPeerReachabilityModeName | null,
+  ): Promise<string> {
+    const sdk = await this.sdk();
+    const peer = await this.session(sessionId).startPeer(
+      domainId,
+      peerReachability(sdk, reachability),
+    );
     const id = newId("peer");
     this.peers.set(id, peer);
     return id;
@@ -700,6 +719,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     sessionId: string,
     domainId: string,
     mode: AukiDiscoveryModeName,
+    reachability?: AukiPeerReachabilityModeName | null,
   ): Promise<string> {
     const sdk = await this.sdk();
     const discoveryMode =
@@ -709,6 +729,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     const peer = await this.session(sessionId).startPeerWithDiscovery(
       domainId,
       discoveryMode,
+      peerReachability(sdk, reachability),
     );
     const id = newId("peer");
     this.peers.set(id, peer);

@@ -1,5 +1,8 @@
 export type AukiDiscoveryModeName = "DiscoverOnly" | "DiscoverAndAdvertise";
 
+/** `OutboundOnly` dials remote relays without a local `/relay-bookings` call. */
+export type AukiPeerReachabilityModeName = "OutboundOnly" | "RelayBacked";
+
 export type AukiDomainInfo = {
   id: string;
   name?: string | null;

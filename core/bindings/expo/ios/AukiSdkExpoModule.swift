@@ -682,20 +682,26 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("startPeer") { (sessionId: String, domainId: String) -> String in
+    AsyncFunction("startPeer") { (sessionId: String, domainId: String, reachability: String?) -> String in
       #if canImport(auki_sdk_uniffiFFI)
-      return try await withAuthErrors { try await self.startPeer(sessionId: sessionId, domainId: domainId, mode: nil) }
+      return try await withAuthErrors {
+        try await self.startPeer(
+          sessionId: sessionId, domainId: domainId, mode: nil, reachability: reachability)
+      }
       #else
       throw unsupported("AukiSDK XCFramework missing")
       #endif
     }
 
     AsyncFunction("startPeerWithDiscovery") {
-      (sessionId: String, domainId: String, mode: String) -> String in
+      (sessionId: String, domainId: String, mode: String, reachability: String?) -> String in
       #if canImport(auki_sdk_uniffiFFI)
       let discovery: AukiDiscoveryMode =
         mode == "DiscoverAndAdvertise" ? .discoverAndAdvertise : .discoverOnly
-      return try await withAuthErrors { try await self.startPeer(sessionId: sessionId, domainId: domainId, mode: discovery) }
+      return try await withAuthErrors {
+        try await self.startPeer(
+          sessionId: sessionId, domainId: domainId, mode: discovery, reachability: reachability)
+      }
       #else
       throw unsupported("AukiSDK XCFramework missing")
       #endif
@@ -757,9 +763,8 @@ public class AukiSdkExpoModule: Module {
       let exact = try Self.exactTarget(target, domainId: peer.domainId())
       let json = try await AukiCatalogClient(peer: peer).fetchResourcesExact(
         target: exact,
-        variants: []
+        variants: try Self.catalogVariants(variants)
       )
-      _ = variants
       return json
       #else
       throw unsupported("AukiSDK XCFramework missing")
@@ -1011,24 +1016,41 @@ public class AukiSdkExpoModule: Module {
   private func startPeer(
     sessionId: String,
     domainId: String,
-    mode: AukiDiscoveryMode?
+    mode: AukiDiscoveryMode?,
+    reachability: String?
   ) async throws -> String {
     let session = try sessions.session(sessionId)
     let identity = AukiPeerIdentity.generate()
+    let reachabilityMode = try Self.peerReachability(reachability)
     let peer: AukiPeer
     if let mode {
       peer = try await session.startPeerWithDiscovery(
         domainId: domainId,
         identity: identity,
-        mode: mode
+        mode: mode,
+        reachability: reachabilityMode
       )
     } else {
-      peer = try await session.startPeer(domainId: domainId, identity: identity)
+      peer = try await session.startPeer(
+        domainId: domainId, identity: identity, reachability: reachabilityMode)
     }
     let id = newId("peer")
     peers[id] = peer
     identities[id] = identity
     return id
+  }
+
+  private static func peerReachability(_ name: String?) throws -> AukiPeerReachabilityMode? {
+    switch name {
+    case nil:
+      return nil
+    case "OutboundOnly":
+      return .outboundOnly
+    case "RelayBacked":
+      return .relayBacked
+    default:
+      throw unsupported("unknown peer reachability: \(name ?? "")")
+    }
   }
 
   private func requirePeer(_ peerHandle: String) throws -> AukiPeer {
@@ -1223,6 +1245,27 @@ public class AukiSdkExpoModule: Module {
     )
   }
 
+  private static func catalogVariants(
+    _ raw: [String]
+  ) throws -> [AukiCatalogResourceVariant] {
+    try raw.map { name in
+      switch name {
+      case "sensor_log":
+        return .sensorLog
+      case "pose_log":
+        return .poseLog
+      case "time_transform_log":
+        return .timeTransformLog
+      case "detection_log":
+        return .detectionLog
+      case "message_channel":
+        return .messageChannel
+      default:
+        throw unsupported("unsupported catalog variant: \(name)")
+      }
+    }
+  }
+
   private static func messageChannel(_ json: String) throws -> AukiMessageChannel {
     guard let data = json.data(using: .utf8) else {
       throw unsupported("message channel JSON is not UTF-8")
@@ -1313,16 +1356,72 @@ public class AukiSdkExpoModule: Module {
     return try jsonString(object)
   }
 
+  /// CameraFrame field 2 is the JPEG. Pose and joint payloads fail the SOI check
+  /// and keep `payloadBase64`, so the phone does not base64 the picture twice.
+  private static func jpegBase64(from payload: Data) -> String? {
+    if payload.isEmpty { return nil }
+    let bytes = [UInt8](payload)
+    var offset = 0
+    var jpeg: Data?
+    while offset < bytes.count {
+      guard let tag = readVarint(bytes, offset) else { return nil }
+      offset = tag.next
+      let field = tag.value >> 3
+      let wire = tag.value & 7
+      if wire == 2 {
+        guard let len = readVarint(bytes, offset) else { return nil }
+        offset = len.next
+        let end = offset + len.value
+        guard end <= bytes.count else { return nil }
+        if field == 2, len.value >= 2, bytes[offset] == 0xff, bytes[offset + 1] == 0xd8 {
+          jpeg = payload.subdata(in: offset..<end)
+        }
+        offset = end
+      } else if wire == 0 {
+        guard let skipped = readVarint(bytes, offset) else { return nil }
+        offset = skipped.next
+      } else if wire == 1 {
+        offset += 8
+      } else if wire == 5 {
+        offset += 4
+      } else {
+        break
+      }
+    }
+    return jpeg?.base64EncodedString()
+  }
+
+  private static func readVarint(_ bytes: [UInt8], _ offset: Int) -> (value: Int, next: Int)? {
+    var value = 0
+    var shift = 0
+    var next = offset
+    while next < bytes.count && shift <= 28 {
+      let byte = Int(bytes[next])
+      next += 1
+      value |= (byte & 0x7f) << shift
+      if byte & 0x80 == 0 {
+        return (value, next)
+      }
+      shift += 7
+    }
+    return nil
+  }
+
   private static func encodeStreamNext(_ next: AukiStreamNext) throws -> String {
     switch next {
     case .entry(let entry):
+      var fields: [String: Any] = [
+        "timestampNs": String(entry.timestampNs),
+        "sequence": String(entry.sequence),
+      ]
+      if let jpeg = Self.jpegBase64(from: entry.payload) {
+        fields["jpegBase64"] = jpeg
+      } else {
+        fields["payloadBase64"] = entry.payload.base64EncodedString()
+      }
       return try jsonString([
         "kind": "entry",
-        "entry": [
-          "timestampNs": String(entry.timestampNs),
-          "sequence": String(entry.sequence),
-          "payloadBase64": entry.payload.base64EncodedString(),
-        ] as [String: Any],
+        "entry": fields,
       ])
     case .end(let reason):
       return try jsonString([

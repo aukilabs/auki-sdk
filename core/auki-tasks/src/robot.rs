@@ -275,14 +275,14 @@ impl AccessAuthenticator for Authenticator {
                 *self.last.lock() = Some(bundle.clone());
             }
             Err(error) if transient_auth_error(error) => {
-                if let Some(bundle) = self.last.lock().clone() {
-                    if bundle.expires_at() > Utc::now() {
-                        warn!(
-                            error = %error,
-                            "robot token refresh failed; keeping the current token until it expires"
-                        );
-                        return Ok(bundle);
-                    }
+                if let Some(bundle) = self.last.lock().clone()
+                    && bundle.expires_at() > Utc::now()
+                {
+                    warn!(
+                        error = %error,
+                        "robot token refresh failed; keeping the current token until it expires"
+                    );
+                    return Ok(bundle);
                 }
                 warn!(error = %error, "robot token refresh failed; will retry");
             }

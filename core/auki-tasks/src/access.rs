@@ -147,7 +147,7 @@ impl TaskCredential {
             || update
                 .status
                 .as_deref()
-                .is_some_and(|s| matches!(s, "cancelled" | "failed" | "completed"))
+                .is_some_and(|s| matches!(s, "canceled" | "failed" | "completed"))
         {
             return Err(TaskError::Cancelled);
         }

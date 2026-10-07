@@ -884,3 +884,97 @@ async fn a_dms_cancelled_task_does_not_stop_the_claim_loop() {
     first_complete.assert_calls(0);
     runtime.close().await.unwrap();
 }
+
+/// DMS cancel that wins the race answers the next heartbeat with 409, because
+/// the task is already canceled. A normal lease end is `/tasks/{id}/complete`
+/// and the loop stays up; this conflict must do the same for any client.
+#[tokio::test]
+async fn a_canceled_task_conflict_does_not_stop_the_claim_loop() {
+    let server = MockServer::start();
+    let first = Uuid::new_v4();
+    let second = Uuid::new_v4();
+    let domain = Uuid::new_v4();
+    let first_grant = grant(&server, first, domain);
+    let second_grant = grant(&server, second, domain);
+    let mut claim_first = server.mock(|when, then| {
+        when.method(GET).path("/tasks");
+        then.json_body(first_grant.clone());
+    });
+    let conflict = server.mock(|when, then| {
+        when.method(POST).path(format!("/tasks/{first}/heartbeat"));
+        then.status(409);
+    });
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/tasks/{second}/heartbeat"));
+        then.json_body(second_grant.clone());
+    });
+    let second_complete = server.mock(|when, then| {
+        when.method(POST).path(format!("/tasks/{second}/complete"));
+        then.status(200);
+    });
+
+    let started = Arc::new(AtomicUsize::new(0));
+    let seen = started.clone();
+    let handler = Handler(move |task: TaskContext| {
+        let seen = seen.clone();
+        async move {
+            seen.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(task.task.id, second);
+            Ok(TaskResult::default())
+        }
+    });
+    let mut handlers: BTreeMap<String, Arc<dyn TaskHandler>> = BTreeMap::new();
+    handlers.insert("/example/v1".into(), Arc::new(handler));
+
+    let client = DmsClient::new(
+        server.base_url().parse().unwrap(),
+        Duration::from_secs(2),
+        Arc::new(Auth),
+    )
+    .unwrap();
+    let runtime = AukiDmsTasks::from_client(
+        client,
+        "native-fixture".into(),
+        vec!["/example/v1".into()],
+        TasksConfig {
+            poll_interval: Duration::from_millis(10),
+            heartbeat_interval: Duration::from_millis(20),
+            ..TasksConfig::default()
+        },
+    )
+    .unwrap();
+
+    let cancel = CancellationToken::new();
+    let child = cancel.clone();
+    let owner = runtime.clone();
+    let running = tokio::spawn(async move { owner.run(&handlers, &child).await });
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while conflict.calls() < 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the canceled task's heartbeat never conflicted");
+    claim_first.delete();
+    server.mock(|when, then| {
+        when.method(GET).path("/tasks");
+        then.json_body(second_grant.clone());
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while started.load(Ordering::SeqCst) < 1 || second_complete.calls() < 1 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the loop stopped claiming after the canceled task conflicted");
+    assert!(
+        !running.is_finished(),
+        "run returned after one task was canceled"
+    );
+
+    cancel.cancel();
+    running.await.unwrap().unwrap();
+    runtime.close().await.unwrap();
+}

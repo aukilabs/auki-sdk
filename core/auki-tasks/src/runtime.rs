@@ -363,10 +363,15 @@ impl AukiDmsTasks {
         self.0.closed.cancel();
     }
 
-    /// A transient claim failure leaves the loop running. The same rule applies
-    /// to every machine credential and to a caller that brings its own DMS
-    /// client. A credential the directory has rejected, or a closed runtime,
-    /// still ends the loop.
+    /// One finished lease, or a transient failure while claiming the next one,
+    /// leaves the loop running. The same rule applies to every machine
+    /// credential and to a caller that brings its own DMS client. A credential
+    /// the directory has rejected, or a closed runtime, still ends the loop.
+    ///
+    /// DMS cancel of a running task arrives as `cancel: true`, which is
+    /// `TaskError::Cancelled`. If that heartbeat loses the race, DMS answers
+    /// 409 because the task is already canceled, or the local grant is already
+    /// gone (`LeaseLost`). Either one ends that lease only.
     fn keeps_claiming(&self, error: &TaskError) -> bool {
         if self.0.closed.is_cancelled()
             || self
@@ -378,9 +383,9 @@ impl AukiDmsTasks {
             return false;
         }
         match error {
-            TaskError::Authentication(_) | TaskError::Service(_) => true,
+            TaskError::Authentication(_) | TaskError::Service(_) | TaskError::LeaseLost => true,
             TaskError::HttpStatus { status, .. } => {
-                matches!(*status, 401 | 408 | 429) || (500..600).contains(status)
+                matches!(*status, 401 | 408 | 409 | 429) || (500..600).contains(status)
             }
             _ => false,
         }
@@ -578,9 +583,10 @@ impl AukiDmsTasks {
                     // there is nothing left to report and nothing to retry.
                     // One failed task leaves the loop free to claim the next one.
                     Err(TaskError::Handler) => {}
-                    // A timed-out or refused claim, or a refresh that has not
-                    // been rejected, waits for the next poll. A rejected
-                    // credential still ends the loop through `stopped()`.
+                    // A timed-out or refused claim, an authentication or service
+                    // error that has not rejected the credential, or one lease
+                    // ending in a 409 or `LeaseLost`, waits for the next poll.
+                    // A rejected credential still ends the loop through `stopped()`.
                     Err(error) if self.keeps_claiming(&error) => {}
                     Err(error) => return Err(error),
                     Ok(_) => {}

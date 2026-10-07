@@ -204,6 +204,110 @@ async fn robot_peer_cleanup_failure_is_retained_for_every_close() {
 }
 
 #[tokio::test]
+async fn a_transient_peer_exchange_keeps_the_peer_until_dds_rejects_it() {
+    let server = MockServer::start();
+    let node = Uuid::new_v4();
+    let domain = Uuid::new_v4();
+    let now = Utc::now();
+    let expires = now + chrono::Duration::seconds(120);
+    let claims = json!({
+        "iss": "dds", "aud": [format!("{}/robots", server.base_url())],
+        "node_type": "robot", "node_mode": "dedicated", "sub": node, "node_id": node,
+        "organization_id": Uuid::new_v4(), "assigned_domain_id": domain,
+        "iat": now.timestamp(), "exp": expires.timestamp()
+    });
+    let token = format!(
+        "e30.{}.fixture",
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).unwrap())
+    );
+    server.mock(|when, then| {
+        when.method(POST).path("/internal/v1/robots/register");
+        then.json_body(
+            json!({"robot_id": node, "access_token": token, "access_expires_at": expires}),
+        );
+    });
+    let phase = Arc::new(AtomicUsize::new(0));
+    let first = phase.clone();
+    server.mock(|when, then| {
+        when.method(POST)
+            .path("/internal/v1/auth/robot/p2p-token")
+            .is_true(move |_| first.load(Ordering::Acquire) == 0);
+        then.json_body(
+            json!({"p2p_access_token": "fake-transport-only", "p2p_access_expires_at": expires}),
+        );
+    });
+    let down_phase = phase.clone();
+    let down = server.mock(|when, then| {
+        when.method(POST)
+            .path("/internal/v1/auth/robot/p2p-token")
+            .is_true(move |_| down_phase.load(Ordering::Acquire) == 1);
+        then.status(503);
+    });
+    let rejected_phase = phase.clone();
+    server.mock(|when, then| {
+        when.method(POST)
+            .path("/internal/v1/auth/robot/p2p-token")
+            .is_true(move |_| rejected_phase.load(Ordering::Acquire) >= 2);
+        then.status(403);
+    });
+    let mut config = crate::RobotConfig::new(
+        &server.base_url(),
+        &server.base_url(),
+        SecretString::new("fixture"),
+        "1.0.0",
+        "fixture",
+        Some(&format!("{}/robots", server.base_url())),
+        vec!["/example/v1".into()],
+    )
+    .unwrap();
+    config.registration_interval = Duration::from_millis(100);
+    let robot = AukiRobotCredential::new(config).unwrap();
+    let factory = Arc::new(Factory {
+        peer: Arc::new(Peer {
+            closing: Notify::new(),
+            release: Semaphore::new(0),
+            refresh: Notify::new(),
+            updated: Notify::new(),
+            shutdowns: AtomicUsize::new(0),
+            fail_shutdown: false,
+        }),
+        entered: Notify::new(),
+        starts: AtomicUsize::new(0),
+        dds: server.base_url().parse().unwrap(),
+        block_start: false,
+    });
+    let runtime = Arc::new(RobotPeer::new(
+        robot.clone(),
+        factory.clone(),
+        robot.cancellation().child_token(),
+    ));
+    runtime.start(&CancellationToken::new()).await.unwrap();
+    phase.store(1, Ordering::Release);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(down.calls() >= 1);
+    assert!(runtime.failure().is_none());
+    assert!(runtime.session().is_some());
+    assert!(!robot.failed());
+    phase.store(2, Ordering::Release);
+    let rejected = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if matches!(
+                runtime.failure(),
+                Some(TaskError::PeerExchangeRejected { status: 403 })
+            ) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(rejected.is_ok(), "a 403 peer exchange must stop the peer");
+    factory.peer.release.add_permits(1);
+    let _ = runtime.close().await;
+    robot.close().await;
+}
+
+#[tokio::test]
 async fn unassigned_robot_never_starts_a_peer() {
     let server = MockServer::start();
     let (runtime, factory, robot) = fixture(&server, false, false, false);

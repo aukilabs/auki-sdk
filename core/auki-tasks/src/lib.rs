@@ -35,8 +35,14 @@ pub enum TaskError {
     LeaseLost,
     #[error("invalid task authority: {0}")]
     Authority(&'static str),
-    #[error("machine authentication or registration failed")]
-    Authentication,
+    /// DDS rejected a machine refresh. `source` is `presence`, `token`,
+    /// `registration`, or empty when the failing call is not one of those.
+    #[error(transparent)]
+    Authentication(AuthenticationFailure),
+    /// DDS rejected the robot peer-token exchange. A transport blip uses
+    /// `Authority("robot P2P exchange unavailable")` and is retried.
+    #[error("robot P2P exchange was rejected (HTTP {status})")]
+    PeerExchangeRejected { status: u16 },
     #[error("DMS {0} failed; its outcome may be unknown")]
     Service(&'static str),
     #[error("DMS {operation} returned HTTP {status}")]
@@ -54,7 +60,33 @@ pub enum TaskError {
 
 pub type Result<T> = std::result::Result<T, TaskError>;
 
+/// Which machine refresh DDS rejected, plus the HTTP status when the response had one.
+#[derive(Debug, Clone, Copy)]
+pub struct AuthenticationFailure {
+    pub source: &'static str,
+    pub status: Option<u16>,
+}
+
+impl std::fmt::Display for AuthenticationFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("machine authentication or registration failed")?;
+        if !self.source.is_empty() {
+            write!(f, ": {} refresh was rejected", self.source)?;
+        }
+        if let Some(status) = self.status {
+            write!(f, " (HTTP {status})")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for AuthenticationFailure {}
+
 impl TaskError {
+    pub(crate) fn authentication(source: &'static str, status: Option<u16>) -> Self {
+        Self::Authentication(AuthenticationFailure { source, status })
+    }
+
     pub(crate) fn dms(operation: &'static str, error: anyhow::Error) -> Self {
         match error.downcast_ref::<auki_dms::client::DmsHttpError>() {
             Some(error) => Self::HttpStatus {

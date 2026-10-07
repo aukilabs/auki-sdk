@@ -363,6 +363,29 @@ impl AukiDmsTasks {
         self.0.closed.cancel();
     }
 
+    /// A transient claim failure leaves the loop running. The same rule applies
+    /// to every machine credential and to a caller that brings its own DMS
+    /// client. A credential the directory has rejected, or a closed runtime,
+    /// still ends the loop.
+    fn keeps_claiming(&self, error: &TaskError) -> bool {
+        if self.0.closed.is_cancelled()
+            || self
+                .0
+                .machine
+                .as_ref()
+                .is_some_and(MachineCredential::failed)
+        {
+            return false;
+        }
+        match error {
+            TaskError::Authentication(_) | TaskError::Service(_) => true,
+            TaskError::HttpStatus { status, .. } => {
+                matches!(*status, 401 | 408 | 429) || (500..600).contains(status)
+            }
+            _ => false,
+        }
+    }
+
     fn stopped_error(&self) -> TaskError {
         if let Some(error) = self.0.robot_peer.as_ref().and_then(|peer| peer.failure()) {
             return error;
@@ -373,7 +396,11 @@ impl AukiDmsTasks {
             .as_ref()
             .is_some_and(MachineCredential::failed)
         {
-            TaskError::Authentication
+            self.0
+                .machine
+                .as_ref()
+                .map(MachineCredential::authentication_error)
+                .unwrap_or_else(|| TaskError::authentication("", None))
         } else {
             TaskError::Closed
         }
@@ -548,11 +575,13 @@ impl AukiDmsTasks {
                     // A completed task whose outcome was a failure, not a
                     // fault in this runtime. `execute_managed` has already
                     // sent the receipt by the time `Handler` gets here, so
-                    // there is nothing left to report and nothing to retry --
-                    // a robot that fails one job claims the next one. Every
-                    // other variant says something about the runtime's own
-                    // health and still ends the loop.
+                    // there is nothing left to report and nothing to retry.
+                    // One failed task leaves the loop free to claim the next one.
                     Err(TaskError::Handler) => {}
+                    // A timed-out or refused claim, or a refresh that has not
+                    // been rejected, waits for the next poll. A rejected
+                    // credential still ends the loop through `stopped()`.
+                    Err(error) if self.keeps_claiming(&error) => {}
                     Err(error) => return Err(error),
                     Ok(_) => {}
                 }

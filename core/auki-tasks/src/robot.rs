@@ -4,6 +4,7 @@ use auki_auth::{
     DomainAccess, DomainAccessProvider, Error as AuthError, SecretString,
     machine::{
         AccessBundle, SiweError,
+        p2p::DdsP2pError,
         robot::RobotAuthenticator,
         token_manager::{
             AccessAuthenticator, SystemClock, TokenManager, TokenManagerConfig, TokenProvider,
@@ -15,6 +16,7 @@ use auki_domain_client::{AukiDomainData, DomainDataClient};
 use auki_p2p::PeerIdentityProof;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
+use reqwest::StatusCode;
 use serde::Deserialize;
 use std::{
     sync::{
@@ -25,6 +27,7 @@ use std::{
 };
 use tokio::{sync::Mutex, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 use url::Url;
 use uuid::Uuid;
 
@@ -136,8 +139,70 @@ struct Authenticator {
     config: Arc<RobotConfig>,
     base: RobotAuthenticator,
     principal: parking_lot::Mutex<Option<RobotClaims>>,
+    /// Last token that passed profile checks. A blip during refresh keeps this
+    /// one until it actually expires, instead of cancelling the credential.
+    last: parking_lot::Mutex<Option<AccessBundle>>,
+    /// Set only when this credential cancels itself. The claim loop copies it
+    /// into `node.error` so a presence rejection and a token rejection stay distinct.
+    stop: parking_lot::Mutex<Option<TaskError>>,
     closed: CancellationToken,
     failed: Arc<AtomicBool>,
+}
+
+/// A transport or upstream blip. A rejected credential (4xx other than 408/429)
+/// and a token whose robot profile is wrong are permanent.
+fn transient_auth_error(error: &SiweError) -> bool {
+    match error {
+        SiweError::Request(err) => err.status().is_none_or(transient_status),
+        SiweError::UpstreamStatus(status) => transient_status(*status),
+        SiweError::InvalidExpiration(_) => true,
+        SiweError::MissingField(field) => !matches!(
+            *field,
+            "valid robot authority" | "valid bound robot authority"
+        ),
+        SiweError::PeerBinding(_) => true,
+        SiweError::InvalidHex(_)
+        | SiweError::InvalidPrivateKeyLength(_)
+        | SiweError::InvalidSigningKey(_)
+        | SiweError::Signing(_) => false,
+    }
+}
+
+fn transient_status(status: StatusCode) -> bool {
+    status.is_server_error() || matches!(status.as_u16(), 408 | 429)
+}
+
+/// A dropped connection or a retryable HTTP status. A 4xx rejection stops the peer.
+fn transient_p2p(error: &DdsP2pError) -> bool {
+    match error {
+        DdsP2pError::Request(err) => err.status().is_none_or(transient_status),
+        DdsP2pError::UpstreamStatus(status) => transient_status(*status),
+        _ => false,
+    }
+}
+
+fn peer_exchange_error(error: DdsP2pError) -> TaskError {
+    if transient_p2p(&error) {
+        warn!(
+            error = %error,
+            "robot peer token exchange failed; retrying while the grant is valid"
+        );
+        return TaskError::Authority("robot P2P exchange unavailable");
+    }
+    if let DdsP2pError::UpstreamStatus(status) = &error {
+        warn!(
+            error = %error,
+            "robot peer token exchange was rejected; stopping the node"
+        );
+        return TaskError::PeerExchangeRejected {
+            status: status.as_u16(),
+        };
+    }
+    warn!(
+        error = %error,
+        "robot peer token exchange was rejected; stopping the node"
+    );
+    TaskError::Authority("robot P2P exchange failed")
 }
 impl Authenticator {
     // Routing and profile checks on an authenticated DDS response. DDS/DMS still
@@ -179,6 +244,12 @@ impl Authenticator {
         *previous = Some(c);
         Ok(())
     }
+
+    fn reject(&self, error: TaskError) {
+        *self.stop.lock() = Some(error);
+        self.failed.store(true, Ordering::Release);
+        self.closed.cancel();
+    }
 }
 #[async_trait]
 impl AccessAuthenticator for Authenticator {
@@ -199,9 +270,29 @@ impl AccessAuthenticator for Authenticator {
             Ok(bundle)
         }
         .await;
-        if result.is_err() {
-            self.failed.store(true, Ordering::Release);
-            self.closed.cancel();
+        match &result {
+            Ok(bundle) => {
+                *self.last.lock() = Some(bundle.clone());
+            }
+            Err(error) if transient_auth_error(error) => {
+                if let Some(bundle) = self.last.lock().clone()
+                    && bundle.expires_at() > Utc::now()
+                {
+                    warn!(
+                        error = %error,
+                        "robot token refresh failed; keeping the current token until it expires"
+                    );
+                    return Ok(bundle);
+                }
+                warn!(error = %error, "robot token refresh failed; will retry");
+            }
+            Err(error) => {
+                warn!(error = %error, "robot token refresh was rejected; stopping the node");
+                self.reject(TaskError::authentication(
+                    "token",
+                    error.status_code().map(|status| status.as_u16()),
+                ));
+            }
         }
         result
     }
@@ -264,6 +355,8 @@ impl AukiRobotCredential {
             config: config.clone(),
             base,
             principal: parking_lot::Mutex::new(None),
+            last: parking_lot::Mutex::new(None),
+            stop: parking_lot::Mutex::new(None),
             closed: closed.clone(),
             failed: failed.clone(),
         });
@@ -301,6 +394,16 @@ impl AukiRobotCredential {
     pub(crate) fn failed(&self) -> bool {
         self.0.failed.load(Ordering::Acquire)
     }
+
+    /// The rejection recorded when this credential cancelled itself.
+    /// A bearer failure before that record exists stays the generic authentication error.
+    pub(crate) fn authentication_error(&self) -> TaskError {
+        self.0
+            .auth
+            .stop
+            .lock()
+            .unwrap_or_else(|| TaskError::authentication("", None))
+    }
     pub(crate) fn attach_runtime(&self, caps: &[String]) -> Result<()> {
         let mut configured = self.config().capabilities.clone();
         configured.sort();
@@ -322,7 +425,13 @@ impl AukiRobotCredential {
             if *started {
                 return Ok(());
             }
-            self.bearer().await.map_err(|_| TaskError::Authentication)?;
+            self.bearer()
+                .await
+                .map_err(|_| self.authentication_error())?;
+            // Renew the access token before it expires, including while no task
+            // is running. A failed refresh retries; it does not cancel this
+            // credential unless DDS rejects the robot.
+            self.0.manager.start_bg().await;
             let auth = self.0.auth.clone();
             let closed = self.0.closed.clone();
             *self.0.registrar.lock().await = Some(tokio::spawn(async move {
@@ -330,14 +439,34 @@ impl AukiRobotCredential {
                     tokio::select! { biased; _ = closed.cancelled() => return, _ = tokio::time::sleep(auth.config.registration_interval) => {} }
                     let result = tokio::select! { biased; _ = closed.cancelled() => return,
                     result = auth.base.register_presence() => result };
-                    if result
-                        .as_ref()
-                        .ok()
-                        .is_none_or(|b| auth.validate(b, false).is_err())
-                    {
-                        auth.failed.store(true, Ordering::Release);
-                        closed.cancel();
-                        return;
+                    match result {
+                        Ok(bundle) => {
+                            if let Err(error) = auth.validate(&bundle, false) {
+                                warn!(
+                                    error = %error,
+                                    "robot presence token was rejected; stopping the node"
+                                );
+                                auth.reject(error);
+                                return;
+                            }
+                        }
+                        Err(error) if transient_auth_error(&error) => {
+                            warn!(
+                                error = %error,
+                                "robot presence refresh failed; retrying on the next interval"
+                            );
+                        }
+                        Err(error) => {
+                            warn!(
+                                error = %error,
+                                "robot presence refresh was rejected; stopping the node"
+                            );
+                            auth.reject(TaskError::authentication(
+                                "presence",
+                                error.status_code().map(|status| status.as_u16()),
+                            ));
+                            return;
+                        }
                     }
                 }
             }));
@@ -345,7 +474,7 @@ impl AukiRobotCredential {
             Ok(())
         };
         tokio::select! { biased;
-        _ = self.wait_closed() => Err(if self.failed() { TaskError::Authentication } else { TaskError::Closed }),
+        _ = self.wait_closed() => Err(if self.failed() { self.authentication_error() } else { TaskError::Closed }),
         _ = cancellation.cancelled() => Err(TaskError::Cancelled), result = operation => result }
     }
     pub async fn assigned_domain_id(
@@ -353,7 +482,9 @@ impl AukiRobotCredential {
         cancellation: &CancellationToken,
     ) -> Result<Option<Uuid>> {
         self.start(cancellation).await?;
-        self.bearer().await.map_err(|_| TaskError::Authentication)?;
+        self.bearer()
+            .await
+            .map_err(|_| self.authentication_error())?;
         Ok(self
             .0
             .auth
@@ -375,7 +506,10 @@ impl AukiRobotCredential {
         )
         .map_err(|_| TaskError::Authority("robot P2P client"))?;
         for attempt in 0..2 {
-            let bearer = self.bearer().await.map_err(|_| TaskError::Authentication)?;
+            let bearer = self
+                .bearer()
+                .await
+                .map_err(|_| self.authentication_error())?;
             match dds.robot_p2p_token(&bearer).await {
                 Ok(grant) => {
                     if grant.domain_id != domain {
@@ -388,15 +522,15 @@ impl AukiRobotCredential {
                         peer_type: "robot",
                     });
                 }
-                Err(auki_auth::machine::p2p::DdsP2pError::UpstreamStatus(status))
+                Err(DdsP2pError::UpstreamStatus(status))
                     if status.as_u16() == 401 && attempt == 0 =>
                 {
                     self.on_unauthorized().await
                 }
-                Err(_) => return Err(TaskError::Authority("robot P2P exchange failed")),
+                Err(error) => return Err(peer_exchange_error(error)),
             }
         }
-        unreachable!("bounded retry returns")
+        Err(TaskError::PeerExchangeRejected { status: 401 })
     }
     pub async fn close(&self) {
         self.0.closed.cancel();

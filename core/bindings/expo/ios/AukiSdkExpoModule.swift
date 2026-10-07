@@ -15,6 +15,8 @@ public class AukiSdkExpoModule: Module {
   private var identities: [String: AukiPeerIdentity] = [:]
   private var streams: [String: AukiStreamSubscription] = [:]
   private var messageSenders: [String: (peerHandle: String, sender: AukiMessageSender)] = [:]
+  private var messageEndpoints: [String: (peerHandle: String, endpoint: AukiMessageEndpoint)] = [:]
+  private var messageReceivers: [String: (peerHandle: String, receiver: AukiMessageReceiver)] = [:]
   private var urdfModels: [String: AukiUrdfModel] = [:]
   #endif
 
@@ -682,20 +684,29 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("startPeer") { (sessionId: String, domainId: String) -> String in
+    AsyncFunction("startPeer") { (sessionId: String, domainId: String, identityBase64: String?) -> String in
       #if canImport(auki_sdk_uniffiFFI)
-      return try await withAuthErrors { try await self.startPeer(sessionId: sessionId, domainId: domainId, mode: nil) }
+      return try await withAuthErrors {
+        try await self.startPeer(sessionId: sessionId, domainId: domainId, mode: nil, identityBase64: identityBase64)
+      }
       #else
       throw unsupported("AukiSDK XCFramework missing")
       #endif
     }
 
     AsyncFunction("startPeerWithDiscovery") {
-      (sessionId: String, domainId: String, mode: String) -> String in
+      (sessionId: String, domainId: String, mode: String, identityBase64: String?) -> String in
       #if canImport(auki_sdk_uniffiFFI)
       let discovery: AukiDiscoveryMode =
         mode == "DiscoverAndAdvertise" ? .discoverAndAdvertise : .discoverOnly
-      return try await withAuthErrors { try await self.startPeer(sessionId: sessionId, domainId: domainId, mode: discovery) }
+      return try await withAuthErrors {
+        try await self.startPeer(
+          sessionId: sessionId,
+          domainId: domainId,
+          mode: discovery,
+          identityBase64: identityBase64
+        )
+      }
       #else
       throw unsupported("AukiSDK XCFramework missing")
       #endif
@@ -704,6 +715,39 @@ public class AukiSdkExpoModule: Module {
     AsyncFunction("peerId") { (peerHandle: String) -> String in
       #if canImport(auki_sdk_uniffiFFI)
       return try self.requirePeer(peerHandle).peerId()
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("peerIdentityEncoded") { (peerHandle: String) -> String in
+      #if canImport(auki_sdk_uniffiFFI)
+      guard let identity = self.identities[peerHandle] else {
+        throw unsupported("unknown peer: \(peerHandle)")
+      }
+      return try identity.encoded().base64EncodedString()
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("peerCard") { (peerHandle: String, protocols: [String]) -> String in
+      #if canImport(auki_sdk_uniffiFFI)
+      let card = try self.requirePeer(peerHandle).card(protocols: protocols)
+      return try peerCardToJson(card: card)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("peerTargetFromCard") {
+      (cardJson: String, requiredProtocol: String?) -> [String: String] in
+      #if canImport(auki_sdk_uniffiFFI)
+      let target = try nativePeerTarget(
+        card: try peerCardFromJson(json: cardJson),
+        requiredProtocol: requiredProtocol
+      )
+      return ["domainId": target.domainId, "peerId": target.peerId, "route": target.route]
       #else
       throw unsupported("AukiSDK XCFramework missing")
       #endif
@@ -937,6 +981,75 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
+    AsyncFunction("messageMount") { (peerHandle: String) -> String in
+      #if canImport(auki_sdk_uniffiFFI)
+      let peer = try self.requirePeer(peerHandle)
+      let endpoint = try await AukiMessageEndpoint.mount(peer: peer)
+      let id = self.newId("message_endpoint")
+      self.messageEndpoints[id] = (peerHandle, endpoint)
+      return id
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("messageDeclare") {
+      (endpointHandle: String, channelJson: String, capacity: Int) -> String in
+      #if canImport(auki_sdk_uniffiFFI)
+      guard let entry = self.messageEndpoints[endpointHandle] else {
+        throw unsupported("unknown message endpoint: \(endpointHandle)")
+      }
+      guard let receiverCapacity = UInt32(exactly: capacity) else {
+        throw unsupported("capacity must be a non-negative 32-bit integer")
+      }
+      let receiver = try await entry.endpoint.declare(
+        channel: Self.messageChannel(channelJson),
+        receiverCapacity: receiverCapacity
+      )
+      let id = self.newId("message_receiver")
+      self.messageReceivers[id] = (entry.peerHandle, receiver)
+      return id
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("messageNext") { (receiverHandle: String) -> String? in
+      #if canImport(auki_sdk_uniffiFFI)
+      guard let entry = self.messageReceivers[receiverHandle] else {
+        throw unsupported("unknown message receiver: \(receiverHandle)")
+      }
+      guard let event = try await entry.receiver.next() else {
+        return nil
+      }
+      return try Self.encodeMessageEvent(event)
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("messageReceiverClose") { (receiverHandle: String) in
+      #if canImport(auki_sdk_uniffiFFI)
+      guard let entry = self.messageReceivers.removeValue(forKey: receiverHandle) else {
+        return
+      }
+      try await entry.receiver.close()
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
+    AsyncFunction("messageEndpointClose") { (endpointHandle: String) in
+      #if canImport(auki_sdk_uniffiFFI)
+      guard let entry = self.messageEndpoints.removeValue(forKey: endpointHandle) else {
+        return
+      }
+      try await entry.endpoint.close()
+      #else
+      throw unsupported("AukiSDK XCFramework missing")
+      #endif
+    }
+
     AsyncFunction("urdfModelFromXml") { (xml: String) -> String in
       #if canImport(auki_sdk_uniffiFFI)
       let model = try AukiUrdfModel.fromXml(xml: xml)
@@ -990,6 +1103,17 @@ public class AukiSdkExpoModule: Module {
         self.messageSenders.removeValue(forKey: id)
         try? await entry.sender.close()
       }
+      let ownedReceivers = self.messageReceivers.filter { $0.value.peerHandle == peerHandle }
+      for (id, entry) in ownedReceivers {
+        self.messageReceivers.removeValue(forKey: id)
+        try? await entry.receiver.close()
+      }
+      let ownedEndpoints = self.messageEndpoints.filter { $0.value.peerHandle == peerHandle }
+      for (id, entry) in ownedEndpoints {
+        self.messageEndpoints.removeValue(forKey: id)
+        try? await entry.endpoint.close()
+      }
+      self.identities.removeValue(forKey: peerHandle)
       if let peer = self.peers.removeValue(forKey: peerHandle) {
         try await peer.shutdown()
       }
@@ -1011,10 +1135,11 @@ public class AukiSdkExpoModule: Module {
   private func startPeer(
     sessionId: String,
     domainId: String,
-    mode: AukiDiscoveryMode?
+    mode: AukiDiscoveryMode?,
+    identityBase64: String?
   ) async throws -> String {
     let session = try sessions.session(sessionId)
-    let identity = AukiPeerIdentity.generate()
+    let identity = try Self.peerIdentity(identityBase64)
     let peer: AukiPeer
     if let mode {
       peer = try await session.startPeerWithDiscovery(
@@ -1029,6 +1154,16 @@ public class AukiSdkExpoModule: Module {
     peers[id] = peer
     identities[id] = identity
     return id
+  }
+
+  private static func peerIdentity(_ identityBase64: String?) throws -> AukiPeerIdentity {
+    guard let identityBase64, !identityBase64.isEmpty else {
+      return AukiPeerIdentity.generate()
+    }
+    guard let encoded = Data(base64Encoded: identityBase64) else {
+      throw unsupported("identityBase64 is not valid base64")
+    }
+    return try AukiPeerIdentity.fromEncoded(encoded: encoded)
   }
 
   private func requirePeer(_ peerHandle: String) throws -> AukiPeer {
@@ -1331,6 +1466,37 @@ public class AukiSdkExpoModule: Module {
         "entry": NSNull(),
       ])
     }
+  }
+
+  private static func encodeMessageEvent(_ event: AukiMessageEvent) throws -> String {
+    var sender: [String: Any] = [
+      "peerId": event.sender.peerId,
+      "subject": event.sender.subject,
+      "domainIds": event.sender.domainIds,
+      "scopes": event.sender.scopes,
+      "verifiedUntil": event.sender.verifiedUntil,
+    ]
+    if let peerType = event.sender.peerType {
+      sender["peerType"] = peerType
+    }
+    if let application = event.sender.application {
+      sender["application"] = ["name": application.name, "version": application.version]
+    }
+    return try jsonString([
+      "channel": [
+        "owner_peer_id": event.channel.ownerPeerId,
+        "resource_id": event.channel.resourceId,
+        "clock": [
+          "peer_id": event.channel.clock.peerId,
+          "id": event.channel.clock.id,
+          "hash": event.channel.clock.hash,
+        ],
+      ] as [String: Any],
+      "sender": sender,
+      "messageType": event.messageType,
+      "timestampNs": String(event.timestampNs),
+      "payloadBase64": event.payload.base64EncodedString(),
+    ] as [String: Any])
   }
 
   private static func encodeEndReason(_ reason: AukiStreamEndReason) -> [String: Any] {

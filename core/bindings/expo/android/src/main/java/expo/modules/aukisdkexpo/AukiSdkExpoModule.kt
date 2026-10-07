@@ -15,6 +15,10 @@ import uniffi.auki_sdk_uniffi.AukiDomainFleetInterface
 import uniffi.auki_sdk_uniffi.AukiDomainJobsInterface
 import uniffi.auki_sdk_uniffi.AukiInfoClient
 import uniffi.auki_sdk_uniffi.AukiMessageClient
+import uniffi.auki_sdk_uniffi.AukiMessageEndpoint
+import uniffi.auki_sdk_uniffi.AukiMessageEndpointInterface
+import uniffi.auki_sdk_uniffi.AukiMessageReceiver
+import uniffi.auki_sdk_uniffi.AukiMessageReceiverInterface
 import uniffi.auki_sdk_uniffi.AukiMessageSender
 import uniffi.auki_sdk_uniffi.AukiMessageSenderInterface
 import uniffi.auki_sdk_uniffi.AukiPeer
@@ -24,6 +28,9 @@ import uniffi.auki_sdk_uniffi.AukiSession
 import uniffi.auki_sdk_uniffi.AukiStreamClient
 import uniffi.auki_sdk_uniffi.AukiStreamSubscription
 import uniffi.auki_sdk_uniffi.AukiUrdfModel
+import uniffi.auki_sdk_uniffi.nativePeerTarget
+import uniffi.auki_sdk_uniffi.peerCardFromJson
+import uniffi.auki_sdk_uniffi.peerCardToJson
 import uniffi.auki_sdk_uniffi.streamRequestFromJson
 import uniffi.auki_sdk_uniffi.uniffiEnsureInitialized
 
@@ -33,8 +40,11 @@ class AukiSdkExpoModule : Module() {
   private val fleet = ExpoFleetRegistry()
   private val jobs = ExpoJobsRegistry()
   private val peers = HashMap<String, AukiPeer>()
+  private val identities = HashMap<String, AukiPeerIdentity>()
   private val streams = HashMap<String, AukiStreamSubscription>()
   private val messageSenders = HashMap<String, Pair<String, AukiMessageSender>>()
+  private val messageEndpoints = HashMap<String, Pair<String, AukiMessageEndpoint>>()
+  private val messageReceivers = HashMap<String, Pair<String, AukiMessageReceiver>>()
   private val urdfModels = HashMap<String, AukiUrdfModel>()
   private val handles = Any()
 
@@ -566,17 +576,37 @@ class AukiSdkExpoModule : Module() {
       withJobsErrors { (client as AukiDomainJobsInterface).close() }
     }
 
-    AsyncFunction("startPeer") Coroutine { sessionId: String, domainId: String ->
-      withAuthErrors { startPeer(sessionId, domainId, null) }
+    AsyncFunction("startPeer") Coroutine { sessionId: String, domainId: String, identityBase64: String? ->
+      withAuthErrors { startPeer(sessionId, domainId, null, identityBase64) }
     }
 
-    AsyncFunction("startPeerWithDiscovery") Coroutine { sessionId: String, domainId: String, mode: String ->
+    AsyncFunction("startPeerWithDiscovery") Coroutine {
+        sessionId: String,
+        domainId: String,
+        mode: String,
+        identityBase64: String?,
+      ->
       val discovery = if (mode == "DiscoverAndAdvertise") {
         AukiDiscoveryMode.DISCOVER_AND_ADVERTISE
       } else {
         AukiDiscoveryMode.DISCOVER_ONLY
       }
-      withAuthErrors { startPeer(sessionId, domainId, discovery) }
+      withAuthErrors { startPeer(sessionId, domainId, discovery, identityBase64) }
+    }
+
+    AsyncFunction("peerIdentityEncoded") Coroutine { peerHandle: String ->
+      val identity = synchronized(handles) { identities[peerHandle] }
+        ?: throw ExpoUnsupported("unknown peer: $peerHandle")
+      encodeBase64(identity.encoded())
+    }
+
+    AsyncFunction("peerCard") Coroutine { peerHandle: String, protocols: List<String> ->
+      peerCardToJson(requirePeer(peerHandle).card(protocols))
+    }
+
+    AsyncFunction("peerTargetFromCard") Coroutine { cardJson: String, requiredProtocol: String? ->
+      val target = nativePeerTarget(peerCardFromJson(cardJson), requiredProtocol)
+      mapOf("domainId" to target.domainId, "peerId" to target.peerId, "route" to target.route)
     }
 
     AsyncFunction("peerId") Coroutine { peerHandle: String ->
@@ -722,6 +752,42 @@ class AukiSdkExpoModule : Module() {
       (sender as AukiMessageSenderInterface).close()
     }
 
+    AsyncFunction("messageMount") Coroutine { peerHandle: String ->
+      val endpoint = AukiMessageEndpoint.mount(requirePeer(peerHandle))
+      val id = newId("message_endpoint")
+      synchronized(handles) { messageEndpoints[id] = peerHandle to endpoint }
+      id
+    }
+
+    AsyncFunction("messageDeclare") Coroutine { endpointHandle: String, channelJson: String, capacity: Int ->
+      val entry = synchronized(handles) { messageEndpoints[endpointHandle] }
+        ?: throw ExpoUnsupported("unknown message endpoint: $endpointHandle")
+      if (capacity < 0) throw ExpoUnsupported("capacity must be a non-negative 32-bit integer")
+      val receiver = entry.second.declare(messageChannel(channelJson), capacity.toUInt())
+      val id = newId("message_receiver")
+      synchronized(handles) { messageReceivers[id] = entry.first to receiver }
+      id
+    }
+
+    AsyncFunction("messageNext") Coroutine { receiverHandle: String ->
+      val receiver = synchronized(handles) { messageReceivers[receiverHandle] }?.second
+        ?: throw ExpoUnsupported("unknown message receiver: $receiverHandle")
+      val event = receiver.next() ?: return@Coroutine null
+      encodeMessageEvent(event)
+    }
+
+    AsyncFunction("messageReceiverClose") Coroutine { receiverHandle: String ->
+      val receiver = synchronized(handles) { messageReceivers.remove(receiverHandle) }?.second
+        ?: return@Coroutine Unit
+      (receiver as AukiMessageReceiverInterface).close()
+    }
+
+    AsyncFunction("messageEndpointClose") Coroutine { endpointHandle: String ->
+      val endpoint = synchronized(handles) { messageEndpoints.remove(endpointHandle) }?.second
+        ?: return@Coroutine Unit
+      (endpoint as AukiMessageEndpointInterface).close()
+    }
+
     AsyncFunction("urdfModelFromXml") Coroutine { xml: String ->
       val model = AukiUrdfModel.fromXml(xml)
       val id = newId("urdf")
@@ -758,7 +824,30 @@ class AukiSdkExpoModule : Module() {
         } catch (_: Exception) {
         }
       }
-      val peer = synchronized(handles) { peers.remove(peerHandle) }
+      val ownedReceivers = synchronized(handles) {
+        messageReceivers.filterValues { it.first == peerHandle }.keys.toList()
+      }
+      for (id in ownedReceivers) {
+        val receiver = synchronized(handles) { messageReceivers.remove(id) }?.second ?: continue
+        try {
+          (receiver as AukiMessageReceiverInterface).close()
+        } catch (_: Exception) {
+        }
+      }
+      val ownedEndpoints = synchronized(handles) {
+        messageEndpoints.filterValues { it.first == peerHandle }.keys.toList()
+      }
+      for (id in ownedEndpoints) {
+        val endpoint = synchronized(handles) { messageEndpoints.remove(id) }?.second ?: continue
+        try {
+          (endpoint as AukiMessageEndpointInterface).close()
+        } catch (_: Exception) {
+        }
+      }
+      val peer = synchronized(handles) {
+        identities.remove(peerHandle)
+        peers.remove(peerHandle)
+      }
       if (peer != null) peer.shutdown()
     }
 
@@ -767,16 +856,30 @@ class AukiSdkExpoModule : Module() {
     }
   }
 
-  private suspend fun startPeer(sessionId: String, domainId: String, mode: AukiDiscoveryMode?): String {
+  private suspend fun startPeer(
+    sessionId: String,
+    domainId: String,
+    mode: AukiDiscoveryMode?,
+    identityBase64: String?,
+  ): String {
     val session = sessions.session(sessionId)
-    val identity = AukiPeerIdentity.generate()
+    val identity = if (identityBase64.isNullOrEmpty()) {
+      AukiPeerIdentity.generate()
+    } else {
+      val encoded = decodeBase64(identityBase64)
+        ?: throw ExpoUnsupported("identityBase64 is not valid base64")
+      AukiPeerIdentity.fromEncoded(encoded)
+    }
     val peer = if (mode == null) {
       session.startPeer(domainId, identity)
     } else {
       session.startPeerWithDiscovery(domainId, identity, mode)
     }
     val id = newId("peer")
-    synchronized(handles) { peers[id] = peer }
+    synchronized(handles) {
+      peers[id] = peer
+      identities[id] = identity
+    }
     return id
   }
 

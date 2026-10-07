@@ -5,6 +5,7 @@ import type {
   AukiDiscoveryModeName,
   AukiDomainInfo,
   AukiExactTarget,
+  AukiPeerTargetInfo,
   AukiSdkExpoModuleEvents,
   AukiServiceEnvironment,
   DataMetadata,
@@ -30,6 +31,8 @@ type CatalogClient = import("./web/generated/auki_sdk_web.js").AukiCatalogClient
 type MessageClient = import("./web/generated/auki_sdk_web.js").AukiMessageClient;
 type StreamSub = Awaited<ReturnType<StreamClient["subscribeExact"]>>;
 type MessageSender = Awaited<ReturnType<MessageClient["openExact"]>>;
+type MessageEndpoint = import("./web/generated/auki_sdk_web.js").AukiMessageEndpoint;
+type MessageReceiver = import("./web/generated/auki_sdk_web.js").AukiMessageReceiver;
 type DomainDataClient = import("./web/generated/auki_sdk_web.js").AukiDomainData;
 type FleetClient = ReturnType<Session["fleet"]>;
 type JobsClient = ReturnType<Session["jobs"]>;
@@ -136,6 +139,8 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
   private peers = new Map<string, Peer>();
   private streams = new Map<string, StreamSub>();
   private messages = new Map<string, { peerHandle: string; sender: MessageSender }>();
+  private messageEndpoints = new Map<string, { peerHandle: string; endpoint: MessageEndpoint }>();
+  private messageReceivers = new Map<string, { peerHandle: string; receiver: MessageReceiver }>();
   private dataClients = new Map<string, { sessionId: string; client: DomainDataClient }>();
   private dataOperations = new Map<string, AbortController>();
   private fleetClients = new Map<string, { sessionId: string; client: FleetClient }>();
@@ -689,7 +694,12 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     }
   }
 
-  async startPeer(sessionId: string, domainId: string): Promise<string> {
+  // Web peers always generate a fresh identity, so `identityBase64` is ignored.
+  async startPeer(
+    sessionId: string,
+    domainId: string,
+    _identityBase64?: string | null,
+  ): Promise<string> {
     const peer = await this.session(sessionId).startPeer(domainId);
     const id = newId("peer");
     this.peers.set(id, peer);
@@ -700,6 +710,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     sessionId: string,
     domainId: string,
     mode: AukiDiscoveryModeName,
+    _identityBase64?: string | null,
   ): Promise<string> {
     const sdk = await this.sdk();
     const discoveryMode =
@@ -713,6 +724,21 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     const id = newId("peer");
     this.peers.set(id, peer);
     return id;
+  }
+
+  async peerIdentityEncoded(_peerHandle: string): Promise<string> {
+    throw new Error("peerIdentityEncoded is native-only; web peers use a fresh identity per start");
+  }
+
+  async peerCard(_peerHandle: string, _protocols: string[]): Promise<string> {
+    throw new Error("peerCard is native-only");
+  }
+
+  async peerTargetFromCard(
+    _cardJson: string,
+    _requiredProtocol?: string | null,
+  ): Promise<AukiPeerTargetInfo> {
+    throw new Error("peerTargetFromCard is native-only");
   }
 
   async peerId(peerHandle: string): Promise<string> {
@@ -932,6 +958,69 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     entry.sender.free();
   }
 
+  async messageMount(peerHandle: string): Promise<string> {
+    const sdk = await this.sdk();
+    const endpoint = sdk.AukiMessageEndpoint.mount(this.peer(peerHandle));
+    const id = newId("message_endpoint");
+    this.messageEndpoints.set(id, { peerHandle, endpoint });
+    return id;
+  }
+
+  async messageDeclare(
+    endpointHandle: string,
+    channelJson: string,
+    capacity: number,
+  ): Promise<string> {
+    const entry = this.messageEndpoints.get(endpointHandle);
+    if (!entry) {
+      throw new Error(`unknown message endpoint: ${endpointHandle}`);
+    }
+    const channel = { variant: "message_channel" as const, ...JSON.parse(channelJson) };
+    const receiver = entry.endpoint.declare(channel, capacity);
+    const id = newId("message_receiver");
+    this.messageReceivers.set(id, { peerHandle: entry.peerHandle, receiver });
+    return id;
+  }
+
+  async messageNext(receiverHandle: string): Promise<string | null> {
+    const entry = this.messageReceivers.get(receiverHandle);
+    if (!entry) {
+      throw new Error(`unknown message receiver: ${receiverHandle}`);
+    }
+    const event = await entry.receiver.next();
+    if (!event) {
+      return null;
+    }
+    const { variant: _variant, ...channel } = event.channel;
+    return jsonStringify({
+      channel,
+      sender: event.sender,
+      messageType: event.type,
+      timestampNs: event.timestampNs.toString(),
+      payloadBase64: bytesToBase64(event.payload),
+    });
+  }
+
+  async messageReceiverClose(receiverHandle: string): Promise<void> {
+    const entry = this.messageReceivers.get(receiverHandle);
+    if (!entry) {
+      return;
+    }
+    this.messageReceivers.delete(receiverHandle);
+    await entry.receiver.close();
+    entry.receiver.free();
+  }
+
+  async messageEndpointClose(endpointHandle: string): Promise<void> {
+    const entry = this.messageEndpoints.get(endpointHandle);
+    if (!entry) {
+      return;
+    }
+    this.messageEndpoints.delete(endpointHandle);
+    await entry.endpoint.close();
+    entry.endpoint.free();
+  }
+
   async urdfModelFromXml(_xml: string): Promise<string> {
     throw new Error("urdfModelFromXml is native-only; use auki-urdf-fk wasm on web");
   }
@@ -968,6 +1057,26 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
         /* ignore */
       }
       entry.sender.free();
+    }
+    for (const [id, entry] of [...this.messageReceivers.entries()]) {
+      if (entry.peerHandle !== peerHandle) continue;
+      this.messageReceivers.delete(id);
+      try {
+        await entry.receiver.close();
+      } catch {
+        /* ignore */
+      }
+      entry.receiver.free();
+    }
+    for (const [id, entry] of [...this.messageEndpoints.entries()]) {
+      if (entry.peerHandle !== peerHandle) continue;
+      this.messageEndpoints.delete(id);
+      try {
+        await entry.endpoint.close();
+      } catch {
+        /* ignore */
+      }
+      entry.endpoint.free();
     }
     await peer.shutdown();
     this.peers.delete(peerHandle);

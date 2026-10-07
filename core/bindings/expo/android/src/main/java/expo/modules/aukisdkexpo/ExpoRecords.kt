@@ -6,6 +6,7 @@ import uniffi.auki_sdk_uniffi.AukiDiscoverySource
 import uniffi.auki_sdk_uniffi.AukiDomain
 import uniffi.auki_sdk_uniffi.AukiDomainPage
 import uniffi.auki_sdk_uniffi.AukiDomainSummary
+import uniffi.auki_sdk_uniffi.AukiMessageEvent
 import uniffi.auki_sdk_uniffi.AukiPortal
 import uniffi.auki_sdk_uniffi.AukiPortalDomain
 import uniffi.auki_sdk_uniffi.AukiPortalPose
@@ -110,6 +111,37 @@ internal fun encodeUrdfLinks(links: List<AukiUrdfLinkTransform>): String {
     )
   }
   return jsonString(mapped)
+}
+
+internal fun encodeMessageEvent(event: AukiMessageEvent): String {
+  val sender = mutableMapOf<String, Any?>(
+    "peerId" to event.sender.peerId,
+    "subject" to event.sender.subject,
+    "domainIds" to event.sender.domainIds,
+    "scopes" to event.sender.scopes,
+    "verifiedUntil" to event.sender.verifiedUntil,
+  )
+  event.sender.peerType?.let { sender["peerType"] = it }
+  event.sender.application?.let {
+    sender["application"] = mapOf("name" to it.name, "version" to it.version)
+  }
+  return jsonString(
+    mapOf(
+      "channel" to mapOf(
+        "owner_peer_id" to event.channel.ownerPeerId,
+        "resource_id" to event.channel.resourceId,
+        "clock" to mapOf(
+          "peer_id" to event.channel.clock.peerId,
+          "id" to event.channel.clock.id,
+          "hash" to event.channel.clock.hash,
+        ),
+      ),
+      "sender" to sender,
+      "messageType" to event.messageType,
+      "timestampNs" to event.timestampNs.toString(),
+      "payloadBase64" to encodeBase64(event.payload),
+    ),
+  )
 }
 
 internal fun encodeStreamNext(next: AukiStreamNext): String = when (next) {

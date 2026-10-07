@@ -5,6 +5,7 @@ import type {
   AukiDiscoveryModeName,
   AukiDomainInfo,
   AukiExactTarget,
+  AukiPeerTargetInfo,
   AukiSdkExpoModuleEvents,
   DataMetadata,
   DomainPage,
@@ -98,12 +99,24 @@ declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents
   jobsCancel(clientId: string, jobId: string, operationId: string): Promise<string>;
   jobsOperationCancel(operationId: string): Promise<void>;
   jobsClose(clientId: string): Promise<void>;
-  startPeer(sessionId: string, domainId: string): Promise<string>;
+  /**
+   * Start a peer. Pass `identityBase64` (from `peerIdentityEncoded`) to keep the
+   * same Peer ID across restarts; omit it to generate a new identity.
+   * Web ignores `identityBase64`.
+   */
+  startPeer(sessionId: string, domainId: string, identityBase64?: string | null): Promise<string>;
   startPeerWithDiscovery(
     sessionId: string,
     domainId: string,
     mode: AukiDiscoveryModeName,
+    identityBase64?: string | null,
   ): Promise<string>;
+  /** Canonical secret identity bytes (base64). Store them in secure storage only. Native-only. */
+  peerIdentityEncoded(peerHandle: string): Promise<string>;
+  /** Copyable peer card JSON for manual exchange (e.g. a QR code). Native-only. */
+  peerCard(peerHandle: string, protocols: string[]): Promise<string>;
+  /** Select the native TCP dial target from a peer card. Native-only. */
+  peerTargetFromCard(cardJson: string, requiredProtocol?: string | null): Promise<AukiPeerTargetInfo>;
   peerId(peerHandle: string): Promise<string>;
   domainId(peerHandle: string): Promise<string>;
   discover(peerHandle: string): Promise<AukiDiscoveryCandidateInfo[]>;
@@ -154,6 +167,17 @@ declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents
     payloadBase64: string,
   ): Promise<void>;
   messageClose(senderHandle: string): Promise<void>;
+  /** Mount inbound Message v1 on a running peer. Returns an endpoint handle. */
+  messageMount(peerHandle: string): Promise<string>;
+  /** Declare one receiver-owned channel. `capacity` is 1..=65536. Returns a receiver handle. */
+  messageDeclare(endpointHandle: string, channelJson: string, capacity: number): Promise<string>;
+  /**
+   * Receive one message as `AukiMessageEventInfo` JSON, or null after close.
+   * Only one call may be pending per receiver.
+   */
+  messageNext(receiverHandle: string): Promise<string | null>;
+  messageReceiverClose(receiverHandle: string): Promise<void>;
+  messageEndpointClose(endpointHandle: string): Promise<void>;
   urdfModelFromXml(xml: string): Promise<string>;
   urdfJointCount(handle: string): Promise<number>;
   urdfResolve(handle: string, angles: number[]): Promise<string>;

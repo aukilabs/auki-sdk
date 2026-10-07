@@ -201,6 +201,16 @@ pub enum AukiDiscoveryMode {
     DiscoverAndAdvertise,
 }
 
+/// Whether a started peer owns a public inbound relay booking.
+///
+/// Outbound-only peers can still dial another peer's relay route. They do not
+/// call DMS `/relay-bookings` and therefore keep no idle circuit of their own.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, uniffi::Enum)]
+pub enum AukiPeerReachabilityMode {
+    OutboundOnly,
+    RelayBacked,
+}
+
 impl From<AukiDiscoveryMode> for DdsTrackerMode {
     fn from(mode: AukiDiscoveryMode) -> Self {
         match mode {
@@ -652,16 +662,21 @@ impl AukiSession {
             .map_err(|error| auth_error(error.kind()))
     }
 
-    /// Authorize the persisted identity and start a relay-backed peer.
+    /// Authorize the persisted identity and start a peer.
+    ///
+    /// Omitting `reachability` keeps the relay-backed default, which books a
+    /// public inbound relay. `OutboundOnly` dials remote routes without a
+    /// local DMS relay booking.
+    #[uniffi::method(default(reachability = None))]
     pub async fn start_peer(
         &self,
         domain_id: String,
         identity: Arc<AukiPeerIdentity>,
+        reachability: Option<AukiPeerReachabilityMode>,
     ) -> Result<Arc<AukiPeer>, AukiSdkError> {
         let domain_id = Uuid::parse_str(&domain_id)
             .map_err(|error| operation_error("parse Auki Domain ID", error))?;
-        let peer = self
-            .peer_bootstrap()?
+        let peer = apply_reachability(self.peer_bootstrap()?, reachability)
             .start_peer(DomainSelection::new(domain_id), identity.rust_identity())
             .await
             .map_err(|error| bootstrap_error("start Auki peer", error))?;
@@ -670,21 +685,35 @@ impl AukiSession {
 
     /// Authorize the persisted identity and start a peer with one explicit DDS
     /// discovery behavior.
+    ///
+    /// Outbound-only peers may discover but cannot advertise, because they have
+    /// no public route. Omitting `reachability` remains relay-backed.
+    #[uniffi::method(default(reachability = None))]
     pub async fn start_peer_with_discovery(
         &self,
         domain_id: String,
         identity: Arc<AukiPeerIdentity>,
         mode: AukiDiscoveryMode,
+        reachability: Option<AukiPeerReachabilityMode>,
     ) -> Result<Arc<AukiPeer>, AukiSdkError> {
         let domain_id = Uuid::parse_str(&domain_id)
             .map_err(|error| operation_error("parse Auki Domain ID", error))?;
-        let peer = self
-            .peer_bootstrap()?
+        let peer = apply_reachability(self.peer_bootstrap()?, reachability)
             .with_dds_tracker(mode.into())
             .start_peer(DomainSelection::new(domain_id), identity.rust_identity())
             .await
             .map_err(|error| bootstrap_error("start discoverable Auki peer", error))?;
         Ok(Arc::new(AukiPeer::new(peer)))
+    }
+}
+
+fn apply_reachability(
+    bootstrap: AukiPeerBootstrap,
+    reachability: Option<AukiPeerReachabilityMode>,
+) -> AukiPeerBootstrap {
+    match reachability.unwrap_or(AukiPeerReachabilityMode::RelayBacked) {
+        AukiPeerReachabilityMode::OutboundOnly => bootstrap.without_relay(),
+        AukiPeerReachabilityMode::RelayBacked => bootstrap,
     }
 }
 

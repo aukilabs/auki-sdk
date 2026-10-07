@@ -19,6 +19,7 @@ import uniffi.auki_sdk_uniffi.AukiMessageSender
 import uniffi.auki_sdk_uniffi.AukiMessageSenderInterface
 import uniffi.auki_sdk_uniffi.AukiPeer
 import uniffi.auki_sdk_uniffi.AukiPeerIdentity
+import uniffi.auki_sdk_uniffi.AukiPeerReachabilityMode
 import uniffi.auki_sdk_uniffi.AukiRegistryClient
 import uniffi.auki_sdk_uniffi.AukiSession
 import uniffi.auki_sdk_uniffi.AukiStreamClient
@@ -566,17 +567,17 @@ class AukiSdkExpoModule : Module() {
       withJobsErrors { (client as AukiDomainJobsInterface).close() }
     }
 
-    AsyncFunction("startPeer") Coroutine { sessionId: String, domainId: String ->
-      withAuthErrors { startPeer(sessionId, domainId, null) }
+    AsyncFunction("startPeer") Coroutine { sessionId: String, domainId: String, reachability: String? ->
+      withAuthErrors { startPeer(sessionId, domainId, null, reachability) }
     }
 
-    AsyncFunction("startPeerWithDiscovery") Coroutine { sessionId: String, domainId: String, mode: String ->
+    AsyncFunction("startPeerWithDiscovery") Coroutine { sessionId: String, domainId: String, mode: String, reachability: String? ->
       val discovery = if (mode == "DiscoverAndAdvertise") {
         AukiDiscoveryMode.DISCOVER_AND_ADVERTISE
       } else {
         AukiDiscoveryMode.DISCOVER_ONLY
       }
-      withAuthErrors { startPeer(sessionId, domainId, discovery) }
+      withAuthErrors { startPeer(sessionId, domainId, discovery, reachability) }
     }
 
     AsyncFunction("peerId") Coroutine { peerHandle: String ->
@@ -767,17 +768,30 @@ class AukiSdkExpoModule : Module() {
     }
   }
 
-  private suspend fun startPeer(sessionId: String, domainId: String, mode: AukiDiscoveryMode?): String {
+  private suspend fun startPeer(
+    sessionId: String,
+    domainId: String,
+    mode: AukiDiscoveryMode?,
+    reachability: String?,
+  ): String {
     val session = sessions.session(sessionId)
     val identity = AukiPeerIdentity.generate()
+    val reachabilityMode = peerReachability(reachability)
     val peer = if (mode == null) {
-      session.startPeer(domainId, identity)
+      session.startPeer(domainId, identity, reachabilityMode)
     } else {
-      session.startPeerWithDiscovery(domainId, identity, mode)
+      session.startPeerWithDiscovery(domainId, identity, mode, reachabilityMode)
     }
     val id = newId("peer")
     synchronized(handles) { peers[id] = peer }
     return id
+  }
+
+  private fun peerReachability(name: String?): AukiPeerReachabilityMode? = when (name) {
+    null -> null
+    "OutboundOnly" -> AukiPeerReachabilityMode.OUTBOUND_ONLY
+    "RelayBacked" -> AukiPeerReachabilityMode.RELAY_BACKED
+    else -> throw ExpoUnsupported("unknown peer reachability: $name")
   }
 
   private fun requirePeer(peerHandle: String): AukiPeer =

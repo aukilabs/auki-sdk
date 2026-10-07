@@ -1,5 +1,6 @@
 //! Domain-scoped DMS job submission bindings using a shared User session.
 
+use std::future::Future;
 use std::sync::Arc;
 
 use auki_sdk_rs::{AukiDmsJobs, DomainJobsClient, JobsError};
@@ -56,6 +57,28 @@ fn jobs_error(error: JobsError) -> AukiSdkError {
         source_code: source,
         retry_after_seconds: error.retry_after_seconds(),
         message: error.to_string(),
+    }
+}
+
+/// Run DMS HTTP off the foreign poll. UniFFI polls this future on whatever
+/// thread woke it, and driving reqwest there never finishes on iOS.
+fn drive<T: Send + 'static>(
+    owner: &JobsOwner,
+    work: impl Future<Output = Result<T, AukiSdkError>> + Send + 'static,
+) -> impl Future<Output = Result<T, AukiSdkError>> {
+    let runtime = owner.remember_runtime();
+    async move {
+        let Some(runtime) = runtime else {
+            return Err(invalid_input("DMS jobs require a Tokio runtime"));
+        };
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        runtime.spawn(async move {
+            let _ = sender.send(work.await);
+        });
+        match receiver.await {
+            Ok(result) => result,
+            Err(_) => Err(jobs_error(JobsError::Transport)),
+        }
     }
 }
 
@@ -178,13 +201,15 @@ impl AukiDomainJobs {
         self.owner.ensure_open()?;
         let spec = Self::decode(&spec_json, "job specification")?;
         let token = self.owner.operation_token(cancellation);
-        let value = self
-            .owner
-            .inner
-            .estimate_with_cancellation(&spec, &token)
-            .await
-            .map_err(jobs_error)?;
-        Self::encode(&value)
+        let inner = self.owner.inner.clone();
+        drive(&self.owner, async move {
+            let value = inner
+                .estimate_with_cancellation(&spec, &token)
+                .await
+                .map_err(jobs_error)?;
+            AukiDomainJobs::encode(&value)
+        })
+        .await
     }
 
     #[uniffi::method(default(cancellation = None))]
@@ -196,12 +221,15 @@ impl AukiDomainJobs {
         self.owner.ensure_open()?;
         let spec = Self::decode(&spec_json, "job specification")?;
         let token = self.owner.operation_token(cancellation);
-        self.owner
-            .inner
-            .submit_with_cancellation(&spec, &token)
-            .await
-            .map(|id| id.to_string())
-            .map_err(jobs_error)
+        let inner = self.owner.inner.clone();
+        drive(&self.owner, async move {
+            inner
+                .submit_with_cancellation(&spec, &token)
+                .await
+                .map(|id| id.to_string())
+                .map_err(jobs_error)
+        })
+        .await
     }
 
     #[uniffi::method(default(cancellation = None))]
@@ -214,12 +242,15 @@ impl AukiDomainJobs {
         self.owner.ensure_open()?;
         let spec = Self::decode(&spec_json, "job specification")?;
         let token = self.owner.operation_token(cancellation);
-        self.owner
-            .inner
-            .submit_with_key_and_cancellation(&spec, &idempotency_key, &token)
-            .await
-            .map(|id| id.to_string())
-            .map_err(jobs_error)
+        let inner = self.owner.inner.clone();
+        drive(&self.owner, async move {
+            inner
+                .submit_with_key_and_cancellation(&spec, &idempotency_key, &token)
+                .await
+                .map(|id| id.to_string())
+                .map_err(jobs_error)
+        })
+        .await
     }
 
     #[uniffi::method(default(cancellation = None))]
@@ -231,13 +262,15 @@ impl AukiDomainJobs {
         self.owner.ensure_open()?;
         let query = Self::decode(&query_json, "job list query")?;
         let token = self.owner.operation_token(cancellation);
-        let value = self
-            .owner
-            .inner
-            .list_with_cancellation(&query, &token)
-            .await
-            .map_err(jobs_error)?;
-        Self::encode(&value)
+        let inner = self.owner.inner.clone();
+        drive(&self.owner, async move {
+            let value = inner
+                .list_with_cancellation(&query, &token)
+                .await
+                .map_err(jobs_error)?;
+            AukiDomainJobs::encode(&value)
+        })
+        .await
     }
 
     #[uniffi::method(default(cancellation = None))]
@@ -250,13 +283,15 @@ impl AukiDomainJobs {
         let job_id =
             Uuid::parse_str(&job_id).map_err(|_| invalid_input("job ID must be a UUID"))?;
         let token = self.owner.operation_token(cancellation);
-        let value = self
-            .owner
-            .inner
-            .get_with_cancellation(job_id, &token)
-            .await
-            .map_err(jobs_error)?;
-        Self::encode(&value)
+        let inner = self.owner.inner.clone();
+        drive(&self.owner, async move {
+            let value = inner
+                .get_with_cancellation(job_id, &token)
+                .await
+                .map_err(jobs_error)?;
+            AukiDomainJobs::encode(&value)
+        })
+        .await
     }
 
     #[uniffi::method(default(cancellation = None))]
@@ -269,13 +304,15 @@ impl AukiDomainJobs {
         let job_id =
             Uuid::parse_str(&job_id).map_err(|_| invalid_input("job ID must be a UUID"))?;
         let token = self.owner.operation_token(cancellation);
-        let value = self
-            .owner
-            .inner
-            .cancel_with_cancellation(job_id, &token)
-            .await
-            .map_err(jobs_error)?;
-        Self::encode(&value)
+        let inner = self.owner.inner.clone();
+        drive(&self.owner, async move {
+            let value = inner
+                .cancel_with_cancellation(job_id, &token)
+                .await
+                .map_err(jobs_error)?;
+            AukiDomainJobs::encode(&value)
+        })
+        .await
     }
 }
 

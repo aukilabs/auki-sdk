@@ -216,25 +216,62 @@ await secureStore.clear();
 See [authentication](../../../docs/how-to/authenticate.md#reuse-a-zitadel-login)
 for storage failures and DDS requirements.
 
-## Send a typed message
+## Exchange typed messages
 
-Open one receiver-owned Catalog `message_channel` through an exact advertised
-route, send, and close. `messageSend` waits for the ACK. This surface does not
-mount inbound Message or add `claim` / `connectRobot`.
+Message v1 channels are owned by the receiver. Each peer mounts the endpoint,
+declares the channel it reads, and opens the remote peer's channel to send.
+`send` waits for the receiver's ACK, so keep one send in flight per sender.
+This surface does not add `claim` / `connectRobot`.
 
 ~~~ts
-const sender = await AukiSdkExpo.messageOpenExact(
-  peer,
-  { peerId, route },
-  channelJson,
-);
-await AukiSdkExpo.messageSend(sender, "example.event", timestampNs, payloadBase64);
-await AukiSdkExpo.messageClose(sender);
+import AukiSdkExpo, {
+  AukiMessageEndpoint,
+  AukiMessageSender,
+  MESSAGE_PROTOCOL_ID,
+} from "@aukilabs/auki-sdk-expo";
+
+// Reuse one identity so the Peer ID survives restarts. Keep the bytes in
+// secure storage only; they are the peer's private key.
+const stored = await secureStore.get("auki-peer-identity");
+const peer = await AukiSdkExpo.startPeer(session, domainId, stored);
+if (!stored) await secureStore.set("auki-peer-identity", await AukiSdkExpo.peerIdentityEncoded(peer));
+
+const selfId = await AukiSdkExpo.peerId(peer);
+const endpoint = await AukiMessageEndpoint.mount(peer);
+const receiver = await endpoint.declare({
+  owner_peer_id: selfId,
+  resource_id: "example/events",
+  clock: { peer_id: selfId, id: "monotonic", hash: "example" },
+});
+
+// Share a card out of band (for example a QR code) when discovery is off.
+const card = await AukiSdkExpo.peerCard(peer, [MESSAGE_PROTOCOL_ID]);
+const target = await AukiSdkExpo.peerTargetFromCard(remoteCard, MESSAGE_PROTOCOL_ID);
+const sender = await AukiMessageSender.open(peer, target, remoteChannel);
+await sender.send("example.event", BigInt(Date.now()) * 1_000_000n, payloadBytes);
+
+for await (const message of receiver) {
+  // message.sender is the DDS-authenticated peer; authorize it yourself.
+}
+
+await sender.close();
+await receiver.close();
+await endpoint.close();
 ~~~
 
-`channelJson` is a Catalog v3 `message_channel` row: `variant`, `owner_peer_id`,
-`resource_id`, and `clock` (`peer_id`, `id`, `hash`). `timestampNs` is a decimal
-integer string. `payloadBase64` may be empty.
+`receiver.next()` allows one pending call; `for await` reads serially.
+`receiver.close()` resolves a pending `next()` with `null`. `shutdown(peer)`
+closes the peer's senders, receivers, and endpoints. Timestamps are signed
+64-bit nanoseconds carried as decimal strings.
+
+The raw bridge calls are `messageMount`, `messageDeclare`, `messageNext`,
+`messageReceiverClose`, `messageEndpointClose`, `messageOpenExact`,
+`messageSend`, and `messageClose`. `channelJson` is the channel object above;
+Web adds the Catalog `variant: "message_channel"` itself.
+
+Web differences: peers get a fresh identity on every start (`identityBase64` is
+ignored), and `peerIdentityEncoded`, `peerCard`, and `peerTargetFromCard` are
+native-only.
 
 ## Checks
 

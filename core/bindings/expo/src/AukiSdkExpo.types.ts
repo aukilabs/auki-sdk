@@ -22,6 +22,39 @@ export type AukiExactTarget = {
   route: string;
 };
 
+/** Exact native dial target selected from a peer card. */
+export type AukiPeerTargetInfo = AukiExactTarget & {
+  domainId: string;
+};
+
+/** Receiver-owned Message v1 channel identity (wire field names). */
+export type AukiMessageChannelInfo = {
+  owner_peer_id: string;
+  resource_id: string;
+  clock: { peer_id: string; id: string; hash: string };
+};
+
+/** DDS-authenticated metadata of the peer that sent a message. */
+export type AukiMessageSenderInfo = {
+  peerId: string;
+  subject: string;
+  peerType?: string | null;
+  domainIds: string[];
+  scopes: string[];
+  application?: { name: string; version: string } | null;
+  verifiedUntil: string;
+};
+
+/** One received message as returned (JSON-encoded) by `messageNext`. */
+export type AukiMessageEventInfo = {
+  channel: AukiMessageChannelInfo;
+  sender: AukiMessageSenderInfo;
+  messageType: string;
+  /** Signed 64-bit nanoseconds, preserved as text. */
+  timestampNs: string;
+  payloadBase64: string;
+};
+
 /** Public-client host PKCE result. The SDK becomes the sole refresh owner. */
 export type ZitadelSessionCredentials = {
   accessToken: string;

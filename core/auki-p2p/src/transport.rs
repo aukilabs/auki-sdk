@@ -26,7 +26,7 @@ use libp2p::{
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex as AsyncMutex};
 use uuid::Uuid;
 
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "ios", target_os = "android"))]
 use crate::system_dns::SystemDnsTransport;
 use crate::{
     authentication::{authenticate_duplex, SessionRequirements},
@@ -1015,7 +1015,7 @@ enum Command {
     },
 }
 
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 fn build_swarm(
     identity: libp2p::identity::Keypair,
     streams: StreamBehaviour,
@@ -1062,7 +1062,8 @@ fn build_swarm(
         })
 }
 
-#[cfg(target_os = "ios")]
+// Mobile apps cannot read /etc/resolv.conf (Hickory's Unix source): resolve via the OS.
+#[cfg(any(target_os = "ios", target_os = "android"))]
 fn build_swarm(
     identity: libp2p::identity::Keypair,
     streams: StreamBehaviour,
@@ -1628,7 +1629,7 @@ fn error_chain_contains_dns_failure(error: &(dyn StdError + 'static)) -> bool {
     if error.is::<hickory_resolver::ResolveError>() {
         return true;
     }
-    #[cfg(any(test, target_os = "ios"))]
+    #[cfg(any(test, target_os = "ios", target_os = "android"))]
     if error.is::<crate::system_dns::SystemDnsError>() {
         return true;
     }

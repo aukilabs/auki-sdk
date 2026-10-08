@@ -136,6 +136,7 @@ mod tests {
     fn snapshot(policy: AukiRelayConfig) -> RelayBookingSnapshot {
         let now = Utc::now();
         RelayBookingSnapshot {
+            billing: None,
             booking_id: Uuid::new_v4(),
             mode: booking_mode(policy),
             state: RelayBookingState::Active,

@@ -23,6 +23,7 @@ pub(crate) struct RelayFence {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ReadyRelay {
+    pub(crate) billing: Option<auki_relay_booking::RelayBillingAcceptance>,
     pub(crate) booking_id: Uuid,
     pub(crate) requested_until: chrono::DateTime<chrono::Utc>,
     pub(crate) authority_expires_at: chrono::DateTime<chrono::Utc>,
@@ -80,6 +81,7 @@ pub(crate) fn ready_relay(
     )?;
 
     Ok(Some(ReadyRelay {
+        billing: snapshot.billing.clone(),
         booking_id: snapshot.booking_id,
         requested_until: snapshot.requested_until,
         authority_expires_at: snapshot.authority_expires_at,
@@ -100,6 +102,7 @@ pub(crate) fn matches_ready_relay(
 ) -> Result<bool, ReadyRelayError> {
     Ok(ready_relay(snapshot, policy)?.is_some_and(|current| {
         current.booking_id == pinned.booking_id
+            && current.billing == pinned.billing
             && current.fence == pinned.fence
             && current.provider == pinned.provider
     }))
@@ -181,6 +184,7 @@ mod tests {
         let relay = Identity::generate().peer_id();
         let assigned = slot_state == RelaySlotState::Ready;
         RelayBookingSnapshot {
+            billing: None,
             booking_id: Uuid::new_v4(),
             mode: booking_mode(policy()),
             state: RelayBookingState::Active,

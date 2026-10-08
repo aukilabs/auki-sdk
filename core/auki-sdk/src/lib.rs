@@ -83,6 +83,7 @@ pub use auki_p2p::{
     AuthenticatedRouteStream, RouteCatalogError, RouteCatalogStatus, RouteFence, RouteSnapshot,
     validate_relay_circuit_routes,
 };
+pub use auki_relay_booking::RelayBillingAcceptance;
 #[cfg(not(target_arch = "wasm32"))]
 pub use authority::{ExternalAuthorityRefreshRequest, ExternalAuthorityUpdate};
 #[cfg(not(target_arch = "wasm32"))]

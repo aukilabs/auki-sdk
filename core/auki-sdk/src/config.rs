@@ -188,6 +188,7 @@ impl InitialPeerRoutes {
 ///
 #[derive(Clone, Debug)]
 pub struct AukiPeerConfig {
+    relay_billing: Option<auki_relay_booking::RelayBillingAcceptance>,
     dms_base_url: Url,
     dds_tracker: Option<crate::DdsTrackerConfig>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -210,6 +211,7 @@ impl AukiPeerConfig {
     pub fn new(dms_base_url: impl AsRef<str>) -> Result<Self, AukiPeerConfigError> {
         let dms_base_url = parse_dms_base_url(dms_base_url.as_ref())?;
         Ok(Self {
+            relay_billing: None,
             dms_base_url,
             dds_tracker: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -365,6 +367,21 @@ impl AukiPeerConfig {
         validate_local_route_capacity(self.advertised_direct_routes.len(), Some(relay))?;
         self.relay = Some(relay);
         Ok(self)
+    }
+
+    /// Opt in to this exact price and ceiling. An approved organization funding
+    /// allocation in NCS is also required. Defaults and language bindings remain free.
+    pub fn with_relay_billing(
+        mut self,
+        billing: auki_relay_booking::RelayBillingAcceptance,
+    ) -> Result<Self, auki_relay_booking::RelayBookingClientError> {
+        billing.validate()?;
+        self.relay_billing = Some(billing);
+        Ok(self)
+    }
+
+    pub(crate) fn relay_billing(&self) -> Option<&auki_relay_booking::RelayBillingAcceptance> {
+        self.relay_billing.as_ref()
     }
 
     /// Enable the explicitly selected DDS discovery behavior.

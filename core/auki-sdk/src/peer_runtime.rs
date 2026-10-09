@@ -579,12 +579,22 @@ impl AukiPeer {
         let verification_keys = initial_authority.initial_verification_keys();
         let verifier = DdsTokenVerifier::from_keys(verification_keys)
             .map_err(AukiPeerStartError::Transport)?;
+        #[cfg(not(test))]
         let node = Node::start(
             identity,
             verifier,
             config.listen_addresses().iter().cloned(),
-        )
-        .map_err(AukiPeerStartError::Transport)?;
+        );
+        #[cfg(test)]
+        let node = match &config.test_transport {
+            Some(transport) => transport.start(identity, verifier, config.listen_addresses()),
+            None => Node::start(
+                identity,
+                verifier,
+                config.listen_addresses().iter().cloned(),
+            ),
+        };
+        let node = node.map_err(AukiPeerStartError::Transport)?;
         let mut listen_addresses =
             match tokio::time::timeout(LISTENER_STARTUP_TIMEOUT, node.wait_for_listeners()).await {
                 Ok(Ok(addresses)) => addresses,
@@ -659,17 +669,18 @@ impl AukiPeer {
                         return Err(AukiPeerStartError::Relay(AukiPeerRelayError::client(error)));
                     }
                 };
-                let coordinator_config =
-                    match relay_coordinator_config(relay_config, config.relay_transport()) {
-                        Ok(config) => config,
-                        Err(error) => {
-                            authority.shutdown().await;
-                            node.shutdown_now().await;
-                            return Err(AukiPeerStartError::Relay(AukiPeerRelayError::client(
-                                error,
-                            )));
-                        }
-                    };
+                let coordinator_config = match relay_coordinator_config(
+                    relay_config,
+                    config.relay_transport(),
+                    config.relay_billing().cloned(),
+                ) {
+                    Ok(config) => config,
+                    Err(error) => {
+                        authority.shutdown().await;
+                        node.shutdown_now().await;
+                        return Err(AukiPeerStartError::Relay(AukiPeerRelayError::client(error)));
+                    }
+                };
                 let coordinator = loop {
                     match RelayBookingCoordinator::start(
                         client.clone(),
@@ -1058,8 +1069,10 @@ async fn cleanup_relay_after_startup_failure(relay: Option<RelayBookingCoordinat
 fn relay_coordinator_config(
     relay: AukiRelayConfig,
     transport: auki_p2p::RelayBaseTransport,
+    billing: Option<auki_relay_booking::RelayBillingAcceptance>,
 ) -> Result<RelayCoordinatorConfig, RelayBookingClientError> {
     Ok(RelayCoordinatorConfig {
+        billing,
         transport,
         idempotency_key: RelayIdempotencyKey::new(format!("auki-sdk-relay-{}", Uuid::new_v4()))?,
         mode: booking_mode(relay),
@@ -2526,10 +2539,11 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVMaw1idALRBkwGGeONdlTx6jAiqD
     #[test]
     fn relay_start_configs_use_fresh_keys_and_clones_retain_one_key() {
         let relay = AukiRelayConfig::default();
-        let first = relay_coordinator_config(relay, auki_p2p::RelayBaseTransport::Tcp).unwrap();
+        let first =
+            relay_coordinator_config(relay, auki_p2p::RelayBaseTransport::Tcp, None).unwrap();
         let retry = first.clone();
         let next_start =
-            relay_coordinator_config(relay, auki_p2p::RelayBaseTransport::Tcp).unwrap();
+            relay_coordinator_config(relay, auki_p2p::RelayBaseTransport::Tcp, None).unwrap();
         assert_eq!(first.idempotency_key, retry.idempotency_key);
         assert_ne!(first.idempotency_key, next_start.idempotency_key);
     }

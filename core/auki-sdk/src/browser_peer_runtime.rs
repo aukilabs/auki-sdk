@@ -159,9 +159,13 @@ impl AukiPeer {
                     RelayBookingClient::new(config.dms_base().clone(), authority.clone())?;
                 let acquisition_booking_id = Cell::new(None);
                 let ready = {
-                    let acquisition =
-                        acquire_ready_relay(&relay_client, &acquisition_booking_id, relay_policy)
-                            .fuse();
+                    let acquisition = acquire_ready_relay(
+                        &relay_client,
+                        &acquisition_booking_id,
+                        relay_policy,
+                        config.relay_billing(),
+                    )
+                    .fuse();
                     let stopped = node.wait_stopped().fuse();
                     pin_mut!(acquisition, stopped);
                     match select(acquisition, stopped).await {
@@ -544,12 +548,14 @@ async fn acquire_ready_relay(
     client: &RelayBookingClient,
     adopted_booking_id: &Cell<Option<Uuid>>,
     policy: AukiRelayConfig,
+    billing: Option<&auki_relay_booking::RelayBillingAcceptance>,
 ) -> Result<ReadyRelay, AukiPeerError> {
-    let request = CreateRelayBookingRequest::new(
+    let mut request = CreateRelayBookingRequest::new(
         booking_mode(policy),
         policy.requested_duration.as_secs(),
         policy.relay_count,
     )?;
+    request.billing = billing.cloned();
     let idempotency_key =
         RelayIdempotencyKey::new(format!("auki-sdk-browser-relay-{}", Uuid::new_v4()))?;
 
@@ -575,6 +581,11 @@ async fn acquire_ready_relay(
         };
         if created_by_this_attempt {
             adopted_booking_id.set(Some(snapshot.booking_id));
+        }
+        if snapshot.billing.as_ref() != billing {
+            return Err(AukiPeerError::RelaySelection {
+                reason: "active booking has a different spending policy".into(),
+            });
         }
         let ready = ready_relay(&snapshot, policy)?;
         adopted_booking_id.set(Some(snapshot.booking_id));
@@ -1378,6 +1389,9 @@ async fn relay_iteration(
                     relay_usable_until(pinned),
                     now,
                 );
+            }
+            Err(error) if error.http_code() == Some(RelayErrorCode::PaymentRequired) => {
+                *next_renew = relay_usable_until(pinned);
             }
             Err(error) if error.is_retryable() => {
                 let retry = error.retry_after().unwrap_or(RELAY_RETRY);

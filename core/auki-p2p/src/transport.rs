@@ -226,6 +226,51 @@ impl Node {
         resolver_config: libp2p::dns::ResolverConfig,
         resolver_options: libp2p::dns::ResolverOpts,
     ) -> P2PResult<Self> {
+        Self::start_with_dns_and_tls(
+            identity,
+            verifier,
+            listen_addresses,
+            resolver_config,
+            resolver_options,
+            libp2p::websocket::tls::Config::client(),
+        )
+    }
+
+    /// Local fixture seam: use an isolated resolver and optionally trust one
+    /// ephemeral CA. Certificate signature, hostname and expiry checks remain
+    /// enabled. This method is absent from ordinary production builds.
+    #[cfg(feature = "test-support")]
+    pub fn start_with_test_transport(
+        identity: Identity,
+        verifier: DdsTokenVerifier,
+        listen_addresses: impl IntoIterator<Item = Multiaddr>,
+        resolver_config: libp2p::dns::ResolverConfig,
+        resolver_options: libp2p::dns::ResolverOpts,
+        ca_der: Option<Vec<u8>>,
+    ) -> P2PResult<Self> {
+        let mut tls = libp2p::websocket::tls::Config::builder();
+        if let Some(ca) = ca_der {
+            tls.add_trust(&libp2p::websocket::tls::Certificate::new(ca))
+                .map_err(|error| Error::TransportBuild(error.to_string()))?;
+        }
+        Self::start_with_dns_and_tls(
+            identity,
+            verifier,
+            listen_addresses,
+            resolver_config,
+            resolver_options,
+            tls.finish(),
+        )
+    }
+
+    fn start_with_dns_and_tls(
+        identity: Identity,
+        verifier: DdsTokenVerifier,
+        listen_addresses: impl IntoIterator<Item = Multiaddr>,
+        resolver_config: libp2p::dns::ResolverConfig,
+        resolver_options: libp2p::dns::ResolverOpts,
+        tls_config: libp2p::websocket::tls::Config,
+    ) -> P2PResult<Self> {
         let stream_behaviour = StreamBehaviour::new();
         let control = stream_behaviour.new_control();
         let targeted_stream_behaviour = TargetedStreamBehaviour::with_relay_recovery();
@@ -236,6 +281,7 @@ impl Node {
             targeted_stream_behaviour,
             resolver_config,
             resolver_options,
+            tls_config,
         )?;
         Self::start_swarm(
             identity,
@@ -1114,17 +1160,20 @@ fn build_swarm_with_dns_config(
     targeted_streams: TargetedStreamBehaviour,
     resolver_config: libp2p::dns::ResolverConfig,
     resolver_options: libp2p::dns::ResolverOpts,
+    tls_config: libp2p::websocket::tls::Config,
 ) -> P2PResult<Swarm<Behaviour>> {
     SwarmBuilder::with_existing_identity(identity)
         .with_tokio()
         // WSS must match before DNS/TCP: DNS accepts the prefix even when
         // TCP will reject the trailing /wss asynchronously, preventing fallback.
         .with_other_transport(|keypair| -> Result<_, Box<dyn StdError + Send + Sync>> {
-            let transport = libp2p::websocket::Config::new(libp2p::dns::tokio::Transport::custom(
-                tcp::tokio::Transport::new(tcp::Config::default().nodelay(true)),
-                resolver_config.clone(),
-                resolver_options.clone(),
-            ));
+            let mut transport =
+                libp2p::websocket::Config::new(libp2p::dns::tokio::Transport::custom(
+                    tcp::tokio::Transport::new(tcp::Config::default().nodelay(true)),
+                    resolver_config.clone(),
+                    resolver_options.clone(),
+                ));
+            transport.set_tls_config(tls_config);
             Ok(transport
                 .upgrade(Version::V1Lazy)
                 .authenticate(noise::Config::new(keypair)?)

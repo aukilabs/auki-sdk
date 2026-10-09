@@ -15,6 +15,13 @@ mod runtime_policy;
 mod served_protocols;
 mod status;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "../../../test-support/circuit-handover/fixtures.rs"]
+#[allow(dead_code)]
+mod circuit_handover_fixture;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod paid_peer_e2e;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use auki_tasks::{
     AukiComputeCredential, AukiDmsTasks, AukiRobotCredential, ComputeConfig, MachineCredential,

@@ -13,9 +13,7 @@ use crate::relay::{
 
 use super::*;
 
-#[path = "../../../../../test-support/circuit-handover/fixtures.rs"]
-#[allow(dead_code)]
-mod fixture;
+use crate::circuit_handover_fixture as fixture;
 mod paid_transport;
 #[path = "tests/stalled_connection.rs"]
 mod stalled_connection;

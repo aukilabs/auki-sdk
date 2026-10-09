@@ -9,6 +9,10 @@ authors.workspace = true
 description = "DDS-authenticated Auki P2P runtime, exact-route transport, and relay routing"
 readme = "README.md"
 
+[features]
+# Local cross-crate fixtures only; never enabled by a shipping SDK dependency.
+test-support = []
+
 [dependencies]
 async-channel = { workspace = true }
 chrono = { workspace = true }

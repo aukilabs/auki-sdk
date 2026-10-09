@@ -38,5 +38,21 @@ provider recovery deadline (up to five minutes, capped by booking authority), re
 replacement route keeps the same booking/slot. Cancellation removes routes and
 releases the credit hold. Add `--evm --safe-service` on Docker Desktop for macOS to
 follow both providers' earnings through a real two-owner Safe and token claim.
-This combined test covers native TCP and the coordinator; the public facade's
-identity supervisor, browser WSS ingress and capacity soak need separate coverage.
+The runner also invokes `paid_wss_refresh_expiry_and_persistent_restart` through
+the native `AukiPeerBootstrap` / `AukiPeer` facade. It verifies 27 relayed 8-KiB
+WSS echoes, issuer/hostname TLS rejection, the actual scheduled credential refresh
+and a 401-triggered App service-token exchange, persistent same-Peer-ID restart,
+and fail-closed literal expiry during a DDS outage. Refresh keeps the reservation;
+an explicit restart creates a new booking. Both ledgers must conserve exact time,
+charges and the 80% entitlement, stop at expiry and release every hold.
+
+API/DDS issuance is a local App fixture with one-time bearer-bound Ed25519 proofs.
+It ages otherwise valid 30-minute credentials to exercise real timers. DNS and an
+ephemeral CA are supplied per test instance; the CA is never installed in the OS.
+The P2P `test-support` feature is enabled only by the SDK's native dev-dependency;
+the facade transport seam is compiled only for unit tests. Ordinary builds retain
+their resolver and WebPKI roots. No certificate or token verification is disabled.
+
+Use `--transport-scenario identity` or `failover` for a focused run; the default
+is both. Browser execution, real API/DDS login/issuance, hosted TLS/DNS, and
+launch-scale throughput still require separate coverage.

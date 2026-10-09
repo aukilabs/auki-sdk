@@ -40,6 +40,7 @@ wasm-bindgen-futures = { workspace = true }
 auki-tasks = { path = "../auki-tasks" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+auki-p2p = { path = "../auki-p2p", features = ["test-support"] }
 hickory-resolver = "0.25.2"
 httpmock = "0.8.2"
 jsonwebtoken = "9.3.1"

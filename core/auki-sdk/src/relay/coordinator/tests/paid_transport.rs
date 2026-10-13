@@ -8,7 +8,7 @@ use auki_p2p::{
 };
 use auki_relay_booking::{
     RelayAuthorizationError, RelayAuthorizationProvider, RelayAuthorizationSnapshot,
-    RelayBillingAcceptance, RelayBookingClient,
+    RelayBookingClient,
 };
 use futures::io::{AsyncReadExt, AsyncWriteExt};
 use serde::Deserialize;
@@ -156,7 +156,6 @@ async fn paid_booking_renews_and_recovers_real_provider_loss() {
         RouteCatalog::new(target.peer_id(), vec![], RouteCatalogLimits::new(2, 1)).unwrap();
     let lifecycle = CancellationToken::new();
     let mut config = coordinator_config("local-real-paid-transport");
-    config.billing = Some(RelayBillingAcceptance::new("local-v1", "1", "1").unwrap());
     config.status_poll_interval = Duration::from_secs(1);
     config.http_timeout = Duration::from_secs(10);
     config.retry_min = Duration::from_secs(1);

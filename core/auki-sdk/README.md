@@ -48,35 +48,23 @@ server certificates against the WebPKI root store; there is no insecure bypass.
 The replacement operation is also available on the Rust WASM facade. Language
 binding APIs are unchanged.
 
-## Paid relay opt-in (Rust native and WASM)
+## Relay billing
 
-Relay bookings remain free by default. On an explicitly enrolled organization,
-configure an exact published policy, decimal slot-hour price and per-booking
-credit ceiling before starting the peer:
+When the backend enables relay billing, existing peer configuration books relay
+capacity using the organization's available network credits. No SDK billing
+option, price acceptance, per-booking cap, or language-binding change is needed.
+DMS selects the price and retains it for the booking. Existing SDKs can still
+book successfully; older versions may surface HTTP 402 as a generic failure.
 
-```rust,ignore
-use auki_sdk::RelayBillingAcceptance;
+Ready external reservations are charged by elapsed time, including idle time.
+TCP and WSS routes to one provider count as one slot. Same-organization and
+unfilled service incur no charge. Public bookings can still hold credit for
+possible external assignments; unused holds are returned when the booking ends.
+Dedicated bookings remain free.
 
-// Arithmetic example only: use the operator's published policy and price.
-let billing = RelayBillingAcceptance::new("relay-v1", "1", "10")?;
-let config = config.with_relay_billing(billing)?;
-```
-
-DMS enrollment and an NCS-backed organization allowance are also required; a P2P
-credential or network-credit balance does not authorize payment on its own.
-Amounts are positive decimal strings with at most six fractional places. Each
-ready external slot is billed by DMS elapsed reservation time, including idle
-time. TCP/WSS to one provider count as one slot. Same-org and unfilled slots earn
-no charge, although the booking can hold credit for possible later assignments.
-
-The runtime pins the accepted policy/price/ceiling and refuses to adopt an active
-booking with different billing terms. Renewal keeps the original ceiling;
-`payment_required` stops further renewal without discarding still-valid funded
-authority. An expired paid create replay never silently buys a replacement with
-a fresh ceiling. Starting a new paid booking is a new explicit application
-decision; the ceiling is not a lifetime cap across separate peer starts.
-
-Use a compatible DMS/DDS/NCS rollout before enabling this option. Python, Swift,
-Web and Expo binding APIs have no new paid setting in this change and continue
-to omit billing acceptance. Native and WASM Rust facades support it. The SDK
-emits no traffic receipts or authoritative charge reports.
+`payment_required` on create means there is insufficient available credit for
+funding. On renewal, native and WASM runtimes stop requesting extensions and keep
+polling/using the existing funded authority until its deadline. Authentication
+refresh does not solve a balance rejection. The application can top up the
+organization and start again through its existing peer lifecycle. The SDK emits
+no usage receipts or authoritative charge reports.

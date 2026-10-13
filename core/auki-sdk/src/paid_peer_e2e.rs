@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::{
     AukiPeer, AukiPeerBootstrap, AukiPeerConfig, AukiPeerStatus, AukiProtocolRegistration,
     AukiProtocolSpec, AukiRelayConfig, AukiRelayMode, AuthClient, AuthEnvironment, Credentials,
-    DomainSelection, RelayBillingAcceptance,
+    DomainSelection,
 };
 
 use crate::circuit_handover_fixture as fixture;
@@ -167,8 +167,6 @@ async fn paid_wss_refresh_expiry_and_persistent_restart() {
             )
             .unwrap(),
         )
-        .unwrap()
-        .with_relay_billing(RelayBillingAcceptance::new("local-v1", "1", "1").unwrap())
         .unwrap();
     config.test_transport = Some(transport.clone());
     let outbound = config.clone().without_relay();

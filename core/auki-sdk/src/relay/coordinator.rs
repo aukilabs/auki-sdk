@@ -481,7 +481,6 @@ impl RelayRouteRegistry for auki_p2p::RouteCatalog {
 
 #[derive(Clone, Debug)]
 pub(crate) struct RelayCoordinatorConfig {
-    pub(crate) billing: Option<auki_relay_booking::RelayBillingAcceptance>,
     pub(crate) transport: RelayBaseTransport,
     pub(crate) idempotency_key: RelayIdempotencyKey,
     pub(crate) mode: RelayBookingMode,
@@ -607,12 +606,11 @@ impl RelayBookingCoordinator {
                 snapshot
             }
             None => {
-                let mut request = CreateRelayBookingRequest::new(
+                let request = CreateRelayBookingRequest::new(
                     config.mode,
                     config.requested_duration_seconds,
                     config.relay_count,
                 )?;
-                request.billing = config.billing.clone();
                 let response = bounded_control_call(
                     config.http_timeout,
                     RelayOperation::Create,
@@ -622,9 +620,6 @@ impl RelayBookingCoordinator {
                 if response.snapshot.state == RelayBookingState::Active {
                     response.snapshot
                 } else {
-                    if config.billing.is_some() {
-                        return Err(RelayCoordinatorError::AuthorityEnded);
-                    }
                     let replacement_key =
                         RelayIdempotencyKey::new(format!("auki-sdk-relay-{}", Uuid::new_v4()))?;
                     bounded_control_call(
@@ -2383,9 +2378,6 @@ fn validate_booking_matches(
     snapshot: &RelayBookingSnapshot,
     config: &RelayCoordinatorConfig,
 ) -> Result<(), RelayCoordinatorError> {
-    if snapshot.billing != config.billing {
-        return Err(RelayCoordinatorError::ActiveBookingMismatch);
-    }
     let expected = RelayBookingExpectation {
         mode: config.mode,
         requested_duration_seconds: config.requested_duration_seconds,

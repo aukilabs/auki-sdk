@@ -873,81 +873,20 @@ impl fmt::Debug for RelayIdempotencyKey {
     }
 }
 
-/// Explicit price acceptance and a total ceiling for one booking. Amounts are
-/// decimal strings in network credits, never floating point.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RelayBillingAcceptance {
-    pub policy_version: String,
-    pub slot_hour_price: String,
-    pub max_credits: String,
-}
-
-impl RelayBillingAcceptance {
-    pub fn new(
-        policy_version: impl Into<String>,
-        slot_hour_price: impl Into<String>,
-        max_credits: impl Into<String>,
-    ) -> Result<Self, RelayBookingClientError> {
-        let value = Self {
-            policy_version: policy_version.into(),
-            slot_hour_price: slot_hour_price.into(),
-            max_credits: max_credits.into(),
-        };
-        value.validate()?;
-        Ok(value)
-    }
-
-    pub fn validate(&self) -> Result<(), RelayBookingClientError> {
-        fn positive_decimal(value: &str) -> bool {
-            let mut parts = value.split('.');
-            let whole = parts.next().unwrap_or_default();
-            let fraction = parts.next();
-            parts.next().is_none()
-                && !whole.is_empty()
-                && whole.len() <= 12
-                && whole.bytes().all(|b| b.is_ascii_digit())
-                && fraction.is_none_or(|f| {
-                    !f.is_empty() && f.len() <= 6 && f.bytes().all(|b| b.is_ascii_digit())
-                })
-                && value.bytes().any(|b| matches!(b, b'1'..=b'9'))
-        }
-        if self.policy_version.is_empty()
-            || self.policy_version.len() > 128
-            || !positive_decimal(&self.slot_hour_price)
-            || !positive_decimal(&self.max_credits)
-        {
-            return Err(RelayBookingClientError::InvalidRequest);
-        }
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CreateRelayBookingRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub billing: Option<RelayBillingAcceptance>,
     pub mode: RelayBookingMode,
     pub requested_duration_seconds: u64,
     pub relay_count: u8,
 }
 
 impl CreateRelayBookingRequest {
-    pub fn with_billing(
-        mut self,
-        acceptance: RelayBillingAcceptance,
-    ) -> Result<Self, RelayBookingClientError> {
-        acceptance.validate()?;
-        self.billing = Some(acceptance);
-        Ok(self)
-    }
     pub fn new(
         mode: RelayBookingMode,
         requested_duration_seconds: u64,
         relay_count: u8,
     ) -> Result<Self, RelayBookingClientError> {
         let request = Self {
-            billing: None,
             mode,
             requested_duration_seconds,
             relay_count,
@@ -957,9 +896,6 @@ impl CreateRelayBookingRequest {
     }
 
     fn validate(&self) -> Result<(), RelayBookingClientError> {
-        if let Some(billing) = &self.billing {
-            billing.validate()?;
-        }
         if !(MIN_BOOKING_DURATION_SECONDS..=MAX_BOOKING_DURATION_SECONDS)
             .contains(&self.requested_duration_seconds)
             || !(MIN_RELAY_COUNT..=MAX_RELAY_COUNT).contains(&self.relay_count)
@@ -1052,8 +988,6 @@ pub struct RelaySlotSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelayBookingSnapshot {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub billing: Option<RelayBillingAcceptance>,
     pub booking_id: Uuid,
     pub mode: RelayBookingMode,
     pub state: RelayBookingState,
@@ -1072,11 +1006,6 @@ pub struct RelayBookingSnapshot {
 impl RelayBookingSnapshot {
     fn validate(&self, operation: RelayOperation) -> Result<(), RelayBookingClientError> {
         let invalid = |reason| RelayBookingClientError::InvalidResponse { operation, reason };
-        if let Some(billing) = &self.billing {
-            billing
-                .validate()
-                .map_err(|_| invalid("invalid relay spending policy"))?;
-        }
         let observed_at = Utc::now();
         if self.booking_id.is_nil()
             || !(MIN_RELAY_COUNT..=MAX_RELAY_COUNT).contains(&self.relay_count)
@@ -1697,6 +1626,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ordinary_create_and_renew_surface_payment_required_without_retrying() {
+        let server = MockServer::start();
+        let booking_id = Uuid::new_v4();
+        let create = server.mock(|when, then| {
+            when.method(POST).path("/relay-bookings").json_body(
+                json!({"mode":"public","requested_duration_seconds":300,"relay_count":1}),
+            );
+            relay_json(
+                then,
+                402,
+                json!({"code":"payment_required","error":"insufficient available credits"}),
+            );
+        });
+        let renew = server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("/relay-bookings/{booking_id}/renew"));
+            relay_json(
+                then,
+                402,
+                json!({"code":"payment_required","error":"insufficient available credits"}),
+            );
+        });
+        let provider = RotatingProvider::new(vec!["requester-token-a", "requester-token-b"]);
+        let client = make_client(&server, Arc::new(provider.clone()));
+        let request = CreateRelayBookingRequest::new(RelayBookingMode::Public, 300, 1).unwrap();
+        let key = RelayIdempotencyKey::new("existing-client").unwrap();
+        for error in [
+            client.create(&key, &request).await.unwrap_err(),
+            client.renew(booking_id).await.unwrap_err(),
+        ] {
+            assert_eq!(error.http_code(), Some(RelayErrorCode::PaymentRequired));
+            assert!(!error.is_retryable());
+            assert!(error.retry_after().is_none());
+        }
+        assert_eq!(
+            provider.index.load(Ordering::SeqCst),
+            0,
+            "a balance rejection must not trigger credential refresh"
+        );
+        create.assert_calls(1);
+        renew.assert_calls(1);
+    }
+
+    #[tokio::test]
     async fn refreshes_once_on_401_and_returns_redacted_conflict_metadata() {
         const SECRET_BODY: &str = "server-secret-that-must-not-escape";
         let server = MockServer::start();
@@ -2232,45 +2205,14 @@ mod billing_tests {
     use super::*;
 
     #[test]
-    fn legacy_requests_cannot_silently_opt_in_to_spending() {
-        let free = CreateRelayBookingRequest::new(RelayBookingMode::Public, 300, 1).unwrap();
-        assert!(
-            serde_json::to_value(&free)
-                .unwrap()
-                .get("billing")
-                .is_none()
-        );
-        let acceptance = RelayBillingAcceptance::new("relay-v1", "1.25", "10").unwrap();
-        let paid = free.with_billing(acceptance.clone()).unwrap();
+    fn booking_request_keeps_the_existing_wire_contract() {
+        let request = CreateRelayBookingRequest::new(RelayBookingMode::Public, 300, 1).unwrap();
         assert_eq!(
-            serde_json::to_value(paid).unwrap()["billing"],
-            serde_json::to_value(acceptance).unwrap()
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({
+                "mode": "public", "requested_duration_seconds": 300, "relay_count": 1
+            })
         );
-    }
-
-    #[test]
-    fn spending_requires_exact_bounded_decimal_amounts() {
-        for value in [
-            "0",
-            "-1",
-            "NaN",
-            "1e3",
-            "0.0000001",
-            "1000000000000",
-            "1.",
-            ".1",
-        ] {
-            assert!(
-                RelayBillingAcceptance::new("v1", value, "10").is_err(),
-                "{value}"
-            );
-            assert!(
-                RelayBillingAcceptance::new("v1", "1", value).is_err(),
-                "{value}"
-            );
-        }
-        assert!(RelayBillingAcceptance::new("", "1", "10").is_err());
-        assert!(RelayBillingAcceptance::new("v1", "0.000001", "0.000001").is_ok());
     }
 
     #[test]

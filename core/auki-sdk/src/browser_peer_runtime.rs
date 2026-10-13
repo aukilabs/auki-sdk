@@ -159,13 +159,9 @@ impl AukiPeer {
                     RelayBookingClient::new(config.dms_base().clone(), authority.clone())?;
                 let acquisition_booking_id = Cell::new(None);
                 let ready = {
-                    let acquisition = acquire_ready_relay(
-                        &relay_client,
-                        &acquisition_booking_id,
-                        relay_policy,
-                        config.relay_billing(),
-                    )
-                    .fuse();
+                    let acquisition =
+                        acquire_ready_relay(&relay_client, &acquisition_booking_id, relay_policy)
+                            .fuse();
                     let stopped = node.wait_stopped().fuse();
                     pin_mut!(acquisition, stopped);
                     match select(acquisition, stopped).await {
@@ -548,14 +544,12 @@ async fn acquire_ready_relay(
     client: &RelayBookingClient,
     adopted_booking_id: &Cell<Option<Uuid>>,
     policy: AukiRelayConfig,
-    billing: Option<&auki_relay_booking::RelayBillingAcceptance>,
 ) -> Result<ReadyRelay, AukiPeerError> {
-    let mut request = CreateRelayBookingRequest::new(
+    let request = CreateRelayBookingRequest::new(
         booking_mode(policy),
         policy.requested_duration.as_secs(),
         policy.relay_count,
     )?;
-    request.billing = billing.cloned();
     let idempotency_key =
         RelayIdempotencyKey::new(format!("auki-sdk-browser-relay-{}", Uuid::new_v4()))?;
 
@@ -581,11 +575,6 @@ async fn acquire_ready_relay(
         };
         if created_by_this_attempt {
             adopted_booking_id.set(Some(snapshot.booking_id));
-        }
-        if snapshot.billing.as_ref() != billing {
-            return Err(AukiPeerError::RelaySelection {
-                reason: "active booking has a different spending policy".into(),
-            });
         }
         let ready = ready_relay(&snapshot, policy)?;
         adopted_booking_id.set(Some(snapshot.booking_id));
@@ -1301,7 +1290,7 @@ async fn supervise_relay(
     stop: async_channel::Receiver<()>,
 ) -> SupervisionEnd {
     let now = Utc::now();
-    let mut next_renew = now + chrono_duration(booking_renewal_delay_at(&pinned, now));
+    let mut next_renew = Some(now + chrono_duration(booking_renewal_delay_at(&pinned, now)));
     let mut next_poll = relay_status_poll_at(
         policy.status_poll_interval,
         relay_usable_until(&pinned),
@@ -1343,13 +1332,14 @@ async fn relay_iteration(
     client: &RelayBookingClient,
     authority: &AuthoritySupervisor,
     pinned: &mut ReadyRelay,
-    next_renew: &mut DateTime<Utc>,
+    next_renew: &mut Option<DateTime<Utc>>,
     next_poll: &mut DateTime<Utc>,
     policy: AukiRelayConfig,
 ) -> Result<(), SupervisorError> {
     let now = Utc::now();
     ensure_relay_usable(pinned, now)?;
-    let wake_at = (*next_renew)
+    let wake_at = next_renew
+        .unwrap_or_else(|| relay_usable_until(pinned))
         .min(*next_poll)
         .min(relay_usable_until(pinned));
     let delay = wake_at
@@ -1375,7 +1365,7 @@ async fn relay_iteration(
     }
     let now = Utc::now();
     ensure_relay_usable(pinned, now)?;
-    let should_renew = now >= *next_renew;
+    let should_renew = next_renew.is_some_and(|at| now >= at);
 
     if should_renew {
         match client.renew(pinned.booking_id).await {
@@ -1383,7 +1373,7 @@ async fn relay_iteration(
                 apply_relay_snapshot(pinned, &snapshot, policy)?;
                 let now = Utc::now();
                 ensure_relay_usable(pinned, now)?;
-                *next_renew = now + chrono_duration(booking_renewal_delay_at(pinned, now));
+                *next_renew = Some(now + chrono_duration(booking_renewal_delay_at(pinned, now)));
                 *next_poll = relay_status_poll_at(
                     policy.status_poll_interval,
                     relay_usable_until(pinned),
@@ -1391,7 +1381,9 @@ async fn relay_iteration(
                 );
             }
             Err(error) if error.http_code() == Some(RelayErrorCode::PaymentRequired) => {
-                *next_renew = relay_usable_until(pinned);
+                // Insufficient credit prevents extension, not use of time that
+                // was already funded. Keep polling until its existing deadline.
+                *next_renew = None;
             }
             Err(error) if error.is_retryable() => {
                 let retry = error.retry_after().unwrap_or(RELAY_RETRY);
@@ -1400,7 +1392,7 @@ async fn relay_iteration(
                 if now >= latest_retry {
                     return Err(SupervisorError::RelayAuthorityEnded);
                 }
-                *next_renew = (now + chrono_duration(retry)).min(latest_retry);
+                *next_renew = Some((now + chrono_duration(retry)).min(latest_retry));
                 warn!(error = %error, ?retry, "browser relay renewal will retry");
             }
             Err(error) => return Err(error.into()),
@@ -1414,7 +1406,7 @@ async fn relay_iteration(
                 apply_relay_snapshot(pinned, &snapshot, policy)?;
                 let now = Utc::now();
                 ensure_relay_usable(pinned, now)?;
-                *next_renew = pull_booking_renewal_forward(*next_renew, pinned, now);
+                *next_renew = next_renew.map(|at| pull_booking_renewal_forward(at, pinned, now));
                 *next_poll = relay_status_poll_at(
                     policy.status_poll_interval,
                     relay_usable_until(pinned),

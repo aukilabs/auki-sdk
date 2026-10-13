@@ -502,7 +502,6 @@ impl RelayRouteRegistry for RecordingRoutes {
 
 fn coordinator_config(idempotency_key: &str) -> RelayCoordinatorConfig {
     RelayCoordinatorConfig {
-        billing: None,
         transport: RelayBaseTransport::Tcp,
         idempotency_key: RelayIdempotencyKey::new(idempotency_key).expect("valid test key"),
         mode: RelayBookingMode::Public,
@@ -519,7 +518,6 @@ fn coordinator_config(idempotency_key: &str) -> RelayCoordinatorConfig {
 fn queued_snapshot(booking_id: Uuid) -> RelayBookingSnapshot {
     let now = chrono::Utc::now();
     RelayBookingSnapshot {
-        billing: None,
         booking_id,
         mode: RelayBookingMode::Public,
         state: RelayBookingState::Active,
@@ -556,7 +554,6 @@ fn ready_snapshot(
 ) -> RelayBookingSnapshot {
     let now = chrono::Utc::now();
     RelayBookingSnapshot {
-        billing: None,
         booking_id,
         mode: RelayBookingMode::Public,
         state: RelayBookingState::Active,
@@ -2244,34 +2241,12 @@ async fn status_polling_is_fast_until_every_requested_slot_is_ready() {
     assert!(stable_delay <= Duration::from_secs(72));
 }
 
-#[test]
-fn active_booking_adoption_requires_identical_spending_acceptance() {
-    let mut snapshot = queued_snapshot(Uuid::new_v4());
-    let mut config = coordinator_config("billing-adoption");
-    snapshot.billing =
-        Some(auki_relay_booking::RelayBillingAcceptance::new("v1", "1", "10").unwrap());
-    assert!(matches!(
-        validate_booking_matches(&snapshot, &config),
-        Err(RelayCoordinatorError::ActiveBookingMismatch)
-    ));
-    config.billing = snapshot.billing.clone();
-    assert!(validate_booking_matches(&snapshot, &config).is_ok());
-    config.billing.as_mut().unwrap().max_credits = "11".into();
-    assert!(matches!(
-        validate_booking_matches(&snapshot, &config),
-        Err(RelayCoordinatorError::ActiveBookingMismatch)
-    ));
-}
-
 #[tokio::test]
 async fn payment_required_keeps_funded_authority_without_another_renewal_attempt() {
     let booking_id = Uuid::new_v4();
     let mut snapshot = queued_snapshot(booking_id);
-    snapshot.billing =
-        Some(auki_relay_booking::RelayBillingAcceptance::new("v1", "1", "10").unwrap());
     snapshot.authority_expires_at = chrono::Utc::now() + chrono::Duration::minutes(3);
-    let mut config = coordinator_config("paid-renew-denied");
-    config.billing = snapshot.billing.clone();
+    let config = coordinator_config("paid-renew-denied");
     let api = Arc::new(ScriptedApi::default());
     api.push_renew(Err(RelayBookingClientError::Http {
         operation: RelayOperation::Renew,
@@ -2292,30 +2267,4 @@ async fn payment_required_keeps_funded_authority_without_another_renewal_attempt
     assert_eq!(actor.snapshot, snapshot);
     assert_eq!(api.calls(), vec![ApiCall::Renew(booking_id)]);
     assert!(actor.next_renew.saturating_duration_since(Instant::now()) > Duration::from_secs(120));
-}
-
-#[tokio::test]
-async fn expired_paid_create_replay_does_not_reset_the_spending_ceiling() {
-    let mut config = coordinator_config("paid-expired-replay");
-    config.billing =
-        Some(auki_relay_booking::RelayBillingAcceptance::new("v1", "1", "10").unwrap());
-    let mut snapshot = queued_snapshot(Uuid::new_v4());
-    snapshot.billing = config.billing.clone();
-    snapshot.state = RelayBookingState::Expired;
-    let api = Arc::new(ScriptedApi::default());
-    api.push_active(Ok(None));
-    api.push_create(Ok(replayed_create(snapshot)));
-    let result = RelayBookingCoordinator::start_with_backends(
-        api.clone(),
-        Arc::new(PendingStartBackend::new()),
-        Arc::new(RecordingRoutes::default()),
-        config,
-    )
-    .await;
-    assert!(matches!(result, Err(RelayCoordinatorError::AuthorityEnded)));
-    assert_eq!(
-        api.calls().len(),
-        2,
-        "one active lookup and the original create only"
-    );
 }

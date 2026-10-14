@@ -736,6 +736,7 @@ fn validate_error_status(
     code: RelayErrorCode,
 ) -> Result<(), RelayBookingClientError> {
     let valid_status = match code {
+        RelayErrorCode::PaymentRequired => status == StatusCode::PAYMENT_REQUIRED,
         RelayErrorCode::InvalidRequest
         | RelayErrorCode::MissingIdempotencyKey
         | RelayErrorCode::InvalidIdempotencyKey => status == StatusCode::BAD_REQUEST,
@@ -776,7 +777,8 @@ fn validate_error_status(
         ),
         RelayOperation::Create => matches!(
             code,
-            RelayErrorCode::Unauthorized
+            RelayErrorCode::PaymentRequired
+                | RelayErrorCode::Unauthorized
                 | RelayErrorCode::InvalidRequest
                 | RelayErrorCode::MissingIdempotencyKey
                 | RelayErrorCode::InvalidIdempotencyKey
@@ -792,7 +794,8 @@ fn validate_error_status(
         ),
         RelayOperation::Renew => matches!(
             code,
-            RelayErrorCode::Unauthorized
+            RelayErrorCode::PaymentRequired
+                | RelayErrorCode::Unauthorized
                 | RelayErrorCode::InvalidRequest
                 | RelayErrorCode::InvalidRobotPrincipal
                 | RelayErrorCode::InvalidRequesterPrincipal
@@ -1153,6 +1156,7 @@ impl RelayBookingSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RelayErrorCode {
+    PaymentRequired,
     Unauthorized,
     InvalidRequest,
     MissingIdempotencyKey,
@@ -1176,6 +1180,7 @@ pub enum RelayErrorCode {
 impl RelayErrorCode {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::PaymentRequired => "payment_required",
             Self::Unauthorized => "unauthorized",
             Self::InvalidRequest => "invalid_request",
             Self::MissingIdempotencyKey => "missing_idempotency_key",
@@ -1618,6 +1623,50 @@ mod tests {
         renew.assert_calls(1);
         failure.assert_calls(1);
         delete.assert_calls(1);
+    }
+
+    #[tokio::test]
+    async fn ordinary_create_and_renew_surface_payment_required_without_retrying() {
+        let server = MockServer::start();
+        let booking_id = Uuid::new_v4();
+        let create = server.mock(|when, then| {
+            when.method(POST).path("/relay-bookings").json_body(
+                json!({"mode":"public","requested_duration_seconds":300,"relay_count":1}),
+            );
+            relay_json(
+                then,
+                402,
+                json!({"code":"payment_required","error":"insufficient available credits"}),
+            );
+        });
+        let renew = server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("/relay-bookings/{booking_id}/renew"));
+            relay_json(
+                then,
+                402,
+                json!({"code":"payment_required","error":"insufficient available credits"}),
+            );
+        });
+        let provider = RotatingProvider::new(vec!["requester-token-a", "requester-token-b"]);
+        let client = make_client(&server, Arc::new(provider.clone()));
+        let request = CreateRelayBookingRequest::new(RelayBookingMode::Public, 300, 1).unwrap();
+        let key = RelayIdempotencyKey::new("existing-client").unwrap();
+        for error in [
+            client.create(&key, &request).await.unwrap_err(),
+            client.renew(booking_id).await.unwrap_err(),
+        ] {
+            assert_eq!(error.http_code(), Some(RelayErrorCode::PaymentRequired));
+            assert!(!error.is_retryable());
+            assert!(error.retry_after().is_none());
+        }
+        assert_eq!(
+            provider.index.load(Ordering::SeqCst),
+            0,
+            "a balance rejection must not trigger credential refresh"
+        );
+        create.assert_calls(1);
+        renew.assert_calls(1);
     }
 
     #[tokio::test]
@@ -2147,6 +2196,50 @@ mod tests {
                 "future_metadata": true
             }))
             .is_ok()
+        );
+    }
+}
+
+#[cfg(test)]
+mod billing_tests {
+    use super::*;
+
+    #[test]
+    fn booking_request_keeps_the_existing_wire_contract() {
+        let request = CreateRelayBookingRequest::new(RelayBookingMode::Public, 300, 1).unwrap();
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({
+                "mode": "public", "requested_duration_seconds": 300, "relay_count": 1
+            })
+        );
+    }
+
+    #[test]
+    fn payment_required_is_only_a_create_or_renew_financial_error() {
+        for operation in [RelayOperation::Create, RelayOperation::Renew] {
+            validate_error_status(
+                operation,
+                StatusCode::PAYMENT_REQUIRED,
+                RelayErrorCode::PaymentRequired,
+            )
+            .unwrap();
+            assert!(
+                validate_error_status(
+                    operation,
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    RelayErrorCode::PaymentRequired
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            validate_error_status(
+                RelayOperation::Active,
+                StatusCode::PAYMENT_REQUIRED,
+                RelayErrorCode::PaymentRequired
+            )
+            .is_err()
         );
     }
 }

@@ -579,12 +579,22 @@ impl AukiPeer {
         let verification_keys = initial_authority.initial_verification_keys();
         let verifier = DdsTokenVerifier::from_keys(verification_keys)
             .map_err(AukiPeerStartError::Transport)?;
+        #[cfg(not(test))]
         let node = Node::start(
             identity,
             verifier,
             config.listen_addresses().iter().cloned(),
-        )
-        .map_err(AukiPeerStartError::Transport)?;
+        );
+        #[cfg(test)]
+        let node = match &config.test_transport {
+            Some(transport) => transport.start(identity, verifier, config.listen_addresses()),
+            None => Node::start(
+                identity,
+                verifier,
+                config.listen_addresses().iter().cloned(),
+            ),
+        };
+        let node = node.map_err(AukiPeerStartError::Transport)?;
         let mut listen_addresses =
             match tokio::time::timeout(LISTENER_STARTUP_TIMEOUT, node.wait_for_listeners()).await {
                 Ok(Ok(addresses)) => addresses,

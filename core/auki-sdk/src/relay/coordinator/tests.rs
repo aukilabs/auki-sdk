@@ -13,6 +13,8 @@ use crate::relay::{
 
 use super::*;
 
+use crate::circuit_handover_fixture as fixture;
+mod paid_transport;
 #[path = "tests/stalled_connection.rs"]
 mod stalled_connection;
 
@@ -2237,4 +2239,32 @@ async fn status_polling_is_fast_until_every_requested_slot_is_ready() {
     let stable_delay = actor.status_poll_delay();
     assert!(stable_delay >= Duration::from_secs(48));
     assert!(stable_delay <= Duration::from_secs(72));
+}
+
+#[tokio::test]
+async fn payment_required_keeps_funded_authority_without_another_renewal_attempt() {
+    let booking_id = Uuid::new_v4();
+    let mut snapshot = queued_snapshot(booking_id);
+    snapshot.authority_expires_at = chrono::Utc::now() + chrono::Duration::minutes(3);
+    let config = coordinator_config("paid-renew-denied");
+    let api = Arc::new(ScriptedApi::default());
+    api.push_renew(Err(RelayBookingClientError::Http {
+        operation: RelayOperation::Renew,
+        status: reqwest::StatusCode::PAYMENT_REQUIRED,
+        code: RelayErrorCode::PaymentRequired,
+        retry_after: None,
+        location: None,
+    }));
+    let (mut actor, _commands) = actor_harness(
+        api.clone(),
+        Arc::new(PendingStartBackend::new()),
+        Arc::new(RecordingRoutes::default()),
+        config,
+        snapshot.clone(),
+    );
+    actor.renew().await.unwrap();
+    assert!(!actor.control_fenced);
+    assert_eq!(actor.snapshot, snapshot);
+    assert_eq!(api.calls(), vec![ApiCall::Renew(booking_id)]);
+    assert!(actor.next_renew.saturating_duration_since(Instant::now()) > Duration::from_secs(120));
 }

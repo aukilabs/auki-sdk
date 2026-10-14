@@ -188,6 +188,9 @@ impl InitialPeerRoutes {
 ///
 #[derive(Clone, Debug)]
 pub struct AukiPeerConfig {
+    // Per-instance DNS/CA fixture configuration, compiled only into unit tests.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) test_transport: Option<crate::paid_peer_e2e::TestTransport>,
     dms_base_url: Url,
     dds_tracker: Option<crate::DdsTrackerConfig>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -210,6 +213,8 @@ impl AukiPeerConfig {
     pub fn new(dms_base_url: impl AsRef<str>) -> Result<Self, AukiPeerConfigError> {
         let dms_base_url = parse_dms_base_url(dms_base_url.as_ref())?;
         Ok(Self {
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            test_transport: None,
             dms_base_url,
             dds_tracker: None,
             #[cfg(not(target_arch = "wasm32"))]

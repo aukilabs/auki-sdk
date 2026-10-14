@@ -3,9 +3,6 @@ use super::*;
 use auki_p2p::{ApplicationProtocol, ExactRoute, PeerRole, Protocol};
 use futures::io::{AsyncReadExt, AsyncWriteExt};
 
-#[path = "../../../../../../test-support/circuit-handover/fixtures.rs"]
-#[allow(dead_code)]
-mod fixture;
 use fixture::*;
 
 struct RecoveringDms {

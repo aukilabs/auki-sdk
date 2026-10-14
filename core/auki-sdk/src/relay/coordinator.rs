@@ -1038,6 +1038,16 @@ impl CoordinatorActor {
             }
             Err(error) => {
                 warn!(error = %error, "relay booking authority renewal failed");
+                if error.http_code() == Some(RelayErrorCode::PaymentRequired) {
+                    self.next_renew = Instant::now()
+                        + self
+                            .snapshot
+                            .authority_expires_at
+                            .signed_duration_since(chrono::Utc::now())
+                            .to_std()
+                            .unwrap_or_default();
+                    return Ok(());
+                }
                 if control_error_ends_authority(&error) {
                     self.fence_control_plane().await?;
                     return Err(RelayCoordinatorError::AuthorityEnded);

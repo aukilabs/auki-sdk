@@ -47,3 +47,24 @@ transport. Both addresses remain published from the same booking. WSS validates
 server certificates against the WebPKI root store; there is no insecure bypass.
 The replacement operation is also available on the Rust WASM facade. Language
 binding APIs are unchanged.
+
+## Relay billing
+
+When the backend enables relay billing, existing peer configuration books relay
+capacity using the organization's available network credits. No SDK billing
+option, price acceptance, per-booking cap, or language-binding change is needed.
+DMS selects the price and retains it for the booking. Existing SDKs can still
+book successfully; older versions may surface HTTP 402 as a generic failure.
+
+Ready external reservations are charged by elapsed time, including idle time.
+TCP and WSS routes to one provider count as one slot. Same-organization and
+unfilled service incur no charge. Public bookings can still hold credit for
+possible external assignments; unused holds are returned when the booking ends.
+Dedicated bookings remain free.
+
+`payment_required` on create means there is insufficient available credit for
+funding. On renewal, native and WASM runtimes stop requesting extensions and keep
+polling/using the existing funded authority until its deadline. Authentication
+refresh does not solve a balance rejection. The application can top up the
+organization and start again through its existing peer lifecycle. The SDK emits
+no usage receipts or authoritative charge reports.

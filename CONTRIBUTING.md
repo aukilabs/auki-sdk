@@ -85,7 +85,8 @@ Check each affected binding using its README and test harnesses:
   environment with the documented Maturin flags before running `python -m pytest`.
 - [UniFFI for iOS and Android](core/bindings/uniffi/auki-sdk-uniffi/README.md) and
   [Expo](core/bindings/expo/README.md): build with their platform toolchains and
-  run the relevant harnesses in `test-support/`.
+  run the relevant harnesses in `test-support/`. New Expo methods follow the
+  [Public API](core/bindings/expo/README.md#public-api) rules in that README.
 
 For documentation-only changes, check relative links, paths, and heading
 anchors, then run `git diff --check`. Runtime suites are not needed.

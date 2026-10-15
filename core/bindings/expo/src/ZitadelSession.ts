@@ -74,3 +74,8 @@ export async function closeSession(sessionId: string): Promise<void> {
   await module._closeSession(sessionId);
   stores.delete(sessionId);
 }
+
+/** @internal Host harnesses reject a mismatched save. Apps use Session.import. */
+export function ackZitadelSave(sessionId: string, requestId: string, success: boolean): Promise<boolean> {
+  return module._ackZitadelSave(sessionId, requestId, success);
+}

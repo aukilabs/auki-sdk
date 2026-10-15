@@ -1,12 +1,11 @@
 import module from "./AukiSdkExpoModule";
 import type {
+  AukiDomainInfo,
   DataMetadata,
   DataQuery,
   DataSink,
   DataSource,
   DataTarget,
-  DomainDataError,
-  DomainDataFailureKind,
   DomainPage,
   PortalPage,
   PortalDomainPage,
@@ -16,71 +15,52 @@ import type {
   PortalPose,
   TransferOptions,
 } from "./AukiSdkExpo.types";
+import { aukiError, normalizeAukiError, type AukiError } from "./errors";
+import {
+  mapDataMetadata,
+  mapDomainPage,
+  mapPortal,
+  mapPortalDomain,
+  mapPortalDomainPage,
+  mapPortalPage,
+  mapPortalPose,
+} from "./wire";
 
 // Keep each native bridge message comfortably below common React Native bridge
 // limits. The SDK may assemble several chunks into one server multipart part.
 const BRIDGE_CHUNK_BYTES = 256 * 1024;
 const CALLBACK_TIMEOUT_MS = 30_000;
-const failureKinds = new Set<DomainDataFailureKind>([
-  "cancelled", "closed", "timeout", "auth", "http", "input", "response",
-  "limit", "callback", "cleanup", "transport",
-]);
+
+function asList(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
 
 function newId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2)}_${Date.now().toString(36)}`;
 }
 
-function dataError(kind: DomainDataFailureKind, message: string, cause?: unknown): DomainDataError {
-  const error = new Error(message) as DomainDataError;
-  Object.defineProperty(error, "kind", { value: kind, enumerable: true });
-  if (cause !== undefined) Object.defineProperty(error, "cause", { value: cause });
-  return error;
+function dataError(code: AukiError["code"], message: string, cause?: unknown): AukiError {
+  return aukiError(code, message, { cause });
 }
 
-function normalizedError(value: unknown): DomainDataError {
-  if (value instanceof Error) {
-    const candidate = value as Error & { kind?: unknown; code?: unknown; status?: unknown };
-    let rawKind = typeof candidate.kind === "string" ? candidate.kind : candidate.code;
-    if (typeof rawKind === "string" && rawKind.startsWith("domain_data:")) {
-      const [, encodedKind, encodedStatus, authCode] = rawKind.split(":");
-      if (failureKinds.has(encodedKind as DomainDataFailureKind)) {
-        const converted = dataError(encodedKind as DomainDataFailureKind, candidate.message, candidate);
-        if (encodedStatus && Number.isInteger(Number(encodedStatus))) {
-          Object.defineProperty(converted, "status", {
-            value: Number(encodedStatus),
-            enumerable: true,
-          });
-        }
-        if (authCode) Object.defineProperty(converted, "code", { value: authCode, enumerable: true });
-        return converted;
-      }
-      rawKind = encodedKind;
-    }
-    if (typeof rawKind === "string" && failureKinds.has(rawKind as DomainDataFailureKind)) {
-      if (candidate.kind !== rawKind) {
-        Object.defineProperty(candidate, "kind", { value: rawKind, enumerable: true });
-      }
-      return candidate as DomainDataError;
-    }
-  }
-  return dataError("transport", "Domain data operation failed", value);
+function normalizedError(value: unknown): AukiError {
+  return normalizeAukiError(value, "Domain data operation failed");
 }
 
-function cancelledError(): DomainDataError {
+function cancelledError(): AukiError {
   return dataError("cancelled", "Domain data operation was cancelled");
 }
 
 function combinedCleanupError(
   message: string,
-  operation: DomainDataError,
-  cleanup: DomainDataError,
-): DomainDataError {
-  const error = dataError("cleanup", message, { operation, cleanup });
-  const status = operation.status ?? cleanup.status;
-  const code = operation.code ?? cleanup.code;
-  if (status !== undefined) Object.defineProperty(error, "status", { value: status, enumerable: true });
-  if (code !== undefined) Object.defineProperty(error, "code", { value: code, enumerable: true });
-  return error;
+  operation: AukiError,
+  cleanup: AukiError,
+): AukiError {
+  return aukiError("cleanup", message, {
+    cause: { operation, cleanup },
+    status: operation.status ?? cleanup.status,
+    authCode: operation.authCode ?? cleanup.authCode,
+  });
 }
 
 class CallbackWaitError extends Error {
@@ -156,41 +136,64 @@ async function cancellable<T>(
   }
 }
 
+export type DomainPageOptions = {
+  organization?: string;
+  limit?: number;
+  cursor?: string | null;
+  signal?: AbortSignal;
+};
+
 /** Domain discovery and portal metadata backed by an existing login session. */
 export class AukiDomains {
-  /** @internal Use domains(sessionId). */
+  /** @internal Use session.domains. */
   constructor(private readonly sessionId: string) {}
 
-  forPortalPage(portal: string, limit = 50, cursor?: string | null, organization = "own", signal?: AbortSignal): Promise<PortalDomainPage> {
-    return cancellable(signal, operationId => module.domainsForPortalPage(this.sessionId, portal, organization, limit, cursor ?? null, operationId));
-  }
-
-  portalsPage(domainId: string, limit = 50, cursor?: string | null, signal?: AbortSignal): Promise<PortalPage> {
-    return cancellable(signal, operationId => module.domainsPortalsPage(this.sessionId, domainId, limit, cursor ?? null, operationId));
+  /** Short picker list, including the stricter path for an imported session. */
+  accessible(): Promise<AukiDomainInfo[]> {
+    return module.accessibleDomains(this.sessionId).catch(error => {
+      throw normalizedError(error);
+    });
   }
 
   list(query: DomainQuery = {}, signal?: AbortSignal): Promise<DomainPage> {
     return cancellable(signal, operationId =>
-      module.domainsList(this.sessionId, JSON.stringify(query), operationId));
+      module.domainsList(this.sessionId, JSON.stringify(query), operationId))
+      .then(mapDomainPage);
   }
 
-  forPortal(
-    portal: string,
-    organization?: string,
-    signal?: AbortSignal,
-  ): Promise<PortalDomain[]> {
-    return cancellable(signal, operationId =>
-      module.domainsForPortal(this.sessionId, portal, organization ?? null, operationId));
+  forPortal(portal: string, options: DomainPageOptions = {}): Promise<PortalDomain[] | PortalDomainPage> {
+    if (options.limit !== undefined || options.cursor !== undefined) {
+      return cancellable(options.signal, operationId => module.domainsForPortalPage(
+        this.sessionId,
+        portal,
+        options.organization ?? "own",
+        options.limit ?? 50,
+        options.cursor ?? null,
+        operationId,
+      ).then(mapPortalDomainPage));
+    }
+    return cancellable(options.signal, operationId =>
+      module.domainsForPortal(this.sessionId, portal, options.organization ?? null, operationId)
+        .then(rows => asList(rows).map(mapPortalDomain)));
   }
 
-  portals(domainId: string, signal?: AbortSignal): Promise<Portal[]> {
-    return cancellable(signal, operationId =>
-      module.domainsPortals(this.sessionId, domainId, operationId));
+  portals(domainId: string, options: Omit<DomainPageOptions, "organization"> = {}): Promise<Portal[] | PortalPage> {
+    if (options.limit !== undefined || options.cursor !== undefined) {
+      return cancellable(options.signal, operationId => module.domainsPortalsPage(
+        this.sessionId,
+        domainId,
+        options.limit ?? 50,
+        options.cursor ?? null,
+        operationId,
+      ).then(mapPortalPage));
+    }
+    return cancellable(options.signal, operationId =>
+      module.domainsPortals(this.sessionId, domainId, operationId).then(rows => asList(rows).map(mapPortal)));
   }
 
   portal(domainId: string, portal: string, signal?: AbortSignal): Promise<Portal> {
     return cancellable(signal, operationId =>
-      module.domainsPortal(this.sessionId, domainId, portal, operationId));
+      module.domainsPortal(this.sessionId, domainId, portal, operationId).then(mapPortal));
   }
 }
 
@@ -222,12 +225,13 @@ export class AukiDomainData {
 
   list(query: DataQuery = {}, signal?: AbortSignal): Promise<DataMetadata[]> {
     return this.operation(signal, operationId =>
-      module.domainDataList(this.clientId, JSON.stringify(query), operationId));
+      module.domainDataList(this.clientId, JSON.stringify(query), operationId))
+      .then(rows => asList(rows).map(mapDataMetadata));
   }
 
   get(dataId: string, signal?: AbortSignal): Promise<DataMetadata> {
     return this.operation(signal, operationId =>
-      module.domainDataGet(this.clientId, dataId, operationId));
+      module.domainDataGet(this.clientId, dataId, operationId).then(mapDataMetadata));
   }
 
   async read(dataId: string, signal?: AbortSignal): Promise<Uint8Array> {
@@ -246,7 +250,7 @@ export class AukiDomainData {
       JSON.stringify(target),
       encodeBase64(bytes),
       operationId,
-    ));
+    ).then(mapDataMetadata));
   }
 
   delete(dataId: string, signal?: AbortSignal): Promise<void> {
@@ -256,12 +260,12 @@ export class AukiDomainData {
 
   poses(signal?: AbortSignal): Promise<PortalPose[]> {
     return this.operation(signal, operationId =>
-      module.domainDataPoses(this.clientId, operationId));
+      module.domainDataPoses(this.clientId, operationId).then(rows => asList(rows).map(mapPortalPose)));
   }
 
   pose(portal: string, signal?: AbortSignal): Promise<PortalPose> {
     return this.operation(signal, operationId =>
-      module.domainDataPose(this.clientId, portal, operationId));
+      module.domainDataPose(this.clientId, portal, operationId).then(mapPortalPose));
   }
 
   async readTo(
@@ -275,7 +279,7 @@ export class AukiDomainData {
     const callback = this.transferSignal(signal);
     const operationId = newId("data_operation");
     let downloadId: string | null = null;
-    let failure: DomainDataError | null = null;
+    let failure: AukiError | null = null;
     let cancelIssued = false;
     const cancel = () => {
       if (cancelIssued) return;
@@ -324,7 +328,7 @@ export class AukiDomainData {
             // Transfer close awaits the same retained completion and can replay
             // its primary error. Only the core's explicit cleanup kind means
             // abort/drain itself failed.
-            if (cleanup.kind === "cleanup") {
+            if (cleanup.code === "cleanup") {
               throw combinedCleanupError(
                 "Domain data download cleanup failed",
                 failure,
@@ -352,7 +356,7 @@ export class AukiDomainData {
     const callback = this.transferSignal(signal);
     const operationId = newId("data_operation");
     let uploadId: string | null = null;
-    let failure: DomainDataError | null = null;
+    let failure: AukiError | null = null;
     let cancelIssued = false;
     const cancel = () => {
       if (cancelIssued) return;
@@ -397,7 +401,7 @@ export class AukiDomainData {
         }
         await module.dataUploadPush(uploadId, encodeBase64(bytes));
       }
-      return await module.dataUploadResult(uploadId);
+      return mapDataMetadata(await module.dataUploadResult(uploadId));
     } catch (error) {
       failure = normalizedError(error);
       throw failure;
@@ -410,7 +414,7 @@ export class AukiDomainData {
         } catch (error) {
           const cleanup = normalizedError(error);
           if (failure) {
-            if (cleanup.kind === "cleanup") {
+            if (cleanup.code === "cleanup") {
               throw combinedCleanupError(
                 "Domain data upload cleanup failed",
                 failure,
@@ -436,6 +440,10 @@ export class AukiDomainData {
         this.closing = null;
       });
     return this.closing;
+  }
+
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.close();
   }
 
   private transferSignal(external?: AbortSignal): {

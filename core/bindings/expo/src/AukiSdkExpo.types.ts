@@ -20,10 +20,14 @@ export type AukiDiscoveryCandidateInfo = {
   peerType?: string | null;
 };
 
-export type AukiExactTarget = {
+/** Advertised peer id and route. This is the exact dial. */
+export type PeerRoute = {
   peerId: string;
   route: string;
 };
+
+/** @internal Bridge name for {@link PeerRoute}. */
+export type AukiExactTarget = PeerRoute;
 
 /** Public-client host PKCE result. The SDK becomes the sole refresh owner. */
 export type ZitadelSessionCredentials = {
@@ -56,7 +60,7 @@ export type DomainQuery = {
 export type DomainSummary = {
   id: string;
   name: string;
-  organization_id: string | null;
+  organizationId: string | null;
 };
 
 export type DomainPage = {
@@ -67,27 +71,27 @@ export type DomainPage = {
 };
 
 export type PortalDomain = DomainSummary & {
-  is_default: boolean;
-  added_to_domain_at: string;
+  isDefault: boolean;
+  addedToDomainAt: string;
 };
 
 export type Portal = {
   id: string;
-  short_id: string;
+  shortId: string;
   name: string;
   size: number;
-  organization_id: string | null;
-  default_domain_id: string | null;
-  redirect_url: string | null;
-  created_at: string;
-  updated_at: string;
+  organizationId: string | null;
+  defaultDomainId: string | null;
+  redirectUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type PortalPose = {
   id: string;
-  short_id: string;
-  domain_id: string;
-  reported_size: number;
+  shortId: string;
+  domainId: string;
+  reportedSize: number;
   px: number;
   py: number;
   pz: number;
@@ -98,23 +102,23 @@ export type PortalPose = {
   latitude: number | null;
   longitude: number | null;
   altitude: number | null;
-  vertical_accuracy: number | null;
-  horizontal_accuracy: number | null;
-  gps_timestamp: number | null;
-  scanner_device_id: string;
-  scanner_device_name: string;
-  scanner_device_model: string;
-  placed_at: string;
+  verticalAccuracy: number | null;
+  horizontalAccuracy: number | null;
+  gpsTimestamp: number | null;
+  scannerDeviceId: string;
+  scannerDeviceName: string;
+  scannerDeviceModel: string;
+  placedAt: string;
 };
 
 export type DataMetadata = {
   id: string;
-  domain_id: string;
+  domainId: string;
   name: string;
-  data_type: string;
+  dataType: string;
   size: number;
-  created_at: string;
-  updated_at: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type DataQuery = { ids?: string[]; name?: string; dataType?: string };
@@ -130,25 +134,6 @@ export type DataSink = (
   chunk: Uint8Array,
   signal: AbortSignal,
 ) => void | Promise<void>;
-export type DomainDataFailureKind =
-  | "cancelled"
-  | "closed"
-  | "timeout"
-  | "auth"
-  | "http"
-  | "input"
-  | "response"
-  | "limit"
-  | "callback"
-  | "cleanup"
-  | "transport";
-export type DomainDataError = Error & {
-  readonly kind: DomainDataFailureKind;
-  readonly status?: number;
-  /** Authentication subtype, including persistence failures that can be retried. */
-  readonly code?: AukiAuthFailureCode;
-};
-
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 
@@ -191,8 +176,8 @@ export type JobEstimateTask = {
   stage: string;
   capability: string;
   mode: JobMode;
-  billing_units: string;
-  estimated_credit_cost: string;
+  billingUnits: string;
+  estimatedCreditCost: string;
 };
 
 export type JobEstimate = { total: string; tasks: JobEstimateTask[] };
@@ -200,17 +185,17 @@ export type JobEstimate = { total: string; tasks: JobEstimateTask[] };
 export type JobRecord = {
   id: string;
   label: string;
-  domain_id: string;
+  domainId: string;
   status: JobStatus;
   priority: number;
-  created_at: string;
-  updated_at: string;
-  organization_id: string | null;
+  createdAt: string;
+  updatedAt: string;
+  organizationId: string | null;
   meta: JsonValue;
-  credit_lock_id: string | null;
-  credit_lock_amount: string | null;
-  credit_locked_at: string | null;
-  credit_released_at: string | null;
+  creditLockId: string | null;
+  creditLockAmount: string | null;
+  creditLockedAt: string | null;
+  creditReleasedAt: string | null;
 };
 
 export type JobTaskSummary = {
@@ -222,122 +207,95 @@ export type JobTaskSummary = {
   canceled: number;
 };
 
-export type JobListItem = { job: JobRecord; tasks_summary: JobTaskSummary };
+export type JobListItem = { job: JobRecord; tasksSummary: JobTaskSummary };
 
 export type JobPage = {
   items: JobListItem[];
-  next_cursor: string | null;
+  nextCursor: string | null;
 };
 
 export type JobTaskStatus = "queued" | "leased" | "running" | "completed" | "failed" | "canceled";
 
 export type JobTask = {
   id: string;
-  job_id: string;
+  jobId: string;
   label: string;
   stage: string;
   capability: string;
-  capability_filters: Record<string, string>;
+  capabilityFilters: Record<string, string>;
   status: JobTaskStatus;
-  deps_remaining: number;
+  depsRemaining: number;
   priority: number;
-  inputs_cids: string[];
-  outputs_prefix: string | null;
-  organization_id: string | null;
+  inputsCids: string[];
+  outputsPrefix: string | null;
+  organizationId: string | null;
   attempts: number;
-  max_attempts: number;
-  lease_expires_at: string | null;
-  reserved_by: string | null;
+  maxAttempts: number;
+  leaseExpiresAt: string | null;
+  reservedBy: string | null;
   meta: JsonValue;
-  cancel_requested_at: string | null;
-  last_heartbeat_at: string | null;
-  created_at: string;
-  updated_at: string;
+  cancelRequestedAt: string | null;
+  lastHeartbeatAt: string | null;
+  createdAt: string;
+  updatedAt: string;
   mode: JobMode;
-  billing_units: string;
-  estimated_credit_cost: string | null;
-  debited_amount: string | null;
-  debited_at: string | null;
+  billingUnits: string;
+  estimatedCreditCost: string | null;
+  debitedAmount: string | null;
+  debitedAt: string | null;
 };
 
 export type JobReceipt = {
   id: string;
-  job_id: string;
-  task_id: string;
-  node_id: string | null;
+  jobId: string;
+  taskId: string;
+  nodeId: string | null;
   outputs: string[];
   meta: JsonValue;
-  created_at: string;
+  createdAt: string;
 };
 
 export type JobDetails = {
   job: JobRecord;
-  tasks_summary: JobTaskSummary;
+  tasksSummary: JobTaskSummary;
   tasks: JobTask[];
   receipts: JobReceipt[];
 };
 
-export type JobCancellation = { id: string; status: JobStatus; updated_at: string };
-
-export type JobsFailureKind =
-  | "auth"
-  | "invalid_input"
-  | "invalid_response"
-  | "http_status"
-  | "transport"
-  | "timed_out"
-  | "cancelled"
-  | "closed"
-  | "too_large"
-  | "submission_uncertain"
-  | "submission_in_progress";
-
-export type JobsError = Error & {
-  readonly kind: JobsFailureKind;
-  readonly status?: number;
-  /** Authentication subtype, including persistence failures that can be retried. */
-  readonly code?: AukiAuthFailureCode;
-  /** Redacted cause category for an ambiguous submission outcome. */
-  readonly source?: string;
-  /** Minimum delay before retrying the same key and spec when submission is in progress. */
-  readonly retryAfterSeconds?: number;
-};
+export type JobCancellation = { id: string; status: JobStatus; updatedAt: string };
 
 export type AukiSdkExpoModuleEvents = {
   /** Internal request/ACK bridge. Contains identifiers only, never tokens. */
   onZitadelSaveRequested: (request: { sessionId: string; requestId: string }) => void;
 };
 
-/** Fleet results use the shared Rust wire names, including timestamps and nulls. */
 export interface FleetQuery { capabilities?: string[]; matchAllCapabilities?: boolean }
 export interface ComputePoolQuery extends FleetQuery { mode: JobMode }
 export type FleetPresence = "online" | "offline" | "unknown";
 export type FleetWorkState = "idle" | "busy" | "unknown";
-export type FleetFailureKind = "auth" | "input" | "response" | "http" | "transport" | "timeout" | "cancelled" | "closed" | "limit";
-export interface FleetError extends Error { kind: FleetFailureKind; code: string; status?: number }
 export interface FleetActivity {
-  worker_id: string; job_id: string; task_id: string;
-  task_status: JobTaskStatus; job_status: JobStatus; mode: JobMode; capability: string;
-  lease_expires_at: string | null; last_heartbeat_at: string | null;
-  updated_at: string; observed_at: string;
+  workerId: string; jobId: string; taskId: string;
+  taskStatus: JobTaskStatus; jobStatus: JobStatus; mode: JobMode; capability: string;
+  leaseExpiresAt: string | null; lastHeartbeatAt: string | null;
+  updatedAt: string; observedAt: string;
 }
 export interface FleetMachine {
-  kind: "robot" | "compute"; id: string; organization_id: string; name: string;
+  kind: "robot" | "compute"; id: string; organizationId: string; name: string;
   capabilities: string[]; mode: string; association: "assigned" | "active_task" | "candidate";
-  presence: FleetPresence; provider_status: string; presence_observed_at: string;
-  last_seen_at: string | null; active_lease_expires_at: string | null;
-  work_state: FleetWorkState; work_observed_at: string | null; activity: FleetActivity[];
+  presence: FleetPresence; providerStatus: string; presenceObservedAt: string;
+  lastSeenAt: string | null; activeLeaseExpiresAt: string | null;
+  workState: FleetWorkState; workObservedAt: string | null; activity: FleetActivity[];
 }
 export interface FleetSourceReport {
   source: "robots" | "nodes" | "jobs" | "busy";
   state: "complete" | "partial" | "denied" | "unsupported" | "unavailable";
-  observed_at: string; codes: string[]; http_status: number | null;
+  observedAt: string; codes: string[]; httpStatus: number | null;
 }
 export interface FleetSnapshot {
-  domain_id: string; view: "domain" | "compute_pool"; observed_at: string;
-  machines: FleetMachine[]; unresolved_activity: FleetActivity[];
+  domainId: string; view: "domain" | "compute_pool"; observedAt: string;
+  machines: FleetMachine[]; unresolvedActivity: FleetActivity[];
   sources: FleetSourceReport[]; complete: boolean;
 }
 
-export type PortalPage = { items: Portal[]; next_cursor: string | null; paginated: boolean };
-export type PortalDomainPage = { items: PortalDomain[]; next_cursor: string | null; paginated: boolean };
+export type PortalPage = { items: Portal[]; nextCursor: string | null; paginated: boolean };
+export type PortalDomainPage = { items: PortalDomain[]; nextCursor: string | null; paginated: boolean };

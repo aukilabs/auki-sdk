@@ -7,17 +7,10 @@ import type {
   AukiDomainInfo,
   AukiExactTarget,
   AukiSdkExpoModuleEvents,
-  DataMetadata,
-  DomainPage,
-  PortalPage,
-  PortalDomainPage,
-  Portal,
-  PortalDomain,
-  PortalPose,
 } from "./AukiSdkExpo.types";
 
 declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents> {
-  /** @internal Use importZitadelSession/closeSession, not these bridge methods. */
+  /** @internal Use Session.import and Session.close, not these bridge methods. */
   _importZitadel(credentialsJson: string, environmentJson: string | null): Promise<string>;
   _zitadelCredentials(sessionId: string, requestId: string): Promise<string>;
   _ackZitadelSave(sessionId: string, requestId: string, success: boolean): Promise<boolean>;
@@ -32,35 +25,36 @@ declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents
     clientId?: string | null,
   ): Promise<string>;
   accessibleDomains(sessionId: string): Promise<AukiDomainInfo[]>;
-  domainsForPortalPage(sessionId: string, portal: string, organization: string, limit: number, cursor: string | null, operationId: string): Promise<PortalDomainPage>;
-  domainsPortalsPage(sessionId: string, domainId: string, limit: number, cursor: string | null, operationId: string): Promise<PortalPage>;
-  domainsList(sessionId: string, queryJson: string, operationId: string): Promise<DomainPage>;
+  /** Wire records. The facade maps these to camelCase. */
+  domainsForPortalPage(sessionId: string, portal: string, organization: string, limit: number, cursor: string | null, operationId: string): Promise<unknown>;
+  domainsPortalsPage(sessionId: string, domainId: string, limit: number, cursor: string | null, operationId: string): Promise<unknown>;
+  domainsList(sessionId: string, queryJson: string, operationId: string): Promise<unknown>;
   domainsForPortal(
     sessionId: string,
     portal: string,
     organization: string | null,
     operationId: string,
-  ): Promise<PortalDomain[]>;
-  domainsPortals(sessionId: string, domainId: string, operationId: string): Promise<Portal[]>;
+  ): Promise<unknown>;
+  domainsPortals(sessionId: string, domainId: string, operationId: string): Promise<unknown>;
   domainsPortal(
     sessionId: string,
     domainId: string,
     portal: string,
     operationId: string,
-  ): Promise<Portal>;
+  ): Promise<unknown>;
   domainDataOpen(sessionId: string, domainId: string): Promise<string>;
-  domainDataList(clientId: string, queryJson: string, operationId: string): Promise<DataMetadata[]>;
-  domainDataGet(clientId: string, dataId: string, operationId: string): Promise<DataMetadata>;
+  domainDataList(clientId: string, queryJson: string, operationId: string): Promise<unknown>;
+  domainDataGet(clientId: string, dataId: string, operationId: string): Promise<unknown>;
   domainDataRead(clientId: string, dataId: string, operationId: string): Promise<string>;
   domainDataWrite(
     clientId: string,
     targetJson: string,
     bytesBase64: string,
     operationId: string,
-  ): Promise<DataMetadata>;
+  ): Promise<unknown>;
   domainDataDelete(clientId: string, dataId: string, operationId: string): Promise<void>;
-  domainDataPoses(clientId: string, operationId: string): Promise<PortalPose[]>;
-  domainDataPose(clientId: string, portal: string, operationId: string): Promise<PortalPose>;
+  domainDataPoses(clientId: string, operationId: string): Promise<unknown>;
+  domainDataPose(clientId: string, portal: string, operationId: string): Promise<unknown>;
   domainDataClose(clientId: string): Promise<void>;
   dataOperationCancel(operationId: string): Promise<void>;
   dataDownloadStart(
@@ -81,7 +75,7 @@ declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents
   ): Promise<string>;
   dataUploadNextMaximum(uploadId: string): Promise<number | null>;
   dataUploadPush(uploadId: string, bytesBase64: string): Promise<void>;
-  dataUploadResult(uploadId: string): Promise<DataMetadata>;
+  dataUploadResult(uploadId: string): Promise<unknown>;
   dataUploadCancel(uploadId: string): Promise<void>;
   dataUploadClose(uploadId: string): Promise<void>;
   fleetOpen(sessionId: string, domainId: string): Promise<string>;

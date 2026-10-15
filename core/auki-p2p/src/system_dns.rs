@@ -1,10 +1,11 @@
 //! DNS transport backed by the operating system resolver.
 //!
 //! Hickory 0.25 initializes its Unix resolver from `/etc/resolv.conf`, which
-//! is not available to a physical iOS application. This adapter deliberately
-//! uses Tokio's `lookup_host` instead; on iOS that reaches the public system
-//! resolver through `getaddrinfo` and preserves the device's active network
-//! policy instead of selecting an SDK-owned public DNS server.
+//! is not available to a physical iOS or Android application. This adapter
+//! deliberately uses Tokio's `lookup_host` instead. On those platforms that
+//! reaches the public system resolver through `getaddrinfo` and preserves the
+//! device's active network policy instead of selecting an SDK-owned public DNS
+//! server.
 
 use std::{
     collections::HashSet,

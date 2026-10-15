@@ -1,9 +1,4 @@
-import Auki, {
-  closeSession,
-  data,
-  domains,
-  importZitadelSession,
-} from '@aukilabs/auki-sdk-expo';
+import { Session } from '@aukilabs/auki-sdk-expo';
 
 const loopbackHost = '127.0.0.1';
 export const domainDataBase = `http://${loopbackHost}:18114`;
@@ -28,32 +23,34 @@ const gate = () => { let resolve; const promise = new Promise(done => { resolve 
 
 export async function runDomainDataCases(report) {
   await domainFixture('/__reset', {});
-  const session = await Auki.loginWithEnvironment(
-    domainDataBase,
-    domainDataBase,
-    domainDataBase,
-    'expo@example.test',
-    'password',
-    'expo-domain-fixture',
-  );
+  const session = await Session.login({
+    email: 'expo@example.test',
+    password: 'password',
+    clientId: 'expo-domain-fixture',
+    environment: {
+      apiBaseUrl: domainDataBase,
+      ddsBaseUrl: domainDataBase,
+      dmsBaseUrl: domainDataBase,
+    },
+  });
   report('PASS password session opened without a peer');
   await domainFixture('/__configure', { domainsUnauthorizedOnce: true });
 
   let client;
   try {
-    const directory = domains(session);
+    const directory = session.domains;
     const page = await directory.list({ limit: 1, offset: 0 });
     check(page.total === 1 && page.limit === 1 && page.offset === 0, 'paged Domain result lost fields');
     check(page.domains[0]?.id === DOMAIN_ID, 'paged Domain result lost its Domain');
 
     const portals = await directory.portals(DOMAIN_ID);
     const portal = await directory.portal(DOMAIN_ID, PORTAL_ID);
-    const portalDomains = await directory.forPortal(portal.short_id);
+    const portalDomains = await directory.forPortal(portal.shortId);
     check(portals.length === 1 && portal.id === PORTAL_ID, 'portal lookup lost fields');
-    check(portalDomains[0]?.id === DOMAIN_ID && portalDomains[0]?.is_default, 'portal Domain lookup lost fields');
+    check(portalDomains[0]?.id === DOMAIN_ID && portalDomains[0]?.isDefault, 'portal Domain lookup lost fields');
     report('PASS paged Domains and portal metadata');
 
-    client = await data(session, DOMAIN_ID);
+    client = await session.domainData(DOMAIN_ID);
     const records = await client.list({ dataType: 'fixture.v1' });
     const initial = await client.get(INITIAL_DATA_ID);
     const initialBytes = await client.read(INITIAL_DATA_ID);
@@ -69,7 +66,7 @@ export async function runDomainDataCases(report) {
 
     const poses = await client.poses();
     const pose = await client.pose(PORTAL_ID);
-    check(poses.length === 1 && pose.domain_id === DOMAIN_ID && pose.px === 1, 'pose lookup lost fields');
+    check(poses.length === 1 && pose.domainId === DOMAIN_ID && pose.px === 1, 'pose lookup lost fields');
     report('PASS metadata, buffered CRUD, and poses');
 
     const streamedBytes = new Uint8Array([10, 11, 12, 13, 14, 15, 16, 17, 18]);
@@ -105,7 +102,7 @@ export async function runDomainDataCases(report) {
       await client.get(DENIED_DATA_ID);
       throw new Error('denied data unexpectedly readable');
     } catch (error) {
-      check(error.kind === 'http' && error.status === 403, 'HTTP denial lost kind or status');
+      check(error.code === 'http' && error.status === 403, 'HTTP denial lost code or status');
     }
     report('PASS structured permission failure');
 
@@ -130,7 +127,7 @@ export async function runDomainDataCases(report) {
       await cancelled;
       throw new Error('cancelled upload unexpectedly completed');
     } catch (error) {
-      check(error.kind === 'cancelled', 'upload cancellation lost its kind');
+      check(error.code === 'cancelled', 'upload cancellation lost its code');
     }
 
     await client.delete(buffered.id);
@@ -143,7 +140,7 @@ export async function runDomainDataCases(report) {
     report('PASS renewal, cancellation, cleanup, and deletion');
   } finally {
     if (client) await client.close();
-    await closeSession(session);
+    await session.close();
   }
 
   await domainFixture('/__reset', {});
@@ -156,7 +153,7 @@ export async function runDomainDataCases(report) {
   };
   const snapshots = [];
   let rejectSave = true;
-  const importedSession = await importZitadelSession(credentials, async snapshot => {
+  const importedSession = await Session.import(credentials, async snapshot => {
     snapshots.push(snapshot.exposeRefreshToken());
     if (rejectSave) throw new Error('DO_NOT_LEAK_STORAGE_FAILURE');
   }, {
@@ -166,12 +163,12 @@ export async function runDomainDataCases(report) {
   });
   let importedClient;
   try {
-    importedClient = await data(importedSession, DOMAIN_ID);
+    importedClient = await importedSession.domainData(DOMAIN_ID);
     try {
       await importedClient.get(INITIAL_DATA_ID);
       throw new Error('failed imported save unexpectedly authorized data');
     } catch (error) {
-      check(error.kind === 'auth' && error.code === 'persistence', 'imported save failure lost auth persistence code');
+      check(error.code === 'auth' && error.authCode === 'persistence', 'imported save failure lost auth persistence code');
       check(!String(error).includes('DO_NOT_LEAK'), 'storage failure detail crossed the bridge');
     }
     let stats = await domainFixture('/__stats');
@@ -182,11 +179,11 @@ export async function runDomainDataCases(report) {
     stats = await domainFixture('/__stats');
     check(stats.importedRefreshes === 1 && snapshots.join(',') === 'imported-refresh-1,imported-refresh-1', 'imported retry rotated credentials twice');
 
-    const portalsPage = await domains(importedSession).portalsPage(DOMAIN_ID, 1);
+    const portalsPage = await importedSession.domains.portals(DOMAIN_ID, { limit: 1 });
     check(portalsPage.items.length === 1 && portalsPage.paginated === false,
       'portal page lost its bounded legacy acknowledgement');
 
-    const page = await domains(importedSession).list({ limit: 1, offset: 1 });
+    const page = await importedSession.domains.list({ limit: 1, offset: 1 });
     check(page.total === 2 && page.limit === 1 && page.offset === 1
       && page.domains[0]?.id === 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
     'imported server pagination lost its Domain or page fields');
@@ -197,23 +194,23 @@ export async function runDomainDataCases(report) {
 
     const listingCalls = stats.requests['GET /api/v1/domains'] ?? 0;
     try {
-      await domains(importedSession).list({ organization: 'all', limit: 1 });
+      await importedSession.domains.list({ organization: 'all', limit: 1 });
       throw new Error('imported filtered Domain listing unexpectedly succeeded');
     } catch (error) {
-      check(error.kind === 'auth' && error.code === 'configuration', 'imported filtered listing lost unsupported classification');
+      check(error.code === 'auth' && error.authCode === 'configuration', 'imported filtered listing lost unsupported classification');
     }
     stats = await domainFixture('/__stats');
     check((stats.requests['GET /api/v1/domains'] ?? 0) === listingCalls,
       'unsupported imported filter performed provider I/O');
   } finally {
     if (importedClient) await importedClient.close();
-    await closeSession(importedSession);
+    await importedSession.close();
   }
   report('PASS imported persistence retry, paged Domains, and known-Domain data');
 
   const importedListingFailure = async (config, expectedCode) => {
     await domainFixture('/__reset', config);
-    const session = await importZitadelSession({
+    const session = await Session.import({
       ...credentials,
       accessTokenExpiresAt: '2099-01-01T00:00:00Z',
     }, async () => { throw new Error('unexpected credential save'); }, {
@@ -222,13 +219,13 @@ export async function runDomainDataCases(report) {
       dmsBaseUrl: domainDataBase,
     });
     try {
-      await domains(session).list({ limit: 1 });
+      await session.domains.list({ limit: 1 });
       throw new Error(`imported listing unexpectedly accepted ${expectedCode}`);
     } catch (error) {
-      check(error.kind === 'auth' && error.code === expectedCode,
+      check(error.code === 'auth' && error.authCode === expectedCode,
         `imported listing lost ${expectedCode} classification`);
     } finally {
-      await closeSession(session);
+      await session.close();
     }
     const stats = await domainFixture('/__stats');
     check(stats.exchanges === 2 && stats.p2pExchanges === 1

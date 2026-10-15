@@ -16,7 +16,7 @@ Module._load = function load(request, parent, isMain) {
   return originalLoad.call(this, request, parent, isMain);
 };
 
-const { jobs } = require("../src/Jobs.ts");
+const { Session } = require("../src/session.ts");
 const domainId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const jobId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const spec = {
@@ -34,14 +34,14 @@ async function main() {
   bridge.jobsOpen = async () => {
     throw Object.assign(new Error("session closed"), { code: "closed" });
   };
-  await assert.rejects(jobs("closed-session", domainId), error => error.kind === "closed");
+  await assert.rejects(Session.from("closed-session").jobs(domainId), error => error.code === "closed");
 
   bridge.jobsOpen = async (session, domain) => {
     assert.equal(session, "session"); assert.equal(domain, domainId); return "jobs-client";
   };
   bridge.jobsOperationCancel = async () => {};
   bridge.jobsClose = async () => {};
-  const client = await jobs("session", domainId);
+  const client = await Session.from("session").jobs(domainId);
 
   let submitted = 0;
   bridge.jobsEstimate = async (_client, payload) => {
@@ -71,22 +71,22 @@ async function main() {
     return jobId;
   };
   await assert.rejects(client.submitWithKey(spec, "persisted-key"), error =>
-    error.kind === "submission_in_progress" && error.status === 409 && error.retryAfterSeconds === 1);
+    error.code === "submission_in_progress" && error.status === 409 && error.retryAfterSeconds === 1);
   assert.equal(keyedCalls, 1, "busy submission was automatically retried");
   await assert.rejects(client.submitWithKey(spec, "persisted-key"), error =>
-    error.kind === "submission_uncertain" && error.status === 503);
+    error.code === "submission_uncertain" && error.status === 503);
   assert.equal(keyedCalls, 2, "uncertain keyed submission was automatically retried");
   assert.equal(await client.submitWithKey(spec, "persisted-key"), jobId);
   const preCancelled = new AbortController();
   preCancelled.abort();
-  await assert.rejects(client.submitWithKey(spec, "persisted-key", preCancelled.signal), error => error.kind === "cancelled");
+  await assert.rejects(client.submitWithKey(spec, "persisted-key", preCancelled.signal), error => error.code === "cancelled");
   assert.equal(keyedCalls, 3, "pre-cancelled submission reached the bridge");
 
   bridge.jobsList = async (_client, query) => {
     assert.deepEqual(JSON.parse(query), { limit: 10, capabilities: ["vendor.example/private-model/v7"], match_all_capabilities: true });
     return JSON.stringify({ items: [], next_cursor: "opaque" });
   };
-  assert.equal((await client.list({ limit: 10, capabilities: [spec.tasks[0].capability], matchAllCapabilities: true })).next_cursor, "opaque");
+  assert.equal((await client.list({ limit: 10, capabilities: [spec.tasks[0].capability], matchAllCapabilities: true })).nextCursor, "opaque");
 
   bridge.jobsGet = async (_client, id) => {
     assert.equal(id, jobId);
@@ -102,13 +102,13 @@ async function main() {
       code: "jobs:submission_uncertain:::transport",
     });
   };
-  await assert.rejects(client.submit(spec), error => error.kind === "submission_uncertain" && error.source === "transport");
+  await assert.rejects(client.submit(spec), error => error.code === "submission_uncertain" && error.source === "transport");
   assert.equal(submitted, 1, "ambiguous submission was retried");
 
   bridge.jobsGet = async () => {
     throw Object.assign(new Error("bad response"), { kind: "response" });
   };
-  await assert.rejects(client.get(jobId), error => error.kind === "invalid_response");
+  await assert.rejects(client.get(jobId), error => error.code === "response");
 
   const circular = { run: "local" };
   circular.self = circular;
@@ -119,13 +119,13 @@ async function main() {
   const remove = inputController.signal.removeEventListener.bind(inputController.signal);
   inputController.signal.addEventListener = (...args) => { listeners += 1; return add(...args); };
   inputController.signal.removeEventListener = (...args) => { listeners -= 1; return remove(...args); };
-  await assert.rejects(client.estimate(invalidSpec, inputController.signal), error => error.kind === "invalid_input");
+  await assert.rejects(client.estimate(invalidSpec, inputController.signal), error => error.code === "input");
   assert.equal(listeners, 0, "synchronous input failure retained its abort listener");
 
   bridge.jobsList = async () => {
     throw Object.assign(new Error("credential save failed"), { code: "jobs:auth::persistence:" });
   };
-  await assert.rejects(client.list(), error => error.kind === "auth" && error.code === "persistence");
+  await assert.rejects(client.list(), error => error.code === "auth" && error.authCode === "persistence");
 
   let cancelledOperation;
   let rejectEstimate;
@@ -148,12 +148,12 @@ async function main() {
   const controller = new AbortController();
   const pending = client.estimate(spec, controller.signal);
   controller.abort();
-  await assert.rejects(pending, error => error.kind === "cancelled");
+  await assert.rejects(pending, error => error.code === "cancelled");
 
   let releaseClose;
   bridge.jobsClose = () => new Promise(resolve => { releaseClose = resolve; });
   const closing = client.close();
-  await assert.rejects(client.list(), error => error.kind === "closed");
+  await assert.rejects(client.list(), error => error.code === "closed");
   let settled = false;
   void closing.then(() => { settled = true; });
   await new Promise(resolve => setTimeout(resolve, 0));

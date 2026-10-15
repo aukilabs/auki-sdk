@@ -121,7 +121,10 @@ function fromPrefixed(raw: string, message: string, cause: Error): AukiError | n
 
 export function normalizeAukiError(value: unknown, fallback: string): AukiError {
   if (value instanceof AukiError) return value;
-  if (!(value instanceof Error)) return aukiError("transport", fallback, { cause: value });
+  if (!(value instanceof Error)) {
+    const text = typeof value === "string" ? value.trim() : "";
+    return aukiError("transport", text || fallback, { cause: value });
+  }
   const candidate = value as Error & {
     code?: unknown;
     kind?: unknown;
@@ -159,5 +162,6 @@ export function normalizeAukiError(value: unknown, fallback: string): AukiError 
       return aukiError("auth", candidate.message, { cause: candidate, status, authCode });
     }
   }
-  return aukiError("transport", fallback, { cause: value });
+  const message = candidate.message.trim();
+  return aukiError("transport", message || fallback, { cause: value });
 }

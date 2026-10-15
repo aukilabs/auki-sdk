@@ -46,7 +46,10 @@ mod routing;
 mod runtime;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod source_admission;
-#[cfg(all(not(target_arch = "wasm32"), any(test, target_os = "ios")))]
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(test, target_os = "ios", target_os = "android")
+))]
 #[cfg_attr(test, allow(dead_code))]
 mod system_dns;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]

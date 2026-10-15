@@ -44,7 +44,7 @@ type WebDownload = {
 };
 type WebUpload = {
   controller: AbortController;
-  task: Promise<DataMetadata>;
+  task: Promise<unknown>;
   pending: { maximum: number; supply: (bytes: Uint8Array) => void; reject: (error: unknown) => void } | null;
   changed: (() => void) | null;
   observedError?: unknown;
@@ -275,14 +275,14 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     }));
   }
 
-  async domainsForPortalPage(sessionId: string, portal: string, organization: string, limit: number, cursor: string | null, operationId: string): Promise<PortalDomainPage> {
+  async domainsForPortalPage(sessionId: string, portal: string, organization: string, limit: number, cursor: string | null, operationId: string): Promise<unknown> {
     return this.withDataOperation(operationId, async signal => {
       const domains = this.session(sessionId).domains();
       try { return await domains.forPortalPage(portal, organization, limit, cursor, signal); }
       finally { domains.free(); }
     });
   }
-  async domainsPortalsPage(sessionId: string, domain: string, limit: number, cursor: string | null, operationId: string): Promise<PortalPage> {
+  async domainsPortalsPage(sessionId: string, domain: string, limit: number, cursor: string | null, operationId: string): Promise<unknown> {
     return this.withDataOperation(operationId, async signal => {
       const domains = this.session(sessionId).domains();
       try { return await domains.portalsPage(domain, limit, cursor, signal); }
@@ -294,7 +294,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     sessionId: string,
     queryJson: string,
     operationId: string,
-  ): Promise<DomainPage> {
+  ): Promise<unknown> {
     return this.withDataOperation(operationId, async signal => {
       const domains = this.session(sessionId).domains();
       try {
@@ -310,7 +310,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     portal: string,
     organization: string | null,
     operationId: string,
-  ): Promise<PortalDomain[]> {
+  ): Promise<unknown> {
     return this.withDataOperation(operationId, async signal => {
       const domains = this.session(sessionId).domains();
       try {
@@ -325,7 +325,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     sessionId: string,
     domainId: string,
     operationId: string,
-  ): Promise<Portal[]> {
+  ): Promise<unknown> {
     return this.withDataOperation(operationId, async signal => {
       const domains = this.session(sessionId).domains();
       try {
@@ -341,7 +341,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     domainId: string,
     portal: string,
     operationId: string,
-  ): Promise<Portal> {
+  ): Promise<unknown> {
     return this.withDataOperation(operationId, async signal => {
       const domains = this.session(sessionId).domains();
       try {
@@ -363,7 +363,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     clientId: string,
     queryJson: string,
     operationId: string,
-  ): Promise<DataMetadata[]> {
+  ): Promise<unknown> {
     return this.withDataOperation(operationId, signal =>
       this.dataClient(clientId).list(JSON.parse(queryJson), signal));
   }
@@ -372,7 +372,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     clientId: string,
     dataId: string,
     operationId: string,
-  ): Promise<DataMetadata> {
+  ): Promise<unknown> {
     return this.withDataOperation(operationId, signal =>
       this.dataClient(clientId).get(dataId, signal));
   }
@@ -388,7 +388,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     targetJson: string,
     bytesBase64: string,
     operationId: string,
-  ): Promise<DataMetadata> {
+  ): Promise<unknown> {
     return this.withDataOperation(operationId, signal => this.dataClient(clientId).write(
       JSON.parse(targetJson),
       base64ToBytes(bytesBase64),
@@ -401,7 +401,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
       this.dataClient(clientId).delete(dataId, signal));
   }
 
-  async domainDataPoses(clientId: string, operationId: string): Promise<PortalPose[]> {
+  async domainDataPoses(clientId: string, operationId: string): Promise<unknown> {
     return this.withDataOperation(operationId, signal => this.dataClient(clientId).poses(signal));
   }
 
@@ -409,7 +409,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     clientId: string,
     portal: string,
     operationId: string,
-  ): Promise<PortalPose> {
+  ): Promise<unknown> {
     return this.withDataOperation(operationId, signal =>
       this.dataClient(clientId).pose(portal, signal));
   }
@@ -570,7 +570,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     pending.supply(bytes);
   }
 
-  async dataUploadResult(uploadId: string): Promise<DataMetadata> {
+  async dataUploadResult(uploadId: string): Promise<unknown> {
     const upload = this.upload(uploadId);
     try {
       return await upload.task;

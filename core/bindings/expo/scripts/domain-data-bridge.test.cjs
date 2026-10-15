@@ -25,7 +25,7 @@ Module._load = function load(request, parent, isMain) {
   return originalLoad.call(this, request, parent, isMain);
 };
 
-const { data, domains } = require("../src/DomainData.ts");
+const { Session } = require("../src/session.ts");
 const encoded = bytes => Buffer.from(bytes).toString("base64");
 const metadata = {
   id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -44,7 +44,7 @@ async function main() {
     return { domains: [], total: 27, limit: 10, offset: 20 };
   };
   bridge.dataOperationCancel = async () => {};
-  const page = await domains("session").list({ limit: 10, offset: 20 });
+  const page = await Session.from("session").domains.list({ limit: 10, offset: 20 });
   assert.equal(page.total, 27);
   assert.deepEqual(capturedQuery.query, { limit: 10, offset: 20 });
 
@@ -53,13 +53,13 @@ async function main() {
     assert.ok(operation);
     return { items: [], next_cursor: null, paginated: true };
   };
-  assert.equal((await domains("session").forPortalPage("ABC12345678", 1, "next")).paginated, true);
+  assert.equal((await Session.from("session").domains.forPortal("ABC12345678", { limit: 1, cursor: "next" })).paginated, true);
   bridge.domainsPortalsPage = async (session, domain, limit, cursor, operation) => {
     assert.deepEqual([session, domain, limit, cursor], ["session", metadata.domain_id, 1, null]);
     assert.ok(operation);
     return { items: [], next_cursor: null, paginated: true };
   };
-  assert.equal((await domains("session").portalsPage(metadata.domain_id, 1)).paginated, true);
+  assert.equal((await Session.from("session").domains.portals(metadata.domain_id, { limit: 1 })).paginated, true);
 
   let cancelledOperation;
   let rejectDomainList;
@@ -74,9 +74,9 @@ async function main() {
     }));
   };
   const listController = new AbortController();
-  const cancelledList = domains("session").list({}, listController.signal);
+  const cancelledList = Session.from("session").domains.list({}, listController.signal);
   listController.abort();
-  await assert.rejects(cancelledList, error => error.kind === "cancelled");
+  await assert.rejects(cancelledList, error => error.code === "cancelled");
   bridge.dataOperationCancel = async () => {};
 
   bridge.domainDataOpen = async (session, domain) => {
@@ -85,7 +85,7 @@ async function main() {
     return "client";
   };
   bridge.domainDataClose = async () => {};
-  const client = await data("session", metadata.domain_id);
+  const client = await Session.from("session").domainData(metadata.domain_id);
 
   const chunks = [encoded([1]), encoded([2]), null];
   let nextCalls = 0;
@@ -139,14 +139,14 @@ async function main() {
   bridge.domainDataGet = async () => {
     throw Object.assign(new Error("permission denied"), { code: "domain_data:http:403:" });
   };
-  await assert.rejects(client.get(metadata.id), error => error.kind === "http" && error.status === 403);
+  await assert.rejects(client.get(metadata.id), error => error.code === "http" && error.status === 403);
   bridge.domainDataGet = async () => {
     throw Object.assign(new Error("credential save failed"), {
       code: "domain_data:auth::persistence",
     });
   };
   await assert.rejects(client.get(metadata.id), error =>
-    error.kind === "auth" && error.code === "persistence");
+    error.code === "auth" && error.authCode === "persistence");
 
   let pendingDownloadReject;
   let transferCancelCalls = 0;
@@ -163,7 +163,7 @@ async function main() {
   const cancelledRead = client.readTo(metadata.id, async () => {}, {}, transferController.signal);
   await new Promise(resolve => setTimeout(resolve, 0));
   transferController.abort();
-  await assert.rejects(cancelledRead, error => error.kind === "cancelled");
+  await assert.rejects(cancelledRead, error => error.code === "cancelled");
   assert.equal(transferCancelCalls, 1);
 
   let uploadCancelCalls = 0;
@@ -181,7 +181,7 @@ async function main() {
   );
   await new Promise(resolve => setTimeout(resolve, 0));
   sourceController.abort();
-  await assert.rejects(cancelledWrite, error => error.kind === "cancelled");
+  await assert.rejects(cancelledWrite, error => error.code === "cancelled");
   assert.equal(uploadCancelCalls, 1, "pending source did not cancel its native upload");
 
   const denied = Object.assign(new Error("permission denied"), {
@@ -193,7 +193,7 @@ async function main() {
   bridge.dataDownloadClose = async () => { throw denied; };
   await assert.rejects(
     client.readTo(metadata.id, async () => {}),
-    error => error.kind === "http" && error.status === 403,
+    error => error.code === "http" && error.status === 403,
   );
 
   const persistence = Object.assign(new Error("credential save failed"), {
@@ -210,7 +210,7 @@ async function main() {
       1,
       () => new Uint8Array(),
     ),
-    error => error.kind === "auth" && error.code === "persistence",
+    error => error.code === "auth" && error.authCode === "persistence",
   );
 
   let cancelled = 0;
@@ -221,7 +221,7 @@ async function main() {
   bridge.dataDownloadClose = async () => { closedTransfer += 1; };
   await assert.rejects(
     client.readTo(metadata.id, async () => { throw new Error("private destination failure"); }),
-    error => error.kind === "callback" && !error.message.includes("private"),
+    error => error.code === "callback" && !error.message.includes("private"),
   );
   assert.equal(cancelled, 1);
   assert.equal(closedTransfer, 1);
@@ -236,9 +236,9 @@ async function main() {
   };
   await assert.rejects(
     client.readTo(metadata.id, async () => { throw new Error("destination failed"); }),
-    error => error.kind === "cleanup"
-      && error.cause.operation.kind === "callback"
-      && error.cause.cleanup.kind === "cleanup",
+    error => error.code === "cleanup"
+      && error.cause.operation.code === "callback"
+      && error.cause.cleanup.code === "cleanup",
   );
 
   let releaseClose;
@@ -273,8 +273,8 @@ async function main() {
   );
   await enteredSink;
   await enteredSource;
-  const pendingReadRejected = assert.rejects(pendingRead, error => error.kind === "cancelled");
-  const pendingWriteRejected = assert.rejects(pendingWrite, error => error.kind === "cancelled");
+  const pendingReadRejected = assert.rejects(pendingRead, error => error.code === "cancelled");
+  const pendingWriteRejected = assert.rejects(pendingWrite, error => error.code === "cancelled");
   const closing = client.close();
   let closeSettled = false;
   void closing.then(() => { closeSettled = true; });
@@ -285,11 +285,11 @@ async function main() {
   assert.equal(closeUploadCancelled, 1, "client close did not cancel a pending source");
   releaseClose();
   await closing;
-  await assert.rejects(client.list(), error => error.kind === "closed");
+  await assert.rejects(client.list(), error => error.code === "closed");
 
   const controller = new AbortController();
   controller.abort();
-  await assert.rejects(domains("session").list({}, controller.signal), error => error.kind === "cancelled");
+  await assert.rejects(Session.from("session").domains.list({}, controller.signal), error => error.code === "cancelled");
   console.log("PASS Expo Domain data bridge tests");
 }
 

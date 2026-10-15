@@ -17,29 +17,29 @@ Module._load = function load(request, parent, isMain) {
 };
 
 
-const { fleet } = require("../src/Fleet.ts");
+const { Session } = require("../src/session.ts");
 
 async function main() {
   bridge.fleetOpen = async (session, domain) => {
     assert.equal(session, "session"); assert.equal(domain, "domain"); return "fleet-client";
   };
-  const client = await fleet("session", "domain");
+  const client = await Session.from("session").fleet("domain");
   bridge.fleetList = async (_client, query) => {
     assert.deepEqual(JSON.parse(query), { capabilities: ["vendor/v7"], match_all_capabilities: true });
     return JSON.stringify({ view: "domain", complete: false, machines: [{kind: "robot", work_state: "unknown"}], sources: [{ source: "busy", state: "unsupported" }] });
   };
   const partial = await client.list({ capabilities: ["vendor/v7"], matchAllCapabilities: true });
-  assert.equal(partial.machines[0].work_state, "unknown");
+  assert.equal(partial.machines[0].workState, "unknown");
   assert.equal(partial.sources[0].state, "unsupported");
   bridge.fleetComputePool = async (_client, query) => {
     assert.deepEqual(JSON.parse(query), { mode: "dedicated" });
     return JSON.stringify({ view: "compute_pool", machines: [{ association: "candidate", last_seen_at: null }] });
   };
-  assert.equal((await client.computePool({ mode: "dedicated" })).machines[0].last_seen_at, null);
+  assert.equal((await client.computePool({ mode: "dedicated" })).machines[0].lastSeenAt, null);
   bridge.fleetList = async () => { throw Object.assign(new Error("save failed"), { code: "fleet:auth::persistence" }); };
-  await assert.rejects(client.list(), error => error.kind === "auth" && error.code === "persistence");
+  await assert.rejects(client.list(), error => error.code === "auth" && error.authCode === "persistence");
   bridge.fleetList = async () => { throw Object.assign(new Error("invalid response"), { kind: "response", code: "invalid_response" }); };
-  await assert.rejects(client.list(), error => error.kind === "response" && error.code === "invalid_response");
+  await assert.rejects(client.list(), error => error.code === "response");
   const beforeStart = new Set();
   bridge.fleetOperationCancel = async id => { beforeStart.add(id); };
   bridge.fleetList = async (_client, _query, id) => {
@@ -49,13 +49,13 @@ async function main() {
   const controller = new AbortController();
   const pending = client.list({}, controller.signal);
   controller.abort();
-  await assert.rejects(pending, error => error.kind === "cancelled");
-  await assert.rejects(client.list({}, controller.signal), error => error.kind === "cancelled");
+  await assert.rejects(pending, error => error.code === "cancelled");
+  await assert.rejects(client.list({}, controller.signal), error => error.code === "cancelled");
   let release;
   bridge.fleetClose = () => new Promise(resolve => { release = resolve; });
   const closing = client.close();
   assert.equal(client.close(), closing);
-  await assert.rejects(client.list(), error => error.kind === "closed");
+  await assert.rejects(client.list(), error => error.code === "closed");
   let settled = false;
   void closing.then(() => { settled = true; });
   await new Promise(resolve => setTimeout(resolve, 0));

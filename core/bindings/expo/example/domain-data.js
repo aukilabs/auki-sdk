@@ -1,9 +1,9 @@
-import { data, domains } from '@aukilabs/auki-sdk-expo';
+import { Session } from '@aukilabs/auki-sdk-expo';
 
 /** Load one server page for a simple picker. Request another offset only when
  * the user asks for more. Imported sessions support the default own selection. */
 export async function domainChoices(session, query = { limit: 50, offset: 0 }, signal) {
-  return domains(session).list(query, signal);
+  return session.domains.list(query, signal);
 }
 
 /**
@@ -13,16 +13,15 @@ export async function domainChoices(session, query = { limit: 50, offset: 0 }, s
  * owns its destination and partial-file cleanup on failure.
  */
 export async function roundTrip(session, domainId, source, destination, signal) {
-  const domainData = await data(session, domainId);
+  const domainData = await session.domainData(domainId);
   const name = `sdk-374-expo-${Date.now()}`;
   try {
-    const directory = domains(session);
-    const page = await directory.list({ limit: 50 }, signal);
-    const portals = await directory.portals(domainId, signal);
+    const page = await session.domains.list({ limit: 50 }, signal);
+    const portals = await session.domains.portals(domainId, { signal });
     const poses = await domainData.poses(signal);
     if (portals.length) {
-      await directory.portal(domainId, portals[0].id, signal);
-      await directory.forPortal(portals[0].short_id, 'own', signal);
+      await session.domains.portal(domainId, portals[0].id, signal);
+      await session.domains.forPortal(portals[0].shortId, { organization: 'own', signal });
     }
     if (poses.length) await domainData.pose(poses[0].id, signal);
 
@@ -58,3 +57,5 @@ export async function roundTrip(session, domainId, source, destination, signal) 
     }
   }
 }
+
+export { Session };

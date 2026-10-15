@@ -47,19 +47,20 @@ After `npm login` as an `@aukilabs` publisher, `npm publish` uploads
 
 ## Sign in and select a Domain
 
-Password login returns a session handle shared by Domain discovery, Domain data,
+Password login returns a `Session` shared by Domain discovery, Domain data,
 and any peers the app starts. Persist one random client ID for the app
-installation and reuse it across logins.
+installation and reuse it across logins. Store `session.id` if the app keeps
+the handle in its own state, and rebuild it with `Session.from(id)`.
 
 ~~~ts
-import AukiSdkExpo, { closeSession, data, domains } from "@aukilabs/auki-sdk-expo";
+import { Session } from "@aukilabs/auki-sdk-expo";
 
-const session = await AukiSdkExpo.loginDev(email, password, installationId);
+const session = await Session.login({ email, password, clientId: installationId });
 try {
-  const firstPage = await domains(session).list({ limit: 50, offset: 0 });
+  const firstPage = await session.domains.list({ limit: 50, offset: 0 });
   if (!firstPage.domains.length) throw new Error("No accessible Domains");
   const selectedDomainId = firstPage.domains[0].id;
-  const client = await data(session, selectedDomainId);
+  const client = await session.domainData(selectedDomainId);
   try {
     const records = await client.list({ dataType: "my-app.report.v1" });
     if (records.length) showReport(await client.read(records[0].id));
@@ -67,13 +68,12 @@ try {
     await client.close();
   }
 } finally {
-  await closeSession(session);
+  await session.close();
 }
 ~~~
 
-For another environment, use
-`AukiSdkExpo.loginWithEnvironment(apiBase, ddsBase, dmsBase, email, password,
-installationId)`. Keep all three endpoints aligned to the same deployment.
+For another environment, pass `environment: { apiBaseUrl, ddsBaseUrl, dmsBaseUrl }`
+to `Session.login`. Keep all three endpoints aligned to the same deployment.
 
 Domain listing is server-paged; totals may change between pages. Visibility in
 the list does not imply read, write, or delete permission. Portal and pose reads
@@ -97,7 +97,7 @@ the SDK's 30-second callback deadline; cancellation and client close also releas
 pending callbacks.
 
 ~~~ts
-const client = await data(session, selectedDomainId);
+const client = await session.domainData(selectedDomainId);
 const controller = new AbortController();
 try {
   let offset = 0;
@@ -137,9 +137,7 @@ Use the existing session and an explicit Domain ID. This creates no peer and
 does not start a polling loop:
 
 ~~~ts
-import { jobs } from "@aukilabs/auki-sdk-expo";
-
-const client = await jobs(session, selectedDomainId);
+const client = await session.jobs(selectedDomainId);
 try {
   const spec = {
     label: "map update",
@@ -162,12 +160,14 @@ try {
 
 Edges refer to stage names. Custom capability strings pass through unchanged;
 the SDK has no capability catalogue whitelist. `list` returns one DMS page and
-an opaque `next_cursor`. Every operation accepts an optional `AbortSignal`.
+an opaque `nextCursor`. Every operation accepts an optional `AbortSignal`.
+Job records use camelCase (`createdAt`, `tasksSummary`). Credit amounts stay
+decimal text.
 
-If `submit` rejects with `kind === "submission_uncertain"`, DMS may have
+If `submit` rejects with `code === "submission_uncertain"`, DMS may have
 accepted the job. Inspect existing jobs before choosing a recovery action;
 automatic resubmission can duplicate work and charges. Authentication errors
-retain codes such as `persistence`, and HTTP errors retain `status`.
+use `code === "auth"` and `authCode` such as `persistence`. HTTP errors retain `status`.
 
 For a deployment verified to support the idempotency contract, use
 `await client.submitWithKey(spec, idempotencyKey, signal)`. Persist the key and immutable
@@ -191,11 +191,9 @@ tokens. Keep the returned session in app state, including when peer startup
 fails, so you can retry with it.
 
 ~~~ts
-import AukiSdkExpo, {
-  importZitadelSession, closeSession,
-} from "@aukilabs/auki-sdk-expo";
+import { Session } from "@aukilabs/auki-sdk-expo";
 
-const session = await importZitadelSession(credentials, async replacement => {
+const session = await Session.import(credentials, async replacement => {
   await secureStore.saveAtomically({
     accessToken: replacement.exposeAccessToken(),
     refreshToken: replacement.exposeRefreshToken(),
@@ -204,12 +202,12 @@ const session = await importZitadelSession(credentials, async replacement => {
     accessTokenExpiresAt: replacement.accessTokenExpiresAt,
   });
 });
-// Save session in app state before starting the peer.
-const peer = await AukiSdkExpo.startPeer(session, selectedDomainId);
+// Save session.id in app state before starting the peer.
+const peer = await session.startPeer(selectedDomainId);
 
 // On logout, after closing your message handlers:
-await AukiSdkExpo.shutdown(peer);
-await closeSession(session);
+await peer.shutdown();
+await session.close();
 await secureStore.clear();
 ~~~
 
@@ -223,18 +221,21 @@ route, send, and close. `messageSend` waits for the ACK. This surface does not
 mount inbound Message or add `claim` / `connectRobot`.
 
 ~~~ts
-const sender = await AukiSdkExpo.messageOpenExact(
-  peer,
+const sender = await peer.messages.open(
   { peerId, route },
-  channelJson,
+  channel,
 );
-await AukiSdkExpo.messageSend(sender, "example.event", timestampNs, payloadBase64);
-await AukiSdkExpo.messageClose(sender);
+await sender.send({
+  type: "example.event",
+  timestampNs,
+  payload,
+});
+await sender.close();
 ~~~
 
-`channelJson` is a Catalog v3 `message_channel` row: `variant`, `owner_peer_id`,
-`resource_id`, and `clock` (`peer_id`, `id`, `hash`). `timestampNs` is a decimal
-integer string. `payloadBase64` may be empty.
+`channel` is a Catalog v3 `message_channel` row: `variant`, `owner_peer_id`,
+`resource_id`, and `clock` (`peer_id`, `id`, `hash`). Those protocol fields stay
+snake_case. `timestampNs` is a `bigint`. `payload` is a `Uint8Array` and may be empty.
 
 ## Checks
 
@@ -272,9 +273,7 @@ codes, and awaited close.
 ## Fleet inventory and activity
 
 ```ts
-import { fleet } from "@aukilabs/auki-sdk-expo";
-
-const client = await fleet(sessionId, selectedDomainId);
+const client = await session.fleet(selectedDomainId);
 try {
   const inventory = await client.list();
   const candidates = await client.computePool({ mode: "dedicated", capabilities: ["vendor.example/inspect/v7"] });
@@ -284,10 +283,64 @@ try {
 }
 ```
 
-Web, iOS, and Android share typed queries and snake_case snapshot results. Every
-operation accepts an optional `AbortSignal`. `FleetError` retains `kind`, `code`, and
-available `status`; credential persistence and cancellation stay actionable.
+Web, iOS, and Android share typed queries and camelCase snapshot results
+(`workState`, `lastSeenAt`, `domainId`). Every operation accepts an optional
+`AbortSignal`. Failures throw `AukiError`. `code` is `auth`, `input`, `response`,
+`http`, `transport`, `timeout`, `cancelled`, `closed`, or `limit`. Credential
+persistence is `code === "auth"` and `authCode === "persistence"`. `status` is
+set when the service returned one.
 Rebuild/sync the XCFramework with its generated Swift wrappers for iOS, and run
 `scripts/sync-android-jni.sh` before an Android build. Run `npm run test:fleet` for the bridge fixture and see the
 [fleet reference](../../../docs/reference/fleet.md) for permissions, status and
 provider limits. Closing a fleet client leaves the session usable.
+
+## Public API
+
+This is the rule set for the next method, service, or protocol.
+
+The app-facing surface is `Session`, `Peer`, and the service objects
+(`domains`, `domainData`, `fleet`, `jobs`, and the peer protocol clients).
+A new capability is a method on one of those. Do not export the native module,
+and do not add an app-facing function on the bridge.
+
+A new Swift, Kotlin, or Web bridge method is internal. The same change adds the
+typed method, the camelCase or protocol mapping, and a sample in this README.
+
+Calls with more than two inputs take an options object. `AbortSignal` is the
+cancel switch. A client that has `close()` also implements `Symbol.asyncDispose`.
+
+SDK-owned records are camelCase. Map snake_case at the facade. Protocol
+documents, including Catalog rows, registry entries, participant info, and
+message channels, keep the field names in their spec.
+
+Bytes are `Uint8Array`. Integer timestamps that do not fit a JavaScript number
+are `bigint`. Public methods do not take base64 or decimal strings.
+
+A pull stream is an async iterable. Do not add another subscribe, next, and
+cancel string-handle trio.
+
+Stored identity is a `Session` id. New resources are objects, not new public
+string handles. Rebuild a stored session with `Session.from(id)`.
+
+Failures throw `AukiError` with a `code` from the shared set: `cancelled`,
+`closed`, `timeout`, `auth`, `input`, `response`, `http`, `transport`, `limit`,
+`callback`, `cleanup`, `submission_uncertain`, `submission_in_progress`.
+A new failure reuses a code, or adds one code that every service uses.
+Auth detail is `authCode` (`authentication_required`, `configuration`,
+`authorization_denied`, `persistence`, `transient`, `cancelled`, `closed`).
+Do not add a second `kind` vocabulary.
+
+Public names do not include Expo, Zitadel, Exact, or Dev. Those stay in the
+bridge and in docs. `Session.login` without `environment` uses the shared
+default deployment. `Session.import` takes a public-client PKCE result; the
+identity provider is named in the authentication guide, not in the method.
+
+Catalog, Info, Registry, and Blob opens that share one circuit go through the
+existing one-shot queue inside `Peer`. Streams and messages stay off that queue.
+
+Web, iOS, and Android stay behavior-compatible. A web JSON failure says nothing
+about the iOS or Android bridge. Check the platform that failed.
+
+Examples, this README, and the bridge tests change in the same pull request as
+the method. `_ackZitadelSave` is only for the host harness, which rejects a
+mismatched credential save. Apps do not call it.

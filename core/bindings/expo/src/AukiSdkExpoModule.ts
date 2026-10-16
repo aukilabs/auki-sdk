@@ -10,12 +10,11 @@ import type {
 } from "./AukiSdkExpo.types";
 
 declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents> {
-  /** @internal Use Session.import and Session.close, not these bridge methods. */
-  _importZitadel(credentialsJson: string, environmentJson: string | null): Promise<string>;
-  _zitadelCredentials(sessionId: string, requestId: string): Promise<string>;
-  _ackZitadelSave(sessionId: string, requestId: string, success: boolean): Promise<boolean>;
-  _closeSession(sessionId: string): Promise<void>;
-  loginDev(email: string, password: string, clientId?: string | null): Promise<string>;
+  importSession(credentialsJson: string, environmentJson: string | null): Promise<string>;
+  sessionCredentials(sessionId: string, requestId: string): Promise<string>;
+  ackSessionSave(sessionId: string, requestId: string, success: boolean): Promise<boolean>;
+  closeSession(sessionId: string): Promise<void>;
+  login(email: string, password: string, clientId?: string | null): Promise<string>;
   loginWithEnvironment(
     apiBaseUrl: string,
     ddsBaseUrl: string,
@@ -111,30 +110,30 @@ declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents
     peerHandle: string,
     protocolId: string,
   ): Promise<AukiDiscoveryCandidateInfo[]>;
-  infoFetchExact(peerHandle: string, target: AukiExactTarget): Promise<string>;
-  catalogFetchResourcesExact(
+  infoFetch(peerHandle: string, target: AukiExactTarget): Promise<string>;
+  catalogFetchResources(
     peerHandle: string,
     target: AukiExactTarget,
     variants: string[],
   ): Promise<string>;
-  registryListExact(
+  registryList(
     peerHandle: string,
     target: AukiExactTarget,
     kind: string,
   ): Promise<string>;
-  registryFetchExact(
+  registryFetch(
     peerHandle: string,
     target: AukiExactTarget,
     kind: string,
     id: string,
     hash: string,
   ): Promise<string>;
-  blobFetchExact(
+  blobFetch(
     peerHandle: string,
     target: AukiExactTarget,
     sha256: string,
   ): Promise<string>;
-  streamSubscribeExact(
+  streamSubscribe(
     peerHandle: string,
     target: AukiExactTarget,
     payloadKind: string,
@@ -142,7 +141,7 @@ declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents
   ): Promise<string>;
   streamNext(subscriptionId: string): Promise<string | null>;
   streamCancel(subscriptionId: string): Promise<void>;
-  messageOpenExact(
+  messageOpen(
     peerHandle: string,
     target: AukiExactTarget,
     channelJson: string,
@@ -154,13 +153,13 @@ declare class AukiSdkExpoModuleType extends NativeModule<AukiSdkExpoModuleEvents
     payloadBase64: string,
   ): Promise<void>;
   messageClose(senderHandle: string): Promise<void>;
-  urdfModelFromXml(xml: string): Promise<string>;
+  urdfFromXml(xml: string): Promise<string>;
   urdfJointCount(handle: string): Promise<number>;
   urdfResolve(handle: string, angles: number[]): Promise<string>;
   urdfResolveIdentity(handle: string): Promise<string>;
-  urdfModelFree(handle: string): Promise<void>;
+  urdfDispose(handle: string): Promise<void>;
   shutdown(peerHandle: string): Promise<void>;
-  waitStopped(peerHandle: string): Promise<void>;
+  waitUntilStopped(peerHandle: string): Promise<void>;
 }
 
 export default requireNativeModule<AukiSdkExpoModuleType>("AukiSdkExpo");

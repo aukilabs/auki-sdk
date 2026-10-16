@@ -231,7 +231,7 @@ export class Peer {
   }
 
   waitUntilStopped(): Promise<void> {
-    return module.waitStopped(this.handle).catch(error => {
+    return module.waitUntilStopped(this.handle).catch(error => {
       throw normalizeAukiError(error, "Peer stopped unexpectedly");
     });
   }
@@ -245,7 +245,7 @@ class PeerInfo {
   constructor(private readonly handle: string) {}
 
   fetch(route: PeerRoute): Promise<unknown> {
-    return enqueueOpen(async () => parseJson(await module.infoFetchExact(this.handle, route)));
+    return enqueueOpen(async () => parseJson(await module.infoFetch(this.handle, route)));
   }
 }
 
@@ -254,7 +254,7 @@ class PeerCatalog {
 
   fetchResources(route: PeerRoute, variants: string[]): Promise<unknown> {
     return enqueueOpen(async () => parseJson(
-      await module.catalogFetchResourcesExact(this.handle, route, variants),
+      await module.catalogFetchResources(this.handle, route, variants),
     ));
   }
 }
@@ -264,13 +264,13 @@ class PeerRegistry {
 
   list(route: PeerRoute, kind: string): Promise<unknown> {
     return enqueueOpen(async () => parseJson(
-      await module.registryListExact(this.handle, route, kind),
+      await module.registryList(this.handle, route, kind),
     ));
   }
 
   fetch(route: PeerRoute, kind: string, id: string, hash: string): Promise<unknown> {
     return enqueueOpen(async () => parseJson(
-      await module.registryFetchExact(this.handle, route, kind, id, hash),
+      await module.registryFetch(this.handle, route, kind, id, hash),
     ));
   }
 }
@@ -280,7 +280,7 @@ class PeerBlobs {
 
   fetch(route: PeerRoute, sha256: string): Promise<BlobReceipt> {
     return enqueueOpen(async () => {
-      const receipt = parseJson(await module.blobFetchExact(this.handle, route, sha256)) as {
+      const receipt = parseJson(await module.blobFetch(this.handle, route, sha256)) as {
         bytesBase64?: string;
         sha256?: string;
         relayed?: boolean;
@@ -307,7 +307,7 @@ class PeerStreams {
     options: { signal?: AbortSignal } = {},
   ): Promise<StreamSubscription> {
     if (options.signal?.aborted) throw aukiError("cancelled", "Stream request cancelled");
-    const id = await module.streamSubscribeExact(
+    const id = await module.streamSubscribe(
       this.handle,
       route,
       payloadKind,
@@ -329,7 +329,7 @@ class PeerMessages {
   constructor(private readonly handle: string) {}
 
   async open(route: PeerRoute, channel: MessageChannel): Promise<MessageSender> {
-    const id = await module.messageOpenExact(this.handle, route, JSON.stringify(channel));
+    const id = await module.messageOpen(this.handle, route, JSON.stringify(channel));
     return new MessageSender(id);
   }
 }

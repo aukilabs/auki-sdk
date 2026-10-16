@@ -35,7 +35,7 @@ function subscribe(): void {
       try {
         const store = stores.get(request.sessionId);
         if (!store) throw new Error("session storage owner missing");
-        const json = await module._zitadelCredentials(request.sessionId, request.requestId);
+        const json = await module.sessionCredentials(request.sessionId, request.requestId);
         const result = store(new ZitadelCredentialsSnapshot(JSON.parse(json)));
         if (!result || typeof result.then !== "function") throw new Error("storage must return a Promise");
         await result;
@@ -44,7 +44,7 @@ function subscribe(): void {
         // Host/platform error text is deliberately never sent across the bridge.
       }
       // This ACK (not event delivery) releases the core's awaited save.
-      await module._ackZitadelSave(request.sessionId, request.requestId, success);
+      await module.ackSessionSave(request.sessionId, request.requestId, success);
     })().catch(() => {
       // A lost bridge ACK must fail closed: keep the native save pending. Do not
       // pretend a completed close or start a competing rotation. No secret logs.
@@ -61,21 +61,21 @@ export async function importZitadelSession(
   store: ZitadelSessionStore,
   environment?: AukiServiceEnvironment,
 ): Promise<string> {
-  if (typeof module._importZitadel !== "function") throw new Error("Zitadel sessions are supported on Web, iOS, and Android");
+  if (typeof module.importSession !== "function") throw new Error("Zitadel sessions are supported on Web, iOS, and Android");
   if (typeof store !== "function") throw Object.assign(new Error("Storage callback required"), { code: "configuration" });
   subscribe();
-  const id = await module._importZitadel(JSON.stringify(credentials), environment ? JSON.stringify(environment) : null);
+  const id = await module.importSession(JSON.stringify(credentials), environment ? JSON.stringify(environment) : null);
   stores.set(id, store);
   return id;
 }
 
 /** Stop owned peers separately. Await this drain BEFORE clearing host storage. */
 export async function closeSession(sessionId: string): Promise<void> {
-  await module._closeSession(sessionId);
+  await module.closeSession(sessionId);
   stores.delete(sessionId);
 }
 
 /** @internal Host harnesses reject a mismatched save. Apps use Session.import. */
 export function ackZitadelSave(sessionId: string, requestId: string, success: boolean): Promise<boolean> {
-  return module._ackZitadelSave(sessionId, requestId, success);
+  return module.ackSessionSave(sessionId, requestId, success);
 }

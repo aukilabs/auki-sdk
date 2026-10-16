@@ -164,7 +164,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     reject: () => void;
   }>();
 
-  async _importZitadel(credentialsJson: string, environmentJson: string | null): Promise<string> {
+  async importSession(credentialsJson: string, environmentJson: string | null): Promise<string> {
     const sdk = await this.sdk();
     const id = newId("session");
     try {
@@ -185,7 +185,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     }
   }
 
-  async _zitadelCredentials(sessionId: string, requestId: string): Promise<string> {
+  async sessionCredentials(sessionId: string, requestId: string): Promise<string> {
     const pending = this.saves.get(sessionId);
     if (!pending || pending.requestId !== requestId) throw new Error("No matching storage request");
     const c = pending.snapshot;
@@ -193,7 +193,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
       clientId: c.clientId, issuer: c.issuer, accessTokenExpiresAt: c.accessTokenExpiresAt ?? null });
   }
 
-  async _ackZitadelSave(sessionId: string, requestId: string, success: boolean): Promise<boolean> {
+  async ackSessionSave(sessionId: string, requestId: string, success: boolean): Promise<boolean> {
     const pending = this.saves.get(sessionId);
     if (!pending || pending.requestId !== requestId) return false;
     this.saves.delete(sessionId);
@@ -202,7 +202,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     return true;
   }
 
-  async _closeSession(sessionId: string): Promise<void> {
+  async closeSession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
     await session.close();
@@ -235,7 +235,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     return peer;
   }
 
-  async loginDev(email: string, password: string, clientId?: string | null): Promise<string> {
+  async login(email: string, password: string, clientId?: string | null): Promise<string> {
     const sdk = await this.sdk();
     const session = await sdk.AukiUserSession.loginDev(email, password, clientId);
     const id = newId("session");
@@ -770,7 +770,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     }
   }
 
-  async infoFetchExact(
+  async infoFetch(
     peerHandle: string,
     target: AukiExactTarget,
   ): Promise<string> {
@@ -781,7 +781,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     return jsonStringify(info);
   }
 
-  async catalogFetchResourcesExact(
+  async catalogFetchResources(
     peerHandle: string,
     target: AukiExactTarget,
     variants: string[],
@@ -796,7 +796,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     return jsonStringify(resources);
   }
 
-  async registryListExact(
+  async registryList(
     peerHandle: string,
     target: AukiExactTarget,
     kind: string,
@@ -808,7 +808,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     return jsonStringify(entries);
   }
 
-  async registryFetchExact(
+  async registryFetch(
     peerHandle: string,
     target: AukiExactTarget,
     kind: string,
@@ -822,7 +822,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     return jsonStringify(entry);
   }
 
-  async blobFetchExact(
+  async blobFetch(
     peerHandle: string,
     target: AukiExactTarget,
     sha256: string,
@@ -840,7 +840,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     } else if (Array.isArray(bytes)) {
       payload = Uint8Array.from(bytes);
     } else {
-      throw new Error("blobFetchExact: unexpected bytes type");
+      throw new Error("blobFetch: unexpected bytes type");
     }
     return jsonStringify({
       peerId: receipt.peerId,
@@ -850,7 +850,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     });
   }
 
-  async streamSubscribeExact(
+  async streamSubscribe(
     peerHandle: string,
     target: AukiExactTarget,
     payloadKind: string,
@@ -915,7 +915,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     this.streams.delete(subscriptionId);
   }
 
-  async messageOpenExact(
+  async messageOpen(
     peerHandle: string,
     target: AukiExactTarget,
     channelJson: string,
@@ -953,8 +953,8 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     entry.sender.free();
   }
 
-  async urdfModelFromXml(_xml: string): Promise<string> {
-    throw new Error("urdfModelFromXml is native-only; use auki-urdf-fk wasm on web");
+  async urdfFromXml(_xml: string): Promise<string> {
+    throw new Error("urdfFromXml is native-only; use auki-urdf-fk wasm on web");
   }
 
   async urdfJointCount(_handle: string): Promise<number> {
@@ -969,8 +969,8 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     throw new Error("urdfResolveIdentity is native-only");
   }
 
-  async urdfModelFree(_handle: string): Promise<void> {
-    throw new Error("urdfModelFree is native-only");
+  async urdfDispose(_handle: string): Promise<void> {
+    throw new Error("urdfDispose is native-only");
   }
 
   async shutdown(peerHandle: string): Promise<void> {
@@ -994,7 +994,7 @@ class AukiSdkExpoModule extends NativeModule<AukiSdkExpoModuleEvents> {
     this.peers.delete(peerHandle);
   }
 
-  async waitStopped(peerHandle: string): Promise<void> {
+  async waitUntilStopped(peerHandle: string): Promise<void> {
     await this.peer(peerHandle).waitStopped();
   }
 

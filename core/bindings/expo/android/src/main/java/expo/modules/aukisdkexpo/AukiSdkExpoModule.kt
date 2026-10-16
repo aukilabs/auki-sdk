@@ -49,7 +49,7 @@ class AukiSdkExpoModule : Module() {
       uniffiEnsureInitialized()
     }
 
-    AsyncFunction("_importZitadel") Coroutine { credentialsJson: String, environmentJson: String? ->
+    AsyncFunction("importSession") Coroutine { credentialsJson: String, environmentJson: String? ->
       val id = newId("session")
       val store = ExpoZitadelStore { requestId ->
         sendEvent(
@@ -62,19 +62,19 @@ class AukiSdkExpoModule : Module() {
       id
     }
 
-    AsyncFunction("_zitadelCredentials") Coroutine { sessionId: String, requestId: String ->
+    AsyncFunction("sessionCredentials") Coroutine { sessionId: String, requestId: String ->
       sessions.store(sessionId).credentialsJson(requestId)
     }
 
-    AsyncFunction("_ackZitadelSave") Coroutine { sessionId: String, requestId: String, success: Boolean ->
+    AsyncFunction("ackSessionSave") Coroutine { sessionId: String, requestId: String, success: Boolean ->
       sessions.store(sessionId).acknowledge(requestId, success)
     }
 
-    AsyncFunction("_closeSession") Coroutine { sessionId: String ->
+    AsyncFunction("closeSession") Coroutine { sessionId: String ->
       sessions.close(sessionId)
     }
 
-    AsyncFunction("loginDev") Coroutine { email: String, password: String, clientId: String? ->
+    AsyncFunction("login") Coroutine { email: String, password: String, clientId: String? ->
       val session = withAuthErrors { AukiSession.loginDev(email, password, clientId) }
       val id = newId("session")
       sessions.insert(id, session)
@@ -596,12 +596,12 @@ class AukiSdkExpoModule : Module() {
       requirePeer(peerHandle).discoverProtocol(protocolId).map(::mapCandidate)
     }
 
-    AsyncFunction("infoFetchExact") Coroutine { peerHandle: String, target: Map<String, String> ->
+    AsyncFunction("infoFetch") Coroutine { peerHandle: String, target: Map<String, String> ->
       val peer = requirePeer(peerHandle)
       AukiInfoClient(peer).fetchExact(exactTarget(target, peer.domainId()))
     }
 
-    AsyncFunction("catalogFetchResourcesExact") Coroutine {
+    AsyncFunction("catalogFetchResources") Coroutine {
         peerHandle: String,
         target: Map<String, String>,
         variants: List<String>,
@@ -616,7 +616,7 @@ class AukiSdkExpoModule : Module() {
       )
     }
 
-    AsyncFunction("registryListExact") Coroutine { peerHandle: String, target: Map<String, String>, kind: String ->
+    AsyncFunction("registryList") Coroutine { peerHandle: String, target: Map<String, String>, kind: String ->
       val peer = requirePeer(peerHandle)
       val entries = AukiRegistryClient(peer).listExact(
         exactTarget(target, peer.domainId()),
@@ -625,7 +625,7 @@ class AukiSdkExpoModule : Module() {
       jsonString(entries.map { mapOf("id" to it.id, "hash" to it.hash) })
     }
 
-    AsyncFunction("registryFetchExact") Coroutine {
+    AsyncFunction("registryFetch") Coroutine {
         peerHandle: String,
         target: Map<String, String>,
         kind: String,
@@ -641,7 +641,7 @@ class AukiSdkExpoModule : Module() {
       )
     }
 
-    AsyncFunction("blobFetchExact") Coroutine { peerHandle: String, target: Map<String, String>, sha256: String ->
+    AsyncFunction("blobFetch") Coroutine { peerHandle: String, target: Map<String, String>, sha256: String ->
       val peer = requirePeer(peerHandle)
       val receipt = AukiBlobClient(peer).fetchExact(exactTarget(target, peer.domainId()), sha256)
       jsonString(
@@ -654,7 +654,7 @@ class AukiSdkExpoModule : Module() {
       )
     }
 
-    AsyncFunction("streamSubscribeExact") Coroutine {
+    AsyncFunction("streamSubscribe") Coroutine {
         peerHandle: String,
         target: Map<String, String>,
         payloadKind: String,
@@ -684,7 +684,7 @@ class AukiSdkExpoModule : Module() {
       subscription.cancel()
     }
 
-    AsyncFunction("messageOpenExact") Coroutine {
+    AsyncFunction("messageOpen") Coroutine {
         peerHandle: String,
         target: Map<String, String>,
         channelJson: String,
@@ -723,7 +723,7 @@ class AukiSdkExpoModule : Module() {
       (sender as AukiMessageSenderInterface).close()
     }
 
-    AsyncFunction("urdfModelFromXml") Coroutine { xml: String ->
+    AsyncFunction("urdfFromXml") Coroutine { xml: String ->
       val model = AukiUrdfModel.fromXml(xml)
       val id = newId("urdf")
       synchronized(handles) { urdfModels[id] = model }
@@ -743,7 +743,7 @@ class AukiSdkExpoModule : Module() {
       encodeUrdfLinks(requireUrdf(handle).resolveIdentityPose())
     }
 
-    AsyncFunction("urdfModelFree") Coroutine { handle: String ->
+    AsyncFunction("urdfDispose") Coroutine { handle: String ->
       synchronized(handles) { urdfModels.remove(handle) }
       Unit
     }
@@ -763,7 +763,7 @@ class AukiSdkExpoModule : Module() {
       if (peer != null) peer.shutdown()
     }
 
-    AsyncFunction("waitStopped") Coroutine { peerHandle: String ->
+    AsyncFunction("waitUntilStopped") Coroutine { peerHandle: String ->
       withAuthErrors { requirePeer(peerHandle).waitStopped() }
     }
   }

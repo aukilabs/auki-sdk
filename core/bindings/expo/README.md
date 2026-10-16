@@ -13,7 +13,7 @@ npm run build
 ~~~
 
 For iOS, also run `bash scripts/sync-ios-xcframework.sh` from this directory.
-For Android, set `ANDROID_NDK_HOME` and run `bash scripts/sync-android-jni.sh`.
+For Android, run `bash scripts/sync-android-jni.sh`. It uses `ANDROID_NDK_HOME` when set, and otherwise the newest NDK installed under the Android SDK.
 Both scripts build [`auki-sdk-uniffi`](../uniffi/auki-sdk-uniffi/README.md), the
 shared native library `libauki_sdk_uniffi`. iOS gets Swift; Android gets Kotlin.
 Web does not use that library. `npm run build` compiles the separate Wasm crate
@@ -330,9 +330,10 @@ Auth detail is `authCode` (`authentication_required`, `configuration`,
 `authorization_denied`, `persistence`, `transient`, `cancelled`, `closed`).
 Do not add a second `kind` vocabulary.
 
-Public names do not include Expo, Zitadel, Exact, or Dev. Those stay in the
-bridge and in docs. `Session.login` without `environment` uses the shared
-default deployment. `Session.import` takes a public-client PKCE result; the
+Public names do not include Expo, Zitadel, Exact, or Dev. The bridge methods
+use those same Session and Peer names. Rust and the generated Wasm bindings
+keep `loginDev`, `importZitadel`, and `waitStopped`. `Session.login` without
+`environment` uses the shared default deployment. `Session.import` takes a public-client PKCE result; the
 identity provider is named in the authentication guide, not in the method.
 
 Catalog, Info, Registry, and Blob opens that share one circuit go through the

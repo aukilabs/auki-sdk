@@ -34,7 +34,7 @@ export class Session {
           options.password,
           options.clientId,
         )
-        : await module.loginDev(options.email, options.password, options.clientId);
+        : await module.login(options.email, options.password, options.clientId);
       return new Session(id);
     } catch (error) {
       throw normalizeAukiError(error, "Sign-in failed");

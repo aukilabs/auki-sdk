@@ -22,7 +22,7 @@ public class AukiSdkExpoModule: Module {
     Name("AukiSdkExpo")
     Events("onZitadelSaveRequested")
 
-    AsyncFunction("_importZitadel") { (credentialsJson: String, environmentJson: String?) -> String in
+    AsyncFunction("importSession") { (credentialsJson: String, environmentJson: String?) -> String in
       #if canImport(auki_sdk_uniffiFFI)
       let id = self.newId("session")
       let store = ExpoZitadelStore { [weak self] requestId in
@@ -36,7 +36,7 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("_zitadelCredentials") { (sessionId: String, requestId: String) -> String in
+    AsyncFunction("sessionCredentials") { (sessionId: String, requestId: String) -> String in
       #if canImport(auki_sdk_uniffiFFI)
       return try await self.sessions.store(sessionId).credentialsJson(requestId: requestId)
       #else
@@ -44,7 +44,7 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("_ackZitadelSave") { (sessionId: String, requestId: String, success: Bool) -> Bool in
+    AsyncFunction("ackSessionSave") { (sessionId: String, requestId: String, success: Bool) -> Bool in
       #if canImport(auki_sdk_uniffiFFI)
       return try await self.sessions.store(sessionId).acknowledge(requestId: requestId, success: success)
       #else
@@ -52,7 +52,7 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("_closeSession") { (sessionId: String) in
+    AsyncFunction("closeSession") { (sessionId: String) in
       #if canImport(auki_sdk_uniffiFFI)
       await self.sessions.close(sessionId)
       #else
@@ -60,7 +60,7 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("loginDev") { (email: String, password: String, clientId: String?) -> String in
+    AsyncFunction("login") { (email: String, password: String, clientId: String?) -> String in
       #if canImport(auki_sdk_uniffiFFI)
       let session = try await withAuthErrors {
         try await AukiSession.loginDev(email: email, password: password, clientId: clientId)
@@ -744,7 +744,7 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("infoFetchExact") {
+    AsyncFunction("infoFetch") {
       (peerHandle: String, target: [String: String]) -> String in
       #if canImport(auki_sdk_uniffiFFI)
       let peer = try self.requirePeer(peerHandle)
@@ -756,7 +756,7 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("catalogFetchResourcesExact") {
+    AsyncFunction("catalogFetchResources") {
       (peerHandle: String, target: [String: String], variants: [String]) -> String in
       #if canImport(auki_sdk_uniffiFFI)
       let peer = try self.requirePeer(peerHandle)
@@ -771,7 +771,7 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("registryListExact") {
+    AsyncFunction("registryList") {
       (peerHandle: String, target: [String: String], kind: String) -> String in
       #if canImport(auki_sdk_uniffiFFI)
       let peer = try self.requirePeer(peerHandle)
@@ -790,7 +790,7 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("registryFetchExact") {
+    AsyncFunction("registryFetch") {
       (
         peerHandle: String,
         target: [String: String],
@@ -813,7 +813,7 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("blobFetchExact") {
+    AsyncFunction("blobFetch") {
       (peerHandle: String, target: [String: String], sha256: String) -> String in
       #if canImport(auki_sdk_uniffiFFI)
       let peer = try self.requirePeer(peerHandle)
@@ -833,7 +833,7 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("streamSubscribeExact") {
+    AsyncFunction("streamSubscribe") {
       (
         peerHandle: String,
         target: [String: String],
@@ -886,7 +886,7 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("messageOpenExact") {
+    AsyncFunction("messageOpen") {
       (peerHandle: String, target: [String: String], channelJson: String) -> String in
       #if canImport(auki_sdk_uniffiFFI)
       let peer = try self.requirePeer(peerHandle)
@@ -942,7 +942,7 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("urdfModelFromXml") { (xml: String) -> String in
+    AsyncFunction("urdfFromXml") { (xml: String) -> String in
       #if canImport(auki_sdk_uniffiFFI)
       let model = try AukiUrdfModel.fromXml(xml: xml)
       let id = self.newId("urdf")
@@ -980,7 +980,7 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("urdfModelFree") { (handle: String) in
+    AsyncFunction("urdfDispose") { (handle: String) in
       #if canImport(auki_sdk_uniffiFFI)
       self.urdfModels.removeValue(forKey: handle)
       #else
@@ -1003,7 +1003,7 @@ public class AukiSdkExpoModule: Module {
       #endif
     }
 
-    AsyncFunction("waitStopped") { (peerHandle: String) in
+    AsyncFunction("waitUntilStopped") { (peerHandle: String) in
       #if canImport(auki_sdk_uniffiFFI)
       try await withAuthErrors { try await self.requirePeer(peerHandle).waitStopped() }
       #else

@@ -8,7 +8,7 @@ export class UrdfModel {
   ) {}
 
   static async fromXml(xml: string): Promise<UrdfModel> {
-    const handle = await module.urdfModelFromXml(xml);
+    const handle = await module.urdfFromXml(xml);
     const count = await module.urdfJointCount(handle);
     return new UrdfModel(handle, count);
   }
@@ -26,6 +26,6 @@ export class UrdfModel {
   }
 
   dispose(): void {
-    void module.urdfModelFree(this.handle);
+    void module.urdfDispose(this.handle);
   }
 }

@@ -28,7 +28,7 @@ use auki_registry::{ClockBody, ClockMeta, ClockRegistryEntry, Scope};
 pub use auki_datatypes::time_transform::TimeTransformEntry;
 pub use auki_manifests::TimeTransformSource;
 
-/// Optional, network-independent publication of a fixed session-to-UTC anchor.
+/// Optional, network-independent publication of retained session-to-UTC samples.
 #[cfg(feature = "components")]
 #[doc = include_str!("../README.md")]
 pub mod components;
@@ -152,7 +152,7 @@ fn midpoint(a: i64, b: i64) -> i64 {
 /// SDK-owned session-monotonic clock identity and reader.
 ///
 /// The first path segment of `clock_id` is the authoring peer id. The
-/// `session_id` is encoded both in the id and as the registry epoch marker,
+/// `session_id` is encoded both in the id and in the typed registry session field,
 /// because a monotonic clock's zero point is only meaningful for one process
 /// lifetime.
 #[derive(Debug, Clone)]

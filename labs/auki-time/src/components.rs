@@ -1,4 +1,4 @@
-//! Fixed session-clock anchors as ordinary retained Component Products.
+//! Sampled session-to-UTC relationships as an ordinary retained history Product.
 //!
 //! Creating this helper neither starts a session nor exports a network service.
 //! The host serves the clock definitions and explicitly exports `product()` on
@@ -13,15 +13,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Clock, SessionClock, tick};
 
-pub const ANCHOR_SCHEMA: &str = "auki.session-utc-anchor/v1";
-pub const CONTRACT_SCHEMA: &str = "auki.session-utc-contract/v1";
+pub const SAMPLE_SCHEMA: &str = "auki.session-utc-sample/v1";
+pub const CONTRACT_SCHEMA: &str = "auki.session-utc-history/v1";
+
+/// Finite, non-evicting default retention. The host chooses the sampling cadence.
+pub const DEFAULT_HISTORY_CAPACITY: usize = 4096;
 
 /// Immutable relationship declaration. Full definitions resolve each endpoint's
 /// exact registry reference through `from_reference` / `to_reference`.
 ///
-/// This profile is a held offset measured once near session startup, not a
-/// continuously disciplined UTC clock. Sampling uncertainty is in the payload;
-/// unknown UTC accuracy and oscillator drift must not be interpreted as zero.
+/// Each observation measures an offset at its own session-clock timestamp. No
+/// hold, interpolation, or validity interval between observations is implied.
+/// Sampling uncertainty is in the payload; unknown UTC accuracy and oscillator
+/// drift must not be interpreted as zero.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionUtcContract {
@@ -41,7 +45,7 @@ impl SessionUtcContract {
 
     /// Content-derived identity binds both definitions and the accuracy claim.
     pub fn output_id(&self) -> String {
-        format!("session-utc-{}", manifest_hash(self))
+        format!("session-utc-history-v1-{}", manifest_hash(self))
     }
 
     pub fn validate(&self) -> Result<(), SessionClockError> {
@@ -107,14 +111,14 @@ fn reference(entry: &ClockRegistryEntry) -> ClockReference {
 fn payload_contract() -> PayloadContract {
     PayloadContract::Structured(StructuredPayloadContract {
         modality: "time_transform".into(),
-        datatype: ANCHOR_SCHEMA.into(),
-        schema: ANCHOR_SCHEMA.into(),
+        datatype: SAMPLE_SCHEMA.into(),
+        schema: SAMPLE_SCHEMA.into(),
         observes: "session_monotonic_to_local_utc".into(),
         unit: Some("nanoseconds".into()),
     })
 }
 
-/// A failed startup attempt is discoverable but never a usable transform.
+/// A failed measurement is discoverable but never a usable transform.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UtcUnavailable {
@@ -123,10 +127,11 @@ pub enum UtcUnavailable {
     InvalidSample,
 }
 
-/// Capture time belongs to the enclosing SDK Observation in `from_clock`.
+/// Measurement time belongs to the enclosing SDK Observation in `from_clock`.
+/// Later samples never replace earlier samples, including failed measurements.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
-pub enum SessionUtcAnchor {
+pub enum SessionUtcSample {
     Available {
         /// `UTC_ns = session_ns + offset_ns` (checked arithmetic required).
         offset_ns: i64,
@@ -138,18 +143,18 @@ pub enum SessionUtcAnchor {
     },
 }
 
-impl ContractType for SessionUtcAnchor {
-    const DATATYPE: &'static str = ANCHOR_SCHEMA;
+impl ContractType for SessionUtcSample {
+    const DATATYPE: &'static str = SAMPLE_SCHEMA;
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionClockError {
     #[error("invalid session UTC contract: {0}")]
     Invalid(String),
-    #[error("the session UTC startup attempt is immutable and has already been published")]
-    AlreadyPublished,
-    #[error("no session UTC startup attempt has been published")]
-    NotPublished,
+    #[error("session UTC sample {sequence} is not retained")]
+    MissingSample { sequence: u64 },
+    #[error("session UTC history is full (capacity {capacity}); no samples were evicted")]
+    HistoryFull { capacity: usize },
     #[error("component: {0}")]
     Component(Box<ComponentBuildError>),
     #[error("capture: {0}")]
@@ -176,9 +181,12 @@ pub struct SessionClockPublisher {
     session: SessionClock,
     contract: SessionUtcContract,
     _component: Component,
-    output: ConfiguredObservable<SessionUtcAnchor>,
-    capture: BufferProductCapture<SessionUtcAnchor>,
-    attempted: bool,
+    output: ConfiguredObservable<SessionUtcSample>,
+    capture: BufferProductCapture<SessionUtcSample>,
+    capacity: usize,
+    published_samples: usize,
+    last_timestamp_ns: Option<u64>,
+    failed: bool,
 }
 
 impl SessionClockPublisher {
@@ -186,6 +194,19 @@ impl SessionClockPublisher {
         runtime: &ComponentRuntime,
         session: &SessionClock,
     ) -> Result<Self, SessionClockError> {
+        Self::with_capacity(runtime, session, DEFAULT_HISTORY_CAPACITY)
+    }
+
+    /// Bounded retention without eviction. A full history rejects new samples
+    /// before reading UTC; it never discards the existing clock evidence.
+    pub fn with_capacity(
+        runtime: &ComponentRuntime,
+        session: &SessionClock,
+        capacity: usize,
+    ) -> Result<Self, SessionClockError> {
+        if capacity == 0 {
+            return Err(invalid("history capacity must be positive"));
+        }
         let from = session.registry_entry();
         let contract = SessionUtcContract {
             to_clock: ClockRegistryEntry {
@@ -209,14 +230,14 @@ impl SessionClockPublisher {
         let id = contract.output_id();
         let component =
             runtime.component(ComponentSpec::new(&id).observable(ObservableContract {
-                name: "anchor".into(),
-                datatype: ANCHOR_SCHEMA.into(),
-                schema: ANCHOR_SCHEMA.into(),
+                name: "measurements".into(),
+                datatype: SAMPLE_SCHEMA.into(),
+                schema: SAMPLE_SCHEMA.into(),
                 access: vec![ObservationAccess::FollowNew],
                 exposure: Exposure::Cluster,
             }))?;
         let output = component.configured_observable(ConfiguredObservableSpec::new(
-            "anchor",
+            "measurements",
             &id,
             contract.from_reference(),
             payload_contract(),
@@ -227,14 +248,10 @@ impl SessionClockPublisher {
         let capture = runtime.capture_buffer_with_metadata(
             id,
             &output,
-            BufferLimits {
-                max_entries: Some(1),
-                max_bytes: Some(1024),
-                target_duration: None,
-            },
-            |_| std::mem::size_of::<SessionUtcAnchor>(),
+            BufferLimits::entries(capacity),
+            |_| std::mem::size_of::<SessionUtcSample>(),
             move |observation| {
-                validate_anchor(observation).map_err(|e| e.to_string())?;
+                validate_sample(observation).map_err(|e| e.to_string())?;
                 Ok(Some(CatalogProductMetadata {
                     schema: CONTRACT_SCHEMA.into(),
                     source_sequence: observation.sequence,
@@ -248,7 +265,10 @@ impl SessionClockPublisher {
             _component: component,
             output,
             capture,
-            attempted: false,
+            capacity,
+            published_samples: 0,
+            last_timestamp_ns: None,
+            failed: false,
         })
     }
 
@@ -256,16 +276,18 @@ impl SessionClockPublisher {
         &self.contract
     }
 
-    pub fn product(&self) -> RetainedProduct<SessionUtcAnchor> {
+    /// Share/export this Product for reading. Mutating its local buffer or
+    /// retention limits outside the publisher invalidates further publication.
+    pub fn product(&self) -> RetainedProduct<SessionUtcSample> {
         self.capture.product()
     }
 
-    /// Call once at session startup, before capture workloads. Wall-clock
-    /// corrections after this call cannot move the retained anchor.
-    pub fn publish_startup_anchor(
+    /// Measure now, normally at startup and occasionally afterward. No timer is
+    /// installed. Wall-clock corrections appear only in new observations.
+    pub fn publish_measurement(
         &mut self,
-    ) -> Result<Observation<SessionUtcAnchor>, SessionClockError> {
-        self.publish_startup_anchor_with_utc(|| {
+    ) -> Result<Observation<SessionUtcSample>, SessionClockError> {
+        self.publish_measurement_with_utc(|| {
             let duration = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_err(|_| UtcUnavailable::OutOfRange)?;
@@ -275,34 +297,84 @@ impl SessionClockPublisher {
 
     /// Inject only the UTC reader, not a capture timestamp or a second monotonic
     /// clock. It must read this host's current Unix UTC in nanoseconds. Failures
-    /// publish a typed unavailable outcome. A second call fails without reading.
-    pub fn publish_startup_anchor_with_utc(
+    /// append a typed unavailable outcome; a later measurement may recover.
+    /// No queued sensor timestamp or receipt-time approximation is accepted.
+    pub fn publish_measurement_with_utc(
         &mut self,
         utc_now: impl FnOnce() -> Result<i64, UtcUnavailable>,
-    ) -> Result<Observation<SessionUtcAnchor>, SessionClockError> {
-        if self.attempted {
-            return Err(SessionClockError::AlreadyPublished);
+    ) -> Result<Observation<SessionUtcSample>, SessionClockError> {
+        if self.failed {
+            return Err(invalid(
+                "session UTC publication stopped after retention failure",
+            ));
+        }
+        if let Err(error) = self.validate_retention() {
+            self.failed = true;
+            return Err(error);
+        }
+        if self.published_samples == self.capacity {
+            return Err(SessionClockError::HistoryFull {
+                capacity: self.capacity,
+            });
         }
         let before = self.session.now_i64_ns();
         let utc = utc_now();
         let after = self.session.now_i64_ns();
-        let (timestamp, anchor) = sample(before, utc, after);
-        // Even a failed retention/publication must not permit a second anchor.
-        self.attempted = true;
-        self.output.publish(timestamp, Arc::new(anchor))?;
-        if !self.capture.errors().is_empty() {
-            return Err(invalid("session UTC anchor retention failed"));
+        let (timestamp, measurement) = sample(before, utc, after);
+        self.append_measurement(timestamp, measurement)
+    }
+
+    fn append_measurement(
+        &mut self,
+        timestamp: u64,
+        measurement: SessionUtcSample,
+    ) -> Result<Observation<SessionUtcSample>, SessionClockError> {
+        // The SDK buffer is strictly increasing. Reject a coarse-clock repeat
+        // before publication consumes a sequence; never synthesize a timestamp.
+        if self.last_timestamp_ns.is_some_and(|last| timestamp <= last) {
+            return Err(invalid("measurement timestamp must strictly increase"));
         }
-        read_session_anchor(&self.product(), &self.contract)
+        // Publication allocates a sequence before inline capture. Any failure
+        // from here is terminal for this publisher, not a retry with hidden gaps.
+        self.failed = true;
+        let (published, _) = self.output.publish(timestamp, Arc::new(measurement))?;
+        if !self.capture.errors().is_empty() {
+            return Err(invalid("session UTC sample retention failed"));
+        }
+        let observation = read_session_sample(&self.product(), &self.contract, published.sequence)?;
+        if observation.sequence != self.published_samples as u64 {
+            return Err(invalid("session UTC history sequence mismatch"));
+        }
+        self.published_samples += 1;
+        self.last_timestamp_ns = Some(timestamp);
+        self.validate_retention()?;
+        self.failed = false;
+        Ok(observation)
+    }
+
+    fn validate_retention(&self) -> Result<(), SessionClockError> {
+        let product = self.product();
+        let range = product.buffer().range();
+        if !self.capture.errors().is_empty()
+            || product.buffer().limits() != BufferLimits::entries(self.capacity)
+            || range.entries != self.published_samples
+            || range.first_sequence != (self.published_samples > 0).then_some(0)
+            || range.last_sequence != self.published_samples.checked_sub(1).map(|n| n as u64)
+            || range.last_timestamp_ns != self.last_timestamp_ns
+        {
+            return Err(invalid("session UTC history retention changed or failed"));
+        }
+        Ok(())
     }
 }
 
-/// Validate/read the same local or imported SDK Product. Sequence zero is the
-/// only accepted anchor; neither a replacement nor a latest-time guess is valid.
-pub fn read_session_anchor(
-    product: &RetainedProduct<SessionUtcAnchor>,
+/// Validate/read an exact sample in a local or imported retained history. This
+/// does not fetch remotely, infer missing history, or fall back to latest.
+pub fn read_session_sample(
+    product: &RetainedProduct<SessionUtcSample>,
     contract: &SessionUtcContract,
-) -> Result<Observation<SessionUtcAnchor>, SessionClockError> {
+    sequence: u64,
+) -> Result<Observation<SessionUtcSample>, SessionClockError> {
     contract.validate_output(&product.producer)?;
     if product.manifest.producer != product.producer.reference()
         || product.manifest.peer_id != product.producer.peer_id
@@ -310,43 +382,44 @@ pub fn read_session_anchor(
         || product.manifest.form != ProductForm::Buffer
         || product.manifest.schema != "auki.product-manifest/v1"
     {
-        return Err(invalid("anchor Product provenance mismatch"));
+        return Err(invalid("history Product provenance mismatch"));
     }
-    let observation = product
-        .latest_existing()?
-        .ok_or(SessionClockError::NotPublished)?;
-    let range = product.buffer().range();
-    if range.entries != 1 || range.first_sequence != Some(0) || range.last_sequence != Some(0) {
-        return Err(SessionClockError::AlreadyPublished);
+    let snapshot = product.buffer().snapshot(sequence, sequence);
+    let envelope = snapshot
+        .first()
+        .ok_or(SessionClockError::MissingSample { sequence })?;
+    let observation = &envelope.payload;
+    if envelope.sequence != sequence
+        || observation.sequence != sequence
+        || envelope.timestamp_ns != observation.timestamp_ns
+    {
+        return Err(invalid("sample envelope sequence or timestamp mismatch"));
     }
     if observation.output != product.producer.reference() {
-        return Err(invalid("anchor observation provenance mismatch"));
+        return Err(invalid("sample observation provenance mismatch"));
     }
-    validate_anchor(&observation)?;
-    Ok(observation)
+    validate_sample(observation)?;
+    Ok(observation.clone())
 }
 
-fn validate_anchor(observation: &Observation<SessionUtcAnchor>) -> Result<(), SessionClockError> {
-    if observation.sequence != 0 {
-        return Err(SessionClockError::AlreadyPublished);
-    }
+fn validate_sample(observation: &Observation<SessionUtcSample>) -> Result<(), SessionClockError> {
     let timestamp = i64::try_from(observation.timestamp_ns)
-        .map_err(|_| invalid("anchor timestamp overflow"))?;
-    if let SessionUtcAnchor::Available { offset_ns, .. } = *observation.payload
+        .map_err(|_| invalid("sample timestamp overflow"))?;
+    if let SessionUtcSample::Available { offset_ns, .. } = *observation.payload
         && timestamp.checked_add(offset_ns).is_none_or(|utc| utc < 0)
     {
-        return Err(invalid("anchor UTC timestamp out of range"));
+        return Err(invalid("sample UTC timestamp out of range"));
     }
     Ok(())
 }
 
 // Validate before using tick: its legacy saturating arithmetic must not invent
 // an offset or understate a sampling window for this strict profile.
-fn sample(before: i64, utc: Result<i64, UtcUnavailable>, after: i64) -> (u64, SessionUtcAnchor) {
+fn sample(before: i64, utc: Result<i64, UtcUnavailable>, after: i64) -> (u64, SessionUtcSample) {
     let invalid_sample = || {
         (
             before.max(0) as u64,
-            SessionUtcAnchor::Unavailable {
+            SessionUtcSample::Unavailable {
                 reason: UtcUnavailable::InvalidSample,
             },
         )
@@ -360,12 +433,12 @@ fn sample(before: i64, utc: Result<i64, UtcUnavailable>, after: i64) -> (u64, Se
         Ok(_) => {
             return (
                 midpoint as u64,
-                SessionUtcAnchor::Unavailable {
+                SessionUtcSample::Unavailable {
                     reason: UtcUnavailable::OutOfRange,
                 },
             );
         }
-        Err(reason) => return (midpoint as u64, SessionUtcAnchor::Unavailable { reason }),
+        Err(reason) => return (midpoint as u64, SessionUtcSample::Unavailable { reason }),
     };
     struct Readings {
         first: std::sync::atomic::AtomicBool,
@@ -393,7 +466,7 @@ fn sample(before: i64, utc: Result<i64, UtcUnavailable>, after: i64) -> (u64, Se
     });
     (
         timestamp as u64,
-        SessionUtcAnchor::Available {
+        SessionUtcSample::Available {
             offset_ns: entry.offset_ns,
             uncertainty_ns: entry.uncertainty_ns,
         },
@@ -404,13 +477,23 @@ fn sample(before: i64, utc: Result<i64, UtcUnavailable>, after: i64) -> (u64, Se
 mod tests {
     use super::*;
 
+    fn assert_same_sample(
+        actual: Observation<SessionUtcSample>,
+        expected: &Observation<SessionUtcSample>,
+    ) {
+        assert_eq!(actual.output, expected.output);
+        assert_eq!(actual.sequence, expected.sequence);
+        assert_eq!(actual.timestamp_ns, expected.timestamp_ns);
+        assert_eq!(actual.payload, expected.payload);
+    }
+
     #[test]
     fn sampling_preserves_sdk_midpoint_offset_and_full_read_window() {
         assert_eq!(
             sample(100, Ok(1_000), 140),
             (
                 120,
-                SessionUtcAnchor::Available {
+                SessionUtcSample::Available {
                     offset_ns: 880,
                     uncertainty_ns: 40,
                 }
@@ -420,7 +503,7 @@ mod tests {
             sample(100, Ok(50), 100),
             (
                 100,
-                SessionUtcAnchor::Available {
+                SessionUtcSample::Available {
                     offset_ns: -50,
                     uncertainty_ns: 0,
                 }
@@ -433,14 +516,14 @@ mod tests {
         for (before, after) in [(-1, 1), (2, 1), (0, i64::from(u32::MAX) + 1), (0, i64::MAX)] {
             assert!(matches!(
                 sample(before, Ok(1_000), after).1,
-                SessionUtcAnchor::Unavailable {
+                SessionUtcSample::Unavailable {
                     reason: UtcUnavailable::InvalidSample
                 }
             ));
         }
         assert!(matches!(
             sample(100, Ok(i64::MIN), 100).1,
-            SessionUtcAnchor::Unavailable {
+            SessionUtcSample::Unavailable {
                 reason: UtcUnavailable::OutOfRange
             }
         ));
@@ -448,7 +531,7 @@ mod tests {
             sample(i64::MAX - 1, Ok(i64::MAX), i64::MAX),
             (
                 (i64::MAX - 1) as u64,
-                SessionUtcAnchor::Available {
+                SessionUtcSample::Available {
                     offset_ns: 1,
                     uncertainty_ns: 1
                 }
@@ -456,7 +539,7 @@ mod tests {
         );
         assert!(matches!(
             sample(0, Ok(1_000), i64::from(u32::MAX)).1,
-            SessionUtcAnchor::Available {
+            SessionUtcSample::Available {
                 uncertainty_ns: u32::MAX,
                 ..
             }
@@ -469,7 +552,7 @@ mod tests {
             sample(100, Err(UtcUnavailable::ReadFailed), 140),
             (
                 120,
-                SessionUtcAnchor::Unavailable {
+                SessionUtcSample::Unavailable {
                     reason: UtcUnavailable::ReadFailed
                 }
             )
@@ -477,12 +560,12 @@ mod tests {
     }
 
     #[test]
-    fn reader_rejects_replacement_and_malformed_imported_anchor() {
+    fn reader_rejects_malformed_imported_sample() {
         let runtime = ComponentRuntime::new("peer");
         let session = SessionClock::new("peer", "session", "capture");
         let mut publisher = SessionClockPublisher::new(&runtime, &session).unwrap();
         let original = publisher
-            .publish_startup_anchor_with_utc(|| Ok(1_000_000_000))
+            .publish_measurement_with_utc(|| Ok(1_000_000_000))
             .unwrap();
         let source = publisher.product();
         for case in 0..6 {
@@ -499,18 +582,17 @@ mod tests {
             match case {
                 0 => {
                     observation.sequence = 1;
-                    envelope_sequence = 1;
                 }
                 1 => observation.output.manifest_hash = "0".repeat(32),
                 2 => observation.timestamp_ns = u64::MAX,
                 3 => {
-                    observation.payload = Arc::new(SessionUtcAnchor::Available {
+                    observation.payload = Arc::new(SessionUtcSample::Available {
                         offset_ns: i64::MAX,
                         uncertainty_ns: 0,
                     })
                 }
                 4 => {
-                    observation.payload = Arc::new(SessionUtcAnchor::Available {
+                    observation.payload = Arc::new(SessionUtcSample::Available {
                         offset_ns: i64::MIN,
                         uncertainty_ns: 0,
                     })
@@ -527,9 +609,88 @@ mod tests {
                 )))
                 .unwrap();
             assert!(
-                read_session_anchor(&imported, publisher.contract()).is_err(),
+                read_session_sample(&imported, publisher.contract(), envelope_sequence).is_err(),
                 "case {case}"
             );
         }
+    }
+
+    #[test]
+    fn repeated_or_older_measurement_time_rejects_without_consuming_sequence() {
+        let runtime = ComponentRuntime::new("peer");
+        let session = SessionClock::new("peer", "session", "capture");
+        let mut publisher = SessionClockPublisher::new(&runtime, &session).unwrap();
+        let measurement = SessionUtcSample::Available {
+            offset_ns: 1_000,
+            uncertainty_ns: 0,
+        };
+        let first = publisher
+            .append_measurement(100, measurement.clone())
+            .unwrap();
+        for timestamp in [100, 99] {
+            assert!(
+                publisher
+                    .append_measurement(timestamp, measurement.clone())
+                    .is_err()
+            );
+            assert_eq!(publisher.product().buffer().range().entries, 1);
+            assert!(!publisher.failed);
+        }
+        let second = publisher.append_measurement(101, measurement).unwrap();
+        assert_eq!((first.sequence, second.sequence), (0, 1));
+        assert_same_sample(
+            read_session_sample(&publisher.product(), publisher.contract(), 0).unwrap(),
+            &first,
+        );
+    }
+
+    #[test]
+    fn retention_failure_stops_publication_but_preserves_readable_history() {
+        let runtime = ComponentRuntime::new("peer");
+        let session = SessionClock::new("peer", "session", "capture");
+        let mut publisher = SessionClockPublisher::new(&runtime, &session).unwrap();
+        let first = publisher
+            .publish_measurement_with_utc(|| Ok(1_000_000_000))
+            .unwrap();
+        publisher.product().buffer().close();
+        assert!(
+            publisher
+                .publish_measurement_with_utc(|| Ok(2_000_000_000))
+                .is_err()
+        );
+        assert!(
+            publisher
+                .publish_measurement_with_utc(|| panic!("must stop before reading UTC"))
+                .is_err()
+        );
+        assert_eq!(publisher.product().buffer().range().entries, 1);
+        assert_same_sample(
+            read_session_sample(&publisher.product(), publisher.contract(), 0).unwrap(),
+            &first,
+        );
+    }
+
+    #[test]
+    fn changed_retention_limits_reject_before_sampling() {
+        let runtime = ComponentRuntime::new("peer");
+        let session = SessionClock::new("peer", "session", "capture");
+        let mut publisher = SessionClockPublisher::new(&runtime, &session).unwrap();
+        let first = publisher
+            .publish_measurement_with_utc(|| Ok(1_000_000_000))
+            .unwrap();
+        publisher
+            .product()
+            .buffer()
+            .set_limits(BufferLimits::entries(1))
+            .unwrap();
+        assert!(
+            publisher
+                .publish_measurement_with_utc(|| panic!("must detect changed retention"))
+                .is_err()
+        );
+        assert_same_sample(
+            read_session_sample(&publisher.product(), publisher.contract(), 0).unwrap(),
+            &first,
+        );
     }
 }

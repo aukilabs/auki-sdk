@@ -1190,12 +1190,16 @@ dependencies = [
 name = "auki-time"
 version = "0.0.0"
 dependencies = [
+ "auki-components",
  "auki-datatypes",
  "auki-logs",
  "auki-manifests",
  "auki-registry",
  "libc",
+ "serde",
+ "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

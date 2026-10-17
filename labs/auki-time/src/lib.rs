@@ -28,6 +28,11 @@ use auki_registry::{ClockBody, ClockMeta, ClockRegistryEntry, Scope};
 pub use auki_datatypes::time_transform::TimeTransformEntry;
 pub use auki_manifests::TimeTransformSource;
 
+/// Optional, network-independent publication of a fixed session-to-UTC anchor.
+#[cfg(feature = "components")]
+#[doc = include_str!("../README.md")]
+pub mod components;
+
 /// A fixed affine relationship from one clock to another.
 ///
 /// `offset_ns` is `to_clock - from_clock`, so conversion is

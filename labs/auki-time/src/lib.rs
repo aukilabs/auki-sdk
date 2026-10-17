@@ -33,6 +33,10 @@ pub use auki_manifests::TimeTransformSource;
 #[doc = include_str!("../README.md")]
 pub mod components;
 
+/// Bounded, in-memory resolution of explicit registry-backed clock relationships.
+#[cfg(feature = "components")]
+pub mod resolver;
+
 /// A fixed affine relationship from one clock to another.
 ///
 /// `offset_ns` is `to_clock - from_clock`, so conversion is

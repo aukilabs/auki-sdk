@@ -2,7 +2,8 @@
 
 `SessionClock`, offset transforms, and clock-pair sampling. The existing `tick`
 and `Sampler` APIs remain unchanged. Enable the optional `components` feature
-to publish a session-to-UTC relationship as an ordinary Component Product.
+to publish a session-to-UTC relationship as an ordinary Component Product and
+resolve explicitly declared temporal paths in memory.
 The feature adds no network dependency or background worker.
 
 ## Publish the existing session clock
@@ -114,8 +115,142 @@ Unrepresentable UTC values, invalid sample order and a read window exceeding
 Read-window uncertainty is not UTC accuracy. `utc_accuracy_ns` is unknown (`null`)
 for this publisher, and this profile supplies **no oscillator drift bound**.
 Consumers must not infer synchronization between distinct devices' UTC clocks,
-or bounded long-term accuracy from these samples. Inter-peer bridges,
-drift-aware conversion and transform discovery are later work.
+or bounded long-term accuracy from these samples. The resolver below can consume
+explicit bridges and drift declarations; measuring those bridges or estimating
+drift remains the publisher's responsibility.
+
+## In-memory temporal resolver
+
+`resolver::TemporalResolver` is an opt-in, network-independent index of exact
+clock definitions and admitted observations from SDK retained Products. It does
+not choose a Domain clock, start synchronization, fetch a Catalog, or add another
+transport or persistent registry. Applications supply definitions and Products
+through the existing SDK and explicitly authorize each evidence admission.
+
+1. `register_clock(reference, definition)` verifies the full registry identity
+   and nanosecond clock semantics. Equal names, owners, epochs, units or scopes
+   do not connect clocks. Resets require a new definition/reference.
+2. `insert_session_sample(product, contract, sequence, authorize)` reads the
+   existing history profile **at one measured instant only**. It does not turn a
+   startup sample into an offset valid indefinitely or interpolate later samples.
+3. `insert_offset_sample(product, contract, sequence, authorize)` accepts an
+   explicitly bounded offset relationship using the profile below. The reporter
+   may be any peer, including one that owns neither clock; the caller decides
+   whether to admit its claim. Valid hashes are not proof of authorization or
+   of the measurement's physical accuracy.
+4. `resolve(query)` returns a converted timestamp, conservative uncertainty,
+   source-clock coverage, and exact immutable Product/Output/sequence evidence
+   with each traversal direction. It never changes source timestamps.
+
+```rust
+# #[cfg(feature = "components")]
+# fn convert(
+#     resolver: &auki_time::resolver::TemporalResolver,
+#     steve_clock: auki_components::ClockReference,
+#     bob_clock: auki_components::ClockReference,
+# ) -> Result<(), auki_time::resolver::TemporalError> {
+use auki_time::resolver::TemporalQuery;
+
+let converted = resolver.resolve(&TemporalQuery {
+    from_clock: steve_clock,
+    to_clock: bob_clock,
+    timestamp_ns: 2_000_000_000,
+    input_uncertainty_ns: 0,
+    max_uncertainty_ns: 5_000_000,
+})?;
+// Use converted.timestamp_ns only in converted.to_clock. Its uncertainty and
+// path describe the evidence used, not a promise of perfect synchronization.
+# let _ = converted;
+# Ok(())
+# }
+```
+
+### Explicit bounded-offset Product profile
+
+- Payload: `auki.clock-offset/v1` (`OffsetSample`), an additive model only.
+- Catalog contract metadata: `auki.clock-offset-contract/v1` (`OffsetContract`).
+  Publishers attach that descriptor when registering/exporting their ordinary
+  Component Product. This module does not publish or export on their behalf.
+- Contract: exact `from_clock`, exact `to_clock`, and `allow_inverse`. The Output
+  clock is the source clock; its ID binds the contract hash. Registry definitions
+  must already be verified in the index.
+- Observation timestamp: measurement time in the declared source clock.
+- Available payload: signed `offset_ns`, optional `uncertainty_ns`, optional
+  `max_drift_ppb`, and an inclusive source-clock `validity` interval containing
+  the measurement time. `to = from + offset_ns`. Unknown values are not zero.
+- Unavailable payload: an explicit interval without an offset. It is not a zero
+  transform or a command to revoke unrelated evidence. Publishers must delimit
+  valid intervals around corrections or invalidations rather than expect a
+  newer sample to silently override old claims. Incompatible overlapping claims
+  produce an explicit conflict.
+
+The resolver conservatively computes an edge error over its **whole declared
+interval**: measurement uncertainty plus
+`ceil(max_drift_ppb * maximum_distance_from_measurement_ns / 1e9)`.
+This is deliberately not a fitted drift model or per-query interpolation.
+Unknown drift cannot supply a finite bound over a nonzero interval, even when
+the query is near the measurement. A point-only sample needs no drift bound.
+The local session-to-local-UTC error is not enlarged by unknown absolute UTC
+accuracy; connecting two different peers' UTC clocks still requires evidence.
+
+Path uncertainty is added conservatively, including the input bound. The whole
+input interval must fit every forward relationship's coverage. Inversion is
+allowed only when declared, and its **resulting** source interval, including
+the edge's error, must fit the original source coverage. Consequently a
+point-only measurement with nonzero error is generally not safely invertible
+and cannot by itself compose an arbitrary capture-time path. Missing coverage
+is unresolved, not permission to extrapolate or use the latest sample.
+
+### Conflicts, history and resource bounds
+
+Resolution enumerates bounded simple paths without revisiting a clock. It checks
+all applicable finite candidate intervals before applying the caller's uncertainty
+tolerance. If their common intersection is empty, it returns `Conflict` with the
+candidate evidence. Otherwise it picks the lowest-error path, then the fewest
+hops and a deterministic evidence-identity tie break; it does not average or fuse
+claims into artificially improved accuracy. Inconsistent cyclic walks are not
+solved as a global clock-adjustment problem.
+
+Missing exact definitions, missing sequences, denied admission, invalid provenance
+and resource limits are distinct errors. `Unresolved.issues` lists the problems
+encountered while exploring evidence (coverage, availability, uncertainty or
+arithmetic); it is not a causal diagnosis of the remote peer. A disconnected graph
+can have no issue beyond the absence of a path. An identity query still requires
+the exact clock definition and the caller's uncertainty tolerance.
+
+Defaults bound the index to 256 clocks and 4,096 distinct source observations,
+and search to 16 hops, 16,384 evidence scans and 128 candidate paths. Limits are
+caller-configurable; maximum recursion depth is 64. Identity strings are bounded
+to 1,024 bytes and session IDs to 256. Full storage rejects inserts without
+eviction; truncated search returns `LimitExceeded`, never a partial answer that
+could hide a conflict. Dispose/rebuild the index explicitly when appropriate.
+
+Each admitted observation is copied as immutable evidence, not retained as a
+live mutable buffer alias. Re-importing one Output/sequence through another
+Product does not create independent evidence or spend another entry; the first
+admitted Product remains its provenance. Contradictory copies are rejected.
+Appending later UTC corrections, or eviction from the original SDK Product,
+cannot rewrite already returned results. New contradictory evidence may change
+future queries into conflicts, rather than silently replacing history.
+
+### Steve and Bob acceptance fixture
+
+The deterministic test uses independent sessions and complete registry references:
+
+- Steve session → Steve local UTC: offset +100 s, error 1 ms.
+- Steve local UTC → Bob local UTC: measured offset +20 s, error 2 ms, reported by
+  a third peer admitted by the test's explicit policy.
+- Bob session → Bob local UTC: offset +90 s, error 1 ms, inversion permitted.
+
+All three test declarations have explicit sufficient coverage and a synthetic
+zero-drift bound. Steve's `2 s` resolves to Bob's `32 s ±4 ms`; the reverse path
+also succeeds. Without the middle bridge they remain disconnected despite both
+UTC definitions naming the same epoch. An alternative fixture connects two
+peers to one genuinely identical registered clock. No Home role, robot type,
+Domain selection, real clock synchronization or app migration is involved.
+
+See `tests/temporal_resolution.rs` for uncertainty/coverage boundaries, immutable
+history, conflicting paths, malformed evidence and bounded-search regressions.
 
 ## Compatibility and validation
 
@@ -124,6 +259,12 @@ This SDK-only change replaces the one-shot helper source API
 measurement/history API. Its new payload and metadata schemas deliberately do
 not reinterpret the previous `auki.session-utc-anchor/v1` held-anchor contract.
 No backward-compatibility alias or decoder is added.
+
+The temporal resolver is additive and leaves that history profile unchanged.
+Its interval-offset profile is separate: it cannot silently reinterpret a
+point-only measurement as held evidence. Affine-rate transforms, Catalog/network
+discovery, spatial resolution, application adapters and public language bindings
+are outside this slice. No application or deployed wire contract is migrated.
 
 The history profile is also distinct from the harness's
 `spatial-harness.time-transform/v1` and its contract metadata. It is also distinct

@@ -8,7 +8,15 @@ repository.workspace = true
 authors.workspace = true
 description = "Auki SDK time primitives: session clocks, affine time transforms, and TimeTransform Log sampling."
 
+[features]
+default = []
+components = ["dep:auki-components", "dep:serde", "dep:serde_json", "dep:thiserror"]
+
 [dependencies]
+auki-components = { path = "../auki-components", optional = true }
+serde = { workspace = true, features = ["derive"], optional = true }
+serde_json = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
 auki-registry = { path = "../auki-registry" }
 auki-logs = { path = "../auki-logs" }
 # `TimeTransformEntry` lives in `auki-datatypes` since Step 6 of the
